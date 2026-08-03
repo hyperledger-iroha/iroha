@@ -151,11 +151,11 @@ function semanticProfile() {
   };
 }
 
-function finalityAnchor() {
+function finalityAnchor(protocolVersion = 4) {
   return {
     version: 1,
     source_network: network("sora-taira"),
-    protocol_version: 4,
+    protocol_version: protocolVersion,
     chain_id_hash: SORA_TAIRA_CHAIN_ID_HASH,
     checkpoint_height: 7,
     checkpoint_block_hash: UPPER(0xa1, 32),
@@ -164,11 +164,11 @@ function finalityAnchor() {
   };
 }
 
-function outboundPolicy() {
+function outboundPolicy(protocolVersion = 4) {
   return {
     version: 1,
     semantic_profile: semanticProfile(),
-    sora_finality_anchor: finalityAnchor(),
+    sora_finality_anchor: finalityAnchor(protocolVersion),
   };
 }
 
@@ -684,10 +684,10 @@ function messageBundle() {
   };
 }
 
-function proofRequest() {
+function proofRequest(protocolVersion = 4) {
   const key = verifyingKey();
-  const policy = outboundPolicy();
-  const hashes = policyHashes();
+  const policy = outboundPolicy(protocolVersion);
+  const hashes = policyHashes(policy);
   return {
     version: 1,
     backend: { backend: "evm_groth16_bn254_v1", family: null },
@@ -1302,6 +1302,7 @@ test("registry rejects stale emitter hashes after either typed proof policy chan
 test("registry rejects legacy and ambiguous Sumeragi v2 finality anchors", () => {
   const mutations = [
     ["wrong protocol", (anchor) => { anchor.protocol_version = 1; }, /protocol_version/u],
+    ["future protocol", (anchor) => { anchor.protocol_version = 5; }, /protocol_version/u],
     ["protocol type confusion", (anchor) => { anchor.protocol_version = true; }, /integer/u],
     ["zero context", (anchor) => { anchor.checkpoint_context_id = UPPER(0, 32); }, /nonzero/u],
     ["aliased artifact", (anchor) => {
@@ -1848,7 +1849,19 @@ test("recent discovery admits only the exact Solana projection shape", () => {
 
 test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema", () => {
   assert.equal(normalizeSccpMessageBundle(messageBundle()).version, 1);
-  assert.equal(normalizeSccpProofRequest(proofRequest()).public_inputs.target_domain, 2);
+  const request = normalizeSccpProofRequest(proofRequest());
+  assert.equal(request.public_inputs.target_domain, 2);
+  assert.equal(request.sora_finality_anchor.protocol_version, 4);
+  const historicalRequest = normalizeSccpProofRequest(proofRequest(3));
+  assert.equal(historicalRequest.sora_finality_anchor.protocol_version, 3);
+  assert.equal(
+    historicalRequest.sora_finality_anchor_hash,
+    "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba",
+  );
+  assert.notEqual(
+    historicalRequest.sora_finality_anchor_hash,
+    request.sora_finality_anchor_hash,
+  );
   const retiredPayload = messageBundle();
   retiredPayload.payload = { Burn: {} };
   assert.throws(() => normalizeSccpMessageBundle(retiredPayload), /retired/u);

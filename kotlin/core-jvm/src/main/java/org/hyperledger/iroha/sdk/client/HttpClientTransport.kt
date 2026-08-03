@@ -28,6 +28,8 @@ import org.hyperledger.iroha.sdk.crypto.export.KeyExportBundle
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportException
 import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
 import org.hyperledger.iroha.sdk.nexus.*
+import org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotJsonV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1
 import org.hyperledger.iroha.sdk.sorafs.GatewayFetchRequest
 import org.hyperledger.iroha.sdk.sorafs.GatewayFetchSummary
 import org.hyperledger.iroha.sdk.sorafs.SorafsGatewayClient
@@ -226,6 +228,33 @@ class HttpClientTransport(
 
     fun listIdentifierPolicies(): CompletableFuture<IdentifierPolicyListResponse> = fetchJson(buildJsonGetRequest("/v1/identifier-policies", emptyMap()), IdentifierJsonParser::parsePolicyList, "identifier policy list")
     fun listRamLfeProgramPolicies(): CompletableFuture<RamLfeProgramPolicyListResponse> = fetchJson(buildJsonGetRequest("/v1/ram-lfe/program-policies", emptyMap()), RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list")
+
+    /** Fetch the exact result-bearing `SignedBlockWire` committed at `height`. */
+    fun getLedgerExecutedBlockWire(height: BigInteger): CompletableFuture<ByteArray> {
+        require(height.signum() > 0 && height.bitLength() <= 64) {
+            "height must be a positive u64"
+        }
+        val request = buildExactNoritoGetRequest(
+            "/v1/ledger/block/$height",
+            EXECUTED_BLOCK_WIRE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytes(request, "executed block wire")
+    }
+
+    /** Convenience overload for positive signed heights. */
+    fun getLedgerExecutedBlockWire(height: Long): CompletableFuture<ByteArray> =
+        getLedgerExecutedBlockWire(BigInteger.valueOf(height))
+
+    /** Fetch and validate the authoritative committed privacy capability snapshot. */
+    fun getPrivacyCapabilities(): CompletableFuture<PrivacyCapabilitySnapshotV1> =
+        fetchSccpJson(
+            buildExactJsonGetRequest(
+                "/v1/privacy/capabilities",
+                PrivacyCapabilitySnapshotJsonV1.MAX_RESPONSE_BYTES,
+            ),
+            PrivacyCapabilitySnapshotJsonV1::parse,
+            "privacy capabilities",
+        )
 
     /** Fetch and strictly decode exact-lane SCCP capability discovery. */
     fun getSccpCapabilities(): CompletableFuture<SccpCapabilities> =
@@ -618,8 +647,10 @@ class HttpClientTransport(
 
     fun verifyRamLfeReceipt(receipt: Map<String, Any>, outputHex: String?): CompletableFuture<RamLfeReceiptVerifyResponse> = verifyRamLfeReceipt(RamLfeReceiptVerifyRequest(receipt, outputHex))
 
-    fun getVpnProfile(): CompletableFuture<VpnProfile> =
-        fetchJson(buildJsonGetRequest("/v1/vpn/profile", emptyMap()), VpnJsonParser::parseProfile, "vpn profile", 200)
+    fun getVpnProfile(): CompletableFuture<VpnProfile> {
+        requireSecureVpnBaseUri()
+        return fetchJson(buildJsonGetRequest("/v1/vpn/profile", emptyMap()), VpnJsonParser::parseProfile, "vpn profile", 200)
+    }
 
     fun registerPushDevice(requestBody: PushDeviceRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<ClientResponse> {
         val body = encodeJsonBody(buildPushDevicePayload(requestBody.accountId, requestBody.platform, requestBody.token, requestBody.topics))
@@ -1092,6 +1123,23 @@ class HttpClientTransport(
         return builder.build()
     }
 
+    private fun buildExactJsonGetRequest(
+        path: String,
+        maximumResponseBytes: Long,
+    ): TransportRequest {
+        require(config.defaultHeaders().keys.none { it.equals("Accept", ignoreCase = true) }) {
+            "Accept must not be overridden for exact JSON requests"
+        }
+        val builder = TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod("GET")
+            .addHeader("Accept", "application/json")
+            .setMaximumResponseBytes(maximumResponseBytes)
+            .setTimeout(config.requestTimeout())
+        for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
+        return builder.build()
+    }
+
     private fun buildJsonPostRequest(
         path: String,
         body: ByteArray,
@@ -1103,12 +1151,30 @@ class HttpClientTransport(
         return builder.build()
     }
 
+    private fun buildExactNoritoGetRequest(
+        path: String,
+        maximumResponseBytes: Long,
+    ): TransportRequest {
+        require(config.defaultHeaders().keys.none { it.equals("Accept", ignoreCase = true) }) {
+            "Accept must not be overridden for exact Norito requests"
+        }
+        val builder = TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod("GET")
+            .addHeader("Accept", APPLICATION_NORITO)
+            .setMaximumResponseBytes(maximumResponseBytes)
+            .setTimeout(config.requestTimeout())
+        for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
+        return builder.build()
+    }
+
     private fun buildBridgeJsonPostRequest(path: String, body: ByteArray): TransportRequest {
         preflightSccpBridgeSubmitJson(body, path)
         return buildJsonPostRequest(path, body, SCCP_JSON_RESPONSE_MAX_BYTES)
     }
 
     private fun buildVpnRequest(method: String, path: String, body: ByteArray?, canonicalAuth: ToriiCanonicalRequestAuth): TransportRequest {
+        if (path.startsWith("/v1/vpn/")) requireSecureVpnBaseUri()
         val target = resolvePath(path)
         val builder = TransportRequest.builder().setUri(target).setMethod(method).addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
         if (body != null) {
@@ -1118,6 +1184,12 @@ class HttpClientTransport(
         val canonicalHeaders = buildCanonicalHeaders(method, target, body, canonicalAuth)
         for ((k, v) in canonicalHeaders) builder.addHeader(k, v)
         return builder.build()
+    }
+
+    private fun requireSecureVpnBaseUri() {
+        require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+            "Sora VPN requests require an HTTPS Torii base URI"
+        }
     }
 
     private fun buildOnboardingRequest(
@@ -1234,16 +1306,27 @@ class HttpClientTransport(
                 future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
                 return@whenComplete
             }
+            val body = response.body
             val clientResponse = ClientResponse(
                 response.statusCode,
-                response.body,
+                body,
                 response.message,
                 null,
                 extractRejectCode(response),
             )
             try {
                 requireExactSccpJsonResponse(response, errorContext)
-                val parsed = parser.apply(response.body)
+                val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
+                    "$errorContext request must declare a response-body limit"
+                }
+                require(body.isNotEmpty()) {
+                    "$errorContext response must not be empty"
+                }
+                require(body.size.toLong() <= maximumResponseBytes) {
+                    "$errorContext response exceeds $maximumResponseBytes bytes"
+                }
+                requireExactOptionalContentLength(response.headers, body.size, errorContext)
+                val parsed = parser.apply(body)
                 notifyResponse(request, clientResponse)
                 future.complete(parsed)
             } catch (ex: RuntimeException) {
@@ -1252,6 +1335,84 @@ class HttpClientTransport(
             }
         }
         return future
+    }
+
+    private fun fetchExactNoritoBytes(
+        request: TransportRequest,
+        errorContext: String,
+    ): CompletableFuture<ByteArray> {
+        notifyRequest(request)
+        val future = CompletableFuture<ByteArray>()
+        executor.execute(request).whenComplete { response, throwable ->
+            if (throwable != null) {
+                val cause = if (throwable is CompletionException) throwable.cause else throwable
+                notifyFailure(request, cause!!)
+                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
+                return@whenComplete
+            }
+            val body = response.body
+            val clientResponse = ClientResponse(
+                response.statusCode,
+                body,
+                response.message,
+                null,
+                extractRejectCode(response),
+            )
+            try {
+                require(response.statusCode == 200) {
+                    "$errorContext request failed with status ${response.statusCode}"
+                }
+                requireExactHeader(response.headers, "Content-Type", APPLICATION_NORITO, errorContext)
+                require(body.isNotEmpty()) { "$errorContext response must not be empty" }
+                require(body.size.toLong() <= EXECUTED_BLOCK_WIRE_MAX_BYTES) {
+                    "$errorContext response exceeds $EXECUTED_BLOCK_WIRE_MAX_BYTES bytes"
+                }
+                requireExactOptionalContentLength(response.headers, body.size, errorContext)
+                notifyResponse(request, clientResponse)
+                future.complete(body.copyOf())
+            } catch (error: RuntimeException) {
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
+            }
+        }
+        return future
+    }
+
+    private fun requireExactHeader(
+        headers: Map<String, List<String>>,
+        name: String,
+        expected: String,
+        errorContext: String,
+    ) {
+        val values = headers.entries
+            .asSequence()
+            .filter { (header, _) -> header.equals(name, ignoreCase = true) }
+            .flatMap { (_, headerValues) -> headerValues.asSequence() }
+            .toList()
+        require(values.size == 1 && values[0] == expected) {
+            "$errorContext response $name must be exactly $expected"
+        }
+    }
+
+    private fun requireExactOptionalContentLength(
+        headers: Map<String, List<String>>,
+        actualBytes: Int,
+        errorContext: String,
+    ) {
+        val values = headers.entries
+            .asSequence()
+            .filter { (name, _) -> name.equals("Content-Length", ignoreCase = true) }
+            .flatMap { (_, headerValues) -> headerValues.asSequence() }
+            .toList()
+        if (values.isEmpty()) return
+        require(values.size == 1) { "$errorContext response has ambiguous Content-Length" }
+        val value = values.single()
+        require(value == "0" || (value.isNotEmpty() && value[0] in '1'..'9' && value.drop(1).all { it in '0'..'9' })) {
+            "$errorContext response Content-Length must be one canonical decimal integer"
+        }
+        require(value.toLongOrNull() == actualBytes.toLong()) {
+            "$errorContext response Content-Length does not match the body"
+        }
     }
 
     private fun executeAccepted(request: TransportRequest, errorContext: String, acceptedStatus: Int): CompletableFuture<ClientResponse> {
@@ -1369,6 +1530,8 @@ class HttpClientTransport(
         private const val NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L
         private const val SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L
+        private const val EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L
+        private const val APPLICATION_NORITO = "application/x-norito"
 
         @JvmStatic fun createDefault(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
         @JvmStatic fun withExecutor(executor: HttpTransportExecutor, config: ClientConfig): HttpClientTransport = HttpClientTransport(executor, config)

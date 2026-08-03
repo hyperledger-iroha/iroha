@@ -3,7 +3,7 @@
   "chain_discriminant": 369,
   "consensus_fingerprint": "0x341dc1312934c312e6fb5cc8fab0902acaa54c2ce3d60fd67ddac8969eea0a54",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":22020096,"max_chunk_count":1024},"nexus_amx_context_hash":"ADBDBE1CA04BDEDC470B3D43D188A802030310C09D537D459763B66273F5438D","execution_policy_hash":"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"ADBDBE1CA04BDEDC470B3D43D188A802030310C09D537D459763B66273F5438D","execution_policy_hash":"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -254,7 +254,7 @@
               "epoch_seed": "08499EEBF6BCDB2EBA26F335D47F5256F4E294E8BCF95D239870177FBEAE4FC2",
               "vrf_commit_window_blocks": 100,
               "vrf_reveal_window_blocks": 40,
-              "max_validators": 128,
+              "max_validators": 31,
               "min_self_bond": "1000",
               "min_nomination_bond": "1",
               "max_nominator_concentration_pct": 25,
@@ -591,6 +591,16 @@
           }
         },
         {
+          "Grant": {
+            "Permission": {
+              "destination": "testu\uff9b1P\uff75Em\uff77jMZZ\uff91\uff99e\uff71\uff81\uff8e\uff85\uff82\uff8amECepdb\uff8e\uff732uW\uff83\uff78\uff8a\uff98v\uff75i2\uff66P1Y18A",
+              "object": {
+                "name": "CanEnactGovernance"
+              }
+            }
+          }
+        },
+        {
           "Mint": {
             "Asset": {
               "destination": "61CtjvNd9T3THAR65GsMVHr82Bjc#testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
@@ -604,6 +614,16 @@
               "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
                 "name": "CanSetParameters"
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanReadAllLedgerData"
               }
             }
           }

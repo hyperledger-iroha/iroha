@@ -199,6 +199,10 @@ test("browser graph audit derives every explicit browser-conditioned package exp
       target: "./dist/privacyCapabilities.js",
       subpaths: ["./privacy-capabilities"],
     },
+    {
+      target: "./dist/bootleLanternIssuance.js",
+      subpaths: ["./bootle-lantern-issuance"],
+    },
     { target: "./dist/transactionCodec.js", subpaths: ["./transaction-codec"] },
     {
       target: "./dist/smartContractDeployment.js",
@@ -333,8 +337,13 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 59);
-  assert.equal(result.outputFiles[0].contents.byteLength, 473_390);
+  assert.equal(Object.keys(result.metafile.inputs).length, 64);
+  assert.equal(result.outputFiles[0].contents.byteLength, 479_732);
+  assert.equal(
+    target.limitKb * 1024 - result.outputFiles[0].contents.byteLength,
+    524,
+    "public browser aggregate must retain the audited 524-byte headroom",
+  );
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
     "public browser aggregate regressed more than 5% from the protected pre-reset tree",
@@ -389,9 +398,9 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 1_006_517, modules: 62 }],
-    ["transactionCodec.js (browser)", { bytes: 303_764, modules: 46 }],
-    ["nexusApp.js (browser)", { bytes: 383_534, modules: 56 }],
+    ["toriiClient.js", { bytes: 1_005_947, modules: 67 }],
+    ["transactionCodec.js (browser)", { bytes: 301_649, modules: 48 }],
+    ["nexusApp.js (browser)", { bytes: 381_439, modules: 58 }],
     ["canonicalRequest.js (browser)", { bytes: 98_089, modules: 34 }],
   ]);
   const { build } = await import("esbuild");
@@ -436,8 +445,8 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        75,
-        "Torii hard ceiling must retain only the audited 75-byte headroom",
+        645,
+        "Torii hard ceiling must retain the audited 645-byte headroom",
       );
     }
     assert.deepEqual(actual, expected.get(target.label), target.label);

@@ -250,6 +250,53 @@ fn push_globally_bound_lane_reservation_candidate(
     admit_globally_certified_reservation_transaction_for_test(queue, state, transaction)
 }
 
+fn prepared_canonical_cleanup_group(
+    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+) -> PreparedLaneQueueCarrierCleanupGroup {
+    let group_binding =
+        lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+            .expect("bind prepared canonical cleanup group");
+    PreparedLaneQueueCarrierCleanupGroup {
+        ordered_keys,
+        group_binding,
+        cleanup_gate: LaneQueueCarrierCleanupGate::direct_test(group_binding),
+    }
+}
+
+fn reserve_two_canonical_cleanup_carrier_groups(
+    queue: &Queue,
+    state: &State,
+    dir: &tempfile::TempDir,
+    time_source: &TimeSource,
+) -> [LaneQueueReservationKeyV2; 2] {
+    for _ in 0..2 {
+        push_globally_bound_lane_reservation_candidate(
+            queue,
+            state,
+            dir,
+            accepted_unique_entrypoint_tx_by_someone(time_source),
+        );
+    }
+    let reserve_one = |scope| {
+        *queue
+            .reserve_transactions_for_lane(state, scope, nonzero!(1_usize))
+            .expect("reserve one canonical cleanup carrier group")[0]
+            .key()
+    };
+    let first = reserve_one(lane_reservation_scope(
+        state,
+        b"cross-carrier-owner-a",
+        b"cross-carrier-proposal-a",
+    ));
+    let mut second_scope = lane_reservation_scope(
+        state,
+        b"cross-carrier-owner-b",
+        b"cross-carrier-proposal-b",
+    );
+    second_scope.lane_block_height = 2;
+    [first, reserve_one(second_scope)]
+}
+
 fn persist_unreconciled_commit_barrier(
     queue: &Queue,
     state: &State,
@@ -414,6 +461,51 @@ fn plan_admission_append_never_owns_queue_mutation_lock() {
         Some(claim.routing_plan.clone())
     );
     assert!(!queue.accepted_work_validation_faulted());
+}
+
+#[test]
+fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let mut state = lane_reservation_test_state();
+    let dir = tempdir().expect("tempdir");
+    let queue = Queue::test(config_factory(), &time_source);
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash();
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
+        &transaction,
+    );
+
+    queue
+        .push_with_lane_with_state(transaction, &state)
+        .expect("persist ordinary unbound durable claim");
+    assert!(
+        queue
+            .durable_plan_claims
+            .get(&hash)
+            .is_some_and(|claim| claim.global_admission_identity.is_none())
+    );
+
+    let reserved = queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(&state, b"unbound-owner", b"unbound-proposal"),
+            nonzero!(1_usize),
+        )
+        .expect("ordinary claim must remain a healthy pending FIFO owner");
+    assert!(reserved.is_empty());
+    assert_eq!(queue.active_len(), 1);
+    assert_eq!(queue.queued_len(), 1);
+    assert!(queue.contains_transaction_hash(hash));
+    assert!(
+        queue
+            .durable_plan_claims
+            .get(&hash)
+            .is_some_and(|claim| claim.global_admission_identity.is_none())
+    );
+    assert!(!queue.accepted_work_validation_faulted());
+    assert!(!queue.lane_reservation_durability_faulted());
 }
 
 #[test]

@@ -1255,14 +1255,16 @@ pub enum Instr {
         proof: Temp,
         vk: Temp,
     },
-    /// Build a Norito-encoded Unshield InstructionBox from a literal nominal quantity.
+    /// Build a Norito-encoded Unshield InstructionBox from literal public inputs.
+    ///
+    /// Private change commitments are derived from the proof by the host and are never supplied by
+    /// guest code.
     BuildUnshieldInline {
         dest: Temp,
         asset: Temp,
         to: Temp,
         amount: Temp,
         inputs: Temp,
-        outputs: Option<Temp>,
         backend: Temp,
         proof: Temp,
         vk: Temp,
@@ -6158,7 +6160,7 @@ fn lower_surface_builtin_call(
         | Builtin::QueryPageAssetDefinitions
         | Builtin::QueryPageDomains
         | Builtin::QueryPageNfts => {
-            let offset = lower_expr_as_u64(ctx, &args[0], vars);
+            let offset = lower_expr_as_i64(ctx, &args[0], vars);
             let limit = lower_expr_as_u64(ctx, &args[1], vars);
             let entity = match builtin {
                 Builtin::QueryPageAccounts => ivm_abi::core_query::CoreQueryEntityTagV1::Account,
@@ -6226,14 +6228,9 @@ fn lower_surface_builtin_call(
             // public instruction field's source type.
             let amount = lower_expr(ctx, &args[2], vars);
             let inputs = lower_expr(ctx, &args[3], vars);
-            let (outputs, backend_idx) = if args.len() == 8 {
-                (Some(lower_expr(ctx, &args[4], vars)), 5)
-            } else {
-                (None, 4)
-            };
-            let backend = lower_expr(ctx, &args[backend_idx], vars);
-            let proof = lower_expr(ctx, &args[backend_idx + 1], vars);
-            let vk = lower_expr(ctx, &args[backend_idx + 2], vars);
+            let backend = lower_expr(ctx, &args[4], vars);
+            let proof = lower_expr(ctx, &args[5], vars);
+            let vk = lower_expr(ctx, &args[6], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::BuildUnshieldInline {
                 dest,
@@ -6241,7 +6238,6 @@ fn lower_surface_builtin_call(
                 to,
                 amount,
                 inputs,
-                outputs,
                 backend,
                 proof,
                 vk,
@@ -9691,6 +9687,70 @@ mod tests {
     }
 
     #[test]
+    fn exhaustive_result_match_reads_only_the_selected_sum_payload() {
+        let source = r#"
+            fn project(Result<int, (int, int)> value) -> int {
+                match value {
+                    Result::ok(item) => item,
+                    Result::err(pair) => pair.0,
+                }
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse Result match")).expect("analyze Result match"),
+        )
+        .expect("lower Result match");
+        let function = &lowered.functions[0];
+        let entry = function
+            .blocks
+            .iter()
+            .find(|block| block.label == function.entry)
+            .expect("Result match entry block");
+        let (ok_label, err_label) = match entry.terminator {
+            Terminator::Branch {
+                then_bb, else_bb, ..
+            } => (then_bb, else_bb),
+            _ => panic!("Result match entry must branch on the discriminant"),
+        };
+        let payload_offsets = |label| {
+            function
+                .blocks
+                .iter()
+                .find(|block| block.label == label)
+                .expect("Result match arm block")
+                .instrs
+                .iter()
+                .filter_map(|instruction| match instruction {
+                    Instr::Load64Imm { imm, .. } => Some(*imm),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            entry
+                .instrs
+                .iter()
+                .filter_map(|instruction| match instruction {
+                    Instr::Load64Imm { imm, .. } => Some(*imm),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            [0],
+            "Result match reads only the discriminant before selecting an arm"
+        );
+        assert_eq!(
+            payload_offsets(ok_label),
+            [8],
+            "the selected ok arm reads only its scalar payload"
+        );
+        assert_eq!(
+            payload_offsets(err_label),
+            [8, 16],
+            "the selected err arm reads only its pair payload"
+        );
+    }
+
+    #[test]
     fn propagation_returns_original_error_handle_without_conversion() {
         let source = r#"
             fn propagate(Result<int, bool> value) -> Result<int, bool> {
@@ -9846,8 +9906,9 @@ mod tests {
                     items_dest,
                     next_offset_dest,
                     entity,
-                    ..
-                } => Some((*items_dest, *next_offset_dest, *entity)),
+                    offset,
+                    limit,
+                } => Some((*items_dest, *next_offset_dest, *entity, *offset, *limit)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -9855,6 +9916,30 @@ mod tests {
         assert_eq!(
             pages[0].2,
             ivm_abi::core_query::CoreQueryEntityTagV1::Account
+        );
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .filter(|instruction| {
+                    matches!(instruction, Instr::IntTryToI64 { dest, .. } if *dest == pages[0].3)
+                })
+                .count(),
+            1,
+            "dynamic page offsets cross the existing signed i64 host boundary exactly once"
+        );
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .filter(|instruction| {
+                    matches!(instruction, Instr::IntTryToU64 { dest, .. } if *dest == pages[0].4)
+                })
+                .count(),
+            1,
+            "dynamic page limits cross the unsigned bounded host boundary exactly once"
         );
         assert!(function.blocks.iter().any(|block| {
             block.instrs.iter().any(|instruction| {
@@ -12981,94 +13066,5 @@ seiyaku RangeOffsetBits {{
         }
     }
 
-    #[test]
-    fn rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction() {
-        let dynamic = parse(
-            "fn rounded(quantity value, decimal divisor, int scale) -> quantity { \
-                return value.div_round( \
-                    divisor: divisor, \
-                    scale: scale, \
-                    mode: Rounding::nearest_even, \
-                ); \
-            }",
-        )
-        .expect("parse dynamic rounded quantity division");
-        let dynamic = lower(&analyze(&dynamic).expect("analyze rounded quantity division"))
-            .expect("lower rounded quantity division");
-        let calls = dynamic.functions[0]
-            .blocks
-            .iter()
-            .flat_map(|block| &block.instrs)
-            .filter(|instruction| {
-                matches!(
-                    instruction,
-                    Instr::NumericRound {
-                        op: NumericRoundOp::QuantityDiv,
-                        ..
-                    }
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(calls.len(), 1);
-
-        let folded = parse(
-            "fn rounded() -> decimal { \
-                return 1.0.div_round( \
-                    divisor: 8.0, \
-                    scale: 2, \
-                    mode: Rounding::nearest_even, \
-                ); \
-            }",
-        )
-        .expect("parse constant rounded decimal division");
-        let folded = lower(&analyze(&folded).expect("analyze constant rounded decimal division"))
-            .expect("lower constant rounded decimal division");
-        assert!(folded.functions[0].blocks.iter().any(|block| {
-            block.instrs.iter().any(|instruction| {
-                matches!(
-                    instruction,
-                    Instr::DataRef {
-                        kind: DataRefKind::Decimal,
-                        value,
-                        ..
-                    } if value == "0.12"
-                )
-            })
-        }));
-        assert!(folded.functions[0].blocks.iter().all(|block| {
-            block
-                .instrs
-                .iter()
-                .all(|instruction| !matches!(instruction, Instr::NumericRound { .. }))
-        }));
-    }
-
-    #[test]
-    fn wrapping_builtins_have_distinct_ir() {
-        let program = parse(include_str!(
-            "ir/test_sources/wrapping_builtins_have_distinct_ir_1.ko"
-        ))
-        .expect("parse wrapping builtins");
-        let program = lower(&analyze(&program).expect("analyze wrapping builtins"))
-            .expect("lower wrapping builtins");
-        let instructions = program.functions[0]
-            .blocks
-            .iter()
-            .flat_map(|block| block.instrs.iter())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            instructions
-                .iter()
-                .filter(|instr| matches!(instr, Instr::WrappingBinary { .. }))
-                .count(),
-            3
-        );
-        assert_eq!(
-            instructions
-                .iter()
-                .filter(|instr| matches!(instr, Instr::WrappingNeg { .. }))
-                .count(),
-            1
-        );
-    }
+    include!("ir_tail_tests.rs");
 }

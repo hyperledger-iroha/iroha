@@ -3214,14 +3214,7 @@ mod measured_bytes_impls {
 
     impl MeasuredBytes for AssetDefinitionId {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<AssetDefinitionId>();
-            if let Some(domain) = self.try_domain() {
-                total = total.saturating_add(domain.measured_bytes_extra());
-            }
-            if let Some(name) = self.try_name() {
-                total = total.saturating_add(name.measured_bytes_extra());
-            }
-            total
+            size_of::<AssetDefinitionId>()
         }
     }
 
@@ -3863,7 +3856,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.vk_unshield.measured_bytes_extra());
             total = total.saturating_add(self.vk_shield.measured_bytes_extra());
             total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());
-            total = total.saturating_add(self.tree.measured_bytes_extra());
             total
         }
     }
@@ -3950,6 +3942,9 @@ mod measured_bytes_impls {
                 }
                 ProposalKind::ValidationFeePayoutLifecycle(payload) => {
                     total = total.saturating_add(payload.measured_bytes_extra());
+                }
+                ProposalKind::MusubiRegistryGovernance(action) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(action).len());
                 }
             }
             total
@@ -5520,10 +5515,11 @@ mod tests {
     fn measured_bytes_cover_opaque_asset_definition_id() {
         use iroha_data_model::asset::AssetDefinitionId;
 
-        let opaque = AssetDefinitionId::from_uuid_bytes_unchecked([
+        let opaque = AssetDefinitionId::from_uuid_bytes([
             0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x80, 0x11, 0x22, 0x33, 0x44, 0x55,
             0x66, 0x77,
-        ]);
+        ])
+        .expect("measured-bytes fixture UUID is valid");
         assert_eq!(
             MeasuredBytes::measured_bytes(&opaque),
             std::mem::size_of::<AssetDefinitionId>()
@@ -5704,11 +5700,11 @@ mod tests {
         let mut backend = TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
         let mut world = World::default();
 
-        let definition_id =
-            iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes_unchecked([
-                0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x47, 0x98, 0x80, 0x19, 0x2a, 0x3b, 0x4c, 0x5d,
-                0x6e, 0x7f,
-            ]);
+        let definition_id = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+            0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x47, 0x98, 0x80, 0x19, 0x2a, 0x3b, 0x4c, 0x5d,
+            0x6e, 0x7f,
+        ])
+        .expect("cold-tier fixture UUID is valid");
         let asset_binding = crate::state::AssetDefinitionAliasBindingRecord {
             alias: "tiered_cold_asset#universal".parse().expect("asset alias"),
             lease_expiry_ms: Some(2_000),
@@ -5726,7 +5722,7 @@ mod tests {
         .expect("fixture seed derives a valid keypair");
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,

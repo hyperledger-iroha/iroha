@@ -1,31 +1,20 @@
-//! Deterministic, persistent payload dispersal for Sumeragi v2.
+//! Deterministic, bounded payload dispersal for Sumeragi v2.
 //!
 //! This module is transport, not consensus. It derives the one canonical
-//! chunk sequence committed by [`PayloadManifest`], persists authenticated
-//! chunks by manifest hash, and reconstructs exact canonical block bytes. The
+//! chunk sequence committed by [`wire::PayloadManifest`], buffers authenticated
+//! chunks for the active session, and reconstructs exact canonical block
+//! bytes. Partial acquisition is deliberately volatile: after restart the
+//! node reacquires shards, while the reconstructed canonical body crosses the
+//! separate durable body-store boundary before validation or voting. The
 //! reducer sees only the resulting body-availability token; READY/DELIVER
 //! state and collector selection do not exist here.
 
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, ErrorKind, Write},
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::consensus_v2 as wire;
 use iroha_primitives::erasure::rs16;
-use norito::codec::{Decode, DecodeAll, Encode};
 use thiserror::Error;
-
-const MANIFEST_FILE: &str = "manifest.norito";
-const STORE_VERSION: u16 = 1;
-
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-struct StoredManifest {
-    version: u16,
-    manifest: wire::PayloadManifest,
-}
 
 /// Canonical encoded payload and the manifest committing to every chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,70 +38,36 @@ impl EncodedV2Payload {
 /// Result of admitting one authenticated chunk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChunkAdmission {
-    /// A previously missing canonical chunk was persisted.
-    Stored,
-    /// The exact chunk was already durable.
+    /// A previously missing canonical chunk was buffered.
+    Buffered,
+    /// The exact chunk is already present in this bounded session.
     Duplicate,
 }
 
-/// Persistent reconstruction session for one immutable manifest.
+/// Bounded in-memory reconstruction session for one immutable manifest.
 #[derive(Debug)]
 pub(crate) struct V2ChunkSession {
-    directory: PathBuf,
     manifest: wire::PayloadManifest,
     chunks: Vec<Option<Vec<u8>>>,
 }
 
 impl V2ChunkSession {
-    /// Open or create the exact manifest session and replay persisted chunks.
+    /// Open an empty bounded session for the exact validated manifest.
     ///
-    /// Temporary files left by an interrupted atomic write are ignored. A
-    /// malformed final manifest or chunk fails closed.
+    /// `root` remains part of the caller boundary so changing the acquisition
+    /// implementation does not alter worker construction. No directory or
+    /// shard file is created here.
     pub(crate) fn open(
-        root: impl AsRef<Path>,
+        _root: impl AsRef<Path>,
         context: &wire::HeightContext,
         manifest: wire::PayloadManifest,
     ) -> Result<Self, V2ChunkError> {
         manifest.validate(context)?;
-        let manifest_hash = HashOf::new(&manifest);
-        let directory = root.as_ref().join(hex::encode(manifest_hash.as_ref()));
-        fs::create_dir_all(&directory).map_err(|source| io_error(&directory, source))?;
-        sync_directory(root.as_ref())?;
-
-        let manifest_path = directory.join(MANIFEST_FILE);
-        match fs::read(&manifest_path) {
-            Ok(bytes) => {
-                let mut cursor = bytes.as_slice();
-                let recovered = StoredManifest::decode_all(&mut cursor)
-                    .map_err(|error| V2ChunkError::ManifestDecode(error.to_string()))?;
-                if recovered.version != STORE_VERSION {
-                    return Err(V2ChunkError::UnsupportedStoreVersion(recovered.version));
-                }
-                if recovered.manifest != manifest {
-                    return Err(V2ChunkError::ConflictingManifest);
-                }
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                write_atomic_synced(
-                    &manifest_path,
-                    &StoredManifest {
-                        version: STORE_VERSION,
-                        manifest: manifest.clone(),
-                    }
-                    .encode(),
-                )?;
-            }
-            Err(source) => return Err(io_error(&manifest_path, source)),
-        }
-
         let chunk_count = manifest.chunk_hashes.len();
-        let mut session = Self {
-            directory,
+        Ok(Self {
             manifest,
             chunks: vec![None; chunk_count],
-        };
-        session.replay_chunks()?;
-        Ok(session)
+        })
     }
 
     /// Borrow the immutable manifest.
@@ -120,11 +75,11 @@ impl V2ChunkSession {
         &self.manifest
     }
 
-    /// Persist one structurally authenticated chunk.
+    /// Buffer one structurally authenticated chunk.
     ///
     /// The caller is still responsible for verifying its sender signature.
     /// This boundary independently rechecks manifest identity, index, length,
-    /// and content hash before any final file is created.
+    /// and content hash before retaining bounded session memory.
     pub(crate) fn admit(
         &mut self,
         chunk: &wire::PayloadChunk,
@@ -135,7 +90,7 @@ impl V2ChunkSession {
         self.admit_bytes(chunk.index, &chunk.bytes)
     }
 
-    /// Persist already-authenticated bytes at an exact manifest index.
+    /// Buffer already-authenticated bytes at an exact manifest index.
     pub(crate) fn admit_bytes(
         &mut self,
         index: u32,
@@ -143,7 +98,6 @@ impl V2ChunkSession {
     ) -> Result<ChunkAdmission, V2ChunkError> {
         let index = usize::try_from(index).map_err(|_| V2ChunkError::ChunkIndexOutOfRange)?;
         self.validate_chunk(index, bytes)?;
-        let path = self.chunk_path(index);
         let slot = self
             .chunks
             .get_mut(index)
@@ -156,9 +110,8 @@ impl V2ChunkSession {
             };
         }
 
-        write_atomic_synced(&path, bytes)?;
         *slot = Some(bytes.to_vec());
-        Ok(ChunkAdmission::Stored)
+        Ok(ChunkAdmission::Buffered)
     }
 
     /// Reconstruct and verify the canonical payload once enough chunks exist.
@@ -167,7 +120,9 @@ impl V2ChunkSession {
     /// parity chunks are not materialized unless needed to recover data.
     pub(crate) fn reconstruct(&self) -> Result<Option<Vec<u8>>, V2ChunkError> {
         let payload = match self.manifest.layout.encoding {
-            wire::PayloadEncoding::Plain => self.reconstruct_plain()?,
+            wire::PayloadEncoding::Plain => {
+                return Err(wire::ValidationError::InvalidDataAvailabilityLayout.into());
+            }
             wire::PayloadEncoding::ReedSolomon16 => self.reconstruct_rs16()?,
         };
         let Some(payload) = payload else {
@@ -181,41 +136,6 @@ impl V2ChunkSession {
         Ok(Some(payload))
     }
 
-    fn replay_chunks(&mut self) -> Result<(), V2ChunkError> {
-        for entry in
-            fs::read_dir(&self.directory).map_err(|source| io_error(&self.directory, source))?
-        {
-            let entry = entry.map_err(|source| io_error(&self.directory, source))?;
-            let path = entry.path();
-            if !entry
-                .file_type()
-                .map_err(|source| io_error(&path, source))?
-                .is_file()
-            {
-                return Err(V2ChunkError::UnexpectedEntry(path));
-            }
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                return Err(V2ChunkError::UnexpectedEntry(path));
-            };
-            if name == MANIFEST_FILE || name.ends_with(".tmp") {
-                continue;
-            }
-            let Some(index) = parse_chunk_file_name(name) else {
-                return Err(V2ChunkError::UnexpectedEntry(path));
-            };
-            let bytes = fs::read(&path).map_err(|source| io_error(&path, source))?;
-            self.validate_chunk(index, &bytes)?;
-            let slot = self
-                .chunks
-                .get_mut(index)
-                .ok_or(V2ChunkError::ChunkIndexOutOfRange)?;
-            if slot.replace(bytes).is_some() {
-                return Err(V2ChunkError::ConflictingChunk);
-            }
-        }
-        Ok(())
-    }
-
     fn validate_chunk(&self, index: usize, bytes: &[u8]) -> Result<(), V2ChunkError> {
         let expected_hash = self
             .manifest
@@ -226,12 +146,7 @@ impl V2ChunkSession {
             .map_err(|_| V2ChunkError::InvalidChunkLength)?;
         let expected_len = match self.manifest.layout.encoding {
             wire::PayloadEncoding::Plain => {
-                let offset = index
-                    .checked_mul(chunk_size)
-                    .ok_or(V2ChunkError::InvalidChunkLength)?;
-                let payload_size = usize::try_from(self.manifest.payload_size_bytes)
-                    .map_err(|_| V2ChunkError::InvalidChunkLength)?;
-                payload_size.saturating_sub(offset).min(chunk_size)
+                return Err(wire::ValidationError::InvalidDataAvailabilityLayout.into());
             }
             wire::PayloadEncoding::ReedSolomon16 => chunk_size,
         };
@@ -242,19 +157,6 @@ impl V2ChunkSession {
             return Err(V2ChunkError::ChunkHashMismatch);
         }
         Ok(())
-    }
-
-    fn reconstruct_plain(&self) -> Result<Option<Vec<u8>>, V2ChunkError> {
-        if self.chunks.iter().any(Option::is_none) {
-            return Ok(None);
-        }
-        let payload_size = usize::try_from(self.manifest.payload_size_bytes)
-            .map_err(|_| V2ChunkError::PayloadTooLarge)?;
-        let mut payload = Vec::with_capacity(payload_size);
-        for chunk in &self.chunks {
-            payload.extend_from_slice(chunk.as_deref().expect("all chunks checked above"));
-        }
-        Ok(Some(payload))
     }
 
     fn reconstruct_rs16(&self) -> Result<Option<Vec<u8>>, V2ChunkError> {
@@ -312,10 +214,6 @@ impl V2ChunkSession {
         payload.truncate(payload_size);
         Ok(Some(payload))
     }
-
-    fn chunk_path(&self, index: usize) -> PathBuf {
-        self.directory.join(format!("{index:010}.chunk"))
-    }
 }
 
 /// Encode exact canonical payload bytes using the height-frozen DA layout.
@@ -337,23 +235,13 @@ pub(crate) fn encode_payload(
         return Err(V2ChunkError::PayloadTooLarge);
     }
     let chunks = match context.da_layout.encoding {
-        wire::PayloadEncoding::Plain => encode_plain(payload, context.da_layout)?,
+        wire::PayloadEncoding::Plain => {
+            return Err(wire::ValidationError::InvalidDataAvailabilityLayout.into());
+        }
         wire::PayloadEncoding::ReedSolomon16 => encode_rs16(payload, context.da_layout)?,
     };
     let manifest = wire::PayloadManifest::derive(context, round, subject, payload_len, &chunks)?;
     Ok(EncodedV2Payload { manifest, chunks })
-}
-
-fn encode_plain(
-    payload: &[u8],
-    layout: wire::DataAvailabilityLayout,
-) -> Result<Vec<Vec<u8>>, V2ChunkError> {
-    let chunk_size =
-        usize::try_from(layout.chunk_size_bytes).map_err(|_| V2ChunkError::InvalidChunkLength)?;
-    if chunk_size == 0 {
-        return Err(V2ChunkError::InvalidChunkLength);
-    }
-    Ok(payload.chunks(chunk_size).map(<[u8]>::to_vec).collect())
 }
 
 fn encode_rs16(
@@ -411,75 +299,12 @@ fn encode_rs16(
     Ok(encoded)
 }
 
-fn parse_chunk_file_name(name: &str) -> Option<usize> {
-    name.strip_suffix(".chunk")?.parse().ok()
-}
-
-fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<(), V2ChunkError> {
-    let parent = path.parent().ok_or_else(|| V2ChunkError::Io {
-        path: path.to_path_buf(),
-        source: io::Error::new(ErrorKind::InvalidInput, "path has no parent"),
-    })?;
-    fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
-    let tmp = path.with_extension(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map_or_else(|| "tmp".to_owned(), |extension| format!("{extension}.tmp")),
-    );
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&tmp)
-        .map_err(|source| io_error(&tmp, source))?;
-    file.write_all(bytes)
-        .and_then(|()| file.flush())
-        .and_then(|()| file.sync_all())
-        .map_err(|source| io_error(&tmp, source))?;
-    fs::rename(&tmp, path).map_err(|source| io_error(path, source))?;
-    sync_directory(parent)
-}
-
-fn sync_directory(path: &Path) -> Result<(), V2ChunkError> {
-    if path.as_os_str().is_empty() {
-        return Ok(());
-    }
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| io_error(path, source))
-}
-
-fn io_error(path: &Path, source: io::Error) -> V2ChunkError {
-    V2ChunkError::Io {
-        path: path.to_path_buf(),
-        source,
-    }
-}
-
-/// Deterministic chunk encoding, persistence, or reconstruction failure.
+/// Deterministic chunk encoding, buffering, or reconstruction failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2ChunkError {
     /// Manifest or height context failed canonical structural validation.
     #[error(transparent)]
     Wire(#[from] wire::ValidationError),
-    /// Filesystem operation failed.
-    #[error("Sumeragi v2 chunk store I/O failed at {path}: {source}")]
-    Io {
-        /// Affected path.
-        path: PathBuf,
-        /// Underlying I/O error.
-        #[source]
-        source: io::Error,
-    },
-    /// Persisted manifest could not be decoded completely.
-    #[error("persisted Sumeragi v2 manifest is malformed: {0}")]
-    ManifestDecode(String),
-    /// Persisted session layout version is unsupported.
-    #[error("unsupported Sumeragi v2 chunk-store version {0}")]
-    UnsupportedStoreVersion(u16),
-    /// An existing session directory belongs to different manifest bytes.
-    #[error("Sumeragi v2 chunk session manifest conflicts with the requested manifest")]
-    ConflictingManifest,
     /// A payload or reconstructed body does not match its subject.
     #[error("Sumeragi v2 payload bytes do not match the manifest subject")]
     PayloadMismatch,
@@ -498,8 +323,8 @@ pub(crate) enum V2ChunkError {
     /// Chunk bytes do not match their committed hash.
     #[error("Sumeragi v2 chunk hash mismatch")]
     ChunkHashMismatch,
-    /// A final chunk path already contains different bytes.
-    #[error("Sumeragi v2 chunk conflicts with an existing durable chunk")]
+    /// An occupied session slot already contains different bytes.
+    #[error("Sumeragi v2 chunk conflicts with an existing buffered chunk")]
     ConflictingChunk,
     /// RS16 layout arithmetic or profile is invalid.
     #[error("invalid Sumeragi v2 RS16 layout")]
@@ -507,9 +332,6 @@ pub(crate) enum V2ChunkError {
     /// Enough shards existed but deterministic RS16 recovery failed.
     #[error("Sumeragi v2 RS16 reconstruction failed")]
     ReconstructionFailed,
-    /// Session directory contains an unrecognized final path.
-    #[error("unexpected entry in Sumeragi v2 chunk store: {}", .0.display())]
-    UnexpectedEntry(PathBuf),
 }
 
 #[cfg(test)]
@@ -573,10 +395,10 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 8,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 3,
+                parity_shards: 2,
                 max_payload_size_bytes: 1024,
                 max_chunk_count: 256,
             },
@@ -635,29 +457,28 @@ mod tests {
     }
 
     #[test]
-    fn plain_payload_roundtrips_and_reopens() {
-        let payload = b"plain persistent payload";
-        let (context, encoded) = encode_fixture(wire::PayloadEncoding::Plain, payload);
-        let root = tempfile::tempdir().expect("tempdir");
-        let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
-            .expect("open session");
-        for (index, chunk) in encoded.chunks.iter().enumerate() {
-            session
-                .admit_bytes(u32::try_from(index).expect("index"), chunk)
-                .expect("persist chunk");
-        }
-        assert_eq!(
-            session.reconstruct().expect("reconstruct"),
-            Some(payload.to_vec())
-        );
-        drop(session);
-
-        let reopened =
-            V2ChunkSession::open(root.path(), &context, encoded.manifest).expect("reopen session");
-        assert_eq!(
-            reopened.reconstruct().expect("reconstruct"),
-            Some(payload.to_vec())
-        );
+    fn plain_payload_is_rejected_by_protocol_v4() {
+        let payload = b"plain payload";
+        let context = context(wire::PayloadEncoding::Plain);
+        let subject = wire::BlockSubject {
+            parent_block_hash: context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block")),
+            payload_hash: Hash::new(payload),
+        };
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 4,
+        };
+        assert!(matches!(
+            encode_payload(&context, round, subject, payload),
+            Err(V2ChunkError::Wire(
+                wire::ValidationError::InvalidDataAvailabilityLayout
+            ))
+        ));
     }
 
     #[test]
@@ -674,7 +495,7 @@ mod tests {
             if index % width < data_shards {
                 session
                     .admit_bytes(u32::try_from(index).expect("index"), chunk)
-                    .expect("persist data shard");
+                    .expect("buffer data shard");
             }
         }
 
@@ -684,9 +505,9 @@ mod tests {
         );
         for index in 0..encoded.chunks.len() {
             assert_eq!(
-                session.chunk_path(index).exists(),
+                session.chunks[index].is_some(),
                 index % width < data_shards,
-                "only data shards should be present at index {index}"
+                "only data shards should be buffered at index {index}"
             );
         }
     }
@@ -705,7 +526,7 @@ mod tests {
             if within != 0 && within != width - 1 {
                 session
                     .admit_bytes(u32::try_from(index).expect("index"), chunk)
-                    .expect("persist recovery shard");
+                    .expect("buffer recovery shard");
             }
         }
 
@@ -733,7 +554,7 @@ mod tests {
                     }
                     session
                         .admit_bytes(u32::try_from(index).expect("index"), chunk)
-                        .expect("persist shard");
+                        .expect("buffer shard");
                 }
                 assert_eq!(
                     session.reconstruct().expect("reconstruct"),
@@ -745,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn corruption_conflicts_and_insufficient_shards_are_rejected_or_pending() {
+    fn corruption_duplicates_and_insufficient_shards_are_rejected_or_pending() {
         let payload = b"adversarial chunk payload";
         let (context, encoded) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
         let root = tempfile::tempdir().expect("tempdir");
@@ -757,18 +578,49 @@ mod tests {
             session.admit_bytes(0, &corrupt),
             Err(V2ChunkError::ChunkHashMismatch)
         ));
-        session
-            .admit_bytes(0, &encoded.chunks[0])
-            .expect("persist canonical chunk");
+        assert_eq!(
+            session
+                .admit_bytes(0, &encoded.chunks[0])
+                .expect("buffer canonical chunk"),
+            ChunkAdmission::Buffered
+        );
+        assert_eq!(
+            session
+                .admit_bytes(0, &encoded.chunks[0])
+                .expect("accept exact duplicate"),
+            ChunkAdmission::Duplicate
+        );
         assert_eq!(session.reconstruct().expect("pending reconstruction"), None);
+    }
 
-        let path = session.chunk_path(0);
-        fs::write(&path, &corrupt).expect("inject final-path corruption");
+    #[test]
+    fn partial_chunks_are_volatile_and_create_no_files() {
+        let payload = b"volatile bounded chunk acquisition";
+        let (context, encoded) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let acquisition_root = temp.path().join("v2-chunks");
+        assert!(!acquisition_root.exists());
+        let mut session =
+            V2ChunkSession::open(&acquisition_root, &context, encoded.manifest.clone())
+                .expect("open volatile session");
+        assert!(!acquisition_root.exists());
+        assert_eq!(
+            session
+                .admit_bytes(0, &encoded.chunks[0])
+                .expect("buffer one shard"),
+            ChunkAdmission::Buffered
+        );
+        assert!(!acquisition_root.exists());
         drop(session);
-        assert!(matches!(
-            V2ChunkSession::open(root.path(), &context, encoded.manifest),
-            Err(V2ChunkError::ChunkHashMismatch)
-        ));
+
+        let restarted = V2ChunkSession::open(&acquisition_root, &context, encoded.manifest)
+            .expect("restart with an empty volatile session");
+        assert!(restarted.chunks.iter().all(Option::is_none));
+        assert_eq!(
+            restarted.reconstruct().expect("reconstruction pending"),
+            None
+        );
+        assert!(!acquisition_root.exists());
     }
 
     #[test]

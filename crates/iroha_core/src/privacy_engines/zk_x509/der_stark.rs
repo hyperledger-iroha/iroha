@@ -81,6 +81,7 @@ pub(crate) const ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1: usize =
 /// Fixed public parser/comparator registration envelope.
 pub(crate) const ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1: usize =
     ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + ZK_X509_DER_STARK_MAX_COMPARATOR_ROWS_V1;
+/// Canonical inactive tail completing the sole first-release trace domain.
 pub(crate) const ZK_X509_DER_STARK_FIXED_PADDING_ROWS_V1: usize =
     ZK_X509_DER_STARK_TRACE_SIZE_V1 - ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1;
 
@@ -361,7 +362,6 @@ pub(crate) struct ZkX509DerStarkFixedScheduleV1;
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkFixedScheduleV1 {
-    #[cfg(test)]
     pub(crate) const fn active_rows(&self) -> usize {
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }

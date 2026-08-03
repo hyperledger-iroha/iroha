@@ -1,5 +1,12 @@
 import Foundation
 
+/// Strict first-release protocol identity parsing failure.
+public enum PrivacyProtocolIdParseErrorV1: Error, Equatable, Sendable {
+    case unknownCanonicalLabel
+    case unknownNoritoDiscriminant(UInt32)
+    case unknownCanonicalTypedVariantLabel
+}
+
 /// Closed first-release privacy protocol identity in canonical Norito order.
 public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
     case zkAcePqAuthorizationV0 = "zk-ace-pq-authorization-v0"
@@ -15,20 +22,155 @@ public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
     case irohaIvmPrivateNoteStarkV1 = "iroha-ivm-private-note-stark-v1"
     case pqMaspStarkV0 = "pq-masp-stark-v0"
 
+    /// Exact four-byte Norito enum discriminant.
+    public var noritoDiscriminant: UInt32 {
+        switch self {
+        case .zkAcePqAuthorizationV0: return 0
+        case .anonymousPgcKOutOfNV1: return 1
+        case .veRangeTransparentRangeV1: return 2
+        case .irohaZkAmsV1: return 3
+        case .vegaExistingCredentialZkV0: return 4
+        case .irohaZkX509StarkP256V0: return 5
+        case .irohaJindoPolynomialCommitmentV0: return 6
+        case .irohaBootleLanternAnoncredV1: return 7
+        case .orchardHalo2ActionsV1: return 8
+        case .moneroFcmpPlusPlusV1: return 9
+        case .irohaIvmPrivateNoteStarkV1: return 10
+        case .pqMaspStarkV0: return 11
+        }
+    }
+
+    /// Exact first-release Norito statement/proof variant label.
+    public var canonicalTypedVariantLabel: String {
+        switch self {
+        case .zkAcePqAuthorizationV0: return "ZkAcePqAuthorizationV0"
+        case .anonymousPgcKOutOfNV1: return "AnonymousPgcKOutOfNV1"
+        case .veRangeTransparentRangeV1: return "VeRangeTransparentRangeV1"
+        case .irohaZkAmsV1: return "IrohaZkAmsV1"
+        case .vegaExistingCredentialZkV0: return "VegaExistingCredentialZkV0"
+        case .irohaZkX509StarkP256V0: return "IrohaZkX509StarkP256V0"
+        case .irohaJindoPolynomialCommitmentV0:
+            return "IrohaJindoPolynomialCommitmentV0"
+        case .irohaBootleLanternAnoncredV1:
+            return "IrohaBootleLanternAnoncredV1"
+        case .orchardHalo2ActionsV1: return "OrchardHalo2ActionsV1"
+        case .moneroFcmpPlusPlusV1: return "MoneroFcmpPlusPlusV1"
+        case .irohaIvmPrivateNoteStarkV1: return "IrohaIvmPrivateNoteStarkV1"
+        case .pqMaspStarkV0: return "PqMaspStarkV0"
+        }
+    }
+
+    /// Exact proof-system tag required by this protocol.
+    public var expectedProofSystem: PrivacyProofSystemIdV1 {
+        switch self {
+        case .zkAcePqAuthorizationV0,
+             .irohaZkX509StarkP256V0,
+             .irohaIvmPrivateNoteStarkV1,
+             .pqMaspStarkV0:
+            return .starkFriSha256Goldilocks
+        case .irohaZkAmsV1:
+            return .zkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512
+        case .anonymousPgcKOutOfNV1: return .anonymousPgcP256
+        case .veRangeTransparentRangeV1: return .irohaVeRangeP256
+        case .vegaExistingCredentialZkV0: return .vegaNeutronNovaSpartanHyraxT256
+        case .irohaJindoPolynomialCommitmentV0: return .jindoPolynomialCommitment
+        case .irohaBootleLanternAnoncredV1: return .lanternLnp22ModuleLinearNorm
+        case .orchardHalo2ActionsV1: return .halo2IpaPasta
+        case .moneroFcmpPlusPlusV1: return .fcmpPlusPlusCurveTreeBulletproofs
+        }
+    }
+
+    /// Exact native-engine tag required by this protocol.
+    public var expectedEngine: PrivacyEngineIdV1 {
+        switch self {
+        case .zkAcePqAuthorizationV0,
+             .irohaZkX509StarkP256V0,
+             .irohaIvmPrivateNoteStarkV1,
+             .pqMaspStarkV0:
+            return .nativeGoldilocksStarkFri
+        case .irohaZkAmsV1:
+            return .nativeZkAmsMaskedRelaxedSpartanT256Ristretto255
+        case .anonymousPgcKOutOfNV1: return .nativeAnonymousPgcP256
+        case .veRangeTransparentRangeV1: return .nativeVeRangeP256
+        case .vegaExistingCredentialZkV0: return .nativeVega
+        case .irohaJindoPolynomialCommitmentV0: return .nativeJindo
+        case .irohaBootleLanternAnoncredV1: return .nativeLanternLnp22
+        case .orchardHalo2ActionsV1: return .nativeHalo2Orchard
+        case .moneroFcmpPlusPlusV1: return .nativeFcmpPlusPlus
+        }
+    }
+
     /// Parse one exact canonical label. Aliases and normalized spellings are rejected.
     public init(canonicalLabel: String) throws {
         guard let value = Self(rawValue: canonicalLabel) else {
-            throw PrivacyCompiledProfileCatalogBridgeError.unknownProtocol
+            throw PrivacyProtocolIdParseErrorV1.unknownCanonicalLabel
         }
         self = value
     }
+
+    /// Parse one exact four-byte Norito enum discriminant.
+    public init(noritoDiscriminant: UInt32) throws {
+        switch noritoDiscriminant {
+        case 0: self = .zkAcePqAuthorizationV0
+        case 1: self = .anonymousPgcKOutOfNV1
+        case 2: self = .veRangeTransparentRangeV1
+        case 3: self = .irohaZkAmsV1
+        case 4: self = .vegaExistingCredentialZkV0
+        case 5: self = .irohaZkX509StarkP256V0
+        case 6: self = .irohaJindoPolynomialCommitmentV0
+        case 7: self = .irohaBootleLanternAnoncredV1
+        case 8: self = .orchardHalo2ActionsV1
+        case 9: self = .moneroFcmpPlusPlusV1
+        case 10: self = .irohaIvmPrivateNoteStarkV1
+        case 11: self = .pqMaspStarkV0
+        default:
+            throw PrivacyProtocolIdParseErrorV1.unknownNoritoDiscriminant(
+                noritoDiscriminant
+            )
+        }
+    }
+
+    /// Parse one exact first-release Norito statement/proof variant label.
+    public init(canonicalTypedVariantLabel: String) throws {
+        guard let value = Self.allCases.first(where: {
+            $0.canonicalTypedVariantLabel == canonicalTypedVariantLabel
+        }) else {
+            throw PrivacyProtocolIdParseErrorV1.unknownCanonicalTypedVariantLabel
+        }
+        self = value
+    }
+}
+
+/// Canonical first-release proof-system identity in Norito discriminant order.
+public enum PrivacyProofSystemIdV1: UInt32, CaseIterable, Sendable {
+    case starkFriSha256Goldilocks = 0
+    case zkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512 = 1
+    case anonymousPgcP256 = 2
+    case irohaVeRangeP256 = 3
+    case vegaNeutronNovaSpartanHyraxT256 = 4
+    case jindoPolynomialCommitment = 5
+    case halo2IpaPasta = 6
+    case fcmpPlusPlusCurveTreeBulletproofs = 7
+    case lanternLnp22ModuleLinearNorm = 8
+}
+
+/// Canonical first-release native verifier-engine identity in Norito discriminant order.
+public enum PrivacyEngineIdV1: UInt32, CaseIterable, Sendable {
+    case nativeGoldilocksStarkFri = 0
+    case nativeZkAmsMaskedRelaxedSpartanT256Ristretto255 = 1
+    case nativeAnonymousPgcP256 = 2
+    case nativeVeRangeP256 = 3
+    case nativeVega = 4
+    case nativeJindo = 5
+    case nativeHalo2Orchard = 6
+    case nativeFcmpPlusPlus = 7
+    case nativeLanternLnp22 = 8
 }
 
 public enum PrivacyCompiledProfileCatalogBridgeError: Error, Equatable, Sendable {
     case nativeUnavailable
     case invalidArchive
     case invalidFixtureBundle
-    case unknownProtocol
 }
 
 /// Stable ABI-21 result of validating one typed local compiled-profile catalog.

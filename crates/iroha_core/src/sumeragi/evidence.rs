@@ -1372,7 +1372,7 @@ fn verify_v2_aggregate_signature(
     for signer in signers {
         let index = usize::try_from(*signer)
             .ok()
-            .filter(|index| *index < context.roster.len())
+            .filter(|index| *index < context.roster.len() && *index < proofs_of_possession.len())
             .ok_or(EvidenceValidationError::V2SignerMismatch)?;
         public_keys.push(context.roster[index].validator.public_key());
         proofs.push(proofs_of_possession[index].as_slice());
@@ -1631,17 +1631,17 @@ mod tests {
                 snapshot_bootstrap: None,
                 mode: wire_v2::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
-                quorum: wire_v2::DualQuorum::from_roster(&roster).expect("dual quorum"),
+                quorum: wire_v2::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"v2-evidence-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire_v2::DataAvailabilityLayout {
-                    encoding: wire_v2::PayloadEncoding::Plain,
+                    encoding: wire_v2::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 32,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 1024,
-                    max_chunk_count: 32,
+                    max_chunk_count: 64,
                 },
                 leader_seed: [0x51; 32],
             };
@@ -1932,7 +1932,6 @@ mod tests {
             view,
         );
         let mut state_block = state.block(header);
-        let nexus = state.nexus_snapshot();
         let effects = iroha_data_model::consensus::NposConsensusEffects {
             vrf_epoch_seals: Vec::new(),
             v2_evidence_admissions: admissions,
@@ -1942,14 +1941,10 @@ mod tests {
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
-            &nexus.dataspace_catalog,
-            &nexus.staking,
             height,
             view,
             now_ms,
             #[cfg(feature = "telemetry")]
-            None,
-            #[cfg(not(feature = "telemetry"))]
             None,
         )
         .expect("valid exact v2 admission applies");
@@ -2182,6 +2177,8 @@ mod tests {
             Err(EvidenceValidationError::V2ArtifactInvalid)
         );
     }
+
+    include!("evidence/missing_signer_pop_test.rs");
 
     #[test]
     fn sumeragi_v2_equivocation_persistence_deduplicates_swaps_and_restart_replay() {

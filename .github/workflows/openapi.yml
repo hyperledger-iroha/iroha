@@ -139,6 +139,7 @@ jobs:
           node --test
           tools/openapi/scripts/__tests__/sync-openapi.test.mjs
           tools/openapi/scripts/__tests__/verify-openapi-versions.test.mjs
+          tools/openapi/scripts/__tests__/verify-musubi-v1-contract.test.mjs
           tools/openapi/scripts/__tests__/check-openapi-signatures.test.mjs
           tools/openapi/scripts/__tests__/openapi-manifest-v2.test.mjs
           tools/openapi/scripts/__tests__/openapi-release-inputs.test.mjs

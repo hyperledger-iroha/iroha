@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
     error::ParseError,
+    id::ChainId,
     name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
@@ -158,14 +159,11 @@ pub const CONTRACT_HAJIMARI_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint
 /// lifecycle operations as it does for permissioned public entrypoints.
 pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
 
-/// Default mainnet contract HRP used for Bech32m-encoded contract addresses.
-pub const CONTRACT_ADDRESS_HRP_MAINNET: &str = "sorac";
-/// Default Taira/testnet contract HRP used for Bech32m-encoded contract addresses.
-pub const CONTRACT_ADDRESS_HRP_TAIRA: &str = "tairac";
-/// Mainnet chain discriminant used by Sora Nexus address encoding.
-pub const CHAIN_DISCRIMINANT_MAINNET: u16 = 753;
-/// Taira/testnet chain discriminant used by Sora Nexus address encoding.
-pub const CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
+/// Canonical human-readable prefix for every Bech32m contract address.
+///
+/// Chain identity is committed inside the address digest. The presentation prefix is therefore
+/// deliberately network-independent and parsers reject every other prefix.
+pub const CONTRACT_ADDRESS_HRP: &str = "irohac";
 
 const CONTRACT_ADDRESS_VERSION_V1: u8 = 1;
 const CONTRACT_ADDRESS_TAG_V1: &[u8] = b"iroha:contract-address:v1";
@@ -455,7 +453,7 @@ pub enum ContractAddressError {
     /// The supplied literal was empty or malformed.
     #[error("invalid contract address: {0}")]
     InvalidLiteral(String),
-    /// Bech32m HRP parsing failed.
+    /// The Bech32m HRP is malformed or is not the canonical contract-address HRP.
     #[error("invalid contract address hrp: {0}")]
     InvalidHrp(String),
     /// The payload version is not recognized.
@@ -480,21 +478,20 @@ impl ContractAddress {
     /// The address payload is versioned and encoded as:
     /// `version || dataspace_id_be || blake3(preimage)[..20]`.
     ///
-    /// The preimage is domain-separated and includes the chain discriminant so the resulting
-    /// address is network-specific.
+    /// The preimage is domain-separated and length-prefixes the exact canonical chain identifier
+    /// and deployer bytes so the resulting address is unambiguous and chain-specific.
     ///
     /// # Errors
     /// Returns an error when the derived HRP is invalid, the deployer account cannot be
     /// canonicalized into an address, or the final Bech32m literal cannot be encoded.
     pub fn derive(
-        chain_discriminant: u16,
+        chain_id: &ChainId,
         deployer: &AccountId,
         deploy_nonce: u64,
         dataspace_id: DataSpaceId,
     ) -> Result<Self, ContractAddressError> {
-        let hrp = contract_hrp_for_chain_discriminant(chain_discriminant);
-        let hrp =
-            Hrp::parse(&hrp).map_err(|err| ContractAddressError::InvalidHrp(err.to_string()))?;
+        let hrp = Hrp::parse(CONTRACT_ADDRESS_HRP)
+            .map_err(|err| ContractAddressError::InvalidHrp(err.to_string()))?;
 
         let deployer_bytes = deployer
             .to_account_address()
@@ -503,12 +500,29 @@ impl ContractAddress {
                 ContractAddressError::InvalidDeployer(err.to_string())
             })?;
 
-        let mut preimage =
-            Vec::with_capacity(CONTRACT_ADDRESS_TAG_V1.len() + 2 + 8 + 8 + deployer_bytes.len());
+        let chain_id_bytes = chain_id.as_str().as_bytes();
+        let chain_id_len = u16::try_from(chain_id_bytes.len())
+            .expect("validated ChainId length must fit the contract-address framing");
+        let deployer_len = u32::try_from(deployer_bytes.len()).map_err(|_| {
+            ContractAddressError::InvalidDeployer(
+                "canonical deployer bytes exceed the contract-address framing limit".to_owned(),
+            )
+        })?;
+        let mut preimage = Vec::with_capacity(
+            CONTRACT_ADDRESS_TAG_V1.len()
+                + 2
+                + chain_id_bytes.len()
+                + 8
+                + 8
+                + 4
+                + deployer_bytes.len(),
+        );
         preimage.extend_from_slice(CONTRACT_ADDRESS_TAG_V1);
-        preimage.extend_from_slice(&chain_discriminant.to_be_bytes());
+        preimage.extend_from_slice(&chain_id_len.to_be_bytes());
+        preimage.extend_from_slice(chain_id_bytes);
         preimage.extend_from_slice(&dataspace_id.as_u64().to_be_bytes());
         preimage.extend_from_slice(&deploy_nonce.to_be_bytes());
+        preimage.extend_from_slice(&deployer_len.to_be_bytes());
         preimage.extend_from_slice(&deployer_bytes);
 
         let digest = blake3::hash(&preimage);
@@ -637,16 +651,6 @@ impl norito::json::JsonDeserialize for ContractAddress {
     }
 }
 
-/// Resolve the default contract-address HRP for the provided chain discriminant.
-#[must_use]
-pub fn contract_hrp_for_chain_discriminant(chain_discriminant: u16) -> String {
-    match chain_discriminant {
-        CHAIN_DISCRIMINANT_MAINNET => CONTRACT_ADDRESS_HRP_MAINNET.to_owned(),
-        CHAIN_DISCRIMINANT_TAIRA => CONTRACT_ADDRESS_HRP_TAIRA.to_owned(),
-        other => format!("c{other:x}"),
-    }
-}
-
 fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddressError> {
     if value.trim().is_empty() {
         return Err(ContractAddressError::InvalidLiteral(
@@ -680,10 +684,10 @@ fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddres
         version => return Err(ContractAddressError::UnsupportedVersion(version)),
     }
 
-    if hrp.as_str().is_empty() {
-        return Err(ContractAddressError::InvalidLiteral(
-            "contract address hrp must not be empty".to_owned(),
-        ));
+    if hrp.as_str() != CONTRACT_ADDRESS_HRP {
+        return Err(ContractAddressError::InvalidHrp(format!(
+            "expected `{CONTRACT_ADDRESS_HRP}`, found `{hrp}`"
+        )));
     }
 
     Ok((hrp, payload))
@@ -692,13 +696,14 @@ fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddres
 /// Re-export commonly used smart-contract types.
 pub mod prelude {
     pub use super::{
-        CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress, ContractAlias, ContractInstance,
+        CONTRACT_ADDRESS_HRP, CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress, ContractAlias,
+        ContractInstance,
     };
 }
 
 #[cfg(test)]
 mod contract_address_tests {
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
 
@@ -714,75 +719,87 @@ mod contract_address_tests {
     #[test]
     fn contract_address_derivation_is_deterministic() {
         let authority = checked_random_account_id();
-        let first = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
-            &authority,
-            7,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive contract address");
-        let second = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
-            &authority,
-            7,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive contract address");
+        let chain_id = ChainId::from("contract-address-determinism-test");
+        let first = ContractAddress::derive(&chain_id, &authority, 7, DataSpaceId::UNIVERSAL)
+            .expect("derive contract address");
+        let second = ContractAddress::derive(&chain_id, &authority, 7, DataSpaceId::UNIVERSAL)
+            .expect("derive contract address");
         assert_eq!(first, second);
         assert_eq!(
             first.dataspace_id().expect("dataspace"),
             DataSpaceId::UNIVERSAL
         );
-        assert!(first.as_str().starts_with(CONTRACT_ADDRESS_HRP_MAINNET));
+        assert!(first.as_str().starts_with(CONTRACT_ADDRESS_HRP));
     }
 
     #[test]
-    fn contract_address_derivation_changes_with_nonce_and_network() {
-        let authority = checked_random_account_id();
-        let mainnet = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
-            &authority,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("mainnet address");
-        let next_nonce = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
-            &authority,
-            1,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("nonce+1 address");
-        let taira = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_TAIRA,
-            &authority,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("taira address");
+    fn contract_address_derivation_matches_cross_sdk_vector() {
+        let private_key =
+            hex::decode("CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53")
+                .expect("fixed Ed25519 seed must be hexadecimal");
+        let authority = AccountId::new(
+            KeyPair::try_from_seed(private_key, Algorithm::Ed25519)
+                .expect("fixed Ed25519 seed must derive")
+                .public_key()
+                .clone(),
+        );
 
-        assert_ne!(mainnet, next_nonce);
-        assert_ne!(mainnet, taira);
-        assert!(taira.as_str().starts_with(CONTRACT_ADDRESS_HRP_TAIRA));
+        let address =
+            ContractAddress::derive(&ChainId::from("pk3"), &authority, 7, DataSpaceId::UNIVERSAL)
+                .expect("derive pinned contract address");
+
+        assert_eq!(
+            address.as_str(),
+            "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38"
+        );
+    }
+
+    #[test]
+    fn contract_address_derivation_changes_with_nonce_and_exact_chain_id() {
+        let authority = checked_random_account_id();
+        let first_chain = ChainId::from("contract-address-chain-alpha");
+        let second_chain = ChainId::from("contract-address-chain-beta");
+        let first = ContractAddress::derive(&first_chain, &authority, 0, DataSpaceId::UNIVERSAL)
+            .expect("first-chain address");
+        let next_nonce =
+            ContractAddress::derive(&first_chain, &authority, 1, DataSpaceId::UNIVERSAL)
+                .expect("nonce+1 address");
+        let second = ContractAddress::derive(&second_chain, &authority, 0, DataSpaceId::UNIVERSAL)
+            .expect("second-chain address");
+
+        assert_ne!(first, next_nonce);
+        assert_ne!(first, second);
+        assert!(second.as_str().starts_with(CONTRACT_ADDRESS_HRP));
+    }
+
+    #[test]
+    fn contract_address_derivation_ignores_account_display_discriminant() {
+        let authority = checked_random_account_id();
+        let chain_id = ChainId::from("contract-address-display-independence");
+
+        let first = {
+            let _display_prefix = crate::account::address::ChainDiscriminantGuard::enter(42);
+            ContractAddress::derive(&chain_id, &authority, 0, DataSpaceId::UNIVERSAL)
+                .expect("derive with first display prefix")
+        };
+        let second = {
+            let _display_prefix = crate::account::address::ChainDiscriminantGuard::enter(73);
+            ContractAddress::derive(&chain_id, &authority, 0, DataSpaceId::UNIVERSAL)
+                .expect("derive with second display prefix")
+        };
+
+        assert_eq!(first, second);
+        assert!(first.as_str().starts_with(CONTRACT_ADDRESS_HRP));
     }
 
     #[test]
     fn contract_address_subject_is_deterministic_and_unique_per_address() {
         let authority = checked_random_account_id();
-        let first = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
-            &authority,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("first contract address");
-        let second = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
-            &authority,
-            1,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("second contract address");
+        let chain_id = ChainId::from("contract-address-subject-test");
+        let first = ContractAddress::derive(&chain_id, &authority, 0, DataSpaceId::UNIVERSAL)
+            .expect("first contract address");
+        let second = ContractAddress::derive(&chain_id, &authority, 1, DataSpaceId::UNIVERSAL)
+            .expect("second contract address");
 
         assert_eq!(first.subject_id(), first.subject_id());
         assert_ne!(first.subject_id(), second.subject_id());
@@ -791,13 +808,13 @@ mod contract_address_tests {
     #[test]
     fn contract_address_subject_consensus_vector() {
         let address: ContractAddress =
-            "sorac1qyqqqqqqqqqqqqpze5aq5vfxha4qlvu4q80e0ff4yesw50cuwzvx4"
+            "irohac1qyqqqqqqqqqqqqpze5aq5vfxha4qlvu4q80e0ff4yesw50c37z96q"
                 .parse()
                 .expect("pinned contract address");
 
         assert_eq!(
             hex::encode(address.subject_id().expect_single_signatory().to_bytes().1),
-            "927d662b25886a1bc1f24e4fb974fb4b1e0bcba63728f807885ab757092611d3"
+            "c19d0326bf14cb44e4e11d5c561f5f69367c305e2bc3ee29086b49aa07df3a55"
         );
     }
 
@@ -813,6 +830,27 @@ mod contract_address_tests {
             ),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn contract_address_parser_rejects_a_valid_payload_with_the_wrong_hrp() {
+        let authority = checked_random_account_id();
+        let address = ContractAddress::derive(
+            &ChainId::from("contract-address-wrong-hrp-test"),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let (_, payload) = bech32::decode(address.as_str()).expect("decode derived address");
+        let wrong_hrp = Hrp::parse("sorac").expect("static wrong HRP");
+        let wrong_literal =
+            bech32::encode::<Bech32m>(wrong_hrp, &payload).expect("encode wrong-HRP literal");
+
+        assert!(matches!(
+            wrong_literal.parse::<ContractAddress>(),
+            Err(ContractAddressError::InvalidHrp(_))
+        ));
     }
 
     #[test]
@@ -897,7 +935,7 @@ mod contract_address_tests {
     fn contract_address_norito_wire_is_validated_string_literal() {
         let authority = checked_random_account_id();
         let address = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
+            &ChainId::from("contract-address-norito-test"),
             &authority,
             12,
             DataSpaceId::UNIVERSAL,

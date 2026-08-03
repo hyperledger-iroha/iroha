@@ -307,14 +307,14 @@ fn checked_localnet_smoke_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPai
 }
 
 fn route_stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
 
 fn route_fee_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
@@ -370,15 +370,25 @@ fn route_multilane_genesis_post_topology_transactions(
         .into(),
         Register::account(Account::new(gas_account_id.clone())).into(),
         Register::asset_definition(
-            AssetDefinition::new(stake_asset_id.clone(), Default::default())
-                .with_name(ROUTE_STAKE_ASSET_NAME.to_owned())
-                .with_metadata(Metadata::default()),
+            AssetDefinition::new(
+                stake_asset_id.clone(),
+                ROUTE_STAKE_ASSET_NAME.to_owned(),
+                Default::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default()),
         )
         .into(),
         Register::asset_definition(
-            AssetDefinition::new(fee_asset_id.clone(), Default::default())
-                .with_name(ROUTE_FEE_ASSET_NAME.to_owned())
-                .with_metadata(Metadata::default()),
+            AssetDefinition::new(
+                fee_asset_id.clone(),
+                ROUTE_FEE_ASSET_NAME.to_owned(),
+                Default::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default()),
         )
         .into(),
         Mint::asset_quantity(
@@ -586,7 +596,7 @@ fn realistic_transfer_domain_id() -> DomainId {
 }
 
 fn realistic_transfer_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         realistic_transfer_domain_id(),
         "transfer_coin".parse().expect("transfer asset name"),
     )
@@ -2973,7 +2983,7 @@ async fn run_realistic_30tps_localnet(
                     ]),
                 )
                 .write(
-                    ["torii", "api_allow_cidrs"],
+                    ["torii", "api_rate_limit_bypass_cidrs"],
                     TomlValue::Array(vec![
                         TomlValue::String("127.0.0.0/8".into()),
                         TomlValue::String("::1/128".into()),
@@ -3007,10 +3017,12 @@ async fn run_realistic_30tps_localnet(
                 .with_genesis_instruction(Register::domain(Domain::new(
                     realistic_transfer_domain_id(),
                 )))
-                .with_genesis_instruction(Register::asset_definition(
-                    AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                        .with_name("Realistic Transfer Coin".to_owned()),
-                ));
+                .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+                    transfer_asset_definition_id.clone(),
+                    "Realistic Transfer Coin",
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )));
             for account in &transfer_load_accounts {
                 builder = builder
                     .with_genesis_instruction(Register::account(Account::new(account.id.clone())))
@@ -4878,7 +4890,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     ]),
                 )
                 .write(
-                    ["torii", "api_allow_cidrs"],
+                    ["torii", "api_rate_limit_bypass_cidrs"],
                     TomlValue::Array(vec![
                         TomlValue::String("127.0.0.0/8".into()),
                         TomlValue::String("::1/128".into()),
@@ -5548,7 +5560,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                     ]),
                 )
                 .write(
-                    ["torii", "api_allow_cidrs"],
+                    ["torii", "api_rate_limit_bypass_cidrs"],
                     TomlValue::Array(vec![
                         TomlValue::String("127.0.0.0/8".into()),
                         TomlValue::String("::1/128".into()),
@@ -10216,25 +10228,6 @@ fn realistic_artifact_summary(
         load_avg_secs_per_block: seconds_per_block(load_elapsed, load_end_produced_blocks),
         avg_secs_per_block: seconds_per_block(total_elapsed, produced_blocks),
     }
-}
-
-fn config_fingerprint(root: &Path) -> Result<Option<String>> {
-    if !root.exists() {
-        return Ok(None);
-    }
-    let mut paths = Vec::new();
-    collect_config_paths(root, &mut paths);
-    if paths.is_empty() {
-        return Ok(None);
-    }
-    paths.sort();
-    let mut hasher = Blake3Hasher::new();
-    for path in paths {
-        hasher.update(path.to_string_lossy().as_bytes());
-        let contents = fs::read(&path).wrap_err_with(|| format!("read {}", path.display()))?;
-        hasher.update(&contents);
-    }
-    Ok(Some(hasher.finalize().to_hex().to_string()))
 }
 
 include!("sumeragi_localnet_smoke/config_paths.rs");

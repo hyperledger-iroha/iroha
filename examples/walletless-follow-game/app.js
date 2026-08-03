@@ -79,7 +79,7 @@ function buildCommand() {
   const amount = amountInput.value.trim() || "10";
   const sessionAccount =
     sessionAccountInput.value.trim() ||
-    "sorauﾛ1NksﾂJZﾐLﾂｽjﾖrUphCSﾎ8Wﾉｽﾏﾁﾓr3ﾑLｾﾇﾋYqwﾌﾉFTMDQE";
+    "sorauﾛ1NksﾂJZﾐLﾂTｸjﾖrUphCSﾎ8Wﾉｽﾏﾁﾓr3ﾑLｾﾇﾋYqwﾌﾉX11YBV";
 
   const payload = {
     chain_id: chainId,

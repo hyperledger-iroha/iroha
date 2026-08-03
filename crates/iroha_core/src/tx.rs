@@ -500,6 +500,8 @@ struct PrivateKaigiFeeBinding {
     fee_amount: Quantity,
 }
 
+const PRIVATE_KAIGI_FEE_PAYER_ACCOUNT_DOMAIN: &[u8] = b"iroha:private-kaigi:fee-payer-account:v1";
+
 fn json_object_string(
     map: &norito::json::Map,
     key: &str,
@@ -2047,7 +2049,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(tx.fee_spend.anchor_root.into()),
         );
 
-        let fee_payer = Self::private_kaigi_fee_payer_account(tx)?;
+        let fee_payer = Self::private_kaigi_fee_payer_account(tx);
 
         transfer
             .execute(&fee_payer, state_transaction)
@@ -2056,23 +2058,15 @@ impl<'tx> AcceptedTransaction<'tx> {
             })
     }
 
-    fn private_kaigi_fee_payer_account(
-        tx: &PrivateKaigiTransaction,
-    ) -> Result<AccountId, TransactionRejectionReason> {
-        let fee_payer_seed = iroha_crypto::Hash::new(tx.action_hash().as_ref());
-        let fee_payer_keypair = iroha_crypto::KeyPair::try_from_seed(
-            fee_payer_seed.as_ref().to_vec(),
-            Algorithm::Ed25519,
-        )
-        .map_err(|err| {
-            TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
-                "failed to derive private Kaigi fee payer account: {err}"
-            )))
-        })?;
-        Ok(AccountId::new(fee_payer_keypair.public_key().clone()))
+    fn private_kaigi_fee_payer_account(tx: &PrivateKaigiTransaction) -> AccountId {
+        let public_key = iroha_crypto::derive_non_signing_ed25519_public_key(
+            PRIVATE_KAIGI_FEE_PAYER_ACCOUNT_DOMAIN,
+            &[tx.action_hash().as_ref()],
+        );
+        AccountId::new(public_key)
     }
 
-    /// Like [`Self::accept_genesis`], but without wrapping.
+    /// Validate a genesis transaction, including its individual authorization proof.
     ///
     /// # Errors
     ///
@@ -2115,6 +2109,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         }
 
         Self::ensure_signing_allowed(tx, crypto)?;
+        Self::verify_signature_for_check(tx, SignatureCheck::Verify, None)?;
 
         Ok(())
     }
@@ -5779,7 +5774,7 @@ pub mod tests {
             EventBox,
             data::{
                 self,
-                prelude::{AccountEvent, AssetChanged, AssetEvent, DomainEvent},
+                prelude::{AssetChanged, AssetEvent, DomainEvent},
             },
             trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
         },
@@ -5903,16 +5898,20 @@ pub mod tests {
         allow_unshield: bool,
     ) -> (World, AccountId, AssetDefinitionId) {
         let (mut world, authority_id, _) = world_with_authority("wonderland");
-        let asset_def_id = AssetDefinitionId::new(
+        let asset_def_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "zkpolicy".parse().expect("asset name"),
         );
-        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
-            .with_name(asset_def_id.name().to_string())
-            .confidential_policy(
-                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-            )
-            .build(&authority_id);
+        let asset_definition = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "zkpolicy".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(
+            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+        )
+        .build(&authority_id);
         world
             .asset_definitions
             .insert(asset_def_id.clone(), asset_definition);
@@ -6181,6 +6180,41 @@ pub mod tests {
             far_future,
         )
         .expect("genesis validation should use provided timestamp");
+    }
+
+    #[test]
+    fn validate_genesis_with_now_rejects_invalid_transaction_signature() {
+        let now = Duration::from_secs(10_000);
+        let (_handle, time_source) = TimeSource::new_mock(now);
+        let mut tx = TransactionBuilder::new_with_time_source(
+            CHAIN_ID.clone(),
+            GENESIS_ACCOUNT.id.clone(),
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::DEBUG,
+            "genesis signature check".to_string(),
+        )])
+        .sign(&GENESIS_ACCOUNT.key);
+        let unrelated = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
+        tx.set_signature(TransactionSignature(checked_signature_of(
+            unrelated.private_key(),
+            tx.payload(),
+        )));
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        assert!(matches!(
+            AcceptedTransaction::validate_genesis_with_now(
+                &tx,
+                &CHAIN_ID,
+                Duration::from_secs(1),
+                &GENESIS_ACCOUNT.id,
+                &crypto_cfg,
+                now,
+            ),
+            Err(AcceptTransactionFail::SignatureVerification(_))
+        ));
     }
 
     #[test]
@@ -6469,7 +6503,7 @@ pub mod tests {
         let deployer_keypair = checked_random_tx_keypair();
         let deployer = AccountId::new(deployer_keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &deployer,
             1,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -7593,7 +7627,7 @@ pub mod tests {
     fn decoded_versioned_signed_transaction_normalizes_adaptive_payload_metadata() {
         let chain: ChainId = "decoded-versioned-adaptive-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let asset_def_id = AssetDefinitionId::new(
+        let asset_def_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "adaptivezk".parse().expect("asset name"),
         );
@@ -8031,7 +8065,7 @@ pub mod tests {
                 proof: vec![0xAA, 0xBB, 0xCC],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
@@ -8195,17 +8229,24 @@ pub mod tests {
     }
 
     #[test]
-    fn private_kaigi_fee_payer_account_uses_checked_ed25519_derivation() {
+    fn private_kaigi_fee_payer_account_has_no_publicly_derived_signing_key() {
         let tx = sample_private_kaigi_transaction("private-kaigi-chain".parse().expect("chain id"));
-        let fee_payer = AcceptedTransaction::private_kaigi_fee_payer_account(&tx)
-            .expect("checked private Kaigi fee payer derivation");
+        let fee_payer = AcceptedTransaction::private_kaigi_fee_payer_account(&tx);
+        let repeated = AcceptedTransaction::private_kaigi_fee_payer_account(&tx);
         let seed = Hash::new(tx.action_hash().as_ref());
-        let expected_keypair = KeyPair::try_from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519)
-            .expect("expected checked fee payer seed derivation");
+        let legacy_keypair = KeyPair::try_from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519)
+            .expect("legacy public seed derives");
 
+        assert_eq!(fee_payer, repeated);
         assert_eq!(
+            fee_payer.expect_single_signatory().algorithm(),
+            Algorithm::Ed25519,
+            "protocol account remains a valid Ed25519 account identity"
+        );
+        assert_ne!(
             fee_payer,
-            AccountId::new(expected_keypair.public_key().clone())
+            AccountId::new(legacy_keypair.public_key().clone()),
+            "the public action hash must not yield a signing key for the protocol account"
         );
     }
 
@@ -8378,14 +8419,14 @@ pub mod tests {
         let agreement_id: iroha_data_model::repo::RepoAgreementId =
             "repo-1".parse().expect("repo id");
         let cash_leg = iroha_data_model::repo::RepoCashLeg {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1u32.into(),
         };
         let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
@@ -8450,7 +8491,7 @@ pub mod tests {
         let dvp = iroha_data_model::isi::settlement::DvpIsi::new(
             settlement_id.clone(),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
@@ -8459,7 +8500,7 @@ pub mod tests {
                 authority.clone(),
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
@@ -8475,7 +8516,7 @@ pub mod tests {
         let pvp = iroha_data_model::isi::settlement::PvpIsi::new(
             settlement_id,
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
@@ -8484,7 +8525,7 @@ pub mod tests {
                 authority.clone(),
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
@@ -8525,7 +8566,8 @@ pub mod tests {
             iroha_data_model::events::EventFilterBox::ExecuteTrigger(
                 iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new(),
             ),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = iroha_data_model::trigger::Trigger::new(trigger_id, action);
         let register = iroha_data_model::isi::register::Register::trigger(trigger);
         let boxed = InstructionBox::from(register);
@@ -10433,7 +10475,7 @@ pub mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(Executable::ContractCall(ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: Hash::new(b"admission-contract-code"),
@@ -10467,7 +10509,7 @@ pub mod tests {
         let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let call = ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: Hash::new(b"batch-admission-contract-code"),
@@ -11880,7 +11922,7 @@ pub mod tests {
             .insert(Name::from_str("apps").expect("namespace"));
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11923,14 +11965,14 @@ pub mod tests {
             .insert(Name::from_str("apps").expect("namespace"));
 
         let old_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("old contract address");
         let new_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -12034,7 +12076,7 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -12451,7 +12493,7 @@ pub mod tests {
         state.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             TestDataSpaceId::UNIVERSAL,
@@ -13258,7 +13300,7 @@ pub mod tests {
         LazyLock::new(|| DomainId::try_new(DOMAIN_STR, "universal").unwrap());
     /// Pre-parsed asset definition identifier for the sandbox asset.
     pub static ASSET: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DOMAIN.clone(),
             ASSET_STR.parse().expect("sandbox asset name is valid"),
         )
@@ -13317,670 +13359,7 @@ pub mod tests {
             .collect()
     });
 
-    #[test]
-    fn sandbox_accounts_are_deterministic() {
-        for (name, public, _) in SANDBOX_ACCOUNT_KEYS {
-            assert_eq!(
-                ACCOUNT[name].id.expect_single_signatory().to_string(),
-                *public
-            );
-        }
-    }
-
-    /// Account credentials used by the sandbox (ID and signing key).
-    #[derive(Debug, Clone)]
-    pub struct Credential {
-        /// Fully-qualified account identifier.
-        pub id: AccountId,
-        /// Private key used to sign transactions for the account.
-        pub key: iroha_crypto::PrivateKey,
-    }
-
-    /// Credentials of the special genesis account used to bootstrap state.
-    pub static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
-        let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.clone());
-        Credential {
-            id,
-            key: key_pair.into_parts().1,
-        }
-    });
-    /// Chain identifier used in sandbox transactions.
-    pub static CHAIN_ID: LazyLock<ChainId> =
-        LazyLock::new(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
-
-    /// Build the [`AssetId`] for the sandbox test asset owned by a named account.
-    pub fn asset(account_name: &str) -> AssetId {
-        AssetId::new(ASSET.clone(), ACCOUNT[account_name].id.clone())
-    }
-
-    /// Convenience builder that yields a single transfer instruction iterator.
-    ///
-    /// Transfers `quantity` units of the sandbox asset from `src` to `dest`.
-    pub fn transfer<'a>(
-        src: &'a str,
-        quantity: u32,
-        dest: &'a str,
-    ) -> impl IntoIterator<Item = InstructionBox> + 'a {
-        transfers_batched::<1>(src, quantity, dest)
-    }
-
-    /// Produce an iterator over `N_INSTRUCTIONS` transfer instructions.
-    ///
-    /// Each instruction transfers `quantity_per_instruction` units of the sandbox
-    /// asset from `src` to `dest`.
-    pub fn transfers_batched<'a, const N_INSTRUCTIONS: usize>(
-        src: &'a str,
-        quantity_per_instruction: u32,
-        dest: &'a str,
-    ) -> impl IntoIterator<Item = InstructionBox> + 'a {
-        (0..N_INSTRUCTIONS).map(move |_| {
-            Transfer::asset_quantity(
-                asset(src),
-                quantity_per_instruction,
-                ACCOUNT[dest].id.clone(),
-            )
-            .into()
-        })
-    }
-
-    /// Assert that the emitted events match a stored JSON snapshot.
-    pub fn assert_events(actual: &[EventBox], snapshot_path: impl AsRef<std::path::Path>) {
-        let snapshot_path_buf = {
-            let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures")
-                .join(snapshot_path.as_ref());
-            path.set_extension("json");
-            path
-        };
-        let (snapshot_text, line_endings) = load_snapshot(&snapshot_path_buf);
-        let expected = expect_test::expect_file![snapshot_path_buf.clone()];
-        let actual = actual
-            .iter()
-            .filter(|e| {
-                !matches!(
-                    e,
-                    EventBox::Time(_) | EventBox::Pipeline(_) | EventBox::PipelineBatch(_)
-                )
-            })
-            .map(EventSnapshot::from_event)
-            .collect::<Vec<_>>();
-        let rendered = if actual.is_empty() {
-            "[]".to_owned()
-        } else {
-            norito::json::to_json_pretty(&actual).unwrap()
-        };
-        if let Some(text) = snapshot_text.as_deref() {
-            let collapsed = collapse_to_unix_line_endings(text);
-            let collapsed = collapsed.strip_suffix('\n').unwrap_or(collapsed.as_ref());
-            if collapsed == rendered {
-                return;
-            }
-        }
-        let normalised = normalise_line_endings(&rendered, line_endings);
-        expected.assert_eq(normalised.as_ref());
-    }
-
-    enum EventSnapshot<'a> {
-        Asset(AssetEventSnapshot<'a>),
-        TriggerCompleted(TriggerCompletedSnapshot<'a>),
-        Raw(String),
-    }
-
-    impl<'a> EventSnapshot<'a> {
-        fn from_event(event: &'a EventBox) -> Self {
-            match event {
-                EventBox::Data(data) => AssetEventSnapshot::from_data_event(data.as_ref())
-                    .map_or_else(|| Self::Raw(format!("{event:?}")), Self::Asset),
-                EventBox::TriggerCompleted(event) => {
-                    Self::TriggerCompleted(TriggerCompletedSnapshot(event))
-                }
-                other => Self::Raw(format!("{other:?}")),
-            }
-        }
-    }
-
-    impl norito::json::JsonSerialize for EventSnapshot<'_> {
-        fn json_serialize(&self, out: &mut String) {
-            match self {
-                Self::Asset(asset) => asset.json_serialize(out),
-                Self::TriggerCompleted(event) => event.json_serialize(out),
-                Self::Raw(raw) => norito::json::write_json_string(raw, out),
-            }
-        }
-    }
-
-    enum AssetEventSnapshot<'a> {
-        Added(&'a AssetChanged),
-        Removed(&'a AssetChanged),
-    }
-
-    impl<'a> AssetEventSnapshot<'a> {
-        fn from_data_event(event: &'a data::DataEvent) -> Option<Self> {
-            match event {
-                data::DataEvent::Domain(domain_event) => Self::from_domain_event(domain_event),
-                _ => None,
-            }
-        }
-
-        fn from_domain_event(event: &'a DomainEvent) -> Option<Self> {
-            match event {
-                DomainEvent::Account(account_event) => Self::from_account_event(account_event),
-                _ => None,
-            }
-        }
-
-        fn from_account_event(event: &'a AccountEvent) -> Option<Self> {
-            match event {
-                AccountEvent::Asset(asset_event) => Self::from_asset_event(asset_event),
-                _ => None,
-            }
-        }
-
-        fn from_asset_event(event: &'a AssetEvent) -> Option<Self> {
-            match event {
-                AssetEvent::Added(change) => Some(Self::Added(change)),
-                AssetEvent::Removed(change) => Some(Self::Removed(change)),
-                _ => None,
-            }
-        }
-
-        fn variant_label(&self) -> &'static str {
-            match self {
-                Self::Added(_) => "Added",
-                Self::Removed(_) => "Removed",
-            }
-        }
-
-        fn change(&self) -> &'a AssetChanged {
-            match self {
-                Self::Added(change) | Self::Removed(change) => change,
-            }
-        }
-    }
-
-    fn format_asset_id_for_snapshot(asset_id: &AssetId) -> String {
-        let account = asset_id.account();
-        let account_str = ACCOUNT_ALIAS_BY_ID.get(account).map_or_else(
-            || format!("{}@{}", account.expect_single_signatory(), DOMAIN_STR),
-            |alias| format!("{alias}@{DOMAIN_STR}"),
-        );
-        if asset_id.definition().try_domain() == Some(&*DOMAIN) {
-            let name = asset_id
-                .definition()
-                .try_name()
-                .expect("matching domain projection must include a name");
-            format!("{name}##{account_str}")
-        } else {
-            format!("{}#{}", asset_id.definition(), account_str)
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum SnapshotLineEndings {
-        Lf,
-        Crlf,
-    }
-
-    fn load_snapshot(path: &std::path::Path) -> (Option<String>, SnapshotLineEndings) {
-        std::fs::read_to_string(path).map_or((None, SnapshotLineEndings::Lf), |text| {
-            let endings = detect_line_endings_from_text(&text);
-            (Some(text), endings)
-        })
-    }
-
-    fn normalise_line_endings(
-        input: &str,
-        endings: SnapshotLineEndings,
-    ) -> std::borrow::Cow<'_, str> {
-        match endings {
-            SnapshotLineEndings::Lf => std::borrow::Cow::Borrowed(input),
-            SnapshotLineEndings::Crlf => {
-                if input.contains('\r') {
-                    std::borrow::Cow::Borrowed(input)
-                } else {
-                    std::borrow::Cow::Owned(input.replace('\n', "\r\n"))
-                }
-            }
-        }
-    }
-
-    fn detect_line_endings_from_text(text: &str) -> SnapshotLineEndings {
-        if text.contains('\r') {
-            SnapshotLineEndings::Crlf
-        } else {
-            SnapshotLineEndings::Lf
-        }
-    }
-
-    fn collapse_to_unix_line_endings(text: &str) -> std::borrow::Cow<'_, str> {
-        if text.contains('\r') {
-            let collapsed = text.replace("\r\n", "\n").replace('\r', "\n");
-            std::borrow::Cow::Owned(collapsed)
-        } else {
-            std::borrow::Cow::Borrowed(text)
-        }
-    }
-
-    impl norito::json::JsonSerialize for AssetEventSnapshot<'_> {
-        fn json_serialize(&self, out: &mut String) {
-            out.push('{');
-            norito::json::write_json_string("Data", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("Domain", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("Account", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("Asset", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string(self.variant_label(), out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("asset", out);
-            out.push(':');
-            let asset_id = format_asset_id_for_snapshot(self.change().asset());
-            norito::json::write_json_string(&asset_id, out);
-            out.push(',');
-            norito::json::write_json_string("amount", out);
-            out.push(':');
-            let amount = self.change().amount().to_string();
-            norito::json::write_json_string(&amount, out);
-            out.push('}');
-            out.push('}');
-            out.push('}');
-            out.push('}');
-            out.push('}');
-            out.push('}');
-        }
-    }
-
-    struct TriggerCompletedSnapshot<'a>(&'a TriggerCompletedEvent);
-
-    impl norito::json::JsonSerialize for TriggerCompletedSnapshot<'_> {
-        fn json_serialize(&self, out: &mut String) {
-            out.push('{');
-            norito::json::write_json_string("TriggerCompleted", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("trigger_id", out);
-            out.push(':');
-            let trigger_id = self.0.trigger_id().to_string();
-            norito::json::write_json_string(&trigger_id, out);
-            out.push(',');
-            norito::json::write_json_string("outcome", out);
-            out.push(':');
-            match self.0.outcome() {
-                TriggerCompletedOutcome::Success => {
-                    norito::json::write_json_string("Success", out);
-                }
-                TriggerCompletedOutcome::Failure(message) => {
-                    out.push('{');
-                    norito::json::write_json_string("Failure", out);
-                    out.push(':');
-                    norito::json::write_json_string(message, out);
-                    out.push('}');
-                }
-            }
-            out.push('}');
-            out.push('}');
-        }
-    }
-
-    impl Default for Sandbox {
-        fn default() -> Self {
-            let world = {
-                let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
-                let asset_def = {
-                    let __asset_definition_id = ASSET.clone();
-                    AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
-                .build(&GENESIS_ACCOUNT.id);
-                let accounts = ACCOUNT
-                    .clone()
-                    .into_iter()
-                    .chain([("genesis", GENESIS_ACCOUNT.clone())])
-                    .map(|(_name, cred)| Account::new(cred.id.clone()).build(&GENESIS_ACCOUNT.id));
-                let assets = INIT_BALANCE
-                    .iter()
-                    .map(|(name, num)| Asset::new(asset(name), *num));
-
-                World::with_assets([domain], accounts, [asset_def], assets, [])
-            };
-            let kura = crate::kura::Kura::blank_kura_for_testing();
-            let query_handle = crate::query::store::LiveQueryStore::start_test();
-            let state =
-                State::new_with_chain_for_testing(world, kura, query_handle, CHAIN_ID.clone());
-            let mut sandbox = Self {
-                state,
-                transactions: vec![],
-            };
-            // Force deterministic single-threaded pipeline evaluation in tests to avoid
-            // parallel scheduling reordering transactions that rely on chained data triggers.
-            sandbox.state.pipeline.dynamic_prepass = false;
-            sandbox.state.pipeline.parallel_overlay = false;
-            sandbox.state.pipeline.parallel_apply = false;
-            sandbox.state.pipeline.workers = 1;
-
-            sandbox.with_max_execution_depth(INIT_EXECUTION_DEPTH)
-        }
-    }
-
-    impl Sandbox {
-        fn trigger_registration_metadata(&self) -> Metadata {
-            let height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
-            let registered_ms = self
-                .state
-                .view()
-                .latest_block()
-                .map(|block| block.header().creation_time().as_millis())
-                .and_then(|ms| u64::try_from(ms).ok())
-                .unwrap_or(0);
-            let mut metadata = Metadata::default();
-            let key_height = "__registered_block_height"
-                .parse::<Name>()
-                .expect("registered block height metadata key");
-            let key_time = "__registered_at_ms"
-                .parse::<Name>()
-                .expect("registered timestamp metadata key");
-            metadata.insert(key_height, Json::new(height));
-            metadata.insert(key_time, Json::new(registered_ms));
-            metadata
-        }
-
-        /// Add a time trigger that transfers the test asset after a timer fires.
-        ///
-        /// Enqueues a time-based trigger which moves `quantity` units from `src`
-        /// to `dest` on each firing. The trigger is configured for infinite repeats
-        /// in the sandbox unless otherwise specified by a labeled variant.
-        #[must_use]
-        pub fn with_time_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_time_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely, 0)
-        }
-
-        /// Add a labeled time trigger variant for test disambiguation.
-        #[must_use]
-        pub fn with_time_trigger_transfer_labeled(
-            self,
-            src: &str,
-            quantity: u32,
-            dest: &str,
-            label: u32,
-        ) -> Self {
-            self.with_time_trigger_transfer_internal(
-                src,
-                quantity,
-                dest,
-                Repeats::Indefinitely,
-                label,
-            )
-        }
-
-        fn with_time_trigger_transfer_internal(
-            self,
-            src: &str,
-            quantity: u32,
-            dest: &str,
-            repeats: Repeats,
-            label: u32,
-        ) -> Self {
-            let mut block = self.state.world.triggers.block();
-            let mut transaction = block.transaction();
-            let trigger = Trigger::new(
-                format!("time-{src}-{dest}-{label}").parse().unwrap(),
-                Action::new(
-                    transfer(src, quantity, dest),
-                    repeats,
-                    GENESIS_ACCOUNT.id.clone(),
-                    TimeEventFilter::new(ExecutionTime::PreCommit),
-                )
-                .with_metadata(self.trigger_registration_metadata()),
-            )
-            .try_into()
-            .unwrap();
-
-            transaction.add_time_trigger(trigger).unwrap();
-            transaction.apply();
-            block.commit();
-            self
-        }
-
-        /// Add a data trigger that reacts to asset-added events and forwards funds.
-        #[must_use]
-        pub fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_quantity_internal(
-                src,
-                Quantity::from(quantity),
-                dest,
-                Repeats::Indefinitely,
-                0,
-            )
-        }
-
-        /// Add a single-use data trigger that fires at most once.
-        #[must_use]
-        pub fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_quantity_internal(
-                src,
-                Quantity::from(quantity),
-                dest,
-                Repeats::Exactly(1),
-                0,
-            )
-        }
-
-        /// Add a labeled data trigger for disambiguation between similar triggers in tests.
-        #[must_use]
-        pub fn with_data_trigger_transfer_labeled(
-            self,
-            src: &str,
-            quantity: u32,
-            dest: &str,
-            label: u32,
-        ) -> Self {
-            self.with_data_trigger_transfer_quantity_internal(
-                src,
-                Quantity::from(quantity),
-                dest,
-                Repeats::Indefinitely,
-                label,
-            )
-        }
-
-        /// Add a data trigger with an explicit [`Quantity`] amount.
-        #[must_use]
-        pub fn with_data_trigger_transfer_quantity(
-            self,
-            src: &str,
-            amount: Quantity,
-            dest: &str,
-        ) -> Self {
-            self.with_data_trigger_transfer_quantity_internal(
-                src,
-                amount,
-                dest,
-                Repeats::Indefinitely,
-                0,
-            )
-        }
-
-        fn with_data_trigger_transfer_quantity_internal(
-            self,
-            src: &str,
-            amount: Quantity,
-            dest: &str,
-            repeats: Repeats,
-            label: u32,
-        ) -> Self {
-            let mut block = self.state.world.triggers.block();
-            let mut transaction = block.transaction();
-            let trigger = Trigger::new(
-                format!("data-{src}-{dest}-{label}").parse().unwrap(),
-                Action::new(
-                    [InstructionBox::from(Transfer::asset_quantity(
-                        asset(src),
-                        amount,
-                        ACCOUNT[dest].id.clone(),
-                    ))],
-                    repeats,
-                    GENESIS_ACCOUNT.id.clone(),
-                    AssetEventFilter::new()
-                        .for_events(AssetEventSet::Added)
-                        .for_asset(asset(src)),
-                )
-                .with_metadata(self.trigger_registration_metadata()),
-            )
-            .try_into()
-            .unwrap();
-
-            transaction.add_data_trigger(trigger).unwrap();
-            transaction.apply();
-            block.commit();
-            self
-        }
-
-        /// Limit the maximum smart contract execution depth in the sandbox state.
-        #[must_use]
-        pub fn with_max_execution_depth(self, depth: u8) -> Self {
-            let mut world = self.state.world.block();
-            world.parameters.set_parameter(Parameter::SmartContract(
-                iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(depth),
-            ));
-            world.commit();
-            self
-        }
-
-        /// Queue a single transfer transaction from `src` to `dest`.
-        ///
-        /// This is a convenience wrapper over [`Self::request_transfers_batched`] with
-        /// `N_INSTRUCTIONS = 1`.
-        pub fn request_transfer(&mut self, src: &str, quantity: u32, dest: &str) {
-            self.request_transfers_batched::<1>(src, quantity, dest);
-        }
-
-        /// Queue a transaction consisting of repeated Transfer instructions.
-        ///
-        /// Builds and buffers a signed transaction that contains `N_INSTRUCTIONS`
-        /// transfer instructions, each moving `quantity_per_instruction` units of
-        /// the test asset from `src` to `dest`. The buffered transaction is
-        /// included the next time a sandbox block is constructed via [`Self::block`].
-        ///
-        /// - `N_INSTRUCTIONS`: number of identical transfer instructions to include
-        /// - `src`: source account name (e.g., "alice")
-        /// - `quantity_per_instruction`: amount transferred by each instruction
-        /// - `dest`: destination account name (e.g., "bob")
-        pub fn request_transfers_batched<const N_INSTRUCTIONS: usize>(
-            &mut self,
-            src: &str,
-            quantity_per_instruction: u32,
-            dest: &str,
-        ) {
-            let transaction = {
-                let instructions =
-                    transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
-                TransactionBuilder::new(
-                    CHAIN_ID.clone(),
-                    GENESIS_ACCOUNT.id.clone(),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .with_instructions(instructions)
-                .sign(&GENESIS_ACCOUNT.key)
-            };
-            self.transactions.push(transaction);
-        }
-
-        /// Build a signed block from all queued transactions and open it for assertions.
-        ///
-        /// Consumes the currently queued transactions, packs them into a signed
-        /// block and returns a [`SandboxBlock`] handle which allows asserting
-        /// balances and applying the block to the in-memory test state.
-        pub fn block(&mut self) -> SandboxBlock<'_> {
-            let block: SignedBlock = {
-                let transactions = {
-                    let signed = core::mem::take(&mut self.transactions);
-                    // Skip static analysis (AcceptedTransaction::accept)
-                    signed
-                        .into_iter()
-                        .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
-                        .collect::<Vec<_>>()
-                };
-                BlockBuilder::new_preserve_order(transactions)
-                    .chain(0, self.state.view().latest_block().as_deref())
-                    .sign(&GENESIS_ACCOUNT.key)
-                    .unpack(|_| {})
-                    .into()
-            };
-
-            SandboxBlock {
-                state: self.state.block(block.header()),
-                block: Some(block),
-            }
-        }
-    }
-
-    impl SandboxBlock<'_> {
-        /// Validate and commit the prepared block to the sandbox state.
-        ///
-        /// Returns the list of emitted events together with the committed
-        /// block for further inspection in tests.
-        pub fn apply(&mut self) -> (Vec<EventBox>, CommittedBlock) {
-            let _fifo_lock = FIFO_SCHEDULER_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            struct RestoreFifoScheduler(bool);
-            impl Drop for RestoreFifoScheduler {
-                fn drop(&mut self) {
-                    crate::pipeline::set_force_fifo_scheduler(self.0);
-                }
-            }
-            let _restore_fifo =
-                RestoreFifoScheduler(crate::pipeline::set_force_fifo_scheduler(true));
-            let valid = ValidBlock::validate_unchecked(
-                core::mem::take(&mut self.block).unwrap(),
-                &mut self.state,
-            )
-            .unpack(|_| {});
-            let committed = valid.commit_unchecked().unpack(|_| {});
-            let events = self.state.apply_without_execution(
-                &committed,
-                // topology in state is only used by sumeragi
-                vec![],
-            );
-
-            (events, committed)
-        }
-
-        /// Assert that selected accounts have the expected balances.
-        ///
-        /// The `expected` map specifies accounts (by short name like "alice")
-        /// and their expected balances of the sandbox test asset. Only the
-        /// accounts present in `expected` are checked.
-        pub fn assert_balances(&self, expected: impl Into<AccountBalance>) {
-            let expected = expected.into();
-            let actual: AccountBalance = ACCOUNTS_STR
-                .iter()
-                .filter(|name| expected.contains_key(*name))
-                .map(|name| {
-                    let balance_num = self.state.world.assets.get(&asset(name)).map_or_else(
-                        || panic!("{name}'s asset not found"),
-                        |asset| asset.0.clone(),
-                    );
-                    let balance =
-                        numeric_to_u64(balance_num.as_numeric()).unwrap_or_else(|error| {
-                            panic!(
-                                "account {name} has non-integer balance {balance_num}: {error:?}"
-                            );
-                        });
-                    (*name, balance)
-                })
-                .collect();
-
-            assert_eq!(actual, expected);
-        }
-    }
+    include!("tx/sandbox_state_tests.rs");
 }
 
 #[cfg(test)]

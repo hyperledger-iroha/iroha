@@ -11,6 +11,26 @@ export type PrivacyProtocolIdV1 =
   | "monero-fcmp-plus-plus-v1"
   | "iroha-ivm-private-note-stark-v1"
   | "pq-masp-stark-v0";
+export type PrivacyProofSystemIdV1 =
+  | "stark-fri-sha256-goldilocks"
+  | "anonymous-pgc-p256"
+  | "iroha-verange-p256"
+  | "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512"
+  | "vega-neutron-nova-spartan-hyrax-t256"
+  | "jindo-polynomial-commitment"
+  | "lantern-lnp22-module-linear-norm"
+  | "halo2-ipa-pasta"
+  | "fcmp-plus-plus-curve-tree-bulletproofs";
+export type PrivacyEngineIdV1 =
+  | "native-goldilocks-stark-fri"
+  | "native-anonymous-pgc-p256"
+  | "native-verange-p256"
+  | "native-zk-ams-masked-relaxed-spartan-t256-ristretto255"
+  | "native-vega"
+  | "native-jindo"
+  | "native-lantern-lnp22"
+  | "native-halo2-orchard"
+  | "native-fcmp-plus-plus";
 export type PrivacyTaggedUnitV1<
   Key extends string,
   Value extends string,
@@ -19,6 +39,14 @@ export type PrivacyTaggedUnitV1<
 export type PrivacyProtocolTagV1 = PrivacyTaggedUnitV1<
   "protocol",
   PrivacyProtocolIdV1
+>;
+export type PrivacyProofSystemTagV1 = PrivacyTaggedUnitV1<
+  "proof_system",
+  PrivacyProofSystemIdV1
+>;
+export type PrivacyEngineTagV1 = PrivacyTaggedUnitV1<
+  "engine",
+  PrivacyEngineIdV1
 >;
 export type PrivacyFixed32BytesV1 = readonly number[];
 /** Exact unsigned 64-bit protocol integer decoded without IEEE-754 rounding. */
@@ -50,8 +78,8 @@ export interface PrivacyProtocolLimitsV1 {
 }
 export interface PrivacyCompiledProfileBindingsV1 {
   readonly protocol_id: PrivacyProtocolTagV1;
-  readonly proof_system_id: Readonly<{ proof_system: string; value: null }>;
-  readonly engine_id: Readonly<{ engine: string; value: null }>;
+  readonly proof_system_id: PrivacyProofSystemTagV1;
+  readonly engine_id: PrivacyEngineTagV1;
   readonly parameter_id: PrivacyFixed32BytesV1;
   readonly parameter_digest: PrivacyFixed32BytesV1;
   readonly verifier_digest: PrivacyFixed32BytesV1;

@@ -72,10 +72,11 @@ fn register_account_and_asset_then_mint() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
 
     // Predeclare asset id to grant mint permission
-    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let rose: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     wsv.grant_permission(&alice, PermissionToken::MintAsset(rose.clone()));
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);

@@ -364,6 +364,7 @@ fn blocker_label(blocker: SumeragiV2LivenessBlocker) -> &'static str {
         SumeragiV2LivenessBlocker::TimeoutCertificateMissing => "timeout_certificate_missing",
         SumeragiV2LivenessBlocker::SchedulerStarvation => "scheduler_starvation",
         SumeragiV2LivenessBlocker::ApplicationPending => "application_pending",
+        SumeragiV2LivenessBlocker::SuccessorActivationPending => "successor_activation_pending",
         SumeragiV2LivenessBlocker::LocalControlPending => "local_control_pending",
     }
 }
@@ -3895,6 +3896,10 @@ fn simulation_summary_json_records_release_profile_and_status_evidence() {
         "application_pending"
     );
     assert_eq!(
+        blocker_label(SumeragiV2LivenessBlocker::SuccessorActivationPending),
+        "successor_activation_pending"
+    );
+    assert_eq!(
         blocker_label(SumeragiV2LivenessBlocker::LocalControlPending),
         "local_control_pending"
     );
@@ -3939,29 +3944,4 @@ fn status_snapshot_preserves_the_source_validator_index() {
     );
 }
 
-#[test]
-fn generated_config_digest_tracks_config_but_not_runtime_logs() {
-    let temp = tempfile::tempdir().expect("temporary config directory");
-    fs::write(temp.path().join("peer0.toml"), "chain = 'a'\n").expect("write config");
-    fs::write(temp.path().join("peer0.log"), "startup\n").expect("write log");
-    fs::create_dir_all(temp.path().join("storage")).expect("create storage");
-    fs::write(temp.path().join("storage/block.json"), "dynamic\n").expect("write storage");
-
-    let first = generated_config_blake2b_256(temp.path()).expect("digest generated config");
-    fs::write(temp.path().join("peer0.log"), "different log\n").expect("update log");
-    fs::write(
-        temp.path().join("storage/block.json"),
-        "different storage\n",
-    )
-    .expect("update storage");
-    assert_eq!(
-        first,
-        generated_config_blake2b_256(temp.path()).expect("digest without runtime artifacts")
-    );
-
-    fs::write(temp.path().join("peer0.toml"), "chain = 'b'\n").expect("update config");
-    assert_ne!(
-        first,
-        generated_config_blake2b_256(temp.path()).expect("digest changed config")
-    );
-}
+include!("taira_public_localnet_config_digest_test.rs");

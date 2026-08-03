@@ -15,6 +15,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Sequence
 
@@ -40,8 +41,20 @@ LOCK_PATH = Path("/tmp") / f"iroha-kagemusha-v4-{os.getuid()}.lock"
 STAGING_ID_OPTION = "--staging-id"
 STAGING_NAME_OPTION = "--staging-name"
 OUTPUT_PARENT_FD_OPTION = "--output-parent-fd"
+MEMORY_LIMIT_OPTION = "--memory-limit-bytes"
+MEMORY_ENFORCEMENT_PROFILE = "self-physical-footprint-v1"
+MEMORY_CAPACITY_OPERATION = "memory-capacity-v1"
+MEMORY_CAPACITY_SCHEMA = "iroha.kagemusha.memory-capacity.v1"
+MEMORY_CAPACITY_POLICY = "half-effective-physical-cap-absolute-v1"
+MAX_MEMORY_CAPACITY_OUTCOME_BYTES = 256
+FIXED_CANDIDATE_CHILD_PATH = "/usr/bin:/bin"
+PUBLICATION_OUTCOME_SCHEMA = "iroha.kagemusha.publication_outcome.v1"
+MAX_PUBLICATION_OUTCOME_BYTES = 16 * 1024
+PUBLICATION_CONTROL_RECORD = "PUBLICATION"
+PUBLICATION_CONTROL_DIGEST_HEX_LENGTH = hashlib.sha256().digest_size * 2
 STAGING_ID_HEX_LENGTH = 32
 STAGING_PREFIX = ".kagemusha-v4-staging-"
+GUARDED_OUTPUT_SUFFIX = "unpublished"
 BUNDLE_EXECUTABLE = "kagemusha_recursive_spend_v4_bundle"
 JOURNAL_PREFIX = ".kagemusha-v4-guard-"
 JOURNAL_SUFFIX = ".json"
@@ -69,6 +82,31 @@ DISK_BACKED_OUTPUT_FILESYSTEM_TYPES = frozenset(
         "zfs",
     }
 )
+
+
+@dataclass(frozen=True)
+class GenerationMemoryCapacityV1:
+    """Authoritative memory-policy result returned by the pinned Rust bundle."""
+
+    effective_physical_capacity_bytes: int
+    safety_ceiling_bytes: int
+    absolute_maximum_bytes: int
+    enforcement_profile: str
+    policy: str
+
+    def report_context(self) -> dict[str, object]:
+        """Return the exact Rust policy result propagated into the report."""
+
+        return {
+            "absolute_maximum_bytes": self.absolute_maximum_bytes,
+            "effective_physical_capacity_bytes": (
+                self.effective_physical_capacity_bytes
+            ),
+            "enforcement_profile": self.enforcement_profile,
+            "policy": self.policy,
+            "safety_ceiling_bytes": self.safety_ceiling_bytes,
+            "schema": MEMORY_CAPACITY_SCHEMA,
+        }
 
 
 @dataclass
@@ -239,6 +277,149 @@ class PinnedOutputParent:
 
     def close(self) -> None:
         """Close the owned directory descriptor."""
+
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+
+@dataclass(frozen=True)
+class CandidatePublicationContract:
+    """Immutable child-to-publisher arguments owned by the launcher."""
+
+    requested_out_dir: str
+    guarded_out_dir: str
+    output_name: str
+    output_parent_descriptor: int
+    source_commit: str
+    source_tree_sha256: str
+    staging_id: str
+    staging_name: str
+
+    def validate(self, parent: PinnedOutputParent) -> None:
+        """Require every publication argument to remain bound to the parent."""
+
+        parent.validate()
+        if (
+            self.output_name != parent.output_name
+            or self.output_parent_descriptor != parent.descriptor
+            or self.requested_out_dir != str(parent.path / parent.output_name)
+            or self.guarded_out_dir
+            != str(parent.path / _guarded_output_name(self.staging_id))
+            or self.staging_name != _staging_name(self.staging_id)
+        ):
+            raise resource_guard.GuardError(
+                "Kagemusha child-to-publisher contract changed"
+            )
+
+    def report_context(self) -> dict[str, object]:
+        """Return non-secret continuity evidence for this invocation."""
+
+        return {
+            "guarded_out_dir": self.guarded_out_dir,
+            "output_name": self.output_name,
+            "output_parent_descriptor": self.output_parent_descriptor,
+            "requested_out_dir": self.requested_out_dir,
+            "source_commit": self.source_commit,
+            "source_tree_sha256": self.source_tree_sha256,
+            "staging_id": self.staging_id,
+            "staging_name": self.staging_name,
+        }
+
+
+@dataclass
+class PinnedStagingDirectory:
+    """Identity of the exact hidden directory admitted before generation."""
+
+    staging_id: str
+    name: str
+    descriptor: int
+    device: int
+    inode: int
+
+    def validate_named(
+        self,
+        parent: PinnedOutputParent,
+        contract: CandidatePublicationContract,
+    ) -> None:
+        """Require the guarded name to still identify this exact directory."""
+
+        contract.validate(parent)
+        if self.staging_id != contract.staging_id or self.name != contract.staging_name:
+            raise resource_guard.GuardError(
+                "Kagemusha staging id or name changed before publication"
+            )
+        try:
+            opened = os.fstat(self.descriptor)
+            named = os.stat(
+                self.name,
+                dir_fd=parent.descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as error:
+            raise resource_guard.GuardError(
+                "Kagemusha guarded staging directory is unavailable"
+            ) from error
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(named.st_mode)
+            or (opened.st_dev, opened.st_ino) != (self.device, self.inode)
+            or (named.st_dev, named.st_ino) != (self.device, self.inode)
+            or opened.st_uid != os.geteuid()
+            or named.st_uid != os.geteuid()
+            or opened.st_mode & 0o077 != 0
+            or named.st_mode & 0o077 != 0
+        ):
+            raise resource_guard.GuardError(
+                "Kagemusha guarded staging directory identity changed"
+            )
+
+    def validate_published(
+        self,
+        parent: PinnedOutputParent,
+        contract: CandidatePublicationContract,
+    ) -> os.stat_result:
+        """Require publication to rename this exact directory to the final leaf."""
+
+        contract.validate(parent)
+        opened = os.fstat(self.descriptor)
+        try:
+            published = os.stat(
+                contract.output_name,
+                dir_fd=parent.descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as error:
+            raise resource_guard.GuardError(
+                "Kagemusha publisher did not create the requested candidate directory"
+            ) from error
+        try:
+            os.stat(
+                contract.staging_name,
+                dir_fd=parent.descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            pass
+        else:
+            raise resource_guard.GuardError(
+                "Kagemusha publisher retained the guarded staging name"
+            )
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(published.st_mode)
+            or (opened.st_dev, opened.st_ino) != (self.device, self.inode)
+            or (published.st_dev, published.st_ino) != (self.device, self.inode)
+            or published.st_uid != os.geteuid()
+            or published.st_mode & 0o077 != 0
+        ):
+            raise resource_guard.GuardError(
+                "published Kagemusha candidate is not the guarded staging directory"
+            )
+        return published
+
+    def close(self) -> None:
+        """Release the staging identity descriptor."""
 
         if self.descriptor >= 0:
             os.close(self.descriptor)
@@ -682,8 +863,115 @@ def _release_execution_copy(
     snapshot.execution_copy = None
 
 
+def _canonical_positive_decimal(value: str, label: str) -> int:
+    """Parse one nonzero canonical unsigned decimal field."""
+
+    if (
+        not value
+        or not value.isascii()
+        or not value.isdigit()
+        or value.startswith("0")
+    ):
+        raise resource_guard.GuardError(
+            f"Kagemusha memory-capacity {label} is not canonical decimal"
+        )
+    parsed = int(value)
+    if parsed <= 0 or parsed > (1 << 64) - 1:
+        raise resource_guard.GuardError(
+            f"Kagemusha memory-capacity {label} is outside u64"
+        )
+    return parsed
+
+
+def _validate_memory_capacity_outcome(
+    payload: bytes,
+) -> GenerationMemoryCapacityV1:
+    """Validate the pinned bundle's sole bounded memory-policy record."""
+
+    if (
+        not payload
+        or len(payload) > MAX_MEMORY_CAPACITY_OUTCOME_BYTES
+        or not payload.endswith(b"\n")
+    ):
+        raise resource_guard.GuardError(
+            "Kagemusha memory-capacity outcome is absent, oversized, or non-canonical"
+        )
+    try:
+        text = payload.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise resource_guard.GuardError(
+            "Kagemusha memory-capacity outcome is not ASCII"
+        ) from error
+    if text.count("\n") != 1:
+        raise resource_guard.GuardError(
+            "Kagemusha memory-capacity outcome must contain exactly one line"
+        )
+    fields = text[:-1].split(" ")
+    if len(fields) != 6 or fields[0] != MEMORY_CAPACITY_SCHEMA:
+        raise resource_guard.GuardError(
+            "Kagemusha memory-capacity outcome schema is invalid"
+        )
+    expected_keys = ("physical", "ceiling", "absolute", "profile", "policy")
+    values: dict[str, str] = {}
+    for expected_key, field in zip(expected_keys, fields[1:]):
+        key, separator, value = field.partition("=")
+        if separator != "=" or key != expected_key or not value:
+            raise resource_guard.GuardError(
+                "Kagemusha memory-capacity outcome fields are invalid"
+            )
+        values[key] = value
+    physical = _canonical_positive_decimal(values["physical"], "physical capacity")
+    ceiling = _canonical_positive_decimal(values["ceiling"], "safety ceiling")
+    absolute = _canonical_positive_decimal(values["absolute"], "absolute maximum")
+    if absolute != ABSOLUTE_MAX_MEMORY_BYTES:
+        raise resource_guard.GuardError(
+            "Kagemusha memory-capacity absolute maximum differs from the launcher contract"
+        )
+    if ceiling > absolute or ceiling > physical:
+        raise resource_guard.GuardError(
+            "Kagemusha memory-capacity safety ceiling exceeds its admitted bounds"
+        )
+    if values["profile"] != MEMORY_ENFORCEMENT_PROFILE:
+        raise resource_guard.GuardError(
+            "Kagemusha memory-capacity enforcement profile is unsupported"
+        )
+    if values["policy"] != MEMORY_CAPACITY_POLICY:
+        raise resource_guard.GuardError(
+            "Kagemusha memory-capacity policy is unsupported"
+        )
+    return GenerationMemoryCapacityV1(
+        effective_physical_capacity_bytes=physical,
+        safety_ceiling_bytes=ceiling,
+        absolute_maximum_bytes=absolute,
+        enforcement_profile=values["profile"],
+        policy=values["policy"],
+    )
+
+
+def _apply_optional_memory_limit_bytes(
+    capacity: GenerationMemoryCapacityV1, requested_gib: float | None
+) -> int:
+    """Use the exact Rust ceiling, allowing only an explicit lower override."""
+
+    ceiling = capacity.safety_ceiling_bytes
+    if requested_gib is None:
+        return ceiling
+    if not math.isfinite(requested_gib) or requested_gib <= 0:
+        raise resource_guard.GuardError("--max-memory-gib must be greater than zero")
+    if requested_gib > ceiling / BYTES_PER_GIB:
+        raise resource_guard.GuardError(
+            "--max-memory-gib may lower but cannot raise the Kagemusha safety ceiling"
+        )
+    requested = int(requested_gib * BYTES_PER_GIB)
+    if requested == 0:
+        raise resource_guard.GuardError(
+            "--max-memory-gib is too small to represent a positive byte limit"
+        )
+    return requested
+
+
 def _physical_memory_bytes() -> int:
-    """Return installed physical memory, or zero when it cannot be measured."""
+    """Return host memory for the non-shipping benchmark launcher only."""
 
     if sys.platform == "darwin":
         try:
@@ -713,8 +1001,34 @@ def _physical_memory_bytes() -> int:
     return 0
 
 
+def _candidate_child_environment(
+    temporary_directory: Path | None = None,
+) -> dict[str, str]:
+    """Return the complete environment admitted into source-sealed code.
+
+    In particular, loader injection, allocator overrides, Rust/Python runtime
+    knobs, SDK discovery, and caller-controlled tool resolution never cross the
+    evidence boundary. Generation spools use the already-admitted output
+    filesystem; read-only control operations use the OS temporary directory.
+    """
+
+    temporary_path = Path("/tmp") if temporary_directory is None else temporary_directory
+    temporary_text = os.fspath(temporary_path)
+    if not temporary_path.is_absolute() or not temporary_text.isprintable():
+        raise resource_guard.GuardError(
+            "candidate temporary directory must be an absolute path without controls"
+        )
+    return {
+        "HOME": "/var/empty",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": FIXED_CANDIDATE_CHILD_PATH,
+        "TMPDIR": os.fspath(temporary_path),
+    }
+
+
 def _effective_memory_limit_bytes(requested_gib: float | None) -> int:
-    """Apply the non-bypassable 64 GiB / half-physical-RAM ceiling."""
+    """Derive the non-shipping benchmark launcher's external ceiling."""
 
     physical_memory = _physical_memory_bytes()
     if physical_memory <= 0:
@@ -790,7 +1104,12 @@ def _validate_generation_command(command: Sequence[str]) -> None:
         )
     if any(
         option in command
-        for option in (STAGING_ID_OPTION, STAGING_NAME_OPTION, OUTPUT_PARENT_FD_OPTION)
+        for option in (
+            STAGING_ID_OPTION,
+            STAGING_NAME_OPTION,
+            OUTPUT_PARENT_FD_OPTION,
+            MEMORY_LIMIT_OPTION,
+        )
     ):
         raise resource_guard.GuardError(
             "Kagemusha staging and output-parent options are reserved for the resource guard"
@@ -826,6 +1145,7 @@ def _run_text_command(command: Sequence[str], description: str) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=5,
+            env=_candidate_child_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise resource_guard.GuardError(f"could not inspect {description}") from error
@@ -899,12 +1219,42 @@ def _valid_output_leaf(output_name: str) -> bool:
     )
 
 
+def _staging_name(staging_id: str) -> str:
+    """Return the sole candidate staging name for one launcher id."""
+
+    if not _valid_staging_id(staging_id):
+        raise resource_guard.GuardError("Kagemusha staging id is invalid")
+    return f"{STAGING_PREFIX}{staging_id}-work"
+
+
+def _guarded_output_name(staging_id: str) -> str:
+    """Return the hidden decoy output leaf exposed to the generator child."""
+
+    if not _valid_staging_id(staging_id):
+        raise resource_guard.GuardError("Kagemusha staging id is invalid")
+    return f"{STAGING_PREFIX}{staging_id}-{GUARDED_OUTPUT_SUFFIX}"
+
+
+def _replace_required_option(
+    command: Sequence[str], option: str, value: str
+) -> list[str]:
+    """Copy a command while replacing one already validated option value."""
+
+    _required_option(command, option)
+    replaced = list(command)
+    position = replaced.index(option)
+    replaced[position + 1] = value
+    return replaced
+
+
 def _prepare_guarded_command(
     command: Sequence[str],
-) -> tuple[list[str], PinnedOutputParent, str]:
+) -> tuple[list[str], PinnedOutputParent, CandidatePublicationContract]:
     """Bind one unguessable staging prefix to this supervised invocation."""
 
     out_dir = Path(_required_option(command, "--out-dir"))
+    source_commit = _required_option(command, "--source-commit")
+    source_tree_sha256 = _required_option(command, "--source-tree-sha256")
     output_name = out_dir.name
     if not _valid_output_leaf(output_name):
         raise resource_guard.GuardError(
@@ -977,16 +1327,60 @@ def _prepare_guarded_command(
         free_bytes_at_admission=free_bytes,
     )
     staging_id = secrets.token_hex(STAGING_ID_HEX_LENGTH // 2)
-    staging_name = f"{STAGING_PREFIX}{staging_id}-work"
-    return [
-        *command,
-        STAGING_ID_OPTION,
-        staging_id,
-        STAGING_NAME_OPTION,
-        staging_name,
-        OUTPUT_PARENT_FD_OPTION,
-        str(descriptor),
-    ], pinned, staging_id
+    staging_name = _staging_name(staging_id)
+    guarded_out_dir = str(parent / _guarded_output_name(staging_id))
+    contract = CandidatePublicationContract(
+        requested_out_dir=str(parent / output_name),
+        guarded_out_dir=guarded_out_dir,
+        output_name=output_name,
+        output_parent_descriptor=descriptor,
+        source_commit=source_commit,
+        source_tree_sha256=source_tree_sha256,
+        staging_id=staging_id,
+        staging_name=staging_name,
+    )
+    guarded_command = _replace_required_option(command, "--out-dir", guarded_out_dir)
+    guarded_command.extend(
+        [
+            STAGING_ID_OPTION,
+            staging_id,
+            STAGING_NAME_OPTION,
+            staging_name,
+            OUTPUT_PARENT_FD_OPTION,
+            str(descriptor),
+        ]
+    )
+    contract.validate(pinned)
+    return guarded_command, pinned, contract
+
+
+def _validate_guarded_generation_command(
+    command: Sequence[str],
+    executable_snapshot: ExecutableSnapshot,
+    parent: PinnedOutputParent,
+    contract: CandidatePublicationContract,
+    memory_limit_bytes: int,
+) -> None:
+    """Recheck every launcher-owned child argument after resource acceptance."""
+
+    contract.validate(parent)
+    if (
+        len(command) < 2
+        or command[0] != executable_snapshot.execution_path()
+        or command[1] != "generate-candidate"
+        or _required_option(command, "--out-dir") != contract.guarded_out_dir
+        or _required_option(command, STAGING_ID_OPTION) != contract.staging_id
+        or _required_option(command, STAGING_NAME_OPTION) != contract.staging_name
+        or _required_option(command, OUTPUT_PARENT_FD_OPTION)
+        != str(contract.output_parent_descriptor)
+        or _required_option(command, "--source-commit") != contract.source_commit
+        or _required_option(command, "--source-tree-sha256")
+        != contract.source_tree_sha256
+        or _required_option(command, MEMORY_LIMIT_OPTION) != str(memory_limit_bytes)
+    ):
+        raise resource_guard.GuardError(
+            "Kagemusha guarded generation command changed before publication"
+        )
 
 
 def _cleanup_staging(parent: PinnedOutputParent, staging_id: str) -> int:
@@ -1030,26 +1424,48 @@ def _cleanup_staging(parent: PinnedOutputParent, staging_id: str) -> int:
 
 def _create_staging_directory(
     parent: PinnedOutputParent, staging_id: str
-) -> str:
+) -> PinnedStagingDirectory:
     """Create the exact hidden work directory relative to the pinned parent fd."""
 
     if not _valid_staging_id(staging_id):
         raise resource_guard.GuardError("Kagemusha staging id is invalid")
     parent.validate()
-    name = f"{STAGING_PREFIX}{staging_id}-work"
+    name = _staging_name(staging_id)
     os.mkdir(name, mode=0o700, dir_fd=parent.descriptor)
-    metadata = os.stat(name, dir_fd=parent.descriptor, follow_symlinks=False)
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o700
-    ):
-        raise resource_guard.GuardError(
-            "Kagemusha staging directory has unsafe metadata"
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = -1
+    try:
+        named = os.stat(name, dir_fd=parent.descriptor, follow_symlinks=False)
+        descriptor = os.open(name, flags, dir_fd=parent.descriptor)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(named.st_mode)
+            or not stat.S_ISDIR(opened.st_mode)
+            or not os.path.samestat(named, opened)
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o700
+        ):
+            raise resource_guard.GuardError(
+                "Kagemusha staging directory has unsafe metadata"
+            )
+        os.fsync(parent.descriptor)
+        parent.validate()
+        return PinnedStagingDirectory(
+            staging_id=staging_id,
+            name=name,
+            descriptor=descriptor,
+            device=opened.st_dev,
+            inode=opened.st_ino,
         )
-    os.fsync(parent.descriptor)
-    parent.validate()
-    return name
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
 
 
 def _valid_staging_id(staging_id: str) -> bool:
@@ -1331,7 +1747,6 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--lifeline-fd", required=True, type=int)
     parser.add_argument("--control-fd", required=True, type=int)
-    parser.add_argument("--auth-fd", required=True, type=int)
     parser.add_argument("--executable-fd", required=True, type=int)
     parser.add_argument("--execution-path", required=True)
     parser.add_argument("--held-lock-fd", action="append", default=[], type=int)
@@ -1346,7 +1761,6 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
     descriptors = (
         args.lifeline_fd,
         args.control_fd,
-        args.auth_fd,
         args.executable_fd,
         *args.held_lock_fd,
         *args.child_directory_fd,
@@ -1357,7 +1771,6 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
         )
     resource_guard._require_pipe_descriptor(args.lifeline_fd, "lifeline")
     resource_guard._require_pipe_descriptor(args.control_fd, "control")
-    resource_guard._require_pipe_descriptor(args.auth_fd, "authorization")
     for descriptor in args.held_lock_fd:
         metadata = os.fstat(descriptor)
         if (
@@ -1386,13 +1799,6 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
         raise resource_guard.GuardError(
             "candidate execution path does not identify its pinned bytes"
         )
-    if os.environ.get(resource_guard.RESOURCE_GUARD_AUTH_FD_ENV) != str(
-        args.auth_fd
-    ):
-        raise resource_guard.GuardError(
-            "authorization descriptor environment is inconsistent"
-        )
-
     received_signal = 0
 
     def receive_signal(signum: int, _frame: object) -> None:
@@ -1403,6 +1809,12 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
     for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, receive_signal)
 
+    operation = command[1] if len(command) >= 2 else ""
+    capture_publication_outcome = operation == "publish-staged-candidate"
+    capture_memory_capacity = operation == MEMORY_CAPACITY_OPERATION
+    capture_control_outcome = capture_publication_outcome or capture_memory_capacity
+    control_stdout = tempfile.TemporaryFile() if capture_control_outcome else None
+    control_stderr = tempfile.TemporaryFile() if capture_control_outcome else None
     child: subprocess.Popen[bytes] | None = None
     try:
         if resource_guard._lifeline_closed(args.lifeline_fd, 0):
@@ -1412,16 +1824,17 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
             stdin=subprocess.DEVNULL,
             close_fds=True,
             pass_fds=(
-                args.auth_fd,
                 args.executable_fd,
                 *args.child_directory_fd,
             ),
             start_new_session=True,
-            env=os.environ.copy(),
+            env=_candidate_child_environment(
+                Path(os.environ.get("TMPDIR", "/tmp"))
+            ),
+            stdout=control_stdout,
+            stderr=control_stderr,
         )
         process_group_id = child.pid
-        resource_guard._close_descriptor(args.auth_fd)
-        args.auth_fd = -1
         if process_group_id <= 1 or process_group_id == os.getpgrp():
             raise resource_guard.GuardError(
                 "candidate body did not enter its own process group"
@@ -1452,6 +1865,47 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
             args.control_fd,
             f"EXIT {returncode} {1 if lingering else 0} {kernel_peak_rss_bytes}",
         )
+        if capture_control_outcome:
+            if control_stdout is None or control_stderr is None:
+                raise resource_guard.GuardError(
+                    "bundle control outcome capture was not initialized"
+                )
+            captured: list[bytes] = []
+            maximum_bytes = (
+                MAX_PUBLICATION_OUTCOME_BYTES
+                if capture_publication_outcome
+                else MAX_MEMORY_CAPACITY_OUTCOME_BYTES
+            )
+            for stream in (control_stdout, control_stderr):
+                stream.flush()
+                stream.seek(0)
+                payload = stream.read(maximum_bytes + 1)
+                if len(payload) > maximum_bytes:
+                    raise resource_guard.GuardError(
+                        "bundle control outcome exceeded its fixed bound"
+                    )
+                captured.append(payload)
+            if capture_publication_outcome:
+                expected_final_path = _required_option(command, "--out-dir")
+                resource_guard._write_wrapper_control(
+                    args.control_fd,
+                    _publication_control_record(
+                        returncode,
+                        captured[0],
+                        captured[1],
+                        expected_final_path=expected_final_path,
+                    ),
+                )
+            elif returncode == 0:
+                if captured[1]:
+                    raise resource_guard.GuardError(
+                        "successful memory-capacity query emitted stderr"
+                    )
+                _validate_memory_capacity_outcome(captured[0])
+                resource_guard._write_wrapper_control(
+                    args.control_fd,
+                    captured[0].decode("ascii").removesuffix("\n"),
+                )
         return 1 if lingering else resource_guard._exit_status(returncode)
     except BaseException as error:
         if child is not None:
@@ -1466,6 +1920,9 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
         print(f"candidate session wrapper failed: {error}", file=sys.stderr)
         return 1
     finally:
+        for stream in (control_stdout, control_stderr):
+            if stream is not None:
+                stream.close()
         for descriptor in descriptors:
             resource_guard._close_descriptor(descriptor)
 
@@ -1486,14 +1943,14 @@ def _spawn_pinned_guarded_session(
         )
     execution_descriptor = executable_snapshot.execution_descriptor()
     execution_path = executable_snapshot.execution_path()
-    auth_reader, auth_writer = resource_guard._pipe()
     lifeline_reader, lifeline_writer = resource_guard._pipe()
     control_reader, control_writer = resource_guard._pipe()
-    token = secrets.token_hex(32)
-    child_environment = environment.copy()
-    child_environment.pop("SUMERAGI_TLAPS_SUPERVISOR_PID", None)
-    child_environment[resource_guard.RESOURCE_GUARD_AUTH_FD_ENV] = str(auth_reader)
-    child_environment[resource_guard.RESOURCE_GUARD_AUTH_TOKEN_ENV] = token
+    # The resource guard's spawner signature carries a caller environment, but
+    # source-sealed execution accepts only this explicit projection. In
+    # particular, never forward LD_*/DYLD_* loader hooks or an ambient PATH.
+    child_environment = _candidate_child_environment(
+        Path(environment.get("TMPDIR", "/tmp"))
+    )
     wrapper_command = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -1502,8 +1959,6 @@ def _spawn_pinned_guarded_session(
         str(lifeline_reader),
         "--control-fd",
         str(control_writer),
-        "--auth-fd",
-        str(auth_reader),
         "--executable-fd",
         str(execution_descriptor),
         "--execution-path",
@@ -1517,18 +1972,11 @@ def _spawn_pinned_guarded_session(
     wrapper: subprocess.Popen[bytes] | None = None
     control: resource_guard.SessionControl | None = None
     try:
-        resource_guard._write_all(
-            auth_writer,
-            f"{resource_guard.RESOURCE_GUARD_AUTH_MAGIC}:{token}\n".encode("ascii"),
-        )
-        resource_guard._close_descriptor(auth_writer)
-        auth_writer = -1
         wrapper = subprocess.Popen(
             wrapper_command,
             stdin=subprocess.DEVNULL,
             close_fds=True,
             pass_fds=(
-                auth_reader,
                 lifeline_reader,
                 control_writer,
                 execution_descriptor,
@@ -1538,9 +1986,8 @@ def _spawn_pinned_guarded_session(
             start_new_session=True,
             env=child_environment,
         )
-        for descriptor in (auth_reader, lifeline_reader, control_writer):
+        for descriptor in (lifeline_reader, control_writer):
             resource_guard._close_descriptor(descriptor)
-        auth_reader = -1
         lifeline_reader = -1
         control_writer = -1
         control = resource_guard.SessionControl(control_reader)
@@ -1581,8 +2028,6 @@ def _spawn_pinned_guarded_session(
         raise
     finally:
         for descriptor in (
-            auth_reader,
-            auth_writer,
             lifeline_reader,
             lifeline_writer,
             control_reader,
@@ -1626,20 +2071,36 @@ def _run_guarded_with_pinned_executable(
         resource_guard._spawn_guarded_session = original_spawner
 
 
-def _run_authenticated_bundle_command(
+def _run_pinned_bundle_command(
     command: Sequence[str],
     executable_snapshot: ExecutableSnapshot,
     *,
     held_lock_descriptors: Sequence[int] = (),
     child_directory_descriptors: Sequence[int] = (),
-) -> None:
-    """Run one short bundle operation under a supervisor-death lifeline."""
+    temporary_directory: Path | None = None,
+) -> GenerationMemoryCapacityV1 | None:
+    """Run one pinned bundle operation under a supervisor-death lifeline."""
 
-    if not command or command[0] != executable_snapshot.execution_path():
+    if len(command) < 2 or command[0] != executable_snapshot.execution_path():
         raise resource_guard.GuardError(
             "bundle control command must execute the admitted descriptor path"
         )
-    environment = os.environ.copy()
+    operation = command[1]
+    if operation == MEMORY_CAPACITY_OPERATION:
+        if len(command) != 2 or child_directory_descriptors:
+            raise resource_guard.GuardError(
+                "memory-capacity query must be read-only and argument-free"
+            )
+        operation_description = "memory-capacity query"
+        timeout_seconds = 30
+    elif operation == "publish-staged-candidate":
+        operation_description = "candidate publisher"
+        timeout_seconds = 300
+    else:
+        raise resource_guard.GuardError(
+            "bundle control command is not an admitted read-only query or publisher"
+        )
+    environment = _candidate_child_environment(temporary_directory)
     session = _spawn_pinned_guarded_session(
         command,
         environment,
@@ -1662,7 +2123,7 @@ def _run_authenticated_bundle_command(
         signal.signal(signum, receive_signal)
     interrupted = 0
     try:
-        deadline = time.monotonic() + 300
+        deadline = time.monotonic() + timeout_seconds
         while session.wrapper.poll() is None and time.monotonic() < deadline:
             if received_signal:
                 interrupted = received_signal
@@ -1673,18 +2134,18 @@ def _run_authenticated_bundle_command(
             time.sleep(0.05)
         if interrupted:
             raise resource_guard.GuardError(
-                f"Kagemusha publication interrupted by signal {interrupted}"
+                f"Kagemusha {operation_description} interrupted by signal {interrupted}"
             )
         if session.wrapper.poll() is None:
             resource_guard._terminate_owned_group(
                 session.wrapper, session.process_group_id
             )
             raise resource_guard.GuardError(
-                "timed out publishing the validated Kagemusha candidate"
+                f"timed out during Kagemusha {operation_description}"
             )
         wrapper_exit = session.control.read_line(
             timeout=resource_guard.CONTROL_RECORD_TIMEOUT_SECONDS,
-            description="candidate publisher exit status",
+            description=f"Kagemusha {operation_description} exit status",
         )
         fields = wrapper_exit.split()
         if (
@@ -1694,23 +2155,61 @@ def _run_authenticated_bundle_command(
             or not fields[3].isdigit()
         ):
             raise resource_guard.GuardError(
-                "candidate publisher wrapper emitted invalid exit status"
+                f"Kagemusha {operation_description} wrapper emitted invalid exit status"
             )
         try:
             returncode = int(fields[1])
         except ValueError as error:
             raise resource_guard.GuardError(
-                "candidate publisher emitted a non-integer status"
+                f"Kagemusha {operation_description} emitted a non-integer status"
             ) from error
         if fields[2] == "1":
             raise resource_guard.GuardError(
-                "candidate publisher left a lingering process group"
+                f"Kagemusha {operation_description} left a lingering process group"
             )
+        if operation == MEMORY_CAPACITY_OPERATION:
+            if returncode != 0:
+                raise resource_guard.GuardError(
+                    f"pinned Kagemusha memory-capacity query failed with status {returncode}"
+                )
+            capacity_record = session.control.read_line(
+                timeout=resource_guard.CONTROL_RECORD_TIMEOUT_SECONDS,
+                description="Kagemusha memory-capacity machine outcome",
+            )
+            return _validate_memory_capacity_outcome(
+                f"{capacity_record}\n".encode("ascii")
+            )
+        publication_record = session.control.read_line(
+            timeout=resource_guard.CONTROL_RECORD_TIMEOUT_SECONDS,
+            description="candidate publisher machine outcome",
+        )
+        expected_final_path = _required_option(command, "--out-dir")
+        publication_status = _validate_publication_control_record(
+            publication_record,
+            returncode=returncode,
+            expected_final_path=expected_final_path,
+        )
+        if returncode == 0:
+            if publication_status != "committed":
+                raise resource_guard.GuardError(
+                    "candidate publisher wrapper contradicted its successful exit"
+                )
         if returncode != 0:
+            if returncode == 75:
+                if publication_status != "commit-uncertain":
+                    raise resource_guard.GuardError(
+                        "candidate publisher wrapper contradicted its commit-uncertain exit"
+                    )
+                raise resource_guard.GuardError(
+                    "validated Kagemusha candidate publication reached an uncertain "
+                    "post-rename durability boundary (status 75); retain the run journal "
+                    "and reconcile the visible final leaf"
+                )
             raise resource_guard.GuardError(
                 "validated Kagemusha candidate publication failed with status "
                 f"{returncode}"
             )
+        return None
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
@@ -1721,20 +2220,256 @@ def _run_authenticated_bundle_command(
                 prior(interrupted, None)
 
 
-def _publish_staged_candidate(
-    command: Sequence[str],
+def _publication_control_record(
+    returncode: int,
+    stdout_payload: bytes,
+    stderr_payload: bytes,
+    *,
+    expected_final_path: str,
+) -> str:
+    """Validate the child outcome and return one fixed-size wrapper record.
+
+    The generic lifeline protocol intentionally caps every record at 255 bytes.
+    Publication output can include a long canonical path, so the trusted wrapper
+    validates the full bounded payload locally and sends only its status plus
+    fixed-size path and payload digests to the supervisor.
+    """
+
+    if returncode == 0:
+        if stderr_payload:
+            raise resource_guard.GuardError(
+                "committed candidate publisher emitted unexpected stderr"
+            )
+        _validate_publication_outcome(
+            stdout_payload,
+            expected_status="committed",
+            expected_final_path=expected_final_path,
+        )
+        status = "committed"
+        outcome_payload = stdout_payload
+    elif returncode == 75:
+        if stdout_payload:
+            raise resource_guard.GuardError(
+                "commit-uncertain candidate publisher emitted unexpected stdout"
+            )
+        _validate_publication_outcome(
+            stderr_payload,
+            expected_status="commit-uncertain",
+            expected_final_path=expected_final_path,
+        )
+        status = "commit-uncertain"
+        outcome_payload = stderr_payload
+    else:
+        status = "failed"
+        outcome_payload = stdout_payload + b"\x00" + stderr_payload
+
+    path_digest = hashlib.sha256(os.fsencode(expected_final_path)).hexdigest()
+    outcome_digest = hashlib.sha256(outcome_payload).hexdigest()
+    return (
+        f"{PUBLICATION_CONTROL_RECORD} {status} "
+        f"{path_digest} {outcome_digest}"
+    )
+
+
+def _validate_publication_control_record(
+    record: str,
+    *,
+    returncode: int,
+    expected_final_path: str,
+) -> str:
+    """Validate the wrapper's fixed-size, path-bound publication result."""
+
+    fields = record.split()
+    if len(fields) != 4 or fields[0] != PUBLICATION_CONTROL_RECORD:
+        raise resource_guard.GuardError(
+            "candidate publisher wrapper emitted an invalid machine outcome record"
+        )
+    status, path_digest, outcome_digest = fields[1:]
+    expected_status = (
+        "committed"
+        if returncode == 0
+        else "commit-uncertain"
+        if returncode == 75
+        else "failed"
+    )
+    if status != expected_status:
+        raise resource_guard.GuardError(
+            "candidate publisher wrapper outcome contradicts its exit status"
+        )
+    for label, digest in (
+        ("path", path_digest),
+        ("outcome", outcome_digest),
+    ):
+        if (
+            len(digest) != PUBLICATION_CONTROL_DIGEST_HEX_LENGTH
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise resource_guard.GuardError(
+                f"candidate publisher wrapper {label} digest is invalid"
+            )
+    expected_path_digest = hashlib.sha256(
+        os.fsencode(expected_final_path)
+    ).hexdigest()
+    if path_digest != expected_path_digest:
+        raise resource_guard.GuardError(
+            "candidate publisher wrapper outcome names the wrong final path"
+        )
+    return status
+
+
+def _validate_publication_outcome(
+    payload: bytes,
+    *,
+    expected_status: str,
+    expected_final_path: str,
+) -> None:
+    """Validate the publisher's exact, path-bound machine outcome."""
+
+    if not payload or len(payload) > MAX_PUBLICATION_OUTCOME_BYTES or not payload.endswith(b"\n"):
+        raise resource_guard.GuardError(
+            "candidate publisher machine outcome is absent, oversized, or non-canonical"
+        )
+    try:
+        text = payload.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise resource_guard.GuardError(
+            "candidate publisher machine outcome is not ASCII"
+        ) from error
+    if text.count("\n") != 1:
+        raise resource_guard.GuardError(
+            "candidate publisher machine outcome must contain exactly one line"
+        )
+    fields = text[:-1].split(" ")
+    if len(fields) != 6 or fields[0] != PUBLICATION_OUTCOME_SCHEMA:
+        raise resource_guard.GuardError(
+            "candidate publisher machine outcome schema is invalid"
+        )
+    expected_keys = (
+        "status",
+        "final_path_encoding",
+        "final_path_hex",
+        "parent_directory_durable",
+        "parent_sync_error_utf8_hex",
+    )
+    values: dict[str, str] = {}
+    for expected_key, field in zip(expected_keys, fields[1:]):
+        key, separator, value = field.partition("=")
+        if separator != "=" or key != expected_key or not value:
+            raise resource_guard.GuardError(
+                "candidate publisher machine outcome fields are invalid"
+            )
+        values[key] = value
+    final_path_hex = values["final_path_hex"]
+    if (
+        len(final_path_hex) % 2 != 0
+        or any(character not in "0123456789abcdef" for character in final_path_hex)
+        or bytes.fromhex(final_path_hex) != os.fsencode(expected_final_path)
+    ):
+        raise resource_guard.GuardError(
+            "candidate publisher machine outcome names the wrong final path"
+        )
+    if values["status"] != expected_status or values["final_path_encoding"] != "bytes-hex":
+        raise resource_guard.GuardError(
+            "candidate publisher machine outcome status or path encoding is invalid"
+        )
+    sync_error = values["parent_sync_error_utf8_hex"]
+    if expected_status == "committed":
+        if values["parent_directory_durable"] != "1" or sync_error != "-":
+            raise resource_guard.GuardError(
+                "committed candidate publisher outcome is not durable"
+            )
+        return
+    if values["parent_directory_durable"] != "0" or sync_error == "-":
+        raise resource_guard.GuardError(
+            "commit-uncertain candidate publisher outcome lacks its sync failure"
+        )
+    try:
+        sync_error_bytes = bytes.fromhex(sync_error)
+        sync_error_text = sync_error_bytes.decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as error:
+        raise resource_guard.GuardError(
+            "commit-uncertain candidate publisher sync failure is not UTF-8 hex"
+        ) from error
+    if not sync_error_text:
+        raise resource_guard.GuardError(
+            "commit-uncertain candidate publisher sync failure is empty"
+        )
+
+
+def _validate_staged_child_result(
+    guarded_command: Sequence[str],
     executable_snapshot: ExecutableSnapshot,
     output_parent: PinnedOutputParent,
-    staging_id: str,
+    contract: CandidatePublicationContract,
+    staging: PinnedStagingDirectory,
+    memory_limit_bytes: int,
+) -> None:
+    """Prove the successful child left only its exact hidden staging directory."""
+
+    _validate_executable_unchanged(executable_snapshot)
+    _validate_guarded_generation_command(
+        guarded_command,
+        executable_snapshot,
+        output_parent,
+        contract,
+        memory_limit_bytes,
+    )
+    staging.validate_named(output_parent, contract)
+    if _output_leaf_exists(output_parent, contract.output_name):
+        raise resource_guard.GuardError(
+            "Kagemusha generator bypassed guarded publication"
+        )
+    try:
+        os.stat(
+            _guarded_output_name(contract.staging_id),
+            dir_fd=output_parent.descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        pass
+    else:
+        raise resource_guard.GuardError(
+            "Kagemusha generator directly renamed its staging directory"
+        )
+
+
+def _query_generation_memory_capacity(
+    executable_snapshot: ExecutableSnapshot,
+    *,
+    held_lock_descriptors: Sequence[int] = (),
+) -> GenerationMemoryCapacityV1:
+    """Query memory policy through the exact pinned bytes used for generation."""
+
+    _validate_executable_unchanged(executable_snapshot)
+    outcome = _run_pinned_bundle_command(
+        [executable_snapshot.execution_path(), MEMORY_CAPACITY_OPERATION],
+        executable_snapshot,
+        held_lock_descriptors=held_lock_descriptors,
+    )
+    _validate_executable_unchanged(executable_snapshot)
+    if outcome is None:
+        raise resource_guard.GuardError(
+            "pinned Kagemusha memory-capacity query returned no policy"
+        )
+    return outcome
+
+
+def _publish_staged_candidate(
+    contract: CandidatePublicationContract,
+    staging: PinnedStagingDirectory,
+    executable_snapshot: ExecutableSnapshot,
+    output_parent: PinnedOutputParent,
+    memory_limit_bytes: int,
     held_lock_descriptors: Sequence[int] = (),
 ) -> int:
     """Authenticate and atomically publish staging only after the guard verdict."""
 
     _validate_executable_unchanged(executable_snapshot)
-    output_parent.validate()
+    contract.validate(output_parent)
+    staging.validate_named(output_parent, contract)
     try:
         os.stat(
-            output_parent.output_name,
+            contract.output_name,
             dir_fd=output_parent.descriptor,
             follow_symlinks=False,
         )
@@ -1748,44 +2483,33 @@ def _publish_staged_candidate(
         executable_snapshot.execution_path(),
         "publish-staged-candidate",
         "--out-dir",
-        _required_option(command, "--out-dir"),
+        contract.requested_out_dir,
         STAGING_ID_OPTION,
-        staging_id,
+        contract.staging_id,
         STAGING_NAME_OPTION,
-        f"{STAGING_PREFIX}{staging_id}-work",
+        contract.staging_name,
         OUTPUT_PARENT_FD_OPTION,
-        str(output_parent.descriptor),
+        str(contract.output_parent_descriptor),
         "--source-commit",
-        _required_option(command, "--source-commit"),
+        contract.source_commit,
         "--source-tree-sha256",
-        _required_option(command, "--source-tree-sha256"),
+        contract.source_tree_sha256,
+        MEMORY_LIMIT_OPTION,
+        str(memory_limit_bytes),
     ]
-    _run_authenticated_bundle_command(
+    outcome = _run_pinned_bundle_command(
         publish_command,
         executable_snapshot,
         held_lock_descriptors=held_lock_descriptors,
         child_directory_descriptors=(output_parent.descriptor,),
+        temporary_directory=output_parent.path,
     )
+    if outcome is not None:
+        raise resource_guard.GuardError(
+            "candidate publisher returned a memory-capacity result"
+        )
     _validate_executable_unchanged(executable_snapshot)
-    output_parent.validate()
-    try:
-        published = os.stat(
-            output_parent.output_name,
-            dir_fd=output_parent.descriptor,
-            follow_symlinks=False,
-        )
-    except OSError as error:
-        raise resource_guard.GuardError(
-            "Kagemusha publisher did not create the requested candidate directory"
-        ) from error
-    if (
-        not stat.S_ISDIR(published.st_mode)
-        or published.st_uid != os.geteuid()
-        or published.st_mode & 0o077 != 0
-    ):
-        raise resource_guard.GuardError(
-            "published Kagemusha candidate directory is untrusted"
-        )
+    staging.validate_published(output_parent, contract)
     return 1
 
 
@@ -1818,13 +2542,12 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
         return 2
     output_parent: PinnedOutputParent | None = None
     executable_snapshot: ExecutableSnapshot | None = None
+    staging: PinnedStagingDirectory | None = None
     try:
         _validate_generation_command(command)
         executable_snapshot = _snapshot_executable(command[0], BUNDLE_EXECUTABLE)
         command[0] = str(executable_snapshot.path)
-        guarded_command, output_parent, staging_id = _prepare_guarded_command(command)
-        memory_limit = _effective_memory_limit_bytes(args.max_memory_gib)
-        jsonl_path, summary_path = _prepare_report_directory(args.resource_report)
+        guarded_command, output_parent, contract = _prepare_guarded_command(command)
         with resource_guard._host_lock(
             resource_guard.HEAVY_JOB_LOCK_PATH, description="memory-heavy job"
         ) as heavy_lock:
@@ -1833,35 +2556,70 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
             ) as kagemusha_lock:
                 _reject_foreign_kagemusha_jobs()
                 recovered_staging = _recover_stale_runs(output_parent)
-                _create_run_journal(output_parent, staging_id)
+                _create_run_journal(output_parent, contract.staging_id)
                 publication_confirmed = False
 
-                def publish_candidate() -> int:
-                    nonlocal publication_confirmed
-                    result = _publish_staged_candidate(
-                        command,
-                        executable_snapshot,
-                        output_parent,
-                        staging_id,
-                        held_lock_descriptors=(heavy_lock, kagemusha_lock),
-                    )
-                    publication_confirmed = True
-                    return result
-
                 def cleanup_candidate() -> int:
+                    if staging is not None:
+                        staging.close()
                     _release_execution_copy(output_parent, executable_snapshot)
                     return _cleanup_guarded_run(
                         output_parent,
-                        staging_id,
+                        contract.staging_id,
                         publication_confirmed=publication_confirmed,
                     )
 
                 try:
                     _prepare_execution_copy(
-                        output_parent, executable_snapshot, staging_id
+                        output_parent, executable_snapshot, contract.staging_id
                     )
+                    memory_capacity = _query_generation_memory_capacity(
+                        executable_snapshot,
+                        held_lock_descriptors=(heavy_lock, kagemusha_lock),
+                    )
+                    memory_limit = _apply_optional_memory_limit_bytes(
+                        memory_capacity, args.max_memory_gib
+                    )
+                    guarded_command.extend((MEMORY_LIMIT_OPTION, str(memory_limit)))
+                    jsonl_path, summary_path = _prepare_report_directory(
+                        args.resource_report
+                    )
+
+                    def publish_candidate() -> int:
+                        nonlocal publication_confirmed
+                        if staging is None:
+                            raise resource_guard.GuardError(
+                                "Kagemusha staging identity is unavailable"
+                            )
+                        result = _publish_staged_candidate(
+                            contract,
+                            staging,
+                            executable_snapshot,
+                            output_parent,
+                            memory_limit,
+                            held_lock_descriptors=(heavy_lock, kagemusha_lock),
+                        )
+                        publication_confirmed = True
+                        return result
+
+                    def validate_candidate() -> None:
+                        if staging is None:
+                            raise resource_guard.GuardError(
+                                "Kagemusha staging identity is unavailable"
+                            )
+                        _validate_staged_child_result(
+                            guarded_command,
+                            executable_snapshot,
+                            output_parent,
+                            contract,
+                            staging,
+                            memory_limit,
+                        )
+
                     guarded_command[0] = executable_snapshot.execution_path()
-                    _create_staging_directory(output_parent, staging_id)
+                    staging = _create_staging_directory(
+                        output_parent, contract.staging_id
+                    )
                     return _run_guarded_with_pinned_executable(
                         guarded_command,
                         executable_snapshot,
@@ -1880,9 +2638,7 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
                             SAMPLE_INTERVAL_SECONDS
                         ),
                         post_run_cleanup=cleanup_candidate,
-                        post_run_validation=lambda: _validate_executable_unchanged(
-                            executable_snapshot
-                        ),
+                        post_run_validation=validate_candidate,
                         post_success_finalize=publish_candidate,
                         report_context={
                             "executable_identity": (
@@ -1892,11 +2648,22 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
                             "same_parent_recovered_staging_directories": (
                                 recovered_staging
                             ),
-                            "staging_id": staging_id,
+                            "publication_contract": contract.report_context(),
+                            "generation_memory_enforcement_profile": (
+                                MEMORY_ENFORCEMENT_PROFILE
+                            ),
+                            "generation_memory_capacity": (
+                                memory_capacity.report_context()
+                            ),
+                            "generation_memory_limit_bytes": memory_limit,
+                            "staging_id": contract.staging_id,
                         },
+                        child_environment=_candidate_child_environment(
+                            output_parent.path
+                        ),
                     )
                 except BaseException:
-                    if _run_journal_exists(output_parent, staging_id):
+                    if _run_journal_exists(output_parent, contract.staging_id):
                         cleanup_candidate()
                     raise
     except resource_guard.LockUnavailable as error:
@@ -1906,6 +2673,8 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
         print(f"Kagemusha resource guard failed closed: {error}", file=sys.stderr)
         return 1
     finally:
+        if staging is not None:
+            staging.close()
         if output_parent is not None:
             output_parent.close()
         if executable_snapshot is not None:

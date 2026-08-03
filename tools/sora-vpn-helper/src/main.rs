@@ -23,11 +23,14 @@ use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use clap::{Parser, Subcommand};
 use hex::FromHexError;
 use iroha_crypto::{
-    Algorithm, KeyPair, Signature,
+    Algorithm, KeyPair, PublicKey, Signature,
     soranet::{
+        certificate::{
+            leaf_certificate_spki_sha256, validate_quic_multiaddr, validate_tls_server_name,
+        },
         handshake::{
-            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-            RuntimeParams, SessionSecrets, build_client_hello, client_handle_relay_hello,
+            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RuntimeParams,
+            SORANET_QUIC_ALPN, SessionSecrets, build_client_hello, client_handle_relay_hello,
         },
         record::{RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind},
     },
@@ -59,7 +62,6 @@ use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::CertificateDer,
 };
-use sha2::{Digest as _, Sha256};
 use soranet_record_io::{RecordReader, RecordWriter};
 use thiserror::Error;
 use tokio::{
@@ -180,7 +182,12 @@ struct ConnectPayload {
     relay_endpoint: String,
     exit_class: String,
     helper_ticket_hex: String,
+    relay_id_hex: String,
+    descriptor_commit_hex: String,
+    tls_server_name: String,
     relay_tls_spki_sha256_hex: String,
+    relay_certificate_sha256_hex: String,
+    directory_snapshot_digest_hex: String,
     padding_budget_ms: u16,
     route_pushes: Vec<String>,
     excluded_routes: Vec<String>,
@@ -246,7 +253,17 @@ impl IpFamily {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParsedMultiaddrHost {
     Ip(IpAddr),
-    Dns(String),
+    Dns {
+        name: String,
+        address_family: DnsAddressFamily,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DnsAddressFamily {
+    Any,
+    V4,
+    V6,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -772,7 +789,7 @@ async fn connect_and_handshake(
             "failed to create packet engine QUIC endpoint on {bind_addr}: {error}"
         ))
     })?;
-    let relay_tls_pin = parse_fixed_hex_32(
+    let relay_tls_pin = parse_canonical_nonzero_hex_32(
         payload.relay_tls_spki_sha256_hex.as_str(),
         "relay TLS SPKI pin",
     )?;
@@ -783,7 +800,7 @@ async fn connect_and_handshake(
     })?);
 
     let connect = endpoint
-        .connect(relay_addr, "soranet.local")
+        .connect(relay_addr, payload.tls_server_name.as_str())
         .map_err(|error| {
             ControllerError::State(format!(
                 "failed to start packet engine QUIC connect to {relay_addr}: {error}"
@@ -799,7 +816,7 @@ async fn connect_and_handshake(
         }
     };
 
-    let session = perform_helper_handshake(&connection, helper_ticket).await?;
+    let session = perform_helper_handshake(&connection, payload, helper_ticket).await?;
     let record_layer = RecordLayer::new(&session.session_key, RecordEndpoint::Client)
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     Ok((endpoint, connection, Arc::new(record_layer)))
@@ -810,11 +827,20 @@ async fn resolve_multiaddr_socket_addr(
 ) -> Result<SocketAddr, ControllerError> {
     match &relay.host {
         ParsedMultiaddrHost::Ip(host) => Ok(SocketAddr::new(*host, relay.port)),
-        ParsedMultiaddrHost::Dns(host) => lookup_host((host.as_str(), relay.port))
+        ParsedMultiaddrHost::Dns {
+            name,
+            address_family,
+        } => lookup_host((name.as_str(), relay.port))
             .await?
-            .next()
+            .find(|address| match *address_family {
+                DnsAddressFamily::Any => true,
+                DnsAddressFamily::V4 => address.is_ipv4(),
+                DnsAddressFamily::V6 => address.is_ipv6(),
+            })
             .ok_or_else(|| {
-                ControllerError::InvalidMultiaddr(format!("dns {host} did not resolve"))
+                ControllerError::InvalidMultiaddr(format!(
+                    "dns {name} did not resolve to the signed address family"
+                ))
             }),
     }
 }
@@ -847,11 +873,13 @@ fn build_tls_client_config(relay_tls_spki_sha256: [u8; 32]) -> rustls::ClientCon
     // Helper authentication runs after QUIC setup. Keep replayable 0-RTT data
     // disabled so no future stream path can bypass that ordering.
     tls_config.enable_early_data = false;
+    tls_config.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
     tls_config
 }
 
 async fn perform_helper_handshake(
     connection: &Connection,
+    payload: &ConnectPayload,
     helper_ticket: Vec<u8>,
 ) -> Result<SessionSecrets, ControllerError> {
     let (mut send, mut recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
@@ -866,25 +894,39 @@ async fn perform_helper_handshake(
 
     write_handshake_frame(&mut send, &helper_ticket).await?;
 
-    let admission_binding = helper_ticket_handshake_binding(&helper_ticket);
+    let relay_id = parse_canonical_nonzero_hex_32(payload.relay_id_hex.as_str(), "relayIdHex")?;
+    let relay_identity = PublicKey::from_bytes(Algorithm::Ed25519, &relay_id).map_err(|error| {
+        ControllerError::InvalidPayload(format!("relayIdHex is not a valid Ed25519 key: {error}"))
+    })?;
+    let descriptor_commit = parse_canonical_nonzero_hex_32(
+        payload.descriptor_commit_hex.as_str(),
+        "descriptorCommitHex",
+    )?;
+    let admission_binding = helper_ticket_handshake_binding(payload, &helper_ticket)?;
     let params = RuntimeParams {
-        descriptor_commit: &DEFAULT_DESCRIPTOR_COMMIT,
+        descriptor_commit: &descriptor_commit,
         client_capabilities: &DEFAULT_CLIENT_CAPABILITIES,
         relay_capabilities: &DEFAULT_RELAY_CAPABILITIES,
         kem_id: 1,
         sig_id: 1,
+        transport_alpn: SORANET_QUIC_ALPN,
+        tls_server_name: payload.tls_server_name.as_str(),
         resume_hash: Some(&admission_binding),
     };
     let mut rng = StdRng::from_os_rng();
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let (client_hello, client_state) = build_client_hello(&params, &mut rng)
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     write_handshake_frame(&mut send, &client_hello).await?;
 
     let relay_hello = read_handshake_frame(&mut recv).await?;
-    let (client_finish, session) =
-        client_handle_relay_hello(client_state, &relay_hello, &key_pair, &params, &mut rng)
-            .map_err(|error| ControllerError::Handshake(error.to_string()))?;
+    let (client_finish, session) = client_handle_relay_hello(
+        client_state,
+        &relay_hello,
+        &relay_identity,
+        &params,
+        &mut rng,
+    )
+    .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     if let Some(frame) = client_finish {
         write_handshake_frame(&mut send, &frame).await?;
     }
@@ -892,11 +934,48 @@ async fn perform_helper_handshake(
     Ok(session)
 }
 
-fn helper_ticket_handshake_binding(helper_ticket: &[u8]) -> [u8; 32] {
+fn helper_ticket_handshake_binding(
+    payload: &ConnectPayload,
+    helper_ticket: &[u8],
+) -> Result<[u8; 32], ControllerError> {
+    fn update(hasher: &mut Blake3Hasher, value: &[u8]) {
+        hasher.update(&(value.len() as u64).to_be_bytes());
+        hasher.update(value);
+    }
+
+    let relay_id = parse_canonical_nonzero_hex_32(payload.relay_id_hex.as_str(), "relayIdHex")?;
+    let descriptor_commit = parse_canonical_nonzero_hex_32(
+        payload.descriptor_commit_hex.as_str(),
+        "descriptorCommitHex",
+    )?;
+    let relay_spki = parse_canonical_nonzero_hex_32(
+        payload.relay_tls_spki_sha256_hex.as_str(),
+        "relayTlsSpkiSha256Hex",
+    )?;
+    let relay_certificate = parse_canonical_nonzero_hex_32(
+        payload.relay_certificate_sha256_hex.as_str(),
+        "relayCertificateSha256Hex",
+    )?;
+    let directory_snapshot = parse_canonical_nonzero_hex_32(
+        payload.directory_snapshot_digest_hex.as_str(),
+        "directorySnapshotDigestHex",
+    )?;
     let mut hasher = Blake3Hasher::new();
-    hasher.update(b"iroha.soranet.vpn.helper-handshake-binding.v1");
-    hasher.update(helper_ticket);
-    *hasher.finalize().as_bytes()
+    for value in [
+        b"iroha.soranet.vpn.helper-handshake-binding.v2".as_slice(),
+        helper_ticket,
+        payload.relay_endpoint.as_bytes(),
+        relay_id.as_slice(),
+        descriptor_commit.as_slice(),
+        relay_spki.as_slice(),
+        relay_certificate.as_slice(),
+        directory_snapshot.as_slice(),
+        payload.tls_server_name.as_bytes(),
+        SORANET_QUIC_ALPN,
+    ] {
+        update(&mut hasher, value);
+    }
+    Ok(*hasher.finalize().as_bytes())
 }
 
 async fn read_handshake_frame(recv: &mut RecvStream) -> Result<Vec<u8>, ControllerError> {
@@ -2457,6 +2536,29 @@ fn parse_fixed_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerEr
     Ok(bytes)
 }
 
+fn parse_canonical_nonzero_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
+    if value.len() != 64
+        || !value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} must be exactly 64 lowercase hexadecimal characters"
+        )));
+    }
+    let bytes: [u8; 32] = hex::decode(value)
+        .expect("canonical hexadecimal validation makes decoding infallible")
+        .try_into()
+        .expect("64 hexadecimal characters decode to 32 bytes");
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} must not be all zero"
+        )));
+    }
+    Ok(bytes)
+}
+
 fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, ControllerError> {
     let raw_payload = raw_payload.ok_or(ControllerError::MissingPayload)?;
     let value: JsonValue = json::from_str(raw_payload)
@@ -2477,10 +2579,34 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
             &["helperTicketHex", "helper_ticket_hex"],
             "helperTicketHex",
         )?,
+        relay_id_hex: require_json_string(object, &["relayIdHex", "relay_id_hex"], "relayIdHex")?,
+        descriptor_commit_hex: require_json_string(
+            object,
+            &["descriptorCommitHex", "descriptor_commit_hex"],
+            "descriptorCommitHex",
+        )?,
+        tls_server_name: require_json_string(
+            object,
+            &["tlsServerName", "tls_server_name"],
+            "tlsServerName",
+        )?,
         relay_tls_spki_sha256_hex: require_json_string(
             object,
             &["relayTlsSpkiSha256Hex", "relay_tls_spki_sha256_hex"],
             "relayTlsSpkiSha256Hex",
+        )?,
+        relay_certificate_sha256_hex: require_json_string(
+            object,
+            &["relayCertificateSha256Hex", "relay_certificate_sha256_hex"],
+            "relayCertificateSha256Hex",
+        )?,
+        directory_snapshot_digest_hex: require_json_string(
+            object,
+            &[
+                "directorySnapshotDigestHex",
+                "directory_snapshot_digest_hex",
+            ],
+            "directorySnapshotDigestHex",
         )?,
         padding_budget_ms: require_json_u16(
             object,
@@ -2518,25 +2644,53 @@ fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, C
             "sessionId must not be empty".to_owned(),
         ));
     }
-    if payload.relay_endpoint.trim().is_empty() {
-        return Err(ControllerError::InvalidPayload(
-            "relayEndpoint must not be empty".to_owned(),
-        ));
-    }
+    validate_quic_multiaddr(payload.relay_endpoint.as_str()).map_err(|error| {
+        ControllerError::InvalidPayload(format!("relayEndpoint is not canonical: {error}"))
+    })?;
+    validate_tls_server_name(payload.tls_server_name.as_str()).map_err(|error| {
+        ControllerError::InvalidPayload(format!("tlsServerName is not canonical: {error}"))
+    })?;
     if payload.helper_ticket_hex.trim().is_empty() {
         return Err(ControllerError::InvalidPayload(
             "helperTicketHex must not be empty".to_owned(),
         ));
     }
-    if payload.relay_tls_spki_sha256_hex.trim().is_empty() {
-        return Err(ControllerError::InvalidPayload(
-            "relayTlsSpkiSha256Hex must not be empty".to_owned(),
-        ));
-    }
-    let _ = parse_fixed_hex_32(
+    let relay_id = parse_canonical_nonzero_hex_32(payload.relay_id_hex.as_str(), "relayIdHex")?;
+    PublicKey::from_bytes(Algorithm::Ed25519, &relay_id).map_err(|error| {
+        ControllerError::InvalidPayload(format!("relayIdHex is not a valid Ed25519 key: {error}"))
+    })?;
+    let _ = parse_canonical_nonzero_hex_32(
+        payload.descriptor_commit_hex.as_str(),
+        "descriptorCommitHex",
+    )?;
+    let _ = parse_canonical_nonzero_hex_32(
         payload.relay_tls_spki_sha256_hex.as_str(),
         "relayTlsSpkiSha256Hex",
     )?;
+    let _ = parse_canonical_nonzero_hex_32(
+        payload.relay_certificate_sha256_hex.as_str(),
+        "relayCertificateSha256Hex",
+    )?;
+    let _ = parse_canonical_nonzero_hex_32(
+        payload.directory_snapshot_digest_hex.as_str(),
+        "directorySnapshotDigestHex",
+    )?;
+    let ticket = decode_helper_ticket_metadata(payload.helper_ticket_hex.as_str())?;
+    if ticket.relay_id != relay_id {
+        return Err(ControllerError::InvalidPayload(
+            "helper ticket relay identity does not match relayIdHex".to_owned(),
+        ));
+    }
+    if ticket.session_id != relay_session_id_from_session_id(payload.session_id.as_str()) {
+        return Err(ControllerError::InvalidPayload(
+            "helper ticket session id does not match sessionId".to_owned(),
+        ));
+    }
+    if ticket.expires_at_ms <= unix_now_ms() {
+        return Err(ControllerError::InvalidPayload(
+            "helper ticket has expired".to_owned(),
+        ));
+    }
     if payload.padding_budget_ms == 0 {
         return Err(ControllerError::InvalidPayload(
             "paddingBudgetMs must be greater than zero".to_owned(),
@@ -2650,11 +2804,9 @@ fn optional_json_string_array(
 }
 
 fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
-    let trimmed = addr.trim();
-    if trimmed.is_empty() {
-        return Err(ControllerError::InvalidMultiaddr(addr.to_owned()));
-    }
-    let mut parts = trimmed.trim_matches('/').split('/');
+    validate_quic_multiaddr(addr)
+        .map_err(|error| ControllerError::InvalidMultiaddr(error.to_string()))?;
+    let mut parts = addr.trim_start_matches('/').split('/');
     let proto = parts
         .next()
         .ok_or_else(|| ControllerError::InvalidMultiaddr(addr.to_owned()))?;
@@ -2677,12 +2829,22 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
                     .map_err(|_| ControllerError::InvalidMultiaddr(addr.to_owned()))?,
             ))
         }
-        "dns" | "dns4" | "dns6" => ParsedMultiaddrHost::Dns(
-            parts
+        "dns" | "dns4" | "dns6" => {
+            let name = parts
                 .next()
                 .ok_or_else(|| ControllerError::InvalidMultiaddr(addr.to_owned()))?
-                .to_owned(),
-        ),
+                .to_owned();
+            let address_family = match proto {
+                "dns" => DnsAddressFamily::Any,
+                "dns4" => DnsAddressFamily::V4,
+                "dns6" => DnsAddressFamily::V6,
+                _ => unreachable!("matched DNS protocol"),
+            };
+            ParsedMultiaddrHost::Dns {
+                name,
+                address_family,
+            }
+        }
         other => return Err(ControllerError::InvalidMultiaddr(other.to_owned())),
     };
 
@@ -2700,7 +2862,8 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
         .parse::<u16>()
         .map_err(|_| ControllerError::InvalidMultiaddr(addr.to_owned()))?;
     match parts.next() {
-        Some("quic") | None => {}
+        Some("quic") => {}
+        None => return Err(ControllerError::InvalidMultiaddr(addr.to_owned())),
         Some(other) => {
             return Err(ControllerError::InvalidMultiaddr(format!(
                 "unsupported protocol {other}"
@@ -2724,19 +2887,26 @@ impl ServerCertVerifier for PinnedSpkiVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &rustls::pki_types::ServerName<'_>,
+        ocsp_response: &[u8],
+        now: rustls::pki_types::UnixTime,
     ) -> std::result::Result<ServerCertVerified, rustls::Error> {
-        let spki = extract_spki_der(end_entity.as_ref())?;
-        let digest: [u8; 32] = Sha256::digest(spki).into();
+        let digest = leaf_certificate_spki_sha256(end_entity.as_ref()).map_err(|error| {
+            rustls::Error::General(format!("invalid relay leaf certificate: {error}"))
+        })?;
         if digest != self.relay_tls_spki_sha256 {
             return Err(rustls::Error::General(
                 "relay TLS SPKI pin mismatch".to_owned(),
             ));
         }
-        Ok(ServerCertVerified::assertion())
+        verifier_for_signature_cert(end_entity)?.verify_server_cert(
+            end_entity,
+            intermediates,
+            server_name,
+            ocsp_response,
+            now,
+        )
     }
 
     fn verify_tls12_signature(
@@ -2778,93 +2948,6 @@ fn verifier_for_signature_cert(
         .map_err(|error| rustls::Error::General(format!("TLS verifier config error: {error}")))
 }
 
-fn extract_spki_der(certificate: &[u8]) -> Result<&[u8], rustls::Error> {
-    let (_, cert_content, _) = read_der_element(certificate, 0, Some(0x30))?;
-    let (tbs_start, tbs_content, _) =
-        read_der_element(certificate, cert_content.start, Some(0x30))?;
-    let mut cursor = tbs_content.start;
-    if certificate
-        .get(cursor)
-        .copied()
-        .is_some_and(|tag| tag == 0xA0)
-    {
-        let (_, _, next) = read_der_element(certificate, cursor, Some(0xA0))?;
-        cursor = next;
-    }
-    for _ in 0..5 {
-        let (_, _, next) = read_der_element(certificate, cursor, None)?;
-        cursor = next;
-    }
-    let (spki_start, _, spki_next) = read_der_element(certificate, cursor, Some(0x30))?;
-    if spki_start < tbs_start || spki_next > certificate.len() {
-        return Err(rustls::Error::General(
-            "invalid relay certificate SPKI bounds".to_owned(),
-        ));
-    }
-    Ok(&certificate[spki_start..spki_next])
-}
-
-fn read_der_element(
-    bytes: &[u8],
-    start: usize,
-    expected_tag: Option<u8>,
-) -> Result<(usize, std::ops::Range<usize>, usize), rustls::Error> {
-    let tag = *bytes
-        .get(start)
-        .ok_or_else(|| rustls::Error::General("truncated DER element".to_owned()))?;
-    if let Some(expected) = expected_tag
-        && tag != expected
-    {
-        return Err(rustls::Error::General(format!(
-            "unexpected DER tag {tag:#x}; expected {expected:#x}"
-        )));
-    }
-    let len_start = start
-        .checked_add(1)
-        .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?;
-    let first_len = *bytes
-        .get(len_start)
-        .ok_or_else(|| rustls::Error::General("truncated DER length".to_owned()))?;
-    let (length, content_start) = if first_len & 0x80 == 0 {
-        (
-            usize::from(first_len),
-            len_start
-                .checked_add(1)
-                .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?,
-        )
-    } else {
-        let length_bytes = usize::from(first_len & 0x7F);
-        if length_bytes == 0 || length_bytes > std::mem::size_of::<usize>() {
-            return Err(rustls::Error::General(
-                "unsupported DER length encoding".to_owned(),
-            ));
-        }
-        let length_start = len_start
-            .checked_add(1)
-            .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?;
-        let length_end = length_start
-            .checked_add(length_bytes)
-            .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?;
-        let mut length = 0usize;
-        for byte in bytes
-            .get(length_start..length_end)
-            .ok_or_else(|| rustls::Error::General("truncated DER length".to_owned()))?
-        {
-            length = (length << 8) | usize::from(*byte);
-        }
-        (length, length_end)
-    };
-    let content_end = content_start
-        .checked_add(length)
-        .ok_or_else(|| rustls::Error::General("DER offset overflow".to_owned()))?;
-    if content_end > bytes.len() {
-        return Err(rustls::Error::General(
-            "DER element length exceeds certificate".to_owned(),
-        ));
-    }
-    Ok((start, content_start..content_end, content_end))
-}
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
@@ -2884,6 +2967,61 @@ mod tests {
     fn quantity_nanos(value: u64) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 9))
             .expect("u64 nano-XOR test value fits Quantity")
+    }
+
+    fn test_relay_id() -> [u8; 32] {
+        let keys = KeyPair::try_from_seed(vec![0x44; 32], Algorithm::Ed25519)
+            .expect("derive relay fixture key");
+        let (algorithm, bytes) = keys.public_key().try_to_bytes().expect("relay fixture key");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        bytes
+            .try_into()
+            .expect("Ed25519 relay identity is 32 bytes")
+    }
+
+    fn test_helper_ticket(session_id: &str) -> VpnHelperTicketV1 {
+        let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .expect("derive metering fixture key");
+        VpnHelperTicketV1 {
+            session_id: relay_session_id_from_session_id(session_id),
+            quote_id: [0x22; 32],
+            account_hash: [0x33; 32],
+            relay_id: test_relay_id(),
+            payment_tx_hash: [0x55; 32],
+            metering_public_key: metering_keys.public_key().clone(),
+            tariff: VpnTariffV1 {
+                lease_fee: quantity_nanos(1_000),
+                active_fee_per_minute: quantity_nanos(100),
+                ingress_fee_per_mib: quantity_nanos(7),
+                egress_fee_per_mib: quantity_nanos(11),
+            },
+            expires_at_ms: unix_now_ms().saturating_add(60_000),
+        }
+    }
+
+    fn test_connect_payload_json(
+        session_id: &str,
+        ticket: &VpnHelperTicketV1,
+        metering_private_key_seed_hex: Option<&str>,
+    ) -> String {
+        let metering_seed = metering_private_key_seed_hex.map_or_else(String::new, |seed| {
+            format!(r#","meteringPrivateKeySeedHex":"{seed}""#)
+        });
+        format!(
+            r#"{{"sessionId":"{session_id}","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"{}","relayIdHex":"{}","descriptorCommitHex":"{}","tlsServerName":"relay.example","relayTlsSpkiSha256Hex":"{}","relayCertificateSha256Hex":"{}","directorySnapshotDigestHex":"{}","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"leaseSecs":600,"usageVoucherIntervalMs":1{metering_seed}}}"#,
+            ticket.to_hex(&[0xAA; 32]),
+            hex::encode(ticket.relay_id),
+            "cd".repeat(32),
+            "ab".repeat(32),
+            "ef".repeat(32),
+            "42".repeat(32),
+        )
+    }
+
+    fn test_connect_payload(session_id: &str) -> ConnectPayload {
+        let ticket = test_helper_ticket(session_id);
+        let json = test_connect_payload_json(session_id, &ticket, None);
+        parse_connect_payload(Some(&json)).expect("valid connect payload fixture")
     }
 
     #[test]
@@ -2916,10 +3054,31 @@ mod tests {
         assert_eq!(
             parsed,
             ParsedMultiaddr {
-                host: ParsedMultiaddrHost::Dns("torii".to_owned()),
+                host: ParsedMultiaddrHost::Dns {
+                    name: "torii".to_owned(),
+                    address_family: DnsAddressFamily::Any,
+                },
                 port: 9443,
             }
         );
+    }
+
+    #[test]
+    fn parse_multiaddr_preserves_dns_address_family() {
+        for (protocol, expected) in [
+            ("dns4", DnsAddressFamily::V4),
+            ("dns6", DnsAddressFamily::V6),
+        ] {
+            let parsed = parse_multiaddr(&format!("/{protocol}/torii/udp/9443/quic"))
+                .expect("parse family-specific DNS endpoint");
+            assert_eq!(
+                parsed.host,
+                ParsedMultiaddrHost::Dns {
+                    name: "torii".to_owned(),
+                    address_family: expected,
+                }
+            );
+        }
     }
 
     #[test]
@@ -2930,10 +3089,7 @@ mod tests {
 
     #[test]
     fn connect_payload_deserializes_camel_case() {
-        let payload = parse_connect_payload(Some(
-            r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#,
-        ))
-        .expect("payload");
+        let payload = test_connect_payload("session-1");
         assert_eq!("session-1", payload.session_id);
         assert_eq!("/ip4/127.0.0.1/udp/7777/quic", payload.relay_endpoint);
         assert_eq!(1280, payload.mtu_bytes);
@@ -2942,10 +3098,7 @@ mod tests {
 
     #[test]
     fn connect_payload_worker_frame_roundtrips_as_norito() {
-        let payload = parse_connect_payload(Some(
-            r#"{"session_id":"session-1","relay_endpoint":"/ip4/127.0.0.1/udp/7777/quic","exit_class":"standard","helper_ticket_hex":"aa","relay_tls_spki_sha256_hex":"abababababababababababababababababababababababababababababababab","padding_budget_ms":15,"tunnel_addresses":["10.208.0.2/32"],"mtu_bytes":1280}"#,
-        ))
-        .expect("payload");
+        let payload = test_connect_payload("session-1");
         let frame = encode_connect_payload_frame(&payload);
 
         assert!(frame.starts_with(CONNECT_PAYLOAD_FRAME_MAGIC));
@@ -2979,13 +3132,37 @@ mod tests {
 
     #[test]
     fn helper_ticket_handshake_binding_is_nonzero_and_credential_bound() {
-        let first = helper_ticket_handshake_binding(b"first helper ticket");
-        let second = helper_ticket_handshake_binding(b"second helper ticket");
+        let payload = test_connect_payload("session-1");
+        let first = helper_ticket_handshake_binding(&payload, b"first helper ticket")
+            .expect("first binding");
+        let second = helper_ticket_handshake_binding(&payload, b"second helper ticket")
+            .expect("second binding");
         assert_ne!(first, [0; 32]);
         assert_ne!(first, second);
         assert_eq!(
             first,
-            helper_ticket_handshake_binding(b"first helper ticket")
+            helper_ticket_handshake_binding(&payload, b"first helper ticket")
+                .expect("repeat binding")
+        );
+
+        let mut different_trust = payload;
+        different_trust.descriptor_commit_hex = "ce".repeat(32);
+        assert_ne!(
+            first,
+            helper_ticket_handshake_binding(&different_trust, b"first helper ticket")
+                .expect("trust-bound binding")
+        );
+    }
+
+    #[test]
+    fn connect_payload_rejects_noncanonical_trust_hex() {
+        let mut payload = test_connect_payload("session-1");
+        payload.relay_tls_spki_sha256_hex.make_ascii_uppercase();
+        let error = validate_connect_payload(payload).expect_err("uppercase pin must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("exactly 64 lowercase hexadecimal characters")
         );
     }
 
@@ -3069,30 +3246,17 @@ mod tests {
     #[test]
     fn usage_voucher_signer_builds_signed_cumulative_voucher() {
         let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
-        let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
-            .expect("derive metering fixture key");
         let tariff = VpnTariffV1 {
             lease_fee: quantity_nanos(1_000),
             active_fee_per_minute: quantity_nanos(6_000),
             ingress_fee_per_mib: quantity_nanos(3),
             egress_fee_per_mib: quantity_nanos(5),
         };
-        let ticket = VpnHelperTicketV1 {
-            session_id: relay_session_id_from_session_id(session_id),
-            quote_id: [0x22; 32],
-            account_hash: [0x33; 32],
-            relay_id: [0x44; 32],
-            payment_tx_hash: [0x55; 32],
-            metering_public_key: metering_keys.public_key().clone(),
-            tariff,
-            expires_at_ms: 99_000,
-        };
-        let raw_payload = format!(
-            r#"{{"sessionId":"{session_id}","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"{}","relayTlsSpkiSha256Hex":"{}","paddingBudgetMs":15,"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"meteringPrivateKeySeedHex":"{}","usageVoucherIntervalMs":1}}"#,
-            ticket.to_hex(&[0xAA; 32]),
-            "ab".repeat(32),
-            "66".repeat(32)
-        );
+        let mut ticket = test_helper_ticket(session_id);
+        ticket.tariff = tariff;
+        let metering_seed = "66".repeat(32);
+        let raw_payload =
+            test_connect_payload_json(session_id, &ticket, Some(metering_seed.as_str()));
         let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
         let mut signer = UsageVoucherSigner::from_payload(&payload)
             .expect("signer")
@@ -3123,29 +3287,10 @@ mod tests {
     #[test]
     fn usage_voucher_signer_rejects_wrong_metering_seed() {
         let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
-        let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
-            .expect("derive metering fixture key");
-        let ticket = VpnHelperTicketV1 {
-            session_id: relay_session_id_from_session_id(session_id),
-            quote_id: [0x22; 32],
-            account_hash: [0x33; 32],
-            relay_id: [0x44; 32],
-            payment_tx_hash: [0x55; 32],
-            metering_public_key: metering_keys.public_key().clone(),
-            tariff: VpnTariffV1 {
-                lease_fee: quantity_nanos(1_000),
-                active_fee_per_minute: quantity_nanos(100),
-                ingress_fee_per_mib: quantity_nanos(7),
-                egress_fee_per_mib: quantity_nanos(11),
-            },
-            expires_at_ms: 99_000,
-        };
-        let raw_payload = format!(
-            r#"{{"sessionId":"{session_id}","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"{}","relayTlsSpkiSha256Hex":"{}","paddingBudgetMs":15,"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"meteringPrivateKeySeedHex":"{}","usageVoucherIntervalMs":1}}"#,
-            ticket.to_hex(&[0xAA; 32]),
-            "ab".repeat(32),
-            "77".repeat(32)
-        );
+        let ticket = test_helper_ticket(session_id);
+        let wrong_metering_seed = "77".repeat(32);
+        let raw_payload =
+            test_connect_payload_json(session_id, &ticket, Some(wrong_metering_seed.as_str()));
         let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
 
         let error = match UsageVoucherSigner::from_payload(&payload) {

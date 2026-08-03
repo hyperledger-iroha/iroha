@@ -27,9 +27,8 @@ use iroha_primitives::{
 
 use super::*;
 use crate::smartcontracts::isi::asset::isi::{
-    assert_numeric_spec_with, execute_authorized_numeric_asset_pair,
-    execute_native_fx_numeric_asset_pair, validate_authorized_numeric_asset_pair,
-    validate_native_fx_numeric_asset_pair,
+    assert_numeric_spec_with, execute_native_fx_numeric_asset_pair,
+    validate_authorized_numeric_asset_pair, validate_native_fx_numeric_asset_pair,
 };
 #[cfg(test)]
 use crate::smartcontracts::isi::error::MathError;
@@ -42,6 +41,38 @@ pub(crate) const SETTLEMENT_KIND_DVP: &str = "dvp";
 pub(crate) const SETTLEMENT_KIND_PVP: &str = "pvp";
 pub(crate) const CAN_SET_FX_CORRIDOR_POLICY: &str = "CanSetFxCorridorPolicy";
 pub(crate) const CAN_SETTLE_FX_CORRIDOR: &str = "CanSettleFxCorridor";
+
+/// Non-reusable proof that bilateral consent selected two exact settlement legs.
+pub(in crate::smartcontracts::isi) struct VerifiedSettlementNumericPair {
+    authority: AccountId,
+    binding: Vec<u8>,
+    legs: [(AssetId, AssetId, Quantity); 2],
+}
+
+impl VerifiedSettlementNumericPair {
+    fn new<T: norito::codec::Encode>(
+        authority: AccountId,
+        binding: &T,
+        legs: [(AssetId, AssetId, Quantity); 2],
+    ) -> Result<Self, Error> {
+        let binding = norito::encode_canonical(binding).map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to encode exact settlement movement binding: {error}").into(),
+            )
+        })?;
+        Ok(Self {
+            authority,
+            binding,
+            legs,
+        })
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (AccountId, Vec<u8>, [(AssetId, AssetId, Quantity); 2]) {
+        (self.authority, self.binding, self.legs)
+    }
+}
 
 impl Execute for SettlementInstructionBox {
     fn execute(
@@ -1029,8 +1060,13 @@ impl Execute for DvpIsi {
             ),
         };
 
-        match execute_authorized_numeric_asset_pair(
-            stx, authority, first.0, first.1, first.2, second.0, second.1, second.2,
+        let movement = VerifiedSettlementNumericPair::new(
+            authority.clone(),
+            &(settlement_id.clone(), intent_hash, plan),
+            [first, second],
+        )?;
+        match crate::smartcontracts::isi::asset::isi::execute_verified_settlement_numeric_pair(
+            stx, movement,
         ) {
             Ok(()) => {
                 let legs = dvp_leg_snapshots(&delivery_leg, &payment_leg);
@@ -1160,8 +1196,13 @@ impl Execute for PvpIsi {
             ),
         };
 
-        match execute_authorized_numeric_asset_pair(
-            stx, authority, first.0, first.1, first.2, second.0, second.1, second.2,
+        let movement = VerifiedSettlementNumericPair::new(
+            authority.clone(),
+            &(settlement_id.clone(), intent_hash, plan),
+            [first, second],
+        )?;
+        match crate::smartcontracts::isi::asset::isi::execute_verified_settlement_numeric_pair(
+            stx, movement,
         ) {
             Ok(()) => {
                 let legs = pvp_leg_snapshots(&primary_leg, &counter_leg);
@@ -1239,7 +1280,7 @@ mod tests {
         block::BlockHeader,
         common::Owned,
         domain::{Domain, DomainId},
-        events::data::prelude::{AccountEvent, AssetEvent, DataEvent, DomainEvent},
+        events::data::prelude::{AssetEvent, DataEvent, DomainEvent},
         isi::SetAssetHoldingLimit,
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceMetadata},
@@ -1355,7 +1396,7 @@ mod tests {
     #[test]
     fn bilateral_settlement_rejects_partial_commit_plans() {
         let first = SettlementLeg::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("domain"),
                 "first".parse().expect("asset name"),
             ),
@@ -1364,7 +1405,7 @@ mod tests {
             BOB_ID.clone(),
         );
         let second = SettlementLeg::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("domain"),
                 "second".parse().expect("asset name"),
             ),
@@ -1431,16 +1472,20 @@ mod tests {
         enabled: bool,
     ) -> (State, FxCorridorPolicy) {
         let domain_id = DomainId::try_new("fx", "universal").expect("FX domain");
-        let source_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "aed".parse().expect("AED name"));
-        let destination_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "pkr".parse().expect("PKR name"));
+        let source_asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "aed".parse().expect("AED name"),
+        );
+        let destination_asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "pkr".parse().expect("PKR name"),
+        );
         let source_dataspace = DataSpaceId::new(10);
         let destination_dataspace = DataSpaceId::new(12);
         let policy_id: Name = "aed_to_pkr".parse().expect("policy id");
 
         let mut world = World::with_assets(
-            [Domain::new(domain_id).build(&ALICE_ID)],
+            [Domain::new(domain_id.clone()).build(&ALICE_ID)],
             [
                 Account::new(ALICE_ID.clone()).build(&ALICE_ID),
                 Account::new(BOB_ID.clone()).build(&ALICE_ID),
@@ -1448,12 +1493,20 @@ mod tests {
                 Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()).build(&ALICE_ID),
             ],
             [
-                AssetDefinition::numeric(source_asset_definition_id.clone())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&ALICE_ID),
-                AssetDefinition::numeric(destination_asset_definition_id.clone())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&ALICE_ID),
+                AssetDefinition::numeric(
+                    source_asset_definition_id.clone(),
+                    "aed".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(domain_id.clone()),
+                )
+                .build(&ALICE_ID),
+                AssetDefinition::numeric(
+                    destination_asset_definition_id.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(domain_id),
+                )
+                .build(&ALICE_ID),
             ],
             [
                 Asset::new(
@@ -2127,17 +2180,31 @@ mod tests {
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
-        let delivery_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "bond".parse().unwrap(),
-        );
-        let payment_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let delivery_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "bond".parse().unwrap(),
+            );
+        let payment_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
 
-        let delivery_def = AssetDefinition::numeric(delivery_asset_id.clone()).build(&ALICE_ID);
-        let payment_def = AssetDefinition::numeric(payment_asset_id.clone()).build(&ALICE_ID);
+        let delivery_def = AssetDefinition::numeric(
+            delivery_asset_id.clone(),
+            "bond".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
+        let payment_def = AssetDefinition::numeric(
+            payment_asset_id.clone(),
+            "usd".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
 
         let alice_delivery = Asset::new(
             AssetId::new(delivery_asset_id.clone(), ALICE_ID.clone()),
@@ -2172,19 +2239,33 @@ mod tests {
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
-        let delivery_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "bond".parse().unwrap(),
-        );
-        let payment_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let delivery_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "bond".parse().unwrap(),
+            );
+        let payment_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
 
-        let delivery_def = AssetDefinition::new(delivery_asset_id.clone(), NumericSpec::integer())
-            .build(&ALICE_ID);
-        let payment_def =
-            AssetDefinition::new(payment_asset_id.clone(), payment_spec).build(&ALICE_ID);
+        let delivery_def = AssetDefinition::new(
+            delivery_asset_id.clone(),
+            "bond".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
+        let payment_def = AssetDefinition::new(
+            payment_asset_id.clone(),
+            "usd".to_owned(),
+            payment_spec,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
 
         let alice_delivery = Asset::new(
             AssetId::new(delivery_asset_id.clone(), ALICE_ID.clone()),
@@ -2301,14 +2382,16 @@ mod tests {
         Register::account(NewAccount::new(victim_account.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register otherwise-unreferenced victim account");
-        let victim_definition = AssetDefinitionId::new(
+        let victim_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "pin_target".parse().expect("asset name"),
         );
-        Register::asset_definition(
-            AssetDefinition::numeric(victim_definition.clone())
-                .with_name(victim_definition.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            victim_definition.clone(),
+            "pin_target".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(&ALICE_ID, &mut stx)
         .expect("register otherwise-unreferenced victim asset definition");
 
@@ -2542,9 +2625,10 @@ mod tests {
                 .iter()
                 .filter(|event| matches!(
                     event.as_ref(),
-                    DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                        AssetEvent::Transferred(_)
-                    )))
+                    DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
+                        event: AssetEvent::Transferred(_),
+                        ..
+                    }))
                 ))
                 .count(),
             2,
@@ -2767,26 +2851,34 @@ mod tests {
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
-        let delivery_def_id = AssetDefinitionId::new(
+        let delivery_def_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "bond".parse().expect("delivery asset name"),
         );
-        let payment_def_id =
-            AssetDefinitionId::new(domain_id, "usd".parse().expect("payment asset name"));
+        let payment_def_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "usd".parse().expect("payment asset name"),
+        );
 
         let delivery_def = {
             let __asset_definition_id = delivery_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "bond".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
+            )
         }
-        .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted)
         .build(&ALICE_ID);
         let payment_def = {
             let __asset_definition_id = payment_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
         }
-        .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted)
         .build(&ALICE_ID);
 
         let alice_delivery = Asset::new(
@@ -3830,7 +3922,7 @@ mod tests {
 
     #[test]
     fn settlement_leg_quantity_boundaries_reject_negative_and_zero_values() {
-        let definition_id = AssetDefinitionId::new(
+        let definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "usd".parse().expect("asset name"),
         );

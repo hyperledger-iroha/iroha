@@ -117,8 +117,12 @@ pub mod merge;
 pub mod merge_sidecar;
 /// Minimal Merkle Mountain Range for bridge commitments.
 pub mod mmr;
+/// Rebuildable, non-consensus Musubi description and keyword search projection.
+pub mod musubi_search;
 /// Native AMX participant attestation control plane.
 pub mod native_amx;
+#[cfg(any(test, feature = "test-network-native-amx-fault-injection"))]
+pub(crate) mod native_amx_fault_injection;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
 pub mod nexus;
 /// Oracle host helpers (admission/aggregation plumbing).

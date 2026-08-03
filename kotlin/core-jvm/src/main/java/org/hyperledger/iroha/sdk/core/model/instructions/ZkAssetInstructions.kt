@@ -592,32 +592,31 @@ class ShieldInstruction private constructor(
     }
 }
 
-/** Typed representation of `zk::Unshield`. */
+/**
+ * Typed representation of `zk::Unshield`.
+ *
+ * Any private change commitment is authenticated by the proof and derived by the node; callers do
+ * not supply an output list.
+ */
 class UnshieldInstruction private constructor(
     @JvmField val asset: String,
     @JvmField val to: String,
     @JvmField val publicAmount: String,
     inputs: List<ByteArray>,
-    outputs: List<ByteArray>,
     @JvmField val proof: ProofAttachment,
     rootHint: ByteArray?,
     override val arguments: Map<String, String>,
 ) : InstructionTemplate {
     private val _inputs = inputs.map { it.copyOf() }
-    private val _outputs = outputs.map { it.copyOf() }
     private val _rootHint = rootHint?.copyOf()
 
     override val kind: InstructionKind get() = InstructionKind.CUSTOM
 
     val inputs: List<ByteArray> get() = _inputs.map { it.copyOf() }
 
-    val outputs: List<ByteArray> get() = _outputs.map { it.copyOf() }
-
     val rootHint: ByteArray? get() = _rootHint?.copyOf()
 
     fun inputNullifiers(): List<ByteArray> = inputs
-
-    fun outputCommitments(): List<ByteArray> = outputs
 
     fun rootHintBytes(): ByteArray? = rootHint
 
@@ -626,7 +625,6 @@ class UnshieldInstruction private constructor(
         private var to: String? = null
         private var publicAmount: String? = null
         private val inputs = mutableListOf<ByteArray>()
-        private val outputs = mutableListOf<ByteArray>()
         private var proof: ProofAttachment? = null
         private var rootHint: ByteArray? = null
 
@@ -657,17 +655,6 @@ class UnshieldInstruction private constructor(
             inputs.add(fixedNonZeroBytes(input, 32, "inputs[${inputs.size}]"))
         }
 
-        fun setOutputs(outputs: List<ByteArray>?) = apply {
-            this.outputs.clear()
-            outputs?.forEachIndexed { index, output ->
-                this.outputs.add(fixedNonZeroBytes(output, 32, "outputs[$index]"))
-            }
-        }
-
-        fun addOutput(output: ByteArray?) = apply {
-            outputs.add(fixedNonZeroBytes(output, 32, "outputs[${outputs.size}]"))
-        }
-
         fun setProof(proof: ProofAttachment?) = apply {
             this.proof = requireNotNull(proof) { "proof must be provided" }
         }
@@ -687,7 +674,6 @@ class UnshieldInstruction private constructor(
                 selectedTo,
                 selectedAmount,
                 inputs,
-                outputs,
                 selectedProof,
                 rootHint,
                 linkedMapOf(
@@ -696,7 +682,6 @@ class UnshieldInstruction private constructor(
                     "to" to selectedTo,
                     "public_amount" to selectedAmount,
                     "inputs" to inputs.joinToString(",") { hexLower(it) },
-                    "outputs" to outputs.joinToString(",") { hexLower(it) },
                     "proof" to selectedProof.toNativeJson(),
                     "root_hint" to (rootHint?.let { hexLower(it) } ?: ""),
                 ),
@@ -709,15 +694,15 @@ class UnshieldInstruction private constructor(
         fun builder(): Builder = Builder()
 
         /**
-         * Intentionally unsupported. `zk::Unshield` carries binary input nullifiers, output
-         * commitments and a proof attachment that cannot be reconstructed from a generic string
-         * argument map. Build instances through [builder] instead.
+         * Intentionally unsupported. `zk::Unshield` carries binary input nullifiers and a proof
+         * attachment that cannot be reconstructed from a generic string argument map. Build
+         * instances through [builder] instead.
          */
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): UnshieldInstruction =
             throw UnsupportedOperationException(
-                "UnshieldInstruction cannot be built from an argument map: its nullifiers, " +
-                    "commitments and proof attachment are binary fields. Use UnshieldInstruction.builder().",
+                "UnshieldInstruction cannot be built from an argument map: its nullifiers and " +
+                    "proof attachment are binary fields. Use UnshieldInstruction.builder().",
             )
     }
 }

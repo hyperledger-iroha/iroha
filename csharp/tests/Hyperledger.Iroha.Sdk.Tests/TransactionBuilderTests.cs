@@ -63,7 +63,7 @@ public sealed class TransactionBuilderTests
             FixtureAccountId);
         var hash = Enumerable.Repeat((byte)0xA5, 32).ToArray();
         var invocation = new TransactionContractInvocation(
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             hash,
             "run",
             [1, 2, 3]);
@@ -92,7 +92,7 @@ public sealed class TransactionBuilderTests
         Assert.Equal(0xA5, invocation.ExpectedCodeHash[0]);
 
         var emptyArguments = new TransactionContractInvocation(
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             Enumerable.Repeat((byte)0xA5, 32).ToArray(),
             "run",
             Array.Empty<byte>());
@@ -104,7 +104,7 @@ public sealed class TransactionBuilderTests
     public void ExecutableBatchBuilderRequiresGasAndEmitsCanonicalJsonShape()
     {
         var invocation = new TransactionContractInvocation(
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             Enumerable.Repeat((byte)0x11, 32).ToArray(),
             "run");
         var missingGas = new TransactionBuilder(
@@ -149,8 +149,8 @@ public sealed class TransactionBuilderTests
         var hash = Enumerable.Repeat((byte)0x11, 32).ToArray();
         var validAddresses = new[]
         {
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtydf6x",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qhfvtnk",
         };
         foreach (var address in validAddresses)
         {
@@ -160,13 +160,14 @@ public sealed class TransactionBuilderTests
         var invalidAddresses = new[]
         {
             "abc",
-            " tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            " irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             "TAIRAC1QYQQQQQQQQQQQQPUTUV64ZHF0A0A4HHLQDJ2LHNWUZQ4XJQDDCYQ8",
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyqp",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
-            "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkqaty5s",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8pkjeu85",
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyqp",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+            "irohac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qhk43nl",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkk75nd5",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8p2lc7wy",
         };
         foreach (var address in invalidAddresses)
         {

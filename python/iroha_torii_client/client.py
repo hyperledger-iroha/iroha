@@ -90,6 +90,14 @@ from .sccp import (
     parse_sccp_bridge_submit_response_json,
     parse_sccp_json_object,
 )
+from .vpn_validation import (
+    normalize_vpn_canonical_hex_input as _vpn_normalize_canonical_hex_input,
+    parse_vpn_trust_fields as _vpn_parse_trust_fields,
+    require_vpn_relay_endpoint as _vpn_require_relay_endpoint,
+    require_vpn_relay_id as _vpn_require_relay_id,
+    require_vpn_tls_server_name as _vpn_require_tls_server_name,
+    require_vpn_trust_digest as _vpn_require_trust_digest,
+)
 
 # SCCP response limits apply to bytes yielded by Requests after transfer
 # decoding. Content-Length remains an early rejection hint, never the sole
@@ -195,14 +203,17 @@ _VPN_PROFILE_RESPONSE_FIELDS = frozenset(
         "tunnel_addresses",
         "mtu_bytes",
         "display_billing_label",
-        "fee_asset_id",
-        "escrow_account_id",
         "operator_account_id",
         "lease_fee",
         "settlement_grace_secs",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
     }
 )
 _VPN_QUOTE_RESPONSE_FIELDS = frozenset(
@@ -228,10 +239,14 @@ _VPN_QUOTE_RESPONSE_FIELDS = frozenset(
         "meter_family",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
         "metering_public_key_hex",
         "open_lease_instruction",
-        "tx_instructions",
     }
 )
 _VPN_SESSION_RESPONSE_FIELDS = frozenset(
@@ -253,7 +268,12 @@ _VPN_SESSION_RESPONSE_FIELDS = frozenset(
         "lease_fee",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
         "route_pushes",
         "excluded_routes",
         "dns_servers",
@@ -289,7 +309,6 @@ _VPN_RECEIPT_RESPONSE_FIELDS = frozenset(
         "refunded_fee",
         "lease_id_hex",
         "settle_lease_instruction",
-        "tx_instructions",
     }
 )
 _VPN_RECEIPT_LIST_RESPONSE_FIELDS = frozenset({"items", "total"})
@@ -6082,14 +6101,17 @@ class VpnProfile:
     tunnel_addresses: List[str]
     mtu_bytes: int
     display_billing_label: str
-    fee_asset_id: str
-    escrow_account_id: str
     operator_account_id: str
     lease_fee: str
     settlement_grace_secs: int
     flow_label_bits: int
     padding_budget_ms: int
-    relay_tls_spki_sha256_hex: Optional[str]
+    relay_id_hex: str
+    descriptor_commit_hex: str
+    tls_server_name: str
+    relay_tls_spki_sha256_hex: str
+    relay_certificate_sha256_hex: str
+    directory_snapshot_digest_hex: str
 
 
 @dataclass(frozen=True)
@@ -6117,10 +6139,14 @@ class VpnQuote:
     meter_family: str
     flow_label_bits: int
     padding_budget_ms: int
-    relay_tls_spki_sha256_hex: Optional[str]
+    relay_id_hex: str
+    descriptor_commit_hex: str
+    tls_server_name: str
+    relay_tls_spki_sha256_hex: str
+    relay_certificate_sha256_hex: str
+    directory_snapshot_digest_hex: str
     metering_public_key_hex: str
-    open_lease_instruction: Optional[TransactionInstruction]
-    tx_instructions: List[TransactionInstruction]
+    open_lease_instruction: TransactionInstruction
 
 
 @dataclass(frozen=True)
@@ -6144,7 +6170,12 @@ class VpnSession:
     lease_fee: str
     flow_label_bits: int
     padding_budget_ms: int
-    relay_tls_spki_sha256_hex: Optional[str]
+    relay_id_hex: str
+    descriptor_commit_hex: str
+    tls_server_name: str
+    relay_tls_spki_sha256_hex: str
+    relay_certificate_sha256_hex: str
+    directory_snapshot_digest_hex: str
     route_pushes: List[str]
     excluded_routes: List[str]
     dns_servers: List[str]
@@ -6182,7 +6213,6 @@ class VpnReceipt:
     refunded_fee: str
     lease_id_hex: str
     settle_lease_instruction: Optional[TransactionInstruction]
-    tx_instructions: List[TransactionInstruction]
 
 
 @dataclass(frozen=True)
@@ -7249,7 +7279,8 @@ class PipelinePreflight:
 class _SumeragiV2StatusParser:
     """Fail-closed parser for the flattened authoritative v2 JSON projection."""
 
-    MAX_VALIDATORS = 128
+    MAX_CONSENSUS_VALIDATORS = 31
+    MAX_LANE_VALIDATORS = 128
     MAX_LANE_SETTLEMENT_COMMITMENTS = 128
     MAX_LANE_RELAY_ENVELOPES = 64
     MAX_LANE_PAYLOAD_OWNERSHIPS = 128
@@ -7526,9 +7557,7 @@ class _SumeragiV2StatusParser:
             if (
                 min_signers != height_context.min_signers
                 or total_power != height_context.total_power
-                or signed_power < signer_count
-                or signed_power > total_power
-                or (height_context.mode == "permissioned" and signed_power != signer_count)
+                or signed_power != signer_count
             ):
                 raise RuntimeError(f"{quorum_context} disagrees with the frozen dual quorum")
             round_ = checked_round(quorum.get("round"), f"{quorum_context}.round")
@@ -7558,7 +7587,13 @@ class _SumeragiV2StatusParser:
 
         def vote_quorums(field: str, *, phase: str) -> List[SumeragiV2VoteQuorumStatus]:
             raw_values = cls._array(
-                record.get(field), f"{context}.{field}", maximum=cls.MAX_VALIDATORS
+                record.get(field),
+                f"{context}.{field}",
+                maximum=(
+                    cls.MAX_CONSENSUS_VALIDATORS + 1
+                    if phase == "commit"
+                    else cls.MAX_CONSENSUS_VALIDATORS
+                ),
             )
             return [
                 vote_quorum(item, f"{context}.{field}[{index}]", phase=phase)
@@ -7568,7 +7603,7 @@ class _SumeragiV2StatusParser:
         raw_timeouts = cls._array(
             record.get("timeout_quorums"),
             f"{context}.timeout_quorums",
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         timeout_quorums: List[SumeragiV2TimeoutQuorumStatus] = []
         for index, raw in enumerate(raw_timeouts):
@@ -7605,9 +7640,7 @@ class _SumeragiV2StatusParser:
             if (
                 min_signers != height_context.min_signers
                 or total_power != height_context.total_power
-                or signed_power < signer_count
-                or signed_power > total_power
-                or (height_context.mode == "permissioned" and signed_power != signer_count)
+                or signed_power != signer_count
                 or (
                     formed
                     and (
@@ -7870,6 +7903,7 @@ class _SumeragiV2StatusParser:
                     "timeout_certificate_missing",
                     "scheduler_starvation",
                     "application_pending",
+                    "successor_activation_pending",
                     "local_control_pending",
                 },
                 context=f"{context}.blocker",
@@ -8396,14 +8430,14 @@ class _SumeragiV2StatusParser:
             record.get("validator_count"),
             f"{context}.validator_count",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         quorum = cls._mapping(record.get("quorum"), f"{context}.quorum")
         min_signers = cls._unsigned(
             quorum.get("min_signers"),
             f"{context}.quorum.min_signers",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         total_power = cls._unsigned(
             quorum.get("total_power"),
@@ -8411,7 +8445,12 @@ class _SumeragiV2StatusParser:
             positive=True,
         )
         expected_min = validator_count * 2 // 3 + 1
-        if min_signers != expected_min or total_power < validator_count:
+        if (
+            validator_count < 4
+            or (validator_count - 1) % 3 != 0
+            or min_signers != expected_min
+            or total_power != validator_count
+        ):
             raise RuntimeError(
                 f"{context}.quorum is not canonical for validator_count"
             )
@@ -8421,10 +8460,6 @@ class _SumeragiV2StatusParser:
             allowed={"permissioned", "npos"},
             context=f"{context}.mode",
         )
-        if mode == "permissioned" and total_power != validator_count:
-            raise RuntimeError(
-                f"{context}.quorum.total_power must equal validator_count in permissioned mode"
-            )
         return SumeragiV2HeightContextStatus(
             epoch=cls._unsigned(record.get("epoch"), f"{context}.epoch"),
             epoch_end_height=cls._unsigned(
@@ -8444,24 +8479,26 @@ class _SumeragiV2StatusParser:
             record.get("validator_count"),
             f"{context}.validator_count",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         signer_count = cls._unsigned(record.get("signer_count"), f"{context}.signer_count")
         min_signers = cls._unsigned(
             record.get("min_signers"),
             f"{context}.min_signers",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         signed_power = cls._unsigned(record.get("signed_power"), f"{context}.signed_power")
         total_power = cls._unsigned(
             record.get("total_power"), f"{context}.total_power", positive=True
         )
         if (
-            signer_count > validator_count
+            validator_count < 4
+            or (validator_count - 1) % 3 != 0
+            or signer_count > validator_count
             or min_signers != validator_count * 2 // 3 + 1
-            or signed_power > total_power
-            or total_power < validator_count
+            or signed_power != signer_count
+            or total_power != validator_count
             or signer_count < min_signers
             or signed_power * 3 <= total_power * 2
         ):
@@ -8897,13 +8934,13 @@ class _SumeragiV2StatusParser:
             record.get("participant_validator_count"),
             f"{context}.participant_validator_count",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_LANE_VALIDATORS,
         )
         min_quorum = cls._unsigned(
             record.get("participant_min_quorum"),
             f"{context}.participant_min_quorum",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_LANE_VALIDATORS,
         )
         expected_quorum = validator_count - (validator_count - 1) // 3
         authority_height = cls._unsigned(
@@ -9058,7 +9095,7 @@ class _SumeragiV2StatusParser:
                         record.get("validator_set"),
                         f"{context}.validator_set",
                         minimum=1,
-                        maximum=cls.MAX_VALIDATORS,
+                        maximum=cls.MAX_LANE_VALIDATORS,
                     ),
                     f"{context}.validator_set",
                 )
@@ -9221,7 +9258,7 @@ class _SumeragiV2StatusParser:
                         descriptor.get("validator_set"),
                         f"{descriptor_context}.validator_set",
                         minimum=1,
-                        maximum=cls.MAX_VALIDATORS,
+                        maximum=cls.MAX_LANE_VALIDATORS,
                     ),
                     f"{descriptor_context}.validator_set",
                 )
@@ -9232,13 +9269,13 @@ class _SumeragiV2StatusParser:
             descriptor.get("validator_count"),
             f"{descriptor_context}.validator_count",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_LANE_VALIDATORS,
         )
         min_quorum = cls._exact_unsigned(
             descriptor.get("min_quorum"),
             f"{descriptor_context}.min_quorum",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_LANE_VALIDATORS,
         )
         expected_quorum = len(validators) - (len(validators) - 1) // 3
         validator_hash_version = cls._exact_unsigned(
@@ -9730,14 +9767,14 @@ class _SumeragiV2StatusParser:
             ]
             if (
                 not validators
-                or len(validators) > cls.MAX_VALIDATORS
+                or len(validators) > cls.MAX_LANE_VALIDATORS
                 or len(set(validators)) != len(validators)
             ):
                 raise RuntimeError(
                     f"{item_context}.lane_block_descriptor_validator_set must be non-empty and unique"
                 )
-            validator_count = cls._unsigned(record.get("lane_block_descriptor_validator_count"), f"{item_context}.lane_block_descriptor_validator_count", positive=True, maximum=cls.MAX_VALIDATORS)
-            min_quorum = cls._unsigned(record.get("lane_block_descriptor_min_quorum"), f"{item_context}.lane_block_descriptor_min_quorum", positive=True, maximum=cls.MAX_VALIDATORS)
+            validator_count = cls._unsigned(record.get("lane_block_descriptor_validator_count"), f"{item_context}.lane_block_descriptor_validator_count", positive=True, maximum=cls.MAX_LANE_VALIDATORS)
+            min_quorum = cls._unsigned(record.get("lane_block_descriptor_min_quorum"), f"{item_context}.lane_block_descriptor_min_quorum", positive=True, maximum=cls.MAX_LANE_VALIDATORS)
             if validator_count != len(validators) or min_quorum > validator_count:
                 raise RuntimeError(f"{item_context} descriptor quorum does not match its validator set")
             previous_height = cls._unsigned(record.get("previous_lane_block_height"), f"{item_context}.previous_lane_block_height")
@@ -9784,8 +9821,8 @@ class _SumeragiV2StatusParser:
         ):
             item_context = f"{context}[{index}]"
             record = cls._mapping(block_value, item_context)
-            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", positive=True, maximum=cls.MAX_VALIDATORS)
-            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", positive=True, maximum=cls.MAX_VALIDATORS)
+            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", positive=True, maximum=cls.MAX_LANE_VALIDATORS)
+            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", positive=True, maximum=cls.MAX_LANE_VALIDATORS)
             prepare_count = cls._unsigned(record.get("prepare_qc_signer_count"), f"{item_context}.prepare_qc_signer_count", maximum=cls.MAX_U32)
             commit_count = cls._unsigned(record.get("commit_qc_signer_count"), f"{item_context}.commit_qc_signer_count", maximum=cls.MAX_U32)
             if min_quorum > validator_count or not (min_quorum <= prepare_count <= validator_count) or not (min_quorum <= commit_count <= validator_count):
@@ -9846,8 +9883,8 @@ class _SumeragiV2StatusParser:
         ):
             item_context = f"{context}[{index}]"
             record = cls._mapping(session_value, item_context)
-            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", maximum=cls.MAX_VALIDATORS)
-            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", maximum=cls.MAX_VALIDATORS)
+            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", maximum=cls.MAX_LANE_VALIDATORS)
+            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", maximum=cls.MAX_LANE_VALIDATORS)
             prepare_count = cls._unsigned(record.get("prepare_vote_count"), f"{item_context}.prepare_vote_count", maximum=cls.MAX_U32)
             commit_count = cls._unsigned(record.get("commit_vote_count"), f"{item_context}.commit_vote_count", maximum=cls.MAX_U32)
             if validator_count == 0:
@@ -13704,6 +13741,8 @@ class ToriiClient:
         context: str,
         expected_status: Iterable[int] = (200,),
     ) -> Optional[Mapping[str, Any]]:
+        if urlsplit(self._base_url).scheme.lower() != "https":
+            raise RuntimeError("Sora VPN requests require an HTTPS Torii base URL")
         data = self._encode_json_body(body_payload) if body_payload is not None else None
         final_headers = self._vpn_request_headers(
             method,
@@ -13713,7 +13752,13 @@ class ToriiClient:
             headers=headers,
             has_body=data is not None,
         )
-        response = self._request(method, path, headers=final_headers, data=data)
+        response = self._request(
+            method,
+            path,
+            headers=final_headers,
+            data=data,
+            allow_redirects=False,
+        )
         self._expect_status(response, expected_status)
         payload = self._maybe_json(response)
         if payload is None:
@@ -13872,26 +13917,6 @@ class ToriiClient:
             return None
         return cls._parse_vpn_tx_instruction(value, context=context)
 
-    @classmethod
-    def _parse_vpn_tx_instructions(
-        cls,
-        value: Any,
-        *,
-        context: str,
-        minimum: int = 0,
-        maximum: Optional[int] = None,
-    ) -> List[TransactionInstruction]:
-        if not isinstance(value, list):
-            raise RuntimeError(f"{context} must be a list")
-        if len(value) < minimum:
-            raise RuntimeError(f"{context} must contain at least {minimum} instruction")
-        if maximum is not None and len(value) > maximum:
-            raise RuntimeError(f"{context} must contain at most {maximum} instruction")
-        return [
-            cls._parse_vpn_tx_instruction(entry, context=f"{context}[{index}]")
-            for index, entry in enumerate(value)
-        ]
-
     @staticmethod
     def _parse_vpn_string_list(value: Any, *, context: str) -> List[str]:
         if not isinstance(value, list):
@@ -13903,6 +13928,8 @@ class ToriiClient:
             result.append(entry)
         return result
 
+    _parse_vpn_trust_fields = staticmethod(_vpn_parse_trust_fields)
+
     @classmethod
     def _parse_vpn_profile(cls, payload: Mapping[str, Any], *, context: str) -> VpnProfile:
         record = cls._ensure_mapping(payload, context)
@@ -13910,6 +13937,11 @@ class ToriiClient:
         available = record.get("available")
         if not isinstance(available, bool):
             raise RuntimeError(f"{context}.available must be a boolean")
+        trust_fields = cls._parse_vpn_trust_fields(
+            record,
+            context=context,
+            allow_empty=not available,
+        )
         if "dns_push_interval_secs" not in record:
             raise RuntimeError(f"{context}.dns_push_interval_secs is required")
         dns_push_interval_secs = cls._require_vpn_uint64(
@@ -13951,7 +13983,11 @@ class ToriiClient:
         )
         return VpnProfile(
             available=available,
-            relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
+            relay_endpoint=cls._require_vpn_relay_endpoint(
+                record.get("relay_endpoint"),
+                context=f"{context}.relay_endpoint",
+                allow_empty=not available,
+            ),
             supported_exit_classes=supported_exit_classes,
             default_exit_class=cls._require_vpn_enum(
                 record.get("default_exit_class"),
@@ -13976,11 +14012,6 @@ class ToriiClient:
                 record.get("display_billing_label"),
                 f"{context}.display_billing_label",
             ),
-            fee_asset_id=cls._require_string(record.get("fee_asset_id"), f"{context}.fee_asset_id"),
-            escrow_account_id=cls._require_string(
-                record.get("escrow_account_id"),
-                f"{context}.escrow_account_id",
-            ),
             operator_account_id=cls._require_string(
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
@@ -13989,17 +14020,14 @@ class ToriiClient:
             settlement_grace_secs=settlement_grace_secs,
             flow_label_bits=flow_label_bits,
             padding_budget_ms=padding_budget_ms,
-            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
-                record.get("relay_tls_spki_sha256_hex"),
-                context=f"{context}.relay_tls_spki_sha256_hex",
-                expected_length=64,
-            ),
+            **trust_fields,
         )
 
     @classmethod
     def _parse_vpn_quote(cls, payload: Mapping[str, Any], *, context: str) -> VpnQuote:
         record = cls._ensure_mapping(payload, context)
         cls._validate_exact_fields(record, _VPN_QUOTE_RESPONSE_FIELDS, context)
+        trust_fields = cls._parse_vpn_trust_fields(record, context=context)
         lease_secs = cls._require_vpn_unsigned_range(
             record.get("lease_secs"),
             f"{context}.lease_secs",
@@ -14021,12 +14049,6 @@ class ToriiClient:
             f"{context}.padding_budget_ms",
             minimum=1,
             maximum=65535,
-        )
-        tx_instructions = cls._parse_vpn_tx_instructions(
-            record.get("tx_instructions"),
-            context=f"{context}.tx_instructions",
-            minimum=1,
-            maximum=1,
         )
         return VpnQuote(
             quote_id=cls._require_exact_lower_hex_string(
@@ -14054,7 +14076,10 @@ class ToriiClient:
                 _VPN_EXIT_CLASSES,
                 f"{context}.exit_class",
             ),
-            relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
+            relay_endpoint=cls._require_vpn_relay_endpoint(
+                record.get("relay_endpoint"),
+                context=f"{context}.relay_endpoint",
+            ),
             lease_secs=lease_secs,
             quote_expires_at_ms=cls._require_vpn_uint64(
                 record.get("quote_expires_at_ms"),
@@ -14084,27 +14109,23 @@ class ToriiClient:
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
             flow_label_bits=flow_label_bits,
             padding_budget_ms=padding_budget_ms,
-            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
-                record.get("relay_tls_spki_sha256_hex"),
-                context=f"{context}.relay_tls_spki_sha256_hex",
-                expected_length=64,
-            ),
+            **trust_fields,
             metering_public_key_hex=cls._require_exact_lower_hex_string(
                 record.get("metering_public_key_hex"),
                 context=f"{context}.metering_public_key_hex",
                 expected_length=64,
             ),
-            open_lease_instruction=cls._parse_optional_vpn_tx_instruction(
+            open_lease_instruction=cls._parse_vpn_tx_instruction(
                 record.get("open_lease_instruction"),
                 context=f"{context}.open_lease_instruction",
             ),
-            tx_instructions=tx_instructions,
         )
 
     @classmethod
     def _parse_vpn_session(cls, payload: Mapping[str, Any], *, context: str) -> VpnSession:
         record = cls._ensure_mapping(payload, context)
         cls._validate_exact_fields(record, _VPN_SESSION_RESPONSE_FIELDS, context)
+        trust_fields = cls._parse_vpn_trust_fields(record, context=context)
         lease_secs = cls._require_vpn_unsigned_range(
             record.get("lease_secs"),
             f"{context}.lease_secs",
@@ -14139,7 +14160,10 @@ class ToriiClient:
                 _VPN_EXIT_CLASSES,
                 f"{context}.exit_class",
             ),
-            relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
+            relay_endpoint=cls._require_vpn_relay_endpoint(
+                record.get("relay_endpoint"),
+                context=f"{context}.relay_endpoint",
+            ),
             lease_secs=lease_secs,
             expires_at_ms=cls._require_vpn_uint64(record.get("expires_at_ms"), f"{context}.expires_at_ms"),
             connected_at_ms=cls._require_vpn_uint64(
@@ -14173,11 +14197,7 @@ class ToriiClient:
             lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
             flow_label_bits=flow_label_bits,
             padding_budget_ms=padding_budget_ms,
-            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
-                record.get("relay_tls_spki_sha256_hex"),
-                context=f"{context}.relay_tls_spki_sha256_hex",
-                expected_length=64,
-            ),
+            **trust_fields,
             route_pushes=cls._parse_vpn_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
             excluded_routes=cls._parse_vpn_string_list(
                 record.get("excluded_routes"),
@@ -14206,11 +14226,6 @@ class ToriiClient:
     def _parse_vpn_receipt(cls, payload: Mapping[str, Any], *, context: str) -> VpnReceipt:
         record = cls._ensure_mapping(payload, context)
         cls._validate_exact_fields(record, _VPN_RECEIPT_RESPONSE_FIELDS, context)
-        tx_instructions = cls._parse_vpn_tx_instructions(
-            record.get("tx_instructions"),
-            context=f"{context}.tx_instructions",
-            maximum=1,
-        )
         return VpnReceipt(
             session_id=cls._require_exact_lower_hex_string(
                 record.get("session_id"),
@@ -14280,7 +14295,6 @@ class ToriiClient:
                 record.get("settle_lease_instruction"),
                 context=f"{context}.settle_lease_instruction",
             ),
-            tx_instructions=tx_instructions,
         )
 
     @classmethod
@@ -14320,6 +14334,7 @@ class ToriiClient:
         headers: Optional[MutableMapping[str, str]] = None,
         data: Optional[bytes] = None,
         stream: bool = False,
+        allow_redirects: bool = True,
     ) -> requests.Response:
         url = f"{self._base_url}{path}"
         response = self._session.request(
@@ -14329,6 +14344,7 @@ class ToriiClient:
             headers=headers,
             data=data,
             stream=stream,
+            allow_redirects=allow_redirects,
         )
         return response
 
@@ -17955,41 +17971,13 @@ class ToriiClient:
             )
         return value
 
-    @classmethod
-    def _normalize_vpn_canonical_hex_input(
-        cls,
-        value: Union[str, bytes, bytearray, memoryview],
-        *,
-        context: str,
-        expected_length: int,
-    ) -> str:
-        if isinstance(value, (bytes, bytearray, memoryview)):
-            return cls._normalize_hex_string(
-                value,
-                context=context,
-                expected_length=expected_length,
-            )
-        return cls._require_exact_lower_hex_string(
-            value,
-            context=context,
-            expected_length=expected_length,
-        )
-
-    @classmethod
-    def _require_optional_exact_lower_hex_string(
-        cls,
-        value: Any,
-        *,
-        context: str,
-        expected_length: int,
-    ) -> Optional[str]:
-        if value is None:
-            return None
-        return cls._require_exact_lower_hex_string(
-            value,
-            context=context,
-            expected_length=expected_length,
-        )
+    _require_vpn_relay_id = staticmethod(_vpn_require_relay_id)
+    _require_vpn_trust_digest = staticmethod(_vpn_require_trust_digest)
+    _require_vpn_tls_server_name = staticmethod(_vpn_require_tls_server_name)
+    _require_vpn_relay_endpoint = staticmethod(_vpn_require_relay_endpoint)
+    _normalize_vpn_canonical_hex_input = staticmethod(
+        _vpn_normalize_canonical_hex_input
+    )
 
     @staticmethod
     def _require_exact_lower_even_hex_string(value: Any, *, context: str) -> str:

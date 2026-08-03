@@ -66,7 +66,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
             chain_id: ChainId::from("iroha3-dev.local"),
             chain_discriminant: None,
             block_cadence_ms: NonZeroU64::new(100).unwrap(),
-            min_peers: 1,
+            min_peers: 4,
             seed_policy: SeedPolicy::DerivedFromChain,
         },
         GenesisProfile::Iroha3Taira => ProfileDefaults {
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(dev.chain_id, ChainId::from("iroha3-dev.local"));
         assert_eq!(dev.chain_discriminant, None);
         assert_eq!(dev.block_cadence_ms.get(), 100);
-        assert_eq!(dev.min_peers, 1);
+        assert_eq!(dev.min_peers, 4);
 
         let taira = profile_defaults(GenesisProfile::Iroha3Taira);
         assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));

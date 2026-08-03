@@ -65,6 +65,7 @@ fn main() -> Result<()> {
         account_id,
         EventFilterBox::Data(DataEventFilter::Any),
     )
+    .expect("trigger action fixture satisfies validation invariants")
     .with_metadata(trigger_metadata);
     let trigger = Trigger::new(TriggerId::from_str("tea_party").unwrap(), action);
 

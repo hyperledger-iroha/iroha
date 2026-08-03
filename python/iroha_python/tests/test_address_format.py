@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from types import SimpleNamespace
 from typing import Any, Dict, Optional, Union
@@ -30,6 +31,19 @@ def _authority_fee_payment() -> Dict[str, Any]:
     return {
         "payer": "authority",
         "value": {"charge_limits": [], "gas_limit": None},
+    }
+
+
+def _unsigned_multisig_response_fields() -> Dict[str, Any]:
+    transaction_payload = b"canonical unsigned multisig payload"
+    signing_message = bytearray(
+        hashlib.blake2b(transaction_payload, digest_size=32).digest()
+    )
+    signing_message[-1] |= 1
+    return {
+        "submitted": False,
+        "transaction_payload_b64": base64.b64encode(transaction_payload).decode("ascii"),
+        "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
     }
 
 
@@ -167,7 +181,7 @@ def test_build_and_submit_transaction_forwards_wait_scope(
 
     envelope_out, result = client.build_and_submit_transaction(
         "00000000-0000-0000-0000-000000000000",
-        "testu-authority",
+        "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         b"\x11" * 32,
         fee_payment={
             "payer": "authority",
@@ -403,7 +417,7 @@ def test_propose_multisig_inherited_helper_posts_native_instruction_payload() ->
         payload={
             "ok": True,
             "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
-            "submitted": False,
+            **_unsigned_multisig_response_fields(),
         }
     )
     client = ToriiClient("http://node.test", session=session)
@@ -454,12 +468,13 @@ def test_propose_multisig_inherited_helper_rejects_malformed_response() -> None:
         payload={
             "ok": True,
             "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
+            **_unsigned_multisig_response_fields(),
             "signing_message_b64": "not base64",
         }
     )
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="valid base64"):
+    with pytest.raises(ValueError, match="exact standard-base64"):
         client.propose_multisig(
             multisig_account_alias="ops@universal",
             signer_account_id="signer@universal",
@@ -493,12 +508,13 @@ def test_propose_multisig_inherited_helper_rejects_empty_signing_message() -> No
         payload={
             "ok": True,
             "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
+            **_unsigned_multisig_response_fields(),
             "signing_message_b64": "",
         }
     )
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="empty bytes"):
+    with pytest.raises(ValueError, match="non-empty string"):
         client.propose_multisig(
             multisig_account_alias="ops@universal",
             signer_account_id="signer@universal",

@@ -144,8 +144,10 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     state.zk.verify_timeout = std::time::Duration::ZERO;
 
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id =
-        AssetDefinitionId::new(domain_id.clone(), "zcoin".parse().expect("asset name"));
+    let asset_def_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "zcoin".parse().expect("asset name"),
+    );
     let vk_transfer_id = VerifyingKeyId::new(HALO2_BACKEND, TRANSFER_VK_NAME);
     let vk_unshield_id = VerifyingKeyId::new(HALO2_BACKEND, UNSHIELD_VK_NAME);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -161,9 +163,12 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
             account_id.clone(),
         )
         .into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone()).with_name("zcoin".to_owned()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "zcoin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
         Mint::asset_quantity(10_000u64, asset_id).into(),
         verifying_keys::RegisterVerifyingKey {

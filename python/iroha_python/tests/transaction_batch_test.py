@@ -8,10 +8,10 @@ import pytest
 
 import iroha_python.crypto as crypto_module
 import iroha_python.tx as tx_module
-from iroha_python import ContractCall, TransactionConfig, TransactionDraft
+from iroha_python import ContractCall, Instruction, TransactionConfig, TransactionDraft
 
 VALID_HASH = "00" * 31 + "01"
-VALID_ADDRESS = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+VALID_ADDRESS = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
 
 
 def config(*, gas_limit: int | None = 1000) -> TransactionConfig:
@@ -88,6 +88,89 @@ def test_instruction_only_draft_stays_legacy_unless_batch_is_explicit(
     assert calls[0]["entries"] is None
     assert calls[1]["instructions"] is None
     assert calls[1]["entries"] == [instruction]
+
+
+def test_asset_definition_registration_uses_transaction_authority_as_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeInstruction:
+        @staticmethod
+        def register_asset_definition(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return ("register_asset_definition", args, kwargs)
+
+    monkeypatch.setattr(tx_module, "Instruction", FakeInstruction)
+    draft = TransactionDraft(config())
+    draft.register_asset_definition(
+        "definition",
+        owning_domain=None,
+        balance_scope_policy="Global",
+        name="coin",
+    )
+    assert captured["args"] == ("definition",)
+    assert captured["kwargs"]["owning_domain"] is None
+    assert captured["kwargs"]["balance_scope_policy"] == "Global"
+    assert captured["kwargs"]["name"] == "coin"
+
+    with pytest.raises(TypeError):
+        draft.register_asset_definition(  # type: ignore[misc]
+            "definition",
+            "different-owner",
+            owning_domain=None,
+            balance_scope_policy="Global",
+            name="coin",
+        )
+    with pytest.raises(TypeError, match="owning_domain"):
+        draft.register_asset_definition(  # type: ignore[call-arg]
+            "definition", balance_scope_policy="Global", name="coin"
+        )
+    with pytest.raises(TypeError, match="balance_scope_policy"):
+        draft.register_asset_definition(  # type: ignore[call-arg]
+            "definition", owning_domain=None, name="coin"
+        )
+    with pytest.raises(TypeError, match="name"):
+        draft.register_asset_definition(  # type: ignore[call-arg]
+            "definition",
+            owning_domain=None,
+            balance_scope_policy="Global",
+        )
+    with pytest.raises(ValueError, match="name"):
+        draft.register_asset_definition(
+            "definition",
+            owning_domain=None,
+            balance_scope_policy="Global",
+            name="   ",
+        )
+    with pytest.raises(ValueError, match="required for DataspaceRestricted"):
+        draft.register_asset_definition(
+            "definition",
+            owning_domain=None,
+            balance_scope_policy="DataspaceRestricted",
+            name="coin",
+        )
+
+
+def test_native_asset_definition_registration_rejects_owner_override() -> None:
+    definition_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+    instruction = Instruction.register_asset_definition(
+        definition_id,
+        owning_domain=None,
+        balance_scope_policy="Global",
+        name="coin",
+    )
+    assert isinstance(instruction, Instruction)
+
+    with pytest.raises(TypeError):
+        Instruction.register_asset_definition(
+            definition_id,
+            config().authority,
+            owning_domain=None,
+            balance_scope_policy="Global",
+            name="coin",
+        )
 
 
 def test_wallet_transfer_controls_chain_into_one_atomic_draft(

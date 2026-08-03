@@ -1,71 +1,18 @@
 use super::*;
 
 isi! {
-    /// Open a ledger-managed `SoraNet` VPN lease escrow funded in XOR.
+    /// Open a ledger-managed `SoraNet` VPN lease from one operator-signed quote.
     pub struct OpenVpnLeaseEscrow {
-        /// Caller-selected lease identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub lease_id: [u8; 32],
-        /// Session identifier bound to the tunnel runtime.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub session_id: [u8; 16],
-        /// Quote identifier that fixed pricing and relay policy.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub quote_id: [u8; 32],
-        /// Relay fingerprint authorized by the quote.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub relay_id: crate::soranet::RelayId,
-        /// Operator account allowed to settle this lease.
-        pub operator_account_id: crate::account::AccountId,
-        /// Client public key that must sign cumulative usage vouchers.
-        pub metering_public_key: iroha_crypto::PublicKey,
-        /// Asset definition to lock. Native VPN leases require XOR.
-        pub asset_definition: crate::asset::AssetDefinitionId,
-        /// Amount to lock in protocol custody.
-        pub lease_fee: iroha_primitives::numeric::Quantity,
-        /// Deterministic tariff used to recompute earned fees.
-        pub tariff: crate::soranet::vpn::VpnTariffV1,
-        /// Durable quote policy used to rebuild Torii VPN responses from WSV.
-        pub quote_policy: crate::soranet::vpn::VpnQuotePolicyV1,
-        /// Absolute service expiry timestamp in milliseconds since the Unix epoch.
-        pub expires_at_ms: u64,
-        /// Additional settlement grace window after expiry, in milliseconds.
-        pub settlement_grace_ms: u64,
+        /// Complete operator-authored policy and its canonical signature.
+        pub quote: crate::soranet::vpn::VpnSignedQuoteV1,
     }
 }
 
 impl OpenVpnLeaseEscrow {
     /// Construct a VPN lease escrow opening instruction.
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        lease_id: [u8; 32],
-        session_id: [u8; 16],
-        quote_id: [u8; 32],
-        relay_id: crate::soranet::RelayId,
-        operator_account_id: crate::account::AccountId,
-        metering_public_key: iroha_crypto::PublicKey,
-        asset_definition: crate::asset::AssetDefinitionId,
-        lease_fee: iroha_primitives::numeric::Quantity,
-        tariff: crate::soranet::vpn::VpnTariffV1,
-        quote_policy: crate::soranet::vpn::VpnQuotePolicyV1,
-        expires_at_ms: u64,
-        settlement_grace_ms: u64,
-    ) -> Self {
-        Self {
-            lease_id,
-            session_id,
-            quote_id,
-            relay_id,
-            operator_account_id,
-            metering_public_key,
-            asset_definition,
-            lease_fee,
-            tariff,
-            quote_policy,
-            expires_at_ms,
-            settlement_grace_ms,
-        }
+    pub fn new(quote: crate::soranet::vpn::VpnSignedQuoteV1) -> Self {
+        Self { quote }
     }
 }
 
@@ -131,50 +78,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenVpnLeaseEscrow {
         }
 
         let mut offset = 0usize;
-        let lease_id = super::decode_aos_canonical_field::<[u8; 32]>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let session_id = super::decode_aos_canonical_field::<[u8; 16]>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let quote_id = super::decode_aos_canonical_field::<[u8; 32]>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let relay_id = super::decode_aos_canonical_field::<crate::soranet::RelayId>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let operator_account_id = super::decode_aos_canonical_field::<crate::account::AccountId>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let metering_public_key = super::decode_aos_canonical_field::<iroha_crypto::PublicKey>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let asset_definition = super::decode_aos_canonical_field::<crate::asset::AssetDefinitionId>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let lease_fee = super::decode_aos_canonical_field::<iroha_primitives::numeric::Quantity>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let tariff = super::decode_aos_canonical_field::<crate::soranet::vpn::VpnTariffV1>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let quote_policy = super::decode_aos_canonical_field::<
-            crate::soranet::vpn::VpnQuotePolicyV1,
-        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
-        let expires_at_ms = super::decode_aos_canonical_field::<u64>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let settlement_grace_ms = super::decode_aos_canonical_field::<u64>(
+        let quote = super::decode_aos_canonical_field::<crate::soranet::vpn::VpnSignedQuoteV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -182,23 +86,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenVpnLeaseEscrow {
             return Err(norito::core::Error::LengthMismatch);
         }
         norito::core::note_payload_access(bytes, offset);
-        Ok((
-            Self {
-                lease_id,
-                session_id,
-                quote_id,
-                relay_id,
-                operator_account_id,
-                metering_public_key,
-                asset_definition,
-                lease_fee,
-                tariff,
-                quote_policy,
-                expires_at_ms,
-                settlement_grace_ms,
-            },
-            offset,
-        ))
+        Ok((Self { quote }, offset))
     }
 }
 
@@ -267,8 +155,10 @@ mod tests {
         asset::AssetDefinitionId,
         domain::DomainId,
         soranet::vpn::{
-            VpnExitClassV1, VpnQuotePolicyV1, VpnSessionReceiptV1, VpnTariffV1,
-            VpnUsageVoucherBodyV1, VpnUsageVoucherV1,
+            VpnAddressSlotV1, VpnExitClassV1, VpnQuoteBodyV1, VpnQuotePolicyV1,
+            VpnSessionReceiptV1, VpnSignedQuoteV1, VpnTariffV1, VpnUsageVoucherBodyV1,
+            VpnUsageVoucherV1, derive_vpn_address_plan_v1, derive_vpn_lease_id_v1,
+            derive_vpn_session_id_v1,
         },
     };
 
@@ -284,8 +174,13 @@ mod tests {
         key_pair.public_key().clone()
     }
 
+    fn key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked VPN fixture keypair")
+    }
+
     fn asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "xor".parse().expect("asset name"),
         )
@@ -305,10 +200,17 @@ mod tests {
         }
     }
 
-    fn quote_policy(account_id: &AccountId) -> VpnQuotePolicyV1 {
+    fn quote_policy(account_id: &AccountId, slot: VpnAddressSlotV1) -> VpnQuotePolicyV1 {
         VpnQuotePolicyV1 {
             exit_class: VpnExitClassV1::Standard,
             relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
+            relay_id: [0x11; 32],
+            descriptor_commit: [0x22; 32],
+            tls_server_name: "relay.example".to_owned(),
+            relay_tls_spki_sha256: [0xAB; 32],
+            relay_certificate_sha256: [0x33; 32],
+            directory_snapshot_digest: [0x44; 32],
+            relay_trust_valid_until_ms: u64::MAX,
             lease_secs: 600,
             meter_family: "soranet.vpn.standard".to_owned(),
             fee_asset_id: "xor#universal.universal".to_owned(),
@@ -316,46 +218,110 @@ mod tests {
             route_pushes: vec!["0.0.0.0/0".to_owned()],
             excluded_routes: Vec::new(),
             dns_servers: vec!["1.1.1.1".to_owned()],
-            tunnel_addresses: vec!["10.208.0.2/32".to_owned()],
+            tunnel_addresses: derive_vpn_address_plan_v1(slot).client_tunnel_addresses,
             mtu_bytes: 1_280,
             flow_label_bits: 24,
             padding_budget_ms: 15,
-            relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
         }
     }
 
+    fn signed_quote() -> VpnSignedQuoteV1 {
+        let chain_id = crate::ChainId::from("vpn-isi-chain");
+        let quote_id = [0x22; 32];
+        let client_account_id = account(0x41);
+        let operator = key_pair(0x42);
+        let operator_account_id = AccountId::new(operator.public_key().clone());
+        let address_slot = VpnAddressSlotV1::new(7).expect("fixture slot");
+        let body = VpnQuoteBodyV1 {
+            lease_id: derive_vpn_lease_id_v1(&chain_id, quote_id, &client_account_id),
+            session_id: derive_vpn_session_id_v1(
+                &chain_id,
+                quote_id,
+                &client_account_id,
+                address_slot,
+            ),
+            chain_id,
+            quote_id,
+            address_slot,
+            client_account_id,
+            operator_account_id: operator_account_id.clone(),
+            metering_public_key: public_key(0x43),
+            asset_definition: asset_definition(),
+            tariff: tariff(),
+            policy: quote_policy(&operator_account_id, address_slot),
+            valid_after_ms: 1_700_000_000_000,
+            expires_at_ms: 1_700_000_600_000,
+            settlement_grace_ms: 60_000,
+        };
+        VpnSignedQuoteV1::try_sign(body, operator.private_key()).expect("sign VPN quote fixture")
+    }
+
     #[derive(norito::codec::Encode)]
-    struct ForgedOpenVpnLeaseEscrow {
+    struct ForgedVpnTariff {
+        lease_fee: Numeric,
+        active_fee_per_minute: Quantity,
+        ingress_fee_per_mib: Quantity,
+        egress_fee_per_mib: Quantity,
+    }
+
+    #[derive(norito::codec::Encode)]
+    struct ForgedVpnQuoteBody {
+        chain_id: crate::ChainId,
+        quote_id: [u8; 32],
         lease_id: [u8; 32],
         session_id: [u8; 16],
-        quote_id: [u8; 32],
-        relay_id: crate::soranet::RelayId,
+        address_slot: VpnAddressSlotV1,
+        client_account_id: AccountId,
         operator_account_id: AccountId,
         metering_public_key: iroha_crypto::PublicKey,
         asset_definition: AssetDefinitionId,
-        lease_fee: Numeric,
-        tariff: VpnTariffV1,
-        quote_policy: VpnQuotePolicyV1,
+        tariff: ForgedVpnTariff,
+        policy: VpnQuotePolicyV1,
+        valid_after_ms: u64,
         expires_at_ms: u64,
         settlement_grace_ms: u64,
     }
 
+    #[derive(norito::codec::Encode)]
+    struct ForgedVpnSignedQuote {
+        body: ForgedVpnQuoteBody,
+        signature: Signature,
+    }
+
+    #[derive(norito::codec::Encode)]
+    struct ForgedOpenVpnLeaseEscrow {
+        quote: ForgedVpnSignedQuote,
+    }
+
     #[test]
     fn open_vpn_lease_rejects_forged_negative_quantity() {
-        let operator = account(0x42);
+        let valid = signed_quote();
+        let body = valid.body;
         let forged = ForgedOpenVpnLeaseEscrow {
-            lease_id: [0xAA; 32],
-            session_id: [0x11; 16],
-            quote_id: [0x22; 32],
-            relay_id: [0x33; 32],
-            operator_account_id: operator.clone(),
-            metering_public_key: public_key(0x43),
-            asset_definition: asset_definition(),
-            lease_fee: Numeric::new(-1_i32, 0),
-            tariff: tariff(),
-            quote_policy: quote_policy(&operator),
-            expires_at_ms: 1_700_000_600_000,
-            settlement_grace_ms: 60_000,
+            quote: ForgedVpnSignedQuote {
+                body: ForgedVpnQuoteBody {
+                    chain_id: body.chain_id,
+                    quote_id: body.quote_id,
+                    lease_id: body.lease_id,
+                    session_id: body.session_id,
+                    address_slot: body.address_slot,
+                    client_account_id: body.client_account_id,
+                    operator_account_id: body.operator_account_id,
+                    metering_public_key: body.metering_public_key,
+                    asset_definition: body.asset_definition,
+                    tariff: ForgedVpnTariff {
+                        lease_fee: Numeric::new(-1_i32, 0),
+                        active_fee_per_minute: body.tariff.active_fee_per_minute,
+                        ingress_fee_per_mib: body.tariff.ingress_fee_per_mib,
+                        egress_fee_per_mib: body.tariff.egress_fee_per_mib,
+                    },
+                    policy: body.policy,
+                    valid_after_ms: body.valid_after_ms,
+                    expires_at_ms: body.expires_at_ms,
+                    settlement_grace_ms: body.settlement_grace_ms,
+                },
+                signature: valid.signature,
+            },
         };
 
         assert!(
@@ -439,21 +405,7 @@ mod tests {
     #[test]
     fn vpn_decode_from_slice_roundtrips() {
         let voucher = usage_voucher();
-        let escrow_account = account(0x42);
-        assert_slice_roundtrip(OpenVpnLeaseEscrow::new(
-            [0xAA; 32],
-            [0x11; 16],
-            [0x22; 32],
-            [0x33; 32],
-            escrow_account.clone(),
-            public_key(0x43),
-            asset_definition(),
-            tariff().lease_fee.clone(),
-            tariff(),
-            quote_policy(&escrow_account),
-            1_700_000_600_000,
-            60_000,
-        ));
+        assert_slice_roundtrip(OpenVpnLeaseEscrow::new(signed_quote()));
         assert_slice_roundtrip(SettleVpnLease::new(
             [0xAA; 32],
             session_receipt(&voucher),
@@ -465,29 +417,12 @@ mod tests {
     #[test]
     fn vpn_registry_decodes_type_names() {
         let voucher = usage_voucher();
-        let escrow_account = account(0x42);
         let registry = crate::isi::InstructionRegistry::new()
             .register_slice::<OpenVpnLeaseEscrow>()
             .register_slice::<SettleVpnLease>()
             .register_slice::<RefundExpiredVpnLease>();
 
-        assert_registry_decodes(
-            &registry,
-            OpenVpnLeaseEscrow::new(
-                [0xAA; 32],
-                [0x11; 16],
-                [0x22; 32],
-                [0x33; 32],
-                escrow_account.clone(),
-                public_key(0x43),
-                asset_definition(),
-                tariff().lease_fee.clone(),
-                tariff(),
-                quote_policy(&escrow_account),
-                1_700_000_600_000,
-                60_000,
-            ),
-        );
+        assert_registry_decodes(&registry, OpenVpnLeaseEscrow::new(signed_quote()));
         assert_registry_decodes(
             &registry,
             SettleVpnLease::new([0xAA; 32], session_receipt(&voucher), voucher),

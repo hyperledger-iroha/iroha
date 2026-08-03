@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from python.iroha_torii_client.native_amx import (
+    compute_native_amx_application_manifest_singleton_root,
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
     compute_native_amx_proposal_hash,
@@ -434,11 +435,17 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
     assert artifact["version"] == leaf["version"] == 1
     assert artifact["leaf_index"] == proof["leaf_index"] == 0
     assert proof["audit_path"] == []
-    assert artifact["manifest_leaf_count"] == 1
+    assert (
+        artifact["manifest_leaf_count"]
+        == execution["native_amx_application_manifest_count"]
+    )
+    expected_manifest_root = compute_native_amx_application_manifest_singleton_root(
+        artifact["leaf_hash"]
+    )
     assert (
         artifact["manifest_root"]
         == execution["native_amx_application_manifest_root"]
-        == artifact["leaf_hash"]
+        == expected_manifest_root
     )
     assert leaf["executed_block_wire_hash"] == execution["executed_block_wire_hash"]
     assert execution["executed_block_wire_len"] == 49
@@ -869,6 +876,7 @@ def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
         "same_route_participant_application_marker",
         "unanchored_mixed_role_participant",
         "manifest_root_tampering",
+        "manifest_leaf_hash_tampering",
         "manifest_proof_path_tampering",
         "manifest_proof_position_tampering",
         "application_block_substitution",

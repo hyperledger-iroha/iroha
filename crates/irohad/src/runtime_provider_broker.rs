@@ -32,9 +32,12 @@ mod api;
 mod launcher;
 pub(crate) use api::StockRuntimeProviderBrokerRegistryV1;
 pub use api::{
+    BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
-    serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_lifecycle_v1,
+    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
+    StockGovernanceDagServiceRuntimeProviderRegistryV1, serve_runtime_provider_broker_v1,
+    serve_runtime_provider_broker_with_fallible_readiness_v1,
+    serve_runtime_provider_broker_with_lifecycle_v1,
 };
 pub use launcher::{
     RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerDeploymentV1,
@@ -162,6 +165,14 @@ mod protocol {
     const MAX_CHAIN_ID_BYTES_V1: usize = 1024;
     const MAX_PROVIDER_HANDLE_BYTES_V1: usize = 1024;
     const MAX_CATALOG_ENTRIES_V1: usize = RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1;
+    const MAX_BOOTLE_LANTERN_AUTH_CREDENTIAL_BYTES_V1: usize = 4 * 1024;
+    const MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1: usize = 256 * 1024;
+    const BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1: usize =
+        iroha_core::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1;
+    const BOOTLE_LANTERN_REQUEST_BYTES_V1: usize =
+        iroha_core::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_REQUEST_BYTES_V1;
+    const BOOTLE_LANTERN_RESPONSE_BYTES_V1: usize =
+        iroha_core::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_RESPONSE_BYTES_V1;
     const MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1: usize =
         provider_ingest_outbox_defaults::COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1 as usize;
     const MAX_PROVIDER_INGEST_PUBLIC_KEY_BYTES_V1: usize = 16 * 1024;
@@ -979,6 +990,13 @@ mod protocol {
                 handle: binding.handle().to_owned(),
                 revision: binding.revision(),
                 policy_digest: binding.policy_digest(),
+                bootle_lantern_issuance_bindings: binding.bootle_lantern_issuance_bindings().map(
+                    |bindings| BootleLanternIssuanceBindingsWireV1 {
+                        issuer_id: *bindings.issuer_id().as_bytes(),
+                        policy_id: *bindings.policy_id().as_bytes(),
+                        authorization_lifetime_blocks: bindings.authorization_lifetime_blocks(),
+                    },
+                ),
                 stream_token_signer_public_key: binding.stream_token_signer_public_key(),
                 stream_token_gateway_admission_qualification: binding
                     .stream_token_gateway_admission_qualification(),
@@ -1231,6 +1249,53 @@ mod protocol {
             || !iroha_config::parameters::is_production_runtime_handle(&binding.handle)
             || !binding.has_exact_qualification()
         {
+            return Err(BrokerError::BindingMismatch);
+        }
+        let bootle_lantern_issuance = binding.slot
+            == IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id();
+        if bootle_lantern_issuance {
+            let exact = binding
+                .bootle_lantern_issuance_bindings
+                .ok_or(BrokerError::BindingMismatch)?;
+            iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
+                iroha_data_model::privacy::PrivacyIssuerIdV1::new(exact.issuer_id),
+                iroha_data_model::privacy::PrivacyPolicyIdV1::new(exact.policy_id),
+                exact.authorization_lifetime_blocks,
+            )
+            .map_err(|_| BrokerError::BindingMismatch)?;
+            if binding.stream_token_signer_public_key.is_some()
+                || binding.appeal_finance_signer_binding.is_some()
+                || binding.appeal_finance_checkpoint_binding.is_some()
+                || binding.appeal_finance_checkpoint_max_bytes.is_some()
+                || binding.pop_credential_runtime_binding.is_some()
+                || binding.por_replay_archive_binding.is_some()
+                || binding.por_replay_archive_proof_limits.is_some()
+                || binding.potr_runtime_binding.is_some()
+                || binding.native_signer_binding.is_some()
+                || binding.governance_request_auth_public_key.is_some()
+                || binding.governance_request_auth_max_body_bytes.is_some()
+                || binding.provider_ingest_signer_binding.is_some()
+                || binding.provider_ingest_source_limits.is_some()
+                || binding.provider_ingest_checkpoint_max_bytes.is_some()
+                || binding
+                    .provider_ingest_max_signed_transaction_bytes
+                    .is_some()
+                || binding.evidence_viewer_webauthn_binding.is_some()
+                || binding.evidence_viewer_grant_ttl_ms.is_some()
+                || binding.evidence_viewer_receipt_signer_public_key.is_some()
+                || binding
+                    .evidence_viewer_transparency_publisher_public_key
+                    .is_some()
+                || binding.evidence_viewer_checkpoint_max_bytes.is_some()
+                || binding.evidence_viewer_archive_id.is_some()
+                || binding.evidence_viewer_archive_public_key.is_some()
+                || binding.evidence_viewer_archive_max_bytes.is_some()
+            {
+                return Err(BrokerError::BindingMismatch);
+            }
+            return Ok(());
+        }
+        if binding.bootle_lantern_issuance_bindings.is_some() {
             return Err(BrokerError::BindingMismatch);
         }
         let appeal_signer =
@@ -2157,6 +2222,259 @@ mod protocol {
     struct QualificationResultWireV1 {
         revision: u64,
         policy_digest: [u8; 32],
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct BootleLanternAuthenticateRequestWireV1 {
+        opaque_credential: Vec<u8>,
+        action: u8,
+        request_binding: [u8; 32],
+        committed_height: u64,
+    }
+
+    impl fmt::Debug for BootleLanternAuthenticateRequestWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("BootleLanternAuthenticateRequestWireV1")
+                .field("credential_len", &self.opaque_credential.len())
+                .field("action", &self.action)
+                .field("committed_height", &self.committed_height)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for BootleLanternAuthenticateRequestWireV1 {
+        fn drop(&mut self) {
+            self.opaque_credential.fill(0);
+            let _ = std::hint::black_box(&self.opaque_credential);
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+    struct BootleLanternAuthenticatedPrincipalWireV1 {
+        principal_digest: [u8; 32],
+        issued_at_height: u64,
+        expires_at_height: u64,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+    struct BootleLanternPrepareAuthorizationRequestWireV1 {
+        context: iroha_data_model::privacy::PrivacyStatementContextV1,
+        canonical_genesis_hash: [u8; 32],
+        policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+        requester_authorization_digest: [u8; 32],
+        issued_at_height: u64,
+        expires_at_height: u64,
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct BootleLanternAuthorizationWireV1 {
+        authorization: Vec<u8>,
+    }
+
+    impl fmt::Debug for BootleLanternAuthorizationWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("BootleLanternAuthorizationWireV1")
+                .field("authorization_len", &self.authorization.len())
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for BootleLanternAuthorizationWireV1 {
+        fn drop(&mut self) {
+            self.authorization.fill(0);
+            let _ = std::hint::black_box(&self.authorization);
+        }
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct BootleLanternIssueRequestWireV1 {
+        context: iroha_data_model::privacy::PrivacyStatementContextV1,
+        canonical_genesis_hash: [u8; 32],
+        policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+        authorization: Vec<u8>,
+        request: Vec<u8>,
+        current_height: u64,
+    }
+
+    impl fmt::Debug for BootleLanternIssueRequestWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("BootleLanternIssueRequestWireV1")
+                .field("authorization_len", &self.authorization.len())
+                .field("request_len", &self.request.len())
+                .field("current_height", &self.current_height)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for BootleLanternIssueRequestWireV1 {
+        fn drop(&mut self) {
+            self.authorization.fill(0);
+            self.request.fill(0);
+            let _ = std::hint::black_box((&self.authorization, &self.request));
+        }
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct BootleLanternIssuanceResponseWireV1 {
+        response: Vec<u8>,
+    }
+
+    impl fmt::Debug for BootleLanternIssuanceResponseWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("BootleLanternIssuanceResponseWireV1")
+                .field("response_len", &self.response.len())
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for BootleLanternIssuanceResponseWireV1 {
+        fn drop(&mut self) {
+            self.response.fill(0);
+            let _ = std::hint::black_box(&self.response);
+        }
+    }
+
+    fn bootle_lantern_action_to_wire(
+        action: iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1,
+    ) -> u8 {
+        match action {
+            iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1::Authorize => 1,
+            iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1::Issue => 2,
+        }
+    }
+
+    fn bootle_lantern_action_from_wire(
+        action: u8,
+    ) -> Result<iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1, BrokerError> {
+        match action {
+            1 => Ok(iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1::Authorize),
+            2 => Ok(iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1::Issue),
+            _ => Err(BrokerError::Rejected),
+        }
+    }
+
+    fn bootle_lantern_bindings_from_wire(
+        binding: &ProviderBindingWireV1,
+    ) -> Result<
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
+        BrokerError,
+    > {
+        if binding.slot
+            != IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id()
+        {
+            return Err(BrokerError::BindingMismatch);
+        }
+        let exact = binding
+            .bootle_lantern_issuance_bindings
+            .ok_or(BrokerError::BindingMismatch)?;
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
+            iroha_data_model::privacy::PrivacyIssuerIdV1::new(exact.issuer_id),
+            iroha_data_model::privacy::PrivacyPolicyIdV1::new(exact.policy_id),
+            exact.authorization_lifetime_blocks,
+        )
+        .map_err(|_| BrokerError::BindingMismatch)
+    }
+
+    fn validate_bootle_lantern_policy_binding(
+        binding: &ProviderBindingWireV1,
+        policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+    ) -> Result<
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
+        BrokerError,
+    > {
+        let exact = bootle_lantern_bindings_from_wire(binding)?;
+        if policy.issuer_id != exact.issuer_id()
+            || policy.policy_id != exact.policy_id()
+            || policy.lifecycle
+                != iroha_data_model::privacy::BootleLanternIssuerPolicyLifecycleV1::Active
+            || policy.validate().is_err()
+        {
+            return Err(BrokerError::BindingMismatch);
+        }
+        Ok(exact)
+    }
+
+    fn validate_bootle_lantern_prepare_request(
+        request: &BootleLanternPrepareAuthorizationRequestWireV1,
+        binding: &ProviderBindingWireV1,
+        session_chain_id: Option<&str>,
+    ) -> Result<(), BrokerError> {
+        let exact = validate_bootle_lantern_policy_binding(binding, &request.policy)?;
+        if request.canonical_genesis_hash == [0; 32]
+            || request.requester_authorization_digest == [0; 32]
+            || request.issued_at_height == 0
+            || request
+                .expires_at_height
+                .checked_sub(request.issued_at_height)
+                != Some(exact.authorization_lifetime_blocks())
+            || session_chain_id
+                .is_some_and(|chain_id| request.context.chain_id.as_str() != chain_id)
+        {
+            return Err(BrokerError::Rejected);
+        }
+        Ok(())
+    }
+
+    fn decode_bootle_lantern_issue_request(
+        payload: &[u8],
+        binding: &ProviderBindingWireV1,
+        session_chain_id: Option<&str>,
+    ) -> Result<
+        (
+            BootleLanternIssueRequestWireV1,
+            iroha_core::privacy_engines::bootle_lantern::issuer::
+                BootleLanternIssuanceAuthorizationV1,
+        ),
+        BrokerError,
+    >{
+        let request = decode_canonical::<BootleLanternIssueRequestWireV1>(
+            payload,
+            MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+        )?;
+        let exact = validate_bootle_lantern_policy_binding(binding, &request.policy)?;
+        if request.canonical_genesis_hash == [0; 32]
+            || request.current_height == 0
+            || request.authorization.len() != BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1
+            || request.request.len() != BOOTLE_LANTERN_REQUEST_BYTES_V1
+            || session_chain_id
+                .is_some_and(|chain_id| request.context.chain_id.as_str() != chain_id)
+        {
+            return Err(BrokerError::Rejected);
+        }
+        let authorization = iroha_core::privacy_engines::bootle_lantern::issuer::
+            BootleLanternIssuanceAuthorizationV1::decode_exact(&request.authorization)
+            .map_err(|_| BrokerError::Rejected)?;
+        if authorization.issued_at_height() == 0
+            || authorization.expires_at_height() < authorization.issued_at_height()
+            || authorization
+                .expires_at_height()
+                .checked_sub(authorization.issued_at_height())
+                != Some(exact.authorization_lifetime_blocks())
+        {
+            return Err(BrokerError::Rejected);
+        }
+        iroha_core::privacy_engines::bootle_lantern::issuer::
+            BootleLanternBlindIssuanceRequestV1::decode_exact(
+                &request.request,
+                u32::try_from(BOOTLE_LANTERN_REQUEST_BYTES_V1)
+                    .map_err(|_| BrokerError::Protocol)?,
+            )
+            .map_err(|_| BrokerError::Rejected)?;
+        iroha_core::privacy_engines::bootle_lantern::issuer::
+            issuer_validate_blind_issuance_request_encoded_v1(
+                &request.context,
+                request.canonical_genesis_hash,
+                &request.policy,
+                &authorization,
+                &request.request,
+                request.current_height,
+            )
+            .map_err(|_| BrokerError::Rejected)?;
+        Ok((request, authorization))
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
@@ -6490,6 +6808,9 @@ mod protocol {
                 || slot == IrohaRuntimeProviderSlotV1::ModerationPanelNotification.wire_id()
                 || slot
                     == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
+                        .wire_id()
+                || slot
+                    == IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry
                         .wire_id() =>
             {
                 if observed.signer_metadata.is_some()
@@ -8878,6 +9199,12 @@ mod protocol {
             OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1 => {
                 MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1
             }
+            OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1
+            | OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1
+            | OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1
+            | OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1 => {
+                MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1
+            }
             _ => MAX_BROKER_UNARY_FRAME_BYTES_V1,
         }
     }
@@ -9054,6 +9381,10 @@ mod protocol {
                 | OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1
                 | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1
                 | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1
+                | OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1
+                | OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1
+                | OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1
+                | OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1
         )
     }
 
@@ -10022,6 +10353,122 @@ mod protocol {
             decode_canonical::<()>(result, MAX_OPERATION_FRAME_BYTES_V1)?;
         } else {
             match request.operation {
+                OPERATION_QUALIFY_V1
+                    if request.binding.slot
+                        == IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry
+                            .wire_id() =>
+                {
+                    let qualification = decode_canonical::<QualificationResultWireV1>(
+                        result,
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )?;
+                    if Some(qualification.revision) != request.binding.revision
+                        || Some(qualification.policy_digest) != request.binding.policy_digest
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
+                OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1 => {
+                    let authenticate = decode_canonical::<BootleLanternAuthenticateRequestWireV1>(
+                        &request.payload,
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )?;
+                    let principal = decode_canonical::<BootleLanternAuthenticatedPrincipalWireV1>(
+                        result,
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )?;
+                    if principal.principal_digest == [0; 32]
+                        || principal.issued_at_height == 0
+                        || principal.issued_at_height > authenticate.committed_height
+                        || principal.expires_at_height < authenticate.committed_height
+                        || principal.expires_at_height < principal.issued_at_height
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
+                OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1 => {
+                    let prepare = decode_canonical::<BootleLanternPrepareAuthorizationRequestWireV1>(
+                        &request.payload,
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )?;
+                    let authorization = decode_canonical::<BootleLanternAuthorizationWireV1>(
+                        result,
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )?;
+                    if authorization.authorization.len() != BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1 {
+                        return Err(BrokerError::Protocol);
+                    }
+                    let authorization = iroha_core::privacy_engines::bootle_lantern::issuer::
+                        BootleLanternIssuanceAuthorizationV1::decode_exact(
+                            &authorization.authorization,
+                        )
+                        .map_err(|_| BrokerError::Protocol)?;
+                    iroha_core::privacy_engines::bootle_lantern::issuer::
+                        issuer_validate_prepared_blind_issuance_authorization_v1(
+                            &prepare.context,
+                            prepare.canonical_genesis_hash,
+                            &prepare.policy,
+                            &authorization,
+                        )
+                        .map_err(|_| BrokerError::Protocol)?;
+                    if authorization.requester_authorization_digest()
+                        != prepare.requester_authorization_digest
+                        || authorization.issued_at_height() != prepare.issued_at_height
+                        || authorization.expires_at_height() != prepare.expires_at_height
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
+                OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1 => {
+                    let (issue, authorization) = decode_bootle_lantern_issue_request(
+                        &request.payload,
+                        &request.binding,
+                        None,
+                    )
+                    .map_err(|_| BrokerError::Protocol)?;
+                    let request_digest = decode_canonical::<[u8; 32]>(
+                        result,
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )?;
+                    let expected = iroha_core::privacy_engines::bootle_lantern::issuer::
+                        issuer_validate_blind_issuance_request_encoded_v1(
+                            &issue.context,
+                            issue.canonical_genesis_hash,
+                            &issue.policy,
+                            &authorization,
+                            &issue.request,
+                            issue.current_height,
+                        )
+                        .map_err(|_| BrokerError::Protocol)?;
+                    if request_digest == [0; 32] || request_digest != expected {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
+                OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1 => {
+                    let (issue, authorization) = decode_bootle_lantern_issue_request(
+                        &request.payload,
+                        &request.binding,
+                        None,
+                    )
+                    .map_err(|_| BrokerError::Protocol)?;
+                    let response = decode_canonical::<BootleLanternIssuanceResponseWireV1>(
+                        result,
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )?;
+                    if response.response.len() != BOOTLE_LANTERN_RESPONSE_BYTES_V1 {
+                        return Err(BrokerError::Protocol);
+                    }
+                    iroha_core::privacy_engines::bootle_lantern::issuer::
+                        issuer_validate_cached_blind_issuance_response_encoded_v1(
+                            &issue.context,
+                            issue.canonical_genesis_hash,
+                            &issue.policy,
+                            &authorization,
+                            &issue.request,
+                            &response.response,
+                        )
+                        .map_err(|_| BrokerError::Protocol)?;
+                }
                 OPERATION_NATIVE_TRANSACTION_SIGN_V1 => {
                     let signed = decode_canonical::<
                         iroha_data_model::transaction::SignedTransaction,
@@ -11816,6 +12263,46 @@ mod protocol {
             let mut moderation_checkpoint_attestation_public_key = None;
             let mut moderation_panel_notification_archive_binding = None;
             match binding.runtime_slot().map_err(server_error)?.wire_id() {
+                slot if slot
+                    == IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry
+                        .wire_id() =>
+                {
+                    let backend = backends
+                        .bootle_lantern_issuance
+                        .as_ref()
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let expected_bindings = bootle_lantern_bindings_from_wire(binding)
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    let qualification = backend
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    let live_bindings = backend
+                        .bindings()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if backend.handle() != binding.handle
+                        || !iroha_config::parameters::is_production_runtime_handle(backend.handle())
+                        || !qualification_matches(
+                            binding,
+                            qualification.revision,
+                            qualification.policy_digest,
+                        )
+                        || live_bindings != expected_bindings
+                    {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
+                    let qualification_after = backend
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    let bindings_after = backend
+                        .bindings()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if backend.handle() != binding.handle
+                        || qualification_after != qualification
+                        || bindings_after != live_bindings
+                    {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
+                }
                 slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
                     let signer = backends
                         .stream_token_signer
@@ -13151,8 +13638,10 @@ mod protocol {
                 }
             }
             let exact_backend_set =
-                requested(IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper)
-                    == backends.moderation_quarantine_key_wrapper.is_some()
+                requested(IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry)
+                    == backends.bootle_lantern_issuance.is_some()
+                    && requested(IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper)
+                        == backends.moderation_quarantine_key_wrapper.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider)
                         == backends.privacy_cycle_prf_provider.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor)
@@ -13951,6 +14440,8 @@ mod protocol {
                 IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
             let soracloud_hf_credential_slot =
                 IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
+            let bootle_lantern_issuance_slot =
+                IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id();
 
             let result = match (request.binding.slot, request.operation) {
                 (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1)
@@ -14005,6 +14496,271 @@ mod protocol {
                             public_key: exact.public_key,
                         },
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    )
+                }
+                (slot, OPERATION_QUALIFY_V1) if slot == bootle_lantern_issuance_slot => {
+                    let qualification = state
+                        .backends
+                        .bootle_lantern_issuance
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?
+                        .qualification()
+                        .map_err(|error| match error {
+                            iroha_torii::privacy_issuance_api::
+                                BootleLanternIssuanceRuntimeProviderRegistryErrorV1::Unavailable =>
+                            {
+                                BrokerError::Unavailable
+                            }
+                            iroha_torii::privacy_issuance_api::
+                                BootleLanternIssuanceRuntimeProviderRegistryErrorV1::StaleOrRevoked =>
+                            {
+                                BrokerError::StaleOrRevoked
+                            }
+                            iroha_torii::privacy_issuance_api::
+                                BootleLanternIssuanceRuntimeProviderRegistryErrorV1::RejectedBindings =>
+                            {
+                                BrokerError::BindingMismatch
+                            }
+                        })?;
+                    encode_canonical(
+                        &QualificationResultWireV1 {
+                            revision: qualification.revision,
+                            policy_digest: qualification.policy_digest,
+                        },
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )
+                }
+                (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1)
+                    if slot == bootle_lantern_issuance_slot =>
+                {
+                    let authenticate = decode_canonical::<BootleLanternAuthenticateRequestWireV1>(
+                        &request.payload,
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )?;
+                    let action = bootle_lantern_action_from_wire(authenticate.action)?;
+                    let outcome = state
+                        .backends
+                        .bootle_lantern_issuance
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?
+                        .authenticate(
+                            &authenticate.opaque_credential,
+                            action,
+                            authenticate.request_binding,
+                            authenticate.committed_height,
+                        );
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    let principal = outcome.map_err(|error| {
+                        match error {
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceAuthenticationErrorV1::Denied =>
+                        {
+                            BrokerError::Rejected
+                        }
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceAuthenticationErrorV1::Unavailable =>
+                        {
+                            BrokerError::Unavailable
+                        }
+                    }
+                    })?;
+                    encode_canonical(
+                        &BootleLanternAuthenticatedPrincipalWireV1 {
+                            principal_digest: principal.principal_digest,
+                            issued_at_height: principal.issued_at_height,
+                            expires_at_height: principal.expires_at_height,
+                        },
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )
+                }
+                (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1)
+                    if slot == bootle_lantern_issuance_slot =>
+                {
+                    let prepare = decode_canonical::<BootleLanternPrepareAuthorizationRequestWireV1>(
+                        &request.payload,
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )?;
+                    let outcome = state
+                        .backends
+                        .bootle_lantern_issuance
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?
+                        .prepare_authorization(
+                            &prepare.context,
+                            prepare.canonical_genesis_hash,
+                            &prepare.policy,
+                            prepare.requester_authorization_digest,
+                            prepare.issued_at_height,
+                            prepare.expires_at_height,
+                        );
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    let authorization = outcome.map_err(|error| {
+                        match error {
+                        crate::runtime_provider_broker::
+                            BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest =>
+                        {
+                            BrokerError::Rejected
+                        }
+                        crate::runtime_provider_broker::
+                            BootleLanternIssuanceBrokerBackendErrorV1::PolicyMismatch =>
+                        {
+                            BrokerError::StaleOrRevoked
+                        }
+                        crate::runtime_provider_broker::
+                            BootleLanternIssuanceBrokerBackendErrorV1::Unavailable =>
+                        {
+                            BrokerError::Unavailable
+                        }
+                    }
+                    })?;
+                    iroha_core::privacy_engines::bootle_lantern::issuer::
+                        issuer_validate_prepared_blind_issuance_authorization_v1(
+                            &prepare.context,
+                            prepare.canonical_genesis_hash,
+                            &prepare.policy,
+                            &authorization,
+                        )
+                        .map_err(|_| BrokerError::Rejected)?;
+                    let authorization =
+                        authorization.encode().map_err(|_| BrokerError::Rejected)?;
+                    if authorization.len() != BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1 {
+                        return Err(BrokerError::Rejected);
+                    }
+                    encode_canonical(
+                        &BootleLanternAuthorizationWireV1 { authorization },
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                    )
+                }
+                (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1)
+                    if slot == bootle_lantern_issuance_slot =>
+                {
+                    let (issue, authorization) = decode_bootle_lantern_issue_request(
+                        &request.payload,
+                        &request.binding,
+                        Some(&state.chain_id),
+                    )?;
+                    let expected = iroha_core::privacy_engines::bootle_lantern::issuer::
+                        issuer_validate_blind_issuance_request_encoded_v1(
+                            &issue.context,
+                            issue.canonical_genesis_hash,
+                            &issue.policy,
+                            &authorization,
+                            &issue.request,
+                            issue.current_height,
+                        )
+                        .map_err(|_| BrokerError::Rejected)?;
+                    let outcome = state
+                        .backends
+                        .bootle_lantern_issuance
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?
+                        .validate_request(
+                            &issue.context,
+                            issue.canonical_genesis_hash,
+                            &issue.policy,
+                            &authorization,
+                            &issue.request,
+                            issue.current_height,
+                        );
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    let digest = outcome.map_err(|error| {
+                        match error {
+                        crate::runtime_provider_broker::
+                            BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest =>
+                        {
+                            BrokerError::Rejected
+                        }
+                        crate::runtime_provider_broker::
+                            BootleLanternIssuanceBrokerBackendErrorV1::PolicyMismatch =>
+                        {
+                            BrokerError::StaleOrRevoked
+                        }
+                        crate::runtime_provider_broker::
+                            BootleLanternIssuanceBrokerBackendErrorV1::Unavailable =>
+                        {
+                            BrokerError::Unavailable
+                        }
+                    }
+                    })?;
+                    if digest == [0; 32] || digest != expected {
+                        return Err(BrokerError::Rejected);
+                    }
+                    encode_canonical(&digest, MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1)
+                }
+                (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1)
+                    if slot == bootle_lantern_issuance_slot =>
+                {
+                    let (issue, authorization) = decode_bootle_lantern_issue_request(
+                        &request.payload,
+                        &request.binding,
+                        Some(&state.chain_id),
+                    )?;
+                    let outcome = state
+                        .backends
+                        .bootle_lantern_issuance
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?
+                        .issue_validated(
+                            &issue.context,
+                            issue.canonical_genesis_hash,
+                            &issue.policy,
+                            &authorization,
+                            &issue.request,
+                            issue.current_height,
+                        );
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    let response = outcome.map_err(|error| {
+                        match error {
+                        crate::runtime_provider_broker::
+                            BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest =>
+                        {
+                            BrokerError::Rejected
+                        }
+                        crate::runtime_provider_broker::
+                            BootleLanternIssuanceBrokerBackendErrorV1::PolicyMismatch =>
+                        {
+                            BrokerError::StaleOrRevoked
+                        }
+                        crate::runtime_provider_broker::
+                            BootleLanternIssuanceBrokerBackendErrorV1::Unavailable =>
+                        {
+                            BrokerError::Unavailable
+                        }
+                    }
+                    })?;
+                    let response = response.encode().map_err(|_| BrokerError::Rejected)?;
+                    if response.len() != BOOTLE_LANTERN_RESPONSE_BYTES_V1 {
+                        return Err(BrokerError::Rejected);
+                    }
+                    iroha_core::privacy_engines::bootle_lantern::issuer::
+                        issuer_validate_cached_blind_issuance_response_encoded_v1(
+                            &issue.context,
+                            issue.canonical_genesis_hash,
+                            &issue.policy,
+                            &authorization,
+                            &issue.request,
+                            &response,
+                        )
+                        .map_err(|_| BrokerError::Rejected)?;
+                    encode_canonical(
+                        &BootleLanternIssuanceResponseWireV1 { response },
+                        MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
                     )
                 }
                 (slot, OPERATION_QUALIFY_V1) if slot == moderation_quarantine_slot => {
@@ -19513,7 +20269,7 @@ mod protocol {
             }
         }
 
-        fn serve_with_policy_and_lifecycle<R>(
+        fn serve_with_policy_and_fallible_readiness<R>(
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,
             policy: &EndpointPolicy,
@@ -19521,7 +20277,7 @@ mod protocol {
             on_ready: R,
         ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
         where
-            R: FnOnce(),
+            R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
         {
             if lifecycle.shutdown_requested() {
                 return Ok(());
@@ -19582,17 +20338,28 @@ mod protocol {
                         Err(cleanup_error) => Err(cleanup_error),
                     };
                 }
-                if !lifecycle.publish_ready(on_ready) {
-                    let result = if lifecycle.shutdown_requested() {
-                        Ok(())
-                    } else {
-                        Err(RuntimeProviderBrokerServerErrorV1::Protocol)
-                    };
-                    drop(listener);
-                    return match guard.cleanup() {
-                        Ok(()) => result,
-                        Err(cleanup_error) => Err(cleanup_error),
-                    };
+                match lifecycle.publish_ready_fallible(on_ready) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let result = if lifecycle.shutdown_requested() {
+                            Ok(())
+                        } else {
+                            Err(RuntimeProviderBrokerServerErrorV1::Protocol)
+                        };
+                        drop(listener);
+                        return match guard.cleanup() {
+                            Ok(()) => result,
+                            Err(cleanup_error) => Err(cleanup_error),
+                        };
+                    }
+                    Err(RuntimeProviderBrokerReadinessErrorV1) => {
+                        lifecycle.request_shutdown();
+                        drop(listener);
+                        return match guard.cleanup() {
+                            Ok(()) => Err(RuntimeProviderBrokerServerErrorV1::ReadinessUnavailable),
+                            Err(cleanup_error) => Err(cleanup_error),
+                        };
+                    }
                 }
 
                 let session_permits = Arc::new(tokio::sync::Semaphore::new(MAX_BROKER_SESSIONS_V1));
@@ -19742,6 +20509,22 @@ mod protocol {
                     Ok(()) => serve_result,
                     Err(cleanup_error) => Err(cleanup_error),
                 }
+            })
+        }
+
+        fn serve_with_policy_and_lifecycle<R>(
+            bindings: &IrohaRuntimeProviderBindingsV1,
+            backends: RuntimeProviderBrokerBackendsV1,
+            policy: &EndpointPolicy,
+            lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+            on_ready: R,
+        ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+        where
+            R: FnOnce(),
+        {
+            serve_with_policy_and_fallible_readiness(bindings, backends, policy, lifecycle, || {
+                on_ready();
+                Ok(())
             })
         }
 
@@ -20059,6 +20842,500 @@ mod protocol {
                     payload.take(),
                     mutating,
                 )
+            }
+        }
+
+        #[derive(Clone)]
+        struct BootleLanternBrokerProvider {
+            session: Arc<BrokerSession>,
+            binding: ProviderBindingWireV1,
+            metadata_digest: [u8; 32],
+            exact_bindings:
+                iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
+        }
+
+        impl fmt::Debug for BootleLanternBrokerProvider {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter
+                    .debug_struct("BootleLanternBrokerProvider")
+                    .field("handle", &self.binding.handle)
+                    .field("revision", &self.binding.revision)
+                    .field("policy_digest", &self.binding.policy_digest)
+                    .field("issuer_id", &self.exact_bindings.issuer_id())
+                    .field("policy_id", &self.exact_bindings.policy_id())
+                    .field(
+                        "authorization_lifetime_blocks",
+                        &self.exact_bindings.authorization_lifetime_blocks(),
+                    )
+                    .finish_non_exhaustive()
+            }
+        }
+
+        impl BootleLanternBrokerProvider {
+            fn live_qualification(
+                &self,
+            ) -> Result<
+                iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceRuntimeProviderQualificationV1,
+                BrokerError,
+            >{
+                let payload = encode_canonical(&(), MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1)?;
+                let result = self.session.call(
+                    &self.binding,
+                    self.metadata_digest,
+                    OPERATION_QUALIFY_V1,
+                    payload,
+                    false,
+                )?;
+                let qualification = self
+                    .session
+                    .decode_operation_result::<QualificationResultWireV1>(
+                        &result,
+                        OPERATION_QUALIFY_V1,
+                    )?;
+                if Some(qualification.revision) != self.binding.revision
+                    || Some(qualification.policy_digest) != self.binding.policy_digest
+                {
+                    self.session.poison();
+                    return Err(BrokerError::StaleOrRevoked);
+                }
+                Ok(iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceRuntimeProviderQualificationV1::new(
+                        qualification.revision,
+                        qualification.policy_digest,
+                    ))
+            }
+
+            fn call_sensitive_requalified(
+                &self,
+                operation: u16,
+                payload: ScrubbedBytes,
+            ) -> Result<ScrubbedBytes, BrokerError> {
+                self.live_qualification()?;
+                let outcome = self.session.call_sensitive(
+                    &self.binding,
+                    self.metadata_digest,
+                    operation,
+                    payload,
+                    false,
+                );
+                match outcome {
+                    Ok(result) => {
+                        self.live_qualification()
+                            .inspect_err(|_| self.session.poison())?;
+                        Ok(result)
+                    }
+                    Err(error @ (BrokerError::Rejected | BrokerError::Conflict)) => {
+                        self.live_qualification()
+                            .inspect_err(|_| self.session.poison())?;
+                        Err(error)
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+
+            fn registry_error(
+                error: BrokerError,
+            ) -> iroha_torii::privacy_issuance_api::
+                BootleLanternIssuanceRuntimeProviderRegistryErrorV1
+            {
+                match error {
+                    BrokerError::Unavailable | BrokerError::Ambiguous => {
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceRuntimeProviderRegistryErrorV1::Unavailable
+                    }
+                    BrokerError::StaleOrRevoked => {
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceRuntimeProviderRegistryErrorV1::StaleOrRevoked
+                    }
+                    BrokerError::BindingMismatch
+                    | BrokerError::Protocol
+                    | BrokerError::Rejected
+                    | BrokerError::Conflict => {
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceRuntimeProviderRegistryErrorV1::RejectedBindings
+                    }
+                }
+            }
+
+            fn crypto_error(
+                error: BrokerError,
+            ) -> iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1
+            {
+                match error {
+                    BrokerError::Unavailable | BrokerError::Ambiguous => {
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuerCryptoProviderErrorV1::Unavailable
+                    }
+                    BrokerError::BindingMismatch | BrokerError::StaleOrRevoked => {
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuerCryptoProviderErrorV1::PolicyMismatch
+                    }
+                    BrokerError::Protocol | BrokerError::Rejected | BrokerError::Conflict => {
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuerCryptoProviderErrorV1::InvalidRequest
+                    }
+                }
+            }
+        }
+
+        impl iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1
+            for BootleLanternBrokerProvider
+        {
+            fn handle(&self) -> &str {
+                &self.binding.handle
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<
+                iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceRuntimeProviderQualificationV1,
+                iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
+            >{
+                self.live_qualification().map_err(Self::registry_error)
+            }
+
+            fn resolve(
+                &self,
+                bindings: &iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceRuntimeProviderBindingsV1,
+            ) -> Result<
+                iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeSecretsV1,
+                iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
+            >{
+                if bindings != &self.exact_bindings {
+                    return Err(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceRuntimeProviderRegistryErrorV1::RejectedBindings);
+                }
+                self.live_qualification().map_err(Self::registry_error)?;
+                let provider = Arc::new(self.clone());
+                let issuer_provider: Arc<
+                    dyn iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1,
+                > = provider.clone();
+                let authenticator: Arc<
+                    dyn iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticatorV1,
+                > = provider;
+                Ok(
+                    iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeSecretsV1 {
+                        issuer_provider,
+                        authenticator,
+                    },
+                )
+            }
+        }
+
+        impl iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticatorV1
+            for BootleLanternBrokerProvider
+        {
+            fn authenticate(
+                &self,
+                opaque_credential: &[u8],
+                action: iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1,
+                request_binding: [u8; 32],
+                committed_height: u64,
+            ) -> Result<
+                iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticatedPrincipalV1,
+                iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticationErrorV1,
+            > {
+                if opaque_credential.is_empty()
+                    || opaque_credential.len() > MAX_BOOTLE_LANTERN_AUTH_CREDENTIAL_BYTES_V1
+                    || request_binding == [0; 32]
+                    || committed_height == 0
+                {
+                    return Err(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceAuthenticationErrorV1::Denied);
+                }
+                let payload = encode_sensitive_canonical(
+                    &BootleLanternAuthenticateRequestWireV1 {
+                        opaque_credential: opaque_credential.to_vec(),
+                        action: bootle_lantern_action_to_wire(action),
+                        request_binding,
+                        committed_height,
+                    },
+                    MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                )
+                .map_err(|_| {
+                    iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceAuthenticationErrorV1::Unavailable
+                })?;
+                let result = self
+                    .call_sensitive_requalified(
+                        OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1,
+                        payload,
+                    )
+                    .map_err(|error| {
+                        match error {
+                        BrokerError::Rejected | BrokerError::Conflict => {
+                            iroha_torii::privacy_issuance_api::
+                                BootleLanternIssuanceAuthenticationErrorV1::Denied
+                        }
+                        BrokerError::Unavailable
+                        | BrokerError::Ambiguous
+                        | BrokerError::BindingMismatch
+                        | BrokerError::StaleOrRevoked
+                        | BrokerError::Protocol => {
+                            iroha_torii::privacy_issuance_api::
+                                BootleLanternIssuanceAuthenticationErrorV1::Unavailable
+                        }
+                    }
+                    })?;
+                let principal = self
+                    .session
+                    .decode_operation_result::<BootleLanternAuthenticatedPrincipalWireV1>(
+                        &result,
+                        OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1,
+                    )
+                    .map_err(|_| {
+                        iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceAuthenticationErrorV1::Unavailable
+                    })?;
+                if principal.principal_digest == [0; 32]
+                    || principal.issued_at_height == 0
+                    || principal.issued_at_height > committed_height
+                    || principal.expires_at_height < committed_height
+                    || principal.expires_at_height < principal.issued_at_height
+                {
+                    self.session.poison();
+                    return Err(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceAuthenticationErrorV1::Unavailable);
+                }
+                Ok(iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceAuthenticatedPrincipalV1 {
+                        principal_digest: principal.principal_digest,
+                        issued_at_height: principal.issued_at_height,
+                        expires_at_height: principal.expires_at_height,
+                    })
+            }
+        }
+
+        impl iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1
+            for BootleLanternBrokerProvider
+        {
+            fn issuer_id(&self) -> iroha_data_model::privacy::PrivacyIssuerIdV1 {
+                self.exact_bindings.issuer_id()
+            }
+
+            fn policy_id(&self) -> iroha_data_model::privacy::PrivacyPolicyIdV1 {
+                self.exact_bindings.policy_id()
+            }
+
+            fn prepare_authorization(
+                &self,
+                context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+                canonical_genesis_hash: [u8; 32],
+                policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+                requester_authorization_digest: [u8; 32],
+                issued_at_height: u64,
+                expires_at_height: u64,
+            ) -> Result<
+                iroha_core::privacy_engines::bootle_lantern::issuer::
+                    BootleLanternIssuanceAuthorizationV1,
+                iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1,
+            >{
+                let request = BootleLanternPrepareAuthorizationRequestWireV1 {
+                    context: context.clone(),
+                    canonical_genesis_hash,
+                    policy: policy.clone(),
+                    requester_authorization_digest,
+                    issued_at_height,
+                    expires_at_height,
+                };
+                validate_bootle_lantern_prepare_request(&request, &self.binding, None)
+                    .map_err(Self::crypto_error)?;
+                let payload = encode_sensitive_canonical(
+                    &request,
+                    MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                )
+                .map_err(Self::crypto_error)?;
+                let result = self
+                    .call_sensitive_requalified(
+                        OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1,
+                        payload,
+                    )
+                    .map_err(Self::crypto_error)?;
+                let mut authorization = self
+                    .session
+                    .decode_operation_result::<BootleLanternAuthorizationWireV1>(
+                        &result,
+                        OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1,
+                    )
+                    .map_err(Self::crypto_error)?;
+                if authorization.authorization.len() != BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1 {
+                    self.session.poison();
+                    return Err(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::Unavailable);
+                }
+                let authorization_bytes =
+                    ScrubbedBytes::new(std::mem::take(&mut authorization.authorization));
+                let authorization = iroha_core::privacy_engines::bootle_lantern::issuer::
+                    BootleLanternIssuanceAuthorizationV1::decode_exact(&authorization_bytes)
+                    .map_err(|_| {
+                        self.session.poison();
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuerCryptoProviderErrorV1::Unavailable
+                    })?;
+                iroha_core::privacy_engines::bootle_lantern::issuer::
+                    issuer_validate_prepared_blind_issuance_authorization_v1(
+                        context,
+                        canonical_genesis_hash,
+                        policy,
+                        &authorization,
+                    )
+                    .map_err(|_| {
+                        self.session.poison();
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuerCryptoProviderErrorV1::Unavailable
+                    })?;
+                if authorization.requester_authorization_digest() != requester_authorization_digest
+                    || authorization.issued_at_height() != issued_at_height
+                    || authorization.expires_at_height() != expires_at_height
+                {
+                    self.session.poison();
+                    return Err(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::Unavailable);
+                }
+                Ok(authorization)
+            }
+
+            fn validate_request(
+                &self,
+                context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+                canonical_genesis_hash: [u8; 32],
+                policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+                authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+                    BootleLanternIssuanceAuthorizationV1,
+                request_bytes: &[u8],
+                current_height: u64,
+            ) -> Result<
+                [u8; 32],
+                iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1,
+            > {
+                let expected = iroha_core::privacy_engines::bootle_lantern::issuer::
+                    issuer_validate_blind_issuance_request_encoded_v1(
+                        context,
+                        canonical_genesis_hash,
+                        policy,
+                        authorization,
+                        request_bytes,
+                        current_height,
+                    )
+                    .map_err(|_| iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::InvalidRequest)?;
+                let authorization_bytes = authorization.encode().map_err(|_| {
+                    iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::InvalidRequest
+                })?;
+                let payload = encode_sensitive_canonical(
+                    &BootleLanternIssueRequestWireV1 {
+                        context: context.clone(),
+                        canonical_genesis_hash,
+                        policy: policy.clone(),
+                        authorization: authorization_bytes,
+                        request: request_bytes.to_vec(),
+                        current_height,
+                    },
+                    MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                )
+                .map_err(Self::crypto_error)?;
+                let result = self
+                    .call_sensitive_requalified(
+                        OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1,
+                        payload,
+                    )
+                    .map_err(Self::crypto_error)?;
+                let actual = self
+                    .session
+                    .decode_operation_result::<[u8; 32]>(
+                        &result,
+                        OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1,
+                    )
+                    .map_err(Self::crypto_error)?;
+                if actual == [0; 32] || actual != expected {
+                    self.session.poison();
+                    return Err(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::Unavailable);
+                }
+                Ok(actual)
+            }
+
+            fn issue_validated(
+                &self,
+                context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+                canonical_genesis_hash: [u8; 32],
+                policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+                authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+                    BootleLanternIssuanceAuthorizationV1,
+                request_bytes: &[u8],
+                current_height: u64,
+            ) -> Result<
+                iroha_core::privacy_engines::bootle_lantern::issuer::
+                    BootleLanternBlindIssuanceResponseV1,
+                iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1,
+            >{
+                iroha_core::privacy_engines::bootle_lantern::issuer::
+                    issuer_validate_blind_issuance_request_encoded_v1(
+                        context,
+                        canonical_genesis_hash,
+                        policy,
+                        authorization,
+                        request_bytes,
+                        current_height,
+                    )
+                    .map_err(|_| iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::InvalidRequest)?;
+                let authorization_bytes = authorization.encode().map_err(|_| {
+                    iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::InvalidRequest
+                })?;
+                let payload = encode_sensitive_canonical(
+                    &BootleLanternIssueRequestWireV1 {
+                        context: context.clone(),
+                        canonical_genesis_hash,
+                        policy: policy.clone(),
+                        authorization: authorization_bytes,
+                        request: request_bytes.to_vec(),
+                        current_height,
+                    },
+                    MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                )
+                .map_err(Self::crypto_error)?;
+                let result = self
+                    .call_sensitive_requalified(
+                        OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1,
+                        payload,
+                    )
+                    .map_err(Self::crypto_error)?;
+                let mut response = self
+                    .session
+                    .decode_operation_result::<BootleLanternIssuanceResponseWireV1>(
+                        &result,
+                        OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1,
+                    )
+                    .map_err(Self::crypto_error)?;
+                if response.response.len() != BOOTLE_LANTERN_RESPONSE_BYTES_V1 {
+                    self.session.poison();
+                    return Err(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuerCryptoProviderErrorV1::Unavailable);
+                }
+                let response_bytes = ScrubbedBytes::new(std::mem::take(&mut response.response));
+                let response = iroha_core::privacy_engines::bootle_lantern::issuer::
+                    issuer_validate_cached_blind_issuance_response_encoded_v1(
+                        context,
+                        canonical_genesis_hash,
+                        policy,
+                        authorization,
+                        request_bytes,
+                        &response_bytes,
+                    )
+                    .map_err(|_| {
+                        self.session.poison();
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuerCryptoProviderErrorV1::Unavailable
+                    })?;
+                Ok(response)
             }
         }
 
@@ -29230,6 +30507,22 @@ mod protocol {
             for (binding, observation) in requested_catalog.iter().zip(&observations) {
                 match binding.runtime_slot().map_err(registry_error)?.wire_id() {
                     slot if slot
+                        == IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry
+                            .wire_id() =>
+                    {
+                        let exact_bindings = bootle_lantern_bindings_from_wire(binding)
+                            .map_err(registry_error)?;
+                        let registry = Arc::new(BootleLanternBrokerProvider {
+                            session: Arc::clone(&session),
+                            binding: binding.clone(),
+                            metadata_digest: observation.metadata_digest,
+                            exact_bindings,
+                        });
+                        registry.live_qualification().map_err(registry_error)?;
+                        dependencies = dependencies
+                            .with_bootle_lantern_issuance_provider_registry(registry);
+                    }
+                    slot if slot
                         == IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id() =>
                     {
                         let provider = Arc::new(PrivacyCyclePrfBrokerProvider {
@@ -30323,6 +31616,25 @@ mod protocol {
             )
         }
 
+        /// Serve the stock catalog with a fallible readiness publication.
+        pub(super) fn serve_with_fallible_readiness<R>(
+            bindings: &IrohaRuntimeProviderBindingsV1,
+            backends: RuntimeProviderBrokerBackendsV1,
+            lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+            on_ready: R,
+        ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+        where
+            R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
+        {
+            serve_with_policy_and_fallible_readiness(
+                bindings,
+                backends,
+                &EndpointPolicy::production(),
+                lifecycle,
+                on_ready,
+            )
+        }
+
         #[cfg(test)]
         fn set_socket_mode(path: &Path) -> io::Result<()> {
             use std::os::unix::fs::PermissionsExt as _;
@@ -30418,6 +31730,158 @@ mod protocol {
                 "sealed-cas://sorafs/billing/epoch-witness-primary";
             const SERVER_TEST_EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE: &str =
                 "transparency://sorafs/evidence-viewer/publisher-primary";
+            const SERVER_TEST_BOOTLE_LANTERN_HANDLE: &str =
+                "hsm://privacy/bootle-lantern/issuer-primary";
+
+            struct ServerTestBootleLanternBackend {
+                revision: AtomicU64,
+                unavailable: AtomicBool,
+                drift_after_authenticate: AtomicBool,
+                bindings: iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceRuntimeProviderBindingsV1,
+            }
+
+            impl ServerTestBootleLanternBackend {
+                fn new(
+                    bindings: iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceRuntimeProviderBindingsV1,
+                ) -> Self {
+                    Self {
+                        revision: AtomicU64::new(7),
+                        unavailable: AtomicBool::new(false),
+                        drift_after_authenticate: AtomicBool::new(false),
+                        bindings,
+                    }
+                }
+            }
+
+            impl crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendV1
+                for ServerTestBootleLanternBackend
+            {
+                fn handle(&self) -> &str {
+                    SERVER_TEST_BOOTLE_LANTERN_HANDLE
+                }
+
+                fn qualification(
+                    &self,
+                ) -> Result<
+                    iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceRuntimeProviderQualificationV1,
+                    iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
+                >{
+                    if self.unavailable.load(Ordering::Acquire) {
+                        return Err(iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceRuntimeProviderRegistryErrorV1::Unavailable);
+                    }
+                    Ok(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceRuntimeProviderQualificationV1::new(
+                            self.revision.load(Ordering::Acquire),
+                            TEST_POLICY_DIGEST,
+                        ))
+                }
+
+                fn bindings(
+                    &self,
+                ) -> Result<
+                    iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceRuntimeProviderBindingsV1,
+                    iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
+                >{
+                    if self.unavailable.load(Ordering::Acquire) {
+                        return Err(iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceRuntimeProviderRegistryErrorV1::Unavailable);
+                    }
+                    Ok(self.bindings)
+                }
+
+                fn authenticate(
+                    &self,
+                    opaque_credential: &[u8],
+                    _: iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1,
+                    _: [u8; 32],
+                    committed_height: u64,
+                ) -> Result<
+                    iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceAuthenticatedPrincipalV1,
+                    iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceAuthenticationErrorV1,
+                >{
+                    if opaque_credential.first() == Some(&0) {
+                        return Err(iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceAuthenticationErrorV1::Denied);
+                    }
+                    if opaque_credential.first() == Some(&u8::MAX) {
+                        return Err(iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceAuthenticationErrorV1::Unavailable);
+                    }
+                    let expires_at_height = committed_height.checked_add(4).ok_or(
+                        iroha_torii::privacy_issuance_api::
+                            BootleLanternIssuanceAuthenticationErrorV1::Unavailable,
+                    )?;
+                    if self.drift_after_authenticate.load(Ordering::Acquire) {
+                        self.revision.store(8, Ordering::Release);
+                    }
+                    Ok(iroha_torii::privacy_issuance_api::
+                        BootleLanternIssuanceAuthenticatedPrincipalV1 {
+                            principal_digest: [0x95; 32],
+                            issued_at_height: committed_height,
+                            expires_at_height,
+                        })
+                }
+
+                fn prepare_authorization(
+                    &self,
+                    _: &iroha_data_model::privacy::PrivacyStatementContextV1,
+                    _: [u8; 32],
+                    _: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+                    _: [u8; 32],
+                    _: u64,
+                    _: u64,
+                ) -> Result<
+                    iroha_core::privacy_engines::bootle_lantern::issuer::
+                        BootleLanternIssuanceAuthorizationV1,
+                    crate::runtime_provider_broker::
+                        BootleLanternIssuanceBrokerBackendErrorV1,
+                >{
+                    panic!("qualification-only adversarial backend must not issue")
+                }
+
+                fn validate_request(
+                    &self,
+                    _: &iroha_data_model::privacy::PrivacyStatementContextV1,
+                    _: [u8; 32],
+                    _: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+                    _: &iroha_core::privacy_engines::bootle_lantern::issuer::
+                        BootleLanternIssuanceAuthorizationV1,
+                    _: &[u8],
+                    _: u64,
+                ) -> Result<
+                    [u8; 32],
+                    crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendErrorV1,
+                > {
+                    panic!("qualification-only adversarial backend must not validate")
+                }
+
+                fn issue_validated(
+                    &self,
+                    _: &iroha_data_model::privacy::PrivacyStatementContextV1,
+                    _: [u8; 32],
+                    _: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+                    _: &iroha_core::privacy_engines::bootle_lantern::issuer::
+                        BootleLanternIssuanceAuthorizationV1,
+                    _: &[u8],
+                    _: u64,
+                ) -> Result<
+                    iroha_core::privacy_engines::bootle_lantern::issuer::
+                        BootleLanternBlindIssuanceResponseV1,
+                    crate::runtime_provider_broker::
+                        BootleLanternIssuanceBrokerBackendErrorV1,
+                >{
+                    panic!("qualification-only adversarial backend must not issue")
+                }
+            }
 
             #[derive(Debug, Default)]
             struct ServerTestEvidenceTransparencyPublisher {
@@ -35383,6 +36847,7 @@ mod protocol {
                     handle: "hsm://governance/producer-primary".to_owned(),
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
+                    bootle_lantern_issuance_bindings: None,
                     stream_token_signer_public_key: None,
                     stream_token_gateway_admission_qualification: None,
                     stream_token_gateway_admission_max_pending: None,
@@ -35439,6 +36904,351 @@ mod protocol {
                 binding.governance_dag_publisher_peer_id = None;
                 binding.governance_dag_publisher_public_key = None;
                 binding
+            }
+
+            fn bootle_lantern_test_bindings()
+            -> iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1
+            {
+                iroha_torii::privacy_issuance_api::
+                    BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
+                        iroha_data_model::privacy::PrivacyIssuerIdV1::new([0x91; 32]),
+                        iroha_data_model::privacy::PrivacyPolicyIdV1::new([0x92; 32]),
+                        64,
+                    )
+                    .expect("valid Bootle/Lantern broker test bindings")
+            }
+
+            fn bootle_lantern_runtime_binding() -> ProviderBindingWireV1 {
+                let exact = bootle_lantern_test_bindings();
+                let mut binding = plain_runtime_binding(
+                    IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry,
+                    SERVER_TEST_BOOTLE_LANTERN_HANDLE,
+                );
+                binding.bootle_lantern_issuance_bindings =
+                    Some(BootleLanternIssuanceBindingsWireV1 {
+                        issuer_id: *exact.issuer_id().as_bytes(),
+                        policy_id: *exact.policy_id().as_bytes(),
+                        authorization_lifetime_blocks: exact.authorization_lifetime_blocks(),
+                    });
+                binding
+            }
+
+            fn bootle_lantern_test_state(
+                backend: Arc<ServerTestBootleLanternBackend>,
+            ) -> BrokerServerStateV1 {
+                let binding = bootle_lantern_runtime_binding();
+                let backends =
+                    RuntimeProviderBrokerBackendsV1::new().with_bootle_lantern_issuance(backend);
+                let observation = make_server_observation(&binding, &backends)
+                    .expect("observe exact Bootle/Lantern test backend");
+                BrokerServerStateV1 {
+                    chain_id: "server-test-chain".to_owned(),
+                    catalog: vec![binding],
+                    observations: vec![observation],
+                    backends,
+                }
+            }
+
+            fn bootle_lantern_state_auth_operation(
+                state: &BrokerServerStateV1,
+                request_id: u64,
+                opaque_credential: Vec<u8>,
+            ) -> OperationRequestV1 {
+                let payload = encode_canonical(
+                    &BootleLanternAuthenticateRequestWireV1 {
+                        opaque_credential,
+                        action: 1,
+                        request_binding: [0x96; 32],
+                        committed_height: 17,
+                    },
+                    MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                )
+                .expect("encode Bootle/Lantern state authentication request");
+                make_operation_request(
+                    TEST_SESSION_ID,
+                    request_id,
+                    state.catalog[0].clone(),
+                    state.observations[0].metadata_digest,
+                    OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1,
+                    payload,
+                )
+                .expect("build Bootle/Lantern state authentication operation")
+            }
+
+            fn bootle_lantern_auth_operation(
+                request_id: u64,
+                binding: ProviderBindingWireV1,
+                request: &BootleLanternAuthenticateRequestWireV1,
+            ) -> OperationRequestV1 {
+                let payload = encode_canonical(request, MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1)
+                    .expect("encode Bootle/Lantern authentication request");
+                make_operation_request(
+                    TEST_SESSION_ID,
+                    request_id,
+                    binding,
+                    [0x93; 32],
+                    OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1,
+                    payload,
+                )
+                .expect("build Bootle/Lantern authentication operation")
+            }
+
+            #[test]
+            fn bootle_lantern_binding_rejects_slot_handle_qualification_and_metadata_substitution()
+            {
+                let binding = bootle_lantern_runtime_binding();
+                validate_wire_binding(&binding).expect("accept exact slot-56 binding");
+
+                let mut wrong = binding.clone();
+                wrong.slot = IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id();
+                assert!(validate_wire_binding(&wrong).is_err());
+
+                let mut wrong = binding.clone();
+                wrong.handle = "test://privacy/bootle-lantern".to_owned();
+                assert!(validate_wire_binding(&wrong).is_err());
+
+                let mut wrong = binding.clone();
+                wrong.revision = Some(0);
+                assert!(validate_wire_binding(&wrong).is_err());
+
+                let mut wrong = binding.clone();
+                wrong.policy_digest = Some([0; 32]);
+                assert!(validate_wire_binding(&wrong).is_err());
+
+                let mut wrong = binding.clone();
+                wrong.bootle_lantern_issuance_bindings = None;
+                assert!(validate_wire_binding(&wrong).is_err());
+
+                let mut wrong = binding.clone();
+                wrong
+                    .bootle_lantern_issuance_bindings
+                    .as_mut()
+                    .expect("slot metadata")
+                    .issuer_id = [0; 32];
+                assert!(validate_wire_binding(&wrong).is_err());
+
+                let mut wrong = binding.clone();
+                wrong
+                    .bootle_lantern_issuance_bindings
+                    .as_mut()
+                    .expect("slot metadata")
+                    .policy_id = [0; 32];
+                assert!(validate_wire_binding(&wrong).is_err());
+
+                for lifetime in [
+                    0,
+                    iroha_core::privacy_engines::bootle_lantern::issuer::
+                        MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1
+                        + 1,
+                ] {
+                    let mut wrong = binding.clone();
+                    wrong
+                        .bootle_lantern_issuance_bindings
+                        .as_mut()
+                        .expect("slot metadata")
+                        .authorization_lifetime_blocks = lifetime;
+                    assert!(validate_wire_binding(&wrong).is_err());
+                }
+
+                let mut wrong = binding;
+                wrong.evidence_viewer_grant_ttl_ms = Some(1);
+                assert!(validate_wire_binding(&wrong).is_err());
+            }
+
+            #[test]
+            fn bootle_lantern_auth_rejects_action_body_height_and_canonical_wire_attacks() {
+                let binding = bootle_lantern_runtime_binding();
+                let valid = BootleLanternAuthenticateRequestWireV1 {
+                    opaque_credential: vec![0xA4; 32],
+                    action: 1,
+                    request_binding: [0xA5; 32],
+                    committed_height: 9,
+                };
+                let request = bootle_lantern_auth_operation(1, binding.clone(), &valid);
+                validate_operation_payload(&request, Some("server-test-chain"))
+                    .expect("accept exact authentication payload");
+
+                let mut invalid_requests = Vec::new();
+                let mut invalid = valid.clone();
+                invalid.action = 0;
+                invalid_requests.push(invalid);
+                let mut invalid = valid.clone();
+                invalid.action = 3;
+                invalid_requests.push(invalid);
+                let mut invalid = valid.clone();
+                invalid.opaque_credential.clear();
+                invalid_requests.push(invalid);
+                let mut invalid = valid.clone();
+                invalid.request_binding = [0; 32];
+                invalid_requests.push(invalid);
+                let mut invalid = valid.clone();
+                invalid.committed_height = 0;
+                invalid_requests.push(invalid);
+                let mut invalid = valid.clone();
+                invalid.opaque_credential =
+                    vec![0xA4; MAX_BOOTLE_LANTERN_AUTH_CREDENTIAL_BYTES_V1 + 1];
+                invalid_requests.push(invalid);
+                for invalid in invalid_requests {
+                    let request = bootle_lantern_auth_operation(2, binding.clone(), &invalid);
+                    assert!(validate_operation_payload(&request, None).is_err());
+                }
+
+                let mut wrong_slot = bootle_lantern_auth_operation(3, binding.clone(), &valid);
+                wrong_slot.binding.slot =
+                    IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id();
+                assert!(validate_operation_payload(&wrong_slot, None).is_err());
+
+                let mut wrong_operation = bootle_lantern_auth_operation(4, binding, &valid);
+                wrong_operation.operation =
+                    OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1;
+                assert!(validate_operation_payload(&wrong_operation, None).is_err());
+
+                let mut truncated = request.clone();
+                truncated.payload.pop();
+                assert!(validate_operation_payload(&truncated, None).is_err());
+
+                let mut trailing = request;
+                trailing.payload.push(0);
+                assert!(validate_operation_payload(&trailing, None).is_err());
+            }
+
+            #[test]
+            fn bootle_lantern_auth_dispatch_requalifies_and_redacts_backend_failures() {
+                let backend = Arc::new(ServerTestBootleLanternBackend::new(
+                    bootle_lantern_test_bindings(),
+                ));
+                let state = bootle_lantern_test_state(Arc::clone(&backend));
+
+                let request = bootle_lantern_state_auth_operation(&state, 1, vec![0x31; 32]);
+                validate_operation_request(&request).expect("accept exact broker request");
+                let result = dispatch_server_operation(&state, &request)
+                    .expect("authenticate through exact broker backend");
+                let principal = decode_scrubbed_canonical::<
+                    BootleLanternAuthenticatedPrincipalWireV1,
+                >(
+                    &result, MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1
+                )
+                .expect("decode exact authenticated principal");
+                assert_eq!(principal.principal_digest, [0x95; 32]);
+                assert_eq!(principal.issued_at_height, 17);
+                assert_eq!(principal.expires_at_height, 21);
+
+                let denied = bootle_lantern_state_auth_operation(&state, 2, vec![0]);
+                assert!(matches!(
+                    dispatch_server_operation(&state, &denied),
+                    Err(BrokerError::Rejected)
+                ));
+
+                let unavailable = bootle_lantern_state_auth_operation(&state, 3, vec![u8::MAX]);
+                assert!(matches!(
+                    dispatch_server_operation(&state, &unavailable),
+                    Err(BrokerError::Unavailable)
+                ));
+
+                backend
+                    .drift_after_authenticate
+                    .store(true, Ordering::Release);
+                let drifted = bootle_lantern_state_auth_operation(&state, 4, vec![0x32; 32]);
+                assert!(matches!(
+                    dispatch_server_operation(&state, &drifted),
+                    Err(BrokerError::StaleOrRevoked)
+                ));
+            }
+
+            #[test]
+            fn bootle_lantern_response_validation_rejects_operation_and_body_substitution() {
+                let request = bootle_lantern_auth_operation(
+                    1,
+                    bootle_lantern_runtime_binding(),
+                    &BootleLanternAuthenticateRequestWireV1 {
+                        opaque_credential: vec![0xB1; 16],
+                        action: 2,
+                        request_binding: [0xB2; 32],
+                        committed_height: 11,
+                    },
+                );
+                let result = encode_canonical(
+                    &BootleLanternAuthenticatedPrincipalWireV1 {
+                        principal_digest: [0xB3; 32],
+                        issued_at_height: 10,
+                        expires_at_height: 12,
+                    },
+                    MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+                )
+                .expect("encode principal result");
+                validate_operation_result(&request, STATUS_OK_V1, &result)
+                    .expect("accept exact principal result");
+
+                let substituted =
+                    encode_canonical(&[0xB4; 32], MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1)
+                        .expect("encode substituted digest result");
+                assert!(validate_operation_result(&request, STATUS_OK_V1, &substituted).is_err());
+
+                let mut truncated = result.clone();
+                truncated.pop();
+                assert!(validate_operation_result(&request, STATUS_OK_V1, &truncated).is_err());
+                let mut trailing = result.clone();
+                trailing.push(0);
+                assert!(validate_operation_result(&request, STATUS_OK_V1, &trailing).is_err());
+                assert!(validate_operation_result(&request, STATUS_REJECTED_V1, &result).is_err());
+
+                let mut wrong_operation = request;
+                wrong_operation.operation = OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1;
+                assert!(
+                    validate_operation_result(&wrong_operation, STATUS_OK_V1, &result).is_err()
+                );
+            }
+
+            #[test]
+            fn bootle_lantern_backend_set_rejects_drift_unavailability_and_substitution() {
+                let binding = bootle_lantern_runtime_binding();
+                let backend = Arc::new(ServerTestBootleLanternBackend::new(
+                    bootle_lantern_test_bindings(),
+                ));
+                let backends = RuntimeProviderBrokerBackendsV1::new()
+                    .with_bootle_lantern_issuance(backend.clone());
+                validate_exact_backend_set(std::slice::from_ref(&binding), &backends)
+                    .expect("accept exact slot-56 backend set");
+                make_server_observation(&binding, &backends)
+                    .expect("observe exact slot-56 backend");
+
+                let mutations: [fn(&mut ProviderBindingWireV1); 4] = [
+                    |binding: &mut ProviderBindingWireV1| binding.revision = Some(8),
+                    |binding: &mut ProviderBindingWireV1| {
+                        binding.policy_digest = Some([0x72; 32]);
+                    },
+                    |binding: &mut ProviderBindingWireV1| {
+                        binding.handle = "hsm://privacy/bootle-lantern/substituted".to_owned();
+                    },
+                    |binding: &mut ProviderBindingWireV1| {
+                        binding
+                            .bootle_lantern_issuance_bindings
+                            .as_mut()
+                            .expect("slot metadata")
+                            .issuer_id = [0x94; 32];
+                    },
+                ];
+                for mutate in mutations {
+                    let mut substituted = binding.clone();
+                    mutate(&mut substituted);
+                    assert!(make_server_observation(&substituted, &backends).is_err());
+                }
+
+                backend.revision.store(8, Ordering::Release);
+                assert!(make_server_observation(&binding, &backends).is_err());
+                backend.revision.store(7, Ordering::Release);
+                backend.unavailable.store(true, Ordering::Release);
+                assert!(make_server_observation(&binding, &backends).is_err());
+                backend.unavailable.store(false, Ordering::Release);
+
+                assert!(
+                    validate_exact_backend_set(
+                        std::slice::from_ref(&binding),
+                        &RuntimeProviderBrokerBackendsV1::new(),
+                    )
+                    .is_err()
+                );
+                assert!(validate_exact_backend_set(&[], &backends).is_err());
             }
 
             fn appeal_finance_signer_test_state(
@@ -35723,6 +37533,7 @@ mod protocol {
                     generated_at_unix: cycle_end_unix,
                     population_label: "runtime-broker-population".to_owned(),
                     population_digest: [0x52; 32],
+                    source_commitment: [0x51; 32],
                     privacy: sorafs_manifest::ModerationPrivacyParametersV1 {
                         version: sorafs_manifest::MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                         mode: sorafs_manifest::ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
@@ -35824,6 +37635,7 @@ mod protocol {
                     handle: "kms://governance/checkpoint-primary".to_owned(),
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
+                    bootle_lantern_issuance_bindings: None,
                     stream_token_signer_public_key: None,
                     stream_token_gateway_admission_qualification: None,
                     stream_token_gateway_admission_max_pending: None,
@@ -35865,6 +37677,7 @@ mod protocol {
                     handle: SERVER_TEST_MODERATION_HANDLE.to_owned(),
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
+                    bootle_lantern_issuance_bindings: None,
                     stream_token_signer_public_key: None,
                     stream_token_gateway_admission_qualification: None,
                     stream_token_gateway_admission_max_pending: None,
@@ -35906,6 +37719,7 @@ mod protocol {
                     handle: format!("hsm://sorafs/evidence-viewer/slot-{}", slot.wire_id()),
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
+                    bootle_lantern_issuance_bindings: None,
                     stream_token_signer_public_key: None,
                     stream_token_gateway_admission_qualification: None,
                     stream_token_gateway_admission_max_pending: None,
@@ -36423,6 +38237,7 @@ mod protocol {
                     handle: SERVER_TEST_SIGNER_HANDLE.to_owned(),
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
+                    bootle_lantern_issuance_bindings: None,
                     stream_token_signer_public_key: None,
                     stream_token_gateway_admission_qualification: None,
                     stream_token_gateway_admission_max_pending: None,
@@ -42005,2022 +43820,7 @@ mod protocol {
                     .expect("transparency-publisher broker exits cleanly");
             }
 
-            #[test]
-            fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
-                let webauthn =
-                    evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn);
-                let grants = evidence_viewer_binding(
-                    IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority,
-                );
-                let receipt = evidence_viewer_binding(
-                    IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner,
-                );
-                let erasure =
-                    evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerErasure);
-                let checkpoint = evidence_viewer_binding(
-                    IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore,
-                );
-                let archive = evidence_viewer_binding(
-                    IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive,
-                );
-                let publisher = evidence_viewer_binding(
-                    IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher,
-                );
-                for operation in 40..=50 {
-                    assert!(operation_is_known(operation));
-                    assert!(
-                        operation_frame_limit(operation) <= MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
-                    );
-                }
-                for operation in [
-                    OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1,
-                    OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1,
-                ] {
-                    assert!(operation_is_known(operation));
-                    assert_eq!(
-                        operation_frame_limit(operation),
-                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
-                    );
-                }
-                assert_eq!(
-                    broker_error_status(BrokerError::Ambiguous),
-                    Some((STATUS_AMBIGUOUS_V1, true)),
-                    "mutation ambiguity must retire the authenticated session"
-                );
-                let qualify_publisher = validated_test_operation(
-                    publisher,
-                    OPERATION_QUALIFY_V1,
-                    encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
-                        .expect("encode transparency-publisher qualification"),
-                );
-                validate_operation_request(&qualify_publisher)
-                    .expect("transparency publisher supports only its qualified slot");
-
-                let now_unix_ms = u64::try_from(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .expect("system clock after epoch")
-                        .as_millis(),
-                )
-                .expect("timestamp fits u64");
-                let claims = sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1 {
-                    session_id: [0x11; 16],
-                    case_id: "case-1".to_owned(),
-                    round_id: "round-1".to_owned(),
-                    quarantine_id: [0x12; 16],
-                    viewer_account: "viewer".to_owned(),
-                    role: sorafs_node::evidence_viewer::EvidenceViewerRoleV1::Juror,
-                    purpose_digest: [0x13; 32],
-                    generation: 1,
-                    issued_at_unix_ms: now_unix_ms,
-                    expires_at_unix_ms: now_unix_ms + 60_000,
-                };
-                let checkpoint_record =
-                    sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreRecordV1 {
-                        version: sorafs_node::evidence_viewer::
-                            EVIDENCE_VIEWER_CHECKPOINT_STORE_RECORD_VERSION_V1,
-                        generation: 1,
-                        predecessor_revision: None,
-                        predecessor_checkpoint_digest: None,
-                        checkpoint_digest: [0x21; 32],
-                        checkpoint_bytes: vec![0x22],
-                        checkpoint_store_handle: checkpoint.handle.clone(),
-                        checkpoint_store_revision: checkpoint.revision.expect("revision"),
-                        checkpoint_store_policy_digest: checkpoint
-                            .policy_digest
-                            .expect("policy digest"),
-                        signer_handle: "hsm://sorafs/evidence-viewer/receipt-primary".to_owned(),
-                        signer_public_key: TEST_SIGNER_KEY,
-                        signature: [0x23; 64],
-                        revision: [0x24; 32],
-                    };
-                let checkpoint_record_bytes = encode_canonical(
-                    &checkpoint_record,
-                    evidence_viewer_checkpoint_record_limit(&checkpoint)
-                        .expect("checkpoint record limit"),
-                )
-                .expect("encode checkpoint record");
-
-                let mut mutating = Vec::new();
-                mutating.push(validated_test_operation(
-                    webauthn.clone(),
-                    OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1,
-                    encode_canonical(
-                        &EvidenceViewerIssueChallengeRequestWireV1 {
-                            binding_digest: [0x31; 32],
-                            issued_at_unix_ms: now_unix_ms,
-                            expires_at_unix_ms: now_unix_ms + 60_000,
-                        },
-                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                    )
-                    .expect("encode challenge issue"),
-                ));
-                mutating.push(validated_test_operation(
-                    webauthn,
-                    OPERATION_EVIDENCE_VIEWER_VERIFY_AND_CONSUME_V1,
-                    encode_canonical(
-                        &EvidenceViewerVerifyAndConsumeRequestWireV1 {
-                            challenge: b"challenge-secret".to_vec(),
-                            assertion: vec![0x32],
-                            binding_digest: [0x33; 32],
-                            rp_id: "review.example".to_owned(),
-                            allowed_origins: vec!["https://review.example".to_owned()],
-                            now_unix_ms,
-                        },
-                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                    )
-                    .expect("encode WebAuthn verification"),
-                ));
-                mutating.push(validated_test_operation(
-                    grants.clone(),
-                    OPERATION_EVIDENCE_VIEWER_GRANT_ISSUE_V1,
-                    encode_canonical(
-                        &EvidenceViewerGrantIssueRequestWireV1 {
-                            claims: claims.clone(),
-                        },
-                        MAX_EVIDENCE_VIEWER_CLAIMS_BYTES_V1,
-                    )
-                    .expect("encode grant issue"),
-                ));
-                mutating.push(validated_test_operation(
-                    grants.clone(),
-                    OPERATION_EVIDENCE_VIEWER_GRANT_REVOKE_V1,
-                    encode_canonical(
-                        &EvidenceViewerGrantRevokeRequestWireV1 {
-                            token_digest: [0x34; 32],
-                        },
-                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                    )
-                    .expect("encode grant revocation"),
-                ));
-                mutating.push(validated_test_operation(
-                    erasure,
-                    OPERATION_EVIDENCE_VIEWER_ERASE_V1,
-                    encode_canonical(
-                        &EvidenceViewerEraseRequestWireV1 {
-                            operation_id: [0x35; 32],
-                            quarantine_id: [0x36; 16],
-                            object_id: [0x37; 16],
-                            evidence_digest: [0x38; 32],
-                        },
-                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                    )
-                    .expect("encode erasure"),
-                ));
-                mutating.push(validated_test_operation(
-                    checkpoint.clone(),
-                    OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1,
-                    encode_canonical(
-                        &EvidenceViewerCheckpointCompareAndSwapRequestWireV1 {
-                            expected_revision: None,
-                            next_record: checkpoint_record_bytes,
-                        },
-                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
-                    )
-                    .expect("encode checkpoint CAS"),
-                ));
-                mutating.push(validated_test_operation(
-                    archive.clone(),
-                    OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1,
-                    encode_canonical(
-                        &EvidenceViewerArchiveInstallRequestWireV1 {
-                            operation_id: [0x39; 32],
-                            receipt_message: [0x3A; 32],
-                            canonical_artifact: vec![0x3B],
-                        },
-                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
-                    )
-                    .expect("encode archive install"),
-                ));
-                let unit = encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
-                    .expect("encode unit");
-                for request in &mutating {
-                    assert_eq!(
-                        validate_operation_result(request, STATUS_AMBIGUOUS_V1, &unit),
-                        Ok(()),
-                        "operation {}",
-                        request.operation
-                    );
-                }
-
-                let readonly = [
-                    validated_test_operation(
-                        grants,
-                        OPERATION_EVIDENCE_VIEWER_GRANT_VERIFY_V1,
-                        encode_canonical(
-                            &EvidenceViewerGrantVerifyRequestWireV1 {
-                                token: b"grant-secret".to_vec(),
-                                claims,
-                                now_unix_ms: now_unix_ms + 1,
-                            },
-                            MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                        )
-                        .expect("encode grant verification"),
-                    ),
-                    validated_test_operation(
-                        receipt,
-                        OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1,
-                        encode_canonical(
-                            &SignRequestWireV1 {
-                                payload: vec![0x41],
-                            },
-                            MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                        )
-                        .expect("encode receipt sign"),
-                    ),
-                    validated_test_operation(
-                        checkpoint,
-                        OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1,
-                        unit.clone(),
-                    ),
-                    validated_test_operation(
-                        archive,
-                        OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1,
-                        encode_canonical(
-                            &EvidenceViewerArchiveReadRequestWireV1 {
-                                operation_id: [0x42; 32],
-                            },
-                            MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                        )
-                        .expect("encode archive read"),
-                    ),
-                ];
-                for request in readonly {
-                    assert_eq!(
-                        validate_operation_result(&request, STATUS_AMBIGUOUS_V1, &unit),
-                        Err(BrokerError::Protocol),
-                        "operation {}",
-                        request.operation
-                    );
-                }
-
-                let redacted = format!(
-                    "{:?}",
-                    EvidenceViewerVerifyAndConsumeRequestWireV1 {
-                        challenge: b"challenge-secret".to_vec(),
-                        assertion: b"assertion-secret".to_vec(),
-                        binding_digest: [0x43; 32],
-                        rp_id: "review.example".to_owned(),
-                        allowed_origins: vec!["https://review.example".to_owned()],
-                        now_unix_ms,
-                    }
-                );
-                assert!(!redacted.contains("challenge-secret"));
-                assert!(!redacted.contains("assertion-secret"));
-            }
-
-            #[test]
-            fn provider_ingest_wire_roles_bind_exact_public_policy() {
-                let source = ProviderBindingWireV1 {
-                    slot: IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id(),
-                    handle: SERVER_TEST_SOURCE_HANDLE.to_owned(),
-                    revision: Some(5),
-                    policy_digest: Some([0xB1; 32]),
-                    stream_token_signer_public_key: None,
-                    stream_token_gateway_admission_qualification: None,
-                    stream_token_gateway_admission_max_pending: None,
-                    stream_token_gateway_admission_max_tracked_tokens: None,
-                    stream_token_gateway_admission_reconcile_max_items: None,
-                    appeal_finance_signer_binding: None,
-                    appeal_finance_checkpoint_binding: None,
-                    appeal_finance_checkpoint_max_bytes: None,
-                    pop_credential_runtime_binding: None,
-                    por_replay_archive_binding: None,
-                    por_replay_archive_proof_limits: None,
-                    potr_runtime_binding: None,
-                    native_signer_binding: None,
-                    governance_dag_publisher_peer_id: None,
-                    governance_dag_publisher_public_key: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
-                    provider_ingest_signer_binding: None,
-                    provider_ingest_source_limits: Some(ProviderIngestSourceLimitsWireV1 {
-                        operation_timeout_ms: 30_000,
-                        max_content_bytes: 64 * 1024 * 1024,
-                        max_source_providers: 8,
-                        max_concurrent_streams: 2,
-                    }),
-                    provider_ingest_checkpoint_max_bytes: None,
-                    provider_ingest_max_signed_transaction_bytes: None,
-                    evidence_viewer_webauthn_binding: None,
-                    evidence_viewer_grant_ttl_ms: None,
-                    evidence_viewer_receipt_signer_public_key: None,
-                    evidence_viewer_transparency_publisher_public_key: None,
-                    evidence_viewer_checkpoint_max_bytes: None,
-                    moderation_checkpoint_max_bytes: None,
-                    moderation_checkpoint_attestation_public_key: None,
-                    evidence_viewer_archive_id: None,
-                    evidence_viewer_archive_public_key: None,
-                    evidence_viewer_archive_max_bytes: None,
-                    moderation_panel_notification_archive_binding: None,
-                };
-                assert_eq!(validate_wire_binding(&source), Ok(()));
-                let mut source_observation = ProviderObservationWireV1 {
-                    binding: source.clone(),
-                    signer_metadata: None,
-                    moderation_quarantine_active_key_id: None,
-                    provider_ingest_signer_binding: None,
-                    provider_ingest_source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-                    potr_signer_public_key: Vec::new(),
-                    evidence_viewer_receipt_signer_public_key: None,
-                    evidence_viewer_archive_id: None,
-                    evidence_viewer_archive_public_key: None,
-                    moderation_checkpoint_attestation_public_key: None,
-                    moderation_panel_notification_archive_binding: None,
-                    metadata_digest: [0; 32],
-                };
-                refresh_metadata_digest(&mut source_observation);
-                assert_eq!(validate_observation(&source, &source_observation), Ok(()));
-                source_observation
-                    .provider_ingest_source_provider_ids
-                    .swap(0, 1);
-                refresh_metadata_digest(&mut source_observation);
-                assert_eq!(
-                    validate_observation(&source, &source_observation),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let exact_signer = ProviderIngestSignerBindingWireV1 {
-                    runtime_handle: "pkcs11://sorafs/provider-ingest/signer-primary".to_owned(),
-                    adapter_revision: 3,
-                    signer_policy_id: [0xA1; 32],
-                    signer_policy_revision: 1,
-                    signer_policy_predecessor_digest: None,
-                    signer_policy_digest: [0xA2; 32],
-                    algorithm: 1,
-                    public_key: TEST_SIGNER_KEY.to_vec(),
-                };
-                let resolver = ProviderBindingWireV1 {
-                    slot: IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver
-                        .wire_id(),
-                    handle: "hsm://sorafs/provider-ingest/resolver-primary".to_owned(),
-                    revision: Some(6),
-                    policy_digest: Some([0xB2; 32]),
-                    stream_token_signer_public_key: None,
-                    stream_token_gateway_admission_qualification: None,
-                    stream_token_gateway_admission_max_pending: None,
-                    stream_token_gateway_admission_max_tracked_tokens: None,
-                    stream_token_gateway_admission_reconcile_max_items: None,
-                    appeal_finance_signer_binding: None,
-                    appeal_finance_checkpoint_binding: None,
-                    appeal_finance_checkpoint_max_bytes: None,
-                    pop_credential_runtime_binding: None,
-                    por_replay_archive_binding: None,
-                    por_replay_archive_proof_limits: None,
-                    potr_runtime_binding: None,
-                    native_signer_binding: None,
-                    governance_dag_publisher_peer_id: None,
-                    governance_dag_publisher_public_key: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
-                    provider_ingest_signer_binding: Some(exact_signer.clone()),
-                    provider_ingest_source_limits: None,
-                    provider_ingest_checkpoint_max_bytes: None,
-                    provider_ingest_max_signed_transaction_bytes: Some(1024 * 1024),
-                    evidence_viewer_webauthn_binding: None,
-                    evidence_viewer_grant_ttl_ms: None,
-                    evidence_viewer_receipt_signer_public_key: None,
-                    evidence_viewer_transparency_publisher_public_key: None,
-                    evidence_viewer_checkpoint_max_bytes: None,
-                    moderation_checkpoint_max_bytes: None,
-                    moderation_checkpoint_attestation_public_key: None,
-                    evidence_viewer_archive_id: None,
-                    evidence_viewer_archive_public_key: None,
-                    evidence_viewer_archive_max_bytes: None,
-                    moderation_panel_notification_archive_binding: None,
-                };
-                assert_eq!(validate_wire_binding(&resolver), Ok(()));
-                let mut exact_minimum = resolver.clone();
-                exact_minimum.provider_ingest_max_signed_transaction_bytes =
-                    Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN);
-                assert_eq!(validate_wire_binding(&exact_minimum), Ok(()));
-                let mut below_minimum = resolver.clone();
-                below_minimum.provider_ingest_max_signed_transaction_bytes =
-                    Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN - 1);
-                assert_eq!(
-                    validate_wire_binding(&below_minimum),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut leaf = resolver.clone();
-                leaf.slot = IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner.wire_id();
-                leaf.handle = exact_signer.runtime_handle.clone();
-                leaf.revision = Some(exact_signer.adapter_revision);
-                leaf.policy_digest = Some(exact_signer.signer_policy_digest);
-                assert_eq!(validate_wire_binding(&leaf), Ok(()));
-
-                let mut substituted = leaf.clone();
-                substituted
-                    .provider_ingest_signer_binding
-                    .as_mut()
-                    .expect("detailed signer binding")
-                    .algorithm = 99;
-                assert_eq!(
-                    validate_wire_binding(&substituted),
-                    Err(BrokerError::Protocol)
-                );
-
-                let checkpoint = ProviderBindingWireV1 {
-                    slot: IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore.wire_id(),
-                    handle: "sealed://sorafs/provider-ingest/checkpoint-primary".to_owned(),
-                    revision: Some(7),
-                    policy_digest: Some([0xA7; 32]),
-                    stream_token_signer_public_key: None,
-                    stream_token_gateway_admission_qualification: None,
-                    stream_token_gateway_admission_max_pending: None,
-                    stream_token_gateway_admission_max_tracked_tokens: None,
-                    stream_token_gateway_admission_reconcile_max_items: None,
-                    appeal_finance_signer_binding: None,
-                    appeal_finance_checkpoint_binding: None,
-                    appeal_finance_checkpoint_max_bytes: None,
-                    pop_credential_runtime_binding: None,
-                    por_replay_archive_binding: None,
-                    por_replay_archive_proof_limits: None,
-                    potr_runtime_binding: None,
-                    native_signer_binding: None,
-                    governance_dag_publisher_peer_id: None,
-                    governance_dag_publisher_public_key: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
-                    provider_ingest_signer_binding: None,
-                    provider_ingest_source_limits: None,
-                    provider_ingest_checkpoint_max_bytes: Some(64 * 1024 * 1024),
-                    provider_ingest_max_signed_transaction_bytes: None,
-                    evidence_viewer_webauthn_binding: None,
-                    evidence_viewer_grant_ttl_ms: None,
-                    evidence_viewer_receipt_signer_public_key: None,
-                    evidence_viewer_transparency_publisher_public_key: None,
-                    evidence_viewer_checkpoint_max_bytes: None,
-                    moderation_checkpoint_max_bytes: None,
-                    moderation_checkpoint_attestation_public_key: None,
-                    evidence_viewer_archive_id: None,
-                    evidence_viewer_archive_public_key: None,
-                    evidence_viewer_archive_max_bytes: None,
-                    moderation_panel_notification_archive_binding: None,
-                };
-                assert_eq!(validate_wire_binding(&checkpoint), Ok(()));
-                let checkpoint_load_payload = encode_canonical(
-                    &CHECKPOINT_LOAD_REQUEST_VERSION_V1,
-                    MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
-                )
-                .expect("encode provider-ingest checkpoint load");
-                assert_eq!(
-                    checkpoint_load_payload.len(),
-                    norito::core::Header::SIZE + core::mem::size_of::<u8>()
-                );
-                assert_eq!(
-                    decode_canonical::<u8>(
-                        &checkpoint_load_payload,
-                        MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
-                    )
-                    .expect("decode provider-ingest checkpoint load"),
-                    CHECKPOINT_LOAD_REQUEST_VERSION_V1
-                );
-                let checkpoint_load = make_operation_request(
-                    TEST_SESSION_ID,
-                    3,
-                    checkpoint.clone(),
-                    [0xC7; 32],
-                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
-                    checkpoint_load_payload.clone(),
-                )
-                .expect("seal provider-ingest checkpoint load");
-                assert_eq!(validate_operation_request(&checkpoint_load), Ok(()));
-                let unsupported_version = CHECKPOINT_LOAD_REQUEST_VERSION_V1 ^ u8::MAX;
-                let alternate_checkpoint_load = make_operation_request(
-                    TEST_SESSION_ID,
-                    4,
-                    checkpoint.clone(),
-                    [0xC7; 32],
-                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
-                    encode_canonical(
-                        &unsupported_version,
-                        MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
-                    )
-                    .expect("encode alternate provider-ingest checkpoint load version"),
-                )
-                .expect("seal alternate provider-ingest checkpoint load version");
-                assert_eq!(
-                    validate_operation_request(&alternate_checkpoint_load),
-                    Err(BrokerError::Rejected)
-                );
-                let mut trailing_checkpoint_load_payload = checkpoint_load_payload.clone();
-                trailing_checkpoint_load_payload.push(0);
-                let trailing_checkpoint_load = make_operation_request(
-                    TEST_SESSION_ID,
-                    5,
-                    checkpoint.clone(),
-                    [0xC7; 32],
-                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
-                    trailing_checkpoint_load_payload,
-                )
-                .expect("seal trailing provider-ingest checkpoint load payload");
-                assert_eq!(
-                    validate_operation_request(&trailing_checkpoint_load),
-                    Err(BrokerError::Protocol)
-                );
-                let cross_slot_checkpoint_load = make_operation_request(
-                    TEST_SESSION_ID,
-                    6,
-                    source.clone(),
-                    [0xC8; 32],
-                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
-                    checkpoint_load_payload,
-                )
-                .expect("seal cross-slot provider-ingest checkpoint load");
-                assert_eq!(
-                    validate_operation_request(&cross_slot_checkpoint_load),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let retention = ProviderBindingWireV1 {
-                    slot: IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority.wire_id(),
-                    handle: "sealed://sorafs/provider-ingest/retention-primary".to_owned(),
-                    revision: Some(9),
-                    policy_digest: Some([0xC9; 32]),
-                    stream_token_signer_public_key: None,
-                    stream_token_gateway_admission_qualification: None,
-                    stream_token_gateway_admission_max_pending: None,
-                    stream_token_gateway_admission_max_tracked_tokens: None,
-                    stream_token_gateway_admission_reconcile_max_items: None,
-                    appeal_finance_signer_binding: None,
-                    appeal_finance_checkpoint_binding: None,
-                    appeal_finance_checkpoint_max_bytes: None,
-                    pop_credential_runtime_binding: None,
-                    por_replay_archive_binding: None,
-                    por_replay_archive_proof_limits: None,
-                    potr_runtime_binding: None,
-                    native_signer_binding: None,
-                    governance_dag_publisher_peer_id: None,
-                    governance_dag_publisher_public_key: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
-                    provider_ingest_signer_binding: None,
-                    provider_ingest_source_limits: None,
-                    provider_ingest_checkpoint_max_bytes: None,
-                    provider_ingest_max_signed_transaction_bytes: None,
-                    evidence_viewer_webauthn_binding: None,
-                    evidence_viewer_grant_ttl_ms: None,
-                    evidence_viewer_receipt_signer_public_key: None,
-                    evidence_viewer_transparency_publisher_public_key: None,
-                    evidence_viewer_checkpoint_max_bytes: None,
-                    moderation_checkpoint_max_bytes: None,
-                    moderation_checkpoint_attestation_public_key: None,
-                    evidence_viewer_archive_id: None,
-                    evidence_viewer_archive_public_key: None,
-                    evidence_viewer_archive_max_bytes: None,
-                    moderation_panel_notification_archive_binding: None,
-                };
-                assert_eq!(validate_wire_binding(&retention), Ok(()));
-
-                for operation in [
-                    OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1,
-                    OPERATION_PROVIDER_INGEST_RESOLVE_SIGNER_V1,
-                    OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1,
-                ] {
-                    assert_eq!(
-                        operation_frame_limit(operation),
-                        MAX_PROVIDER_INGEST_CONTROL_FRAME_BYTES_V1
-                    );
-                }
-                assert_eq!(
-                    operation_frame_limit(OPERATION_PROVIDER_INGEST_SIGN_V1),
-                    MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1
-                );
-                for operation in [
-                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
-                    OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1,
-                ] {
-                    assert_eq!(
-                        operation_frame_limit(operation),
-                        MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1
-                    );
-                }
-                for operation in [
-                    OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1,
-                    OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1,
-                ] {
-                    assert_eq!(
-                        operation_frame_limit(operation),
-                        MAX_PROVIDER_INGEST_RETENTION_FRAME_BYTES_V1
-                    );
-                }
-                assert_eq!(
-                    operation_frame_limit(OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1),
-                    MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1
-                );
-                for operation in OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1
-                    ..=OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
-                {
-                    assert!(
-                        operation_frame_limit(operation) <= MAX_OPERATION_FRAME_BYTES_V1,
-                        "provider-ingest operation {operation} must stay within the process raw-frame ceiling"
-                    );
-                }
-
-                let signer_owner = iroha_data_model::account::AccountId::new(
-                    iroha_crypto::PublicKey::from_bytes(
-                        iroha_crypto::Algorithm::Ed25519,
-                        &TEST_SIGNER_KEY,
-                    )
-                    .expect("provider-ingest signer public key"),
-                );
-                let signer_context = provider_ingest_completion_test_context(signer_owner.clone());
-                let admitted_payload =
-                    provider_ingest_completion_test_payload(signer_owner.clone());
-                let admitted_payload = encode_canonical(
-                    &admitted_payload,
-                    usize::try_from(
-                        leaf.provider_ingest_max_signed_transaction_bytes
-                            .expect("provider-ingest signed transaction ceiling"),
-                    )
-                    .expect("provider-ingest signed transaction ceiling fits usize"),
-                )
-                .expect("encode provider-ingest completion payload");
-                let admitted_request = make_operation_request(
-                    TEST_SESSION_ID,
-                    1,
-                    leaf.clone(),
-                    [0xB3; 32],
-                    OPERATION_PROVIDER_INGEST_SIGN_V1,
-                    encode_canonical(
-                        &ProviderIngestSignRequestWireV1 {
-                            context: provider_ingest_signer_context_to_wire(&signer_context)
-                                .expect("encode provider-ingest signer context"),
-                            transaction_payload: admitted_payload,
-                        },
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("encode provider-ingest sign request"),
-                )
-                .expect("build provider-ingest sign operation");
-                assert_eq!(validate_operation_request(&admitted_request), Ok(()));
-                assert_eq!(
-                    validate_operation_request_for_session(&admitted_request, "server-test-chain",),
-                    Ok(())
-                );
-                assert_eq!(
-                    validate_operation_request_for_session(&admitted_request, "other-chain"),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut substituted_instruction =
-                    provider_ingest_completion_test_instruction(signer_owner.clone());
-                substituted_instruction.expected_assignment_revision += 1;
-                let substituted_payload = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
-                    signer_owner,
-                    iroha_data_model::transaction::Executable::Instructions(
-                        vec![iroha_data_model::isi::InstructionBox::from(
-                            substituted_instruction,
-                        )]
-                        .into(),
-                    ),
-                );
-                let substituted_payload = encode_canonical(
-                    &substituted_payload,
-                    usize::try_from(
-                        leaf.provider_ingest_max_signed_transaction_bytes
-                            .expect("provider-ingest signed transaction ceiling"),
-                    )
-                    .expect("provider-ingest signed transaction ceiling fits usize"),
-                )
-                .expect("encode substituted provider-ingest completion payload");
-                let substituted_request = make_operation_request(
-                    TEST_SESSION_ID,
-                    2,
-                    leaf,
-                    [0xB3; 32],
-                    OPERATION_PROVIDER_INGEST_SIGN_V1,
-                    encode_canonical(
-                        &ProviderIngestSignRequestWireV1 {
-                            context: provider_ingest_signer_context_to_wire(&signer_context)
-                                .expect("encode provider-ingest signer context"),
-                            transaction_payload: substituted_payload,
-                        },
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("encode substituted provider-ingest sign request"),
-                )
-                .expect("build substituted provider-ingest sign operation");
-                assert_eq!(
-                    validate_operation_request(&substituted_request),
-                    Err(BrokerError::BindingMismatch)
-                );
-                assert_eq!(
-                    validate_operation_request_for_session(
-                        &substituted_request,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let owner = iroha_data_model::account::AccountId::new(
-                    provider_ingest_completion_test_keypair()
-                        .public_key()
-                        .clone(),
-                );
-                let context = provider_ingest_completion_test_context(owner.clone());
-                let exact_payload = provider_ingest_completion_test_payload(owner.clone());
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &exact_payload,
-                        &context,
-                        "server-test-chain"
-                    ),
-                    Ok(())
-                );
-                let cross_chain_payload = iroha_data_model::transaction::TransactionBuilder::new(
-                    iroha_data_model::ChainId::from("other-chain"),
-                    owner.clone(),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .into_payload()
-                .expect("build cross-chain provider-ingest payload");
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &cross_chain_payload,
-                        &context,
-                        "server-test-chain"
-                    ),
-                    Err(BrokerError::BindingMismatch)
-                );
-            }
-
-            #[test]
-            fn provider_ingest_signer_wire_pins_exact_assignment_revision() {
-                let owner = iroha_data_model::account::AccountId::new(
-                    provider_ingest_completion_test_keypair()
-                        .public_key()
-                        .clone(),
-                );
-                let context = provider_ingest_completion_test_context(owner.clone());
-                let wire = provider_ingest_signer_context_to_wire(&context)
-                    .expect("encode exact provider-ingest signer context");
-                assert_eq!(
-                    provider_ingest_signer_context_from_wire(&wire),
-                    Ok(context.clone())
-                );
-
-                let payload = provider_ingest_completion_test_payload(owner);
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &payload,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Ok(())
-                );
-
-                let mut substituted = wire;
-                substituted.expected_assignment_revision += 1;
-                let substituted = provider_ingest_signer_context_from_wire(&substituted)
-                    .expect("decode production-shaped substituted context");
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &payload,
-                        &substituted,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut zero = provider_ingest_signer_context_to_wire(&context)
-                    .expect("encode exact provider-ingest signer context");
-                zero.expected_assignment_revision = 0;
-                assert_eq!(
-                    provider_ingest_signer_context_from_wire(&zero),
-                    Err(BrokerError::Rejected)
-                );
-            }
-
-            #[test]
-            fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
-                let owner = iroha_data_model::account::AccountId::new(
-                    provider_ingest_completion_test_keypair()
-                        .public_key()
-                        .clone(),
-                );
-                let context = provider_ingest_completion_test_context(owner.clone());
-                let exact = provider_ingest_completion_test_payload(owner.clone());
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &exact,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Ok(())
-                );
-
-                let other_executable = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
-                    owner.clone(),
-                    iroha_data_model::transaction::Executable::Ivm(
-                        iroha_data_model::transaction::IvmBytecode::from_compiled(vec![1]),
-                    ),
-                );
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &other_executable,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::Rejected)
-                );
-
-                let wrong_instruction = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
-                    owner.clone(),
-                    iroha_data_model::transaction::Executable::Instructions(
-                        vec![iroha_data_model::isi::InstructionBox::from(
-                            iroha_data_model::isi::Log::new(
-                                iroha_data_model::Level::INFO,
-                                "not a provider-ingest completion".into(),
-                            ),
-                        )]
-                        .into(),
-                    ),
-                );
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &wrong_instruction,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::Rejected)
-                );
-
-                let completion = provider_ingest_completion_test_instruction(owner.clone());
-                let batch = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
-                    owner.clone(),
-                    iroha_data_model::transaction::Executable::Batch(
-                        vec![
-                            iroha_data_model::transaction::ExecutableBatchItem::Instruction(
-                                iroha_data_model::isi::InstructionBox::from(completion.clone()),
-                            ),
-                        ]
-                        .into(),
-                    ),
-                );
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &batch,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::Rejected)
-                );
-
-                let extra_instruction = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
-                    owner.clone(),
-                    iroha_data_model::transaction::Executable::Instructions(
-                        vec![
-                            iroha_data_model::isi::InstructionBox::from(completion.clone()),
-                            iroha_data_model::isi::InstructionBox::from(
-                                iroha_data_model::isi::Log::new(
-                                    iroha_data_model::Level::INFO,
-                                    "extra instruction".into(),
-                                ),
-                            ),
-                        ]
-                        .into(),
-                    ),
-                );
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &extra_instruction,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::Rejected)
-                );
-
-                let other_owner = iroha_data_model::account::AccountId::new(
-                    iroha_crypto::KeyPair::try_from_seed(
-                        vec![0x43; 32],
-                        iroha_crypto::Algorithm::Ed25519,
-                    )
-                    .expect("other provider-ingest owner key")
-                    .public_key()
-                    .clone(),
-                );
-                let wrong_payload_owner = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
-                    other_owner.clone(),
-                    iroha_data_model::transaction::Executable::Instructions(
-                        vec![iroha_data_model::isi::InstructionBox::from(
-                            completion.clone(),
-                        )]
-                        .into(),
-                    ),
-                );
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &wrong_payload_owner,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut wrong_authority = completion.clone();
-                wrong_authority.expected_authority.provider_owner = other_owner;
-                let wrong_authority = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
-                    owner.clone(),
-                    iroha_data_model::transaction::Executable::Instructions(
-                        vec![iroha_data_model::isi::InstructionBox::from(wrong_authority)].into(),
-                    ),
-                );
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &wrong_authority,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut wrong_policy = completion.clone();
-                wrong_policy.expected_authority.signer_policy.policy_digest[0] ^= 1;
-                let wrong_policy = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
-                    owner.clone(),
-                    iroha_data_model::transaction::Executable::Instructions(
-                        vec![iroha_data_model::isi::InstructionBox::from(wrong_policy)].into(),
-                    ),
-                );
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &wrong_policy,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut wrong_anchor = completion.clone();
-                wrong_anchor.finalized_anchor.block_hash[0] ^= 1;
-                let wrong_anchor = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
-                    owner.clone(),
-                    iroha_data_model::transaction::Executable::Instructions(
-                        vec![iroha_data_model::isi::InstructionBox::from(wrong_anchor)].into(),
-                    ),
-                );
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &wrong_anchor,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut wrong_assignment_revision = completion.clone();
-                wrong_assignment_revision.expected_assignment_revision =
-                    context.expected_assignment_revision + 1;
-                let wrong_assignment_revision =
-                    provider_ingest_completion_test_payload_with_executable(
-                        "server-test-chain",
-                        owner.clone(),
-                        iroha_data_model::transaction::Executable::Instructions(
-                            vec![iroha_data_model::isi::InstructionBox::from(
-                                wrong_assignment_revision,
-                            )]
-                            .into(),
-                        ),
-                    );
-                assert_eq!(
-                    ensure_provider_ingest_completion_payload(
-                        &wrong_assignment_revision,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut zero_order = completion.clone();
-                zero_order.order_id =
-                    iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0; 32]);
-                let mut zero_provider = completion.clone();
-                zero_provider.provider_id =
-                    iroha_data_model::sorafs::capacity::ProviderId::new([0; 32]);
-                let mut zero_epoch = completion.clone();
-                zero_epoch.completion_epoch = 0;
-                let mut zero_revision = completion.clone();
-                zero_revision.expected_assignment_revision = 0;
-                let mut zero_anchor_height = completion.clone();
-                zero_anchor_height.finalized_anchor.height = 0;
-                let mut zero_anchor_hash = completion;
-                zero_anchor_hash.finalized_anchor.block_hash = [0; 32];
-                for malformed in [
-                    zero_order,
-                    zero_provider,
-                    zero_epoch,
-                    zero_revision,
-                    zero_anchor_height,
-                    zero_anchor_hash,
-                ] {
-                    let payload = provider_ingest_completion_test_payload_with_executable(
-                        "server-test-chain",
-                        owner.clone(),
-                        iroha_data_model::transaction::Executable::Instructions(
-                            vec![iroha_data_model::isi::InstructionBox::from(malformed)].into(),
-                        ),
-                    );
-                    assert_eq!(
-                        ensure_provider_ingest_completion_payload(
-                            &payload,
-                            &context,
-                            "server-test-chain",
-                        ),
-                        Err(BrokerError::Rejected)
-                    );
-                }
-            }
-
-            #[test]
-            fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
-                let keypair = provider_ingest_completion_test_keypair();
-                let owner = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
-                let context = provider_ingest_completion_test_context(owner.clone());
-                let payload = provider_ingest_completion_test_payload(owner.clone());
-                let exact = iroha_data_model::transaction::TransactionBuilder::from_payload(
-                    payload.clone(),
-                )
-                .expect("rebuild exact provider-ingest payload")
-                .try_sign(keypair.private_key())
-                .expect("sign exact provider-ingest completion");
-                assert_eq!(
-                    ensure_provider_ingest_completion_transaction(
-                        &exact,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Ok(())
-                );
-
-                let attachments = iroha_data_model::proof::ProofAttachmentList::try_from(vec![
-                    iroha_data_model::proof::ProofAttachment::new_ref(
-                        "halo2/ipa".into(),
-                        iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
-                        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_1"),
-                    ),
-                ])
-                .expect("one attachment is a valid bounded proof list");
-                let attached =
-                    iroha_data_model::transaction::TransactionBuilder::from_payload(payload)
-                        .expect("rebuild attached provider-ingest payload")
-                        .with_attachments(attachments)
-                        .try_sign(keypair.private_key())
-                        .expect("sign attached provider-ingest completion");
-                assert_eq!(
-                    ensure_provider_ingest_completion_transaction(
-                        &attached,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::Rejected)
-                );
-
-                let mut multisig = exact;
-                multisig.set_multisig_signatures(
-                    iroha_data_model::transaction::signed::MultisigSignatures::new(Vec::new()),
-                );
-                assert_eq!(
-                    ensure_provider_ingest_completion_transaction(
-                        &multisig,
-                        &context,
-                        "server-test-chain",
-                    ),
-                    Err(BrokerError::Rejected)
-                );
-            }
-
-            #[test]
-            fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() {
-                let unit = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
-                    .expect("encode canonical unit");
-                decode_canonical::<()>(&unit, MAX_OPERATION_FRAME_BYTES_V1)
-                    .expect("decode canonical unit");
-
-                let binding = signer_binding();
-                let metadata_digest = observation(&binding).metadata_digest;
-                let payload = encode_canonical(
-                    &SignRequestWireV1 {
-                        payload: vec![1, 2, 3],
-                    },
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )
-                .expect("encode operation payload");
-                let request = make_operation_request(
-                    TEST_SESSION_ID,
-                    9,
-                    binding,
-                    metadata_digest,
-                    OPERATION_SIGN_V1,
-                    payload,
-                )
-                .expect("build operation request");
-                validate_operation_request(&request).expect("validate operation request");
-                let result = encode_canonical(
-                    &SignResultWireV1 {
-                        signature: [0x44; 64],
-                    },
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )
-                .expect("encode operation result");
-                let response = operation_response(&request, STATUS_OK_V1, result);
-                validate_operation_response(&request, &response)
-                    .expect("validate exact operation response");
-
-                for mutation in 0..11 {
-                    let mut confused = response.clone();
-                    match mutation {
-                        0 => confused.session_id[0] ^= 1,
-                        1 => confused.request_id -= 1,
-                        2 => confused.request_id += 1,
-                        3 => confused.request_digest[0] ^= 1,
-                        4 => confused.observed_binding.slot += 1,
-                        5 => confused.observed_binding.handle.push('x'),
-                        6 => confused.observed_binding.revision = Some(8),
-                        7 => confused.provider_metadata_digest[0] ^= 1,
-                        8 => confused.operation += 1,
-                        9 => confused.payload_digest[0] ^= 1,
-                        10 => confused.observed_binding.policy_digest = Some([0x72; 32]),
-                        _ => unreachable!(),
-                    }
-                    reseal_response(&mut confused);
-                    assert_eq!(
-                        validate_operation_response(&request, &confused),
-                        Err(BrokerError::Protocol),
-                        "mutation {mutation} must fail"
-                    );
-                }
-
-                let mut wrong_result_digest = response.clone();
-                wrong_result_digest.result_digest[0] ^= 1;
-                reseal_response(&mut wrong_result_digest);
-                assert_eq!(
-                    validate_operation_response(&request, &wrong_result_digest),
-                    Err(BrokerError::Protocol)
-                );
-                let mut wrong_response_digest = response;
-                wrong_response_digest.response_digest[0] ^= 1;
-                assert_eq!(
-                    validate_operation_response(&request, &wrong_response_digest),
-                    Err(BrokerError::Protocol)
-                );
-                let diagnostic_leak =
-                    operation_response(&request, STATUS_REJECTED_V1, b"provider secret".to_vec());
-                assert_eq!(
-                    validate_operation_response(&request, &diagnostic_leak),
-                    Err(BrokerError::Protocol),
-                    "provider diagnostics must never cross the broker boundary"
-                );
-
-                let mut corrupt_request = request;
-                corrupt_request.payload.push(4);
-                assert_eq!(
-                    validate_operation_request(&corrupt_request),
-                    Err(BrokerError::Protocol)
-                );
-
-                let load_payload = encode_canonical(
-                    &SealedLoadRequestWireV1 { slot: 1 },
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )
-                .expect("encode mismatched load payload");
-                let mismatched = make_operation_request(
-                    TEST_SESSION_ID,
-                    10,
-                    signer_binding(),
-                    metadata_digest,
-                    OPERATION_SEALED_LOAD_V1,
-                    load_payload,
-                )
-                .expect("build structurally bound mismatched request");
-                assert_eq!(
-                    validate_operation_request(&mismatched),
-                    Err(BrokerError::BindingMismatch)
-                );
-            }
-
-            #[test]
-            fn production_endpoint_policy_pins_non_root_service_uid() {
-                let policy = EndpointPolicy::for_service_uid(
-                    PathBuf::from(STOCK_BROKER_ENDPOINT_V1),
-                    42_424,
-                    true,
-                );
-                assert_eq!(policy.expected_service_uid, 42_424);
-                assert_eq!(verify_peer_uid(42_424, 42_424), Ok(()));
-                assert_eq!(
-                    verify_peer_uid(42_425, 42_424),
-                    Err(BrokerError::Unavailable),
-                    "supplementary-group access never substitutes for the pinned service UID"
-                );
-            }
-
-            #[test]
-            fn shipped_taira_validator_unit_owns_private_runtime_directory() {
-                let unit = include_str!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../configs/soranexus/taira/taira-irohad.service"
-                ));
-                for directive in [
-                    "User=iroha",
-                    "Group=iroha",
-                    "RuntimeDirectory=iroha",
-                    "RuntimeDirectoryMode=0700",
-                ] {
-                    assert!(
-                        unit.lines().any(|line| line == directive),
-                        "shipped validator unit must contain {directive}"
-                    );
-                }
-            }
-
-            #[test]
-            fn endpoint_policy_rejects_outage_mode_owner_symlink_and_path_substitution() {
-                let production = EndpointPolicy::production();
-                assert_eq!(production.path, PathBuf::from(STOCK_BROKER_ENDPOINT_V1));
-                assert_eq!(
-                    production.expected_service_uid,
-                    rustix::process::geteuid().as_raw()
-                );
-                assert_eq!(production.socket_mode, STOCK_BROKER_SOCKET_MODE_V1);
-                assert!(production.verify_all_ancestors);
-
-                let (_directory, path, policy, listener) = bind_fake_broker();
-                let first = endpoint_identity(&policy).expect("accept hardened socket");
-
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o666))
-                    .expect("loosen test socket");
-                assert_eq!(endpoint_identity(&policy), Err(BrokerError::Unavailable));
-                set_socket_mode(&path).expect("restore test socket mode");
-
-                let mut wrong_owner = policy.clone();
-                wrong_owner.expected_service_uid = wrong_owner.expected_service_uid.wrapping_add(1);
-                assert_eq!(
-                    endpoint_identity(&wrong_owner),
-                    Err(BrokerError::Unavailable)
-                );
-                assert_eq!(
-                    verify_peer_uid(
-                        policy.expected_service_uid.wrapping_add(1),
-                        policy.expected_service_uid
-                    ),
-                    Err(BrokerError::Unavailable),
-                    "a substituted peer credential must fail closed"
-                );
-
-                let symlink_path = path.with_extension("link");
-                symlink(&path, &symlink_path).expect("create test socket symlink");
-                assert_eq!(
-                    endpoint_identity(&EndpointPolicy::for_test(symlink_path)),
-                    Err(BrokerError::Unavailable)
-                );
-
-                fs::remove_file(&path).expect("remove first test socket");
-                let replacement = UnixListener::bind(&path).expect("bind replacement test socket");
-                set_socket_mode(&path).expect("harden replacement test socket");
-                let second = endpoint_identity(&policy).expect("inspect replacement socket");
-                assert_ne!(first, second, "device/inode substitution must be visible");
-                drop(listener);
-                drop(replacement);
-
-                let missing = EndpointPolicy::for_test(path.with_extension("missing"));
-                assert!(matches!(
-                    connect_verified(&missing),
-                    Err(BrokerError::Unavailable)
-                ));
-            }
-
-            #[test]
-            fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
-                let (_directory, _path, policy, listener) = bind_fake_broker();
-                let server = thread::spawn(move || {
-                    let (mut stream, _) = listener.accept().expect("accept fake broker client");
-                    let handshake = read_handshake(&mut stream);
-                    send_handshake(&mut stream, &handshake_response(&handshake));
-
-                    let qualify = read_operation(&mut stream);
-                    assert_eq!(qualify.request_id, 1);
-                    assert_eq!(qualify.operation, OPERATION_QUALIFY_V1);
-                    let qualification = encode_canonical(
-                        &QualificationResultWireV1 {
-                            revision: 7,
-                            policy_digest: TEST_POLICY_DIGEST,
-                        },
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("encode qualification result");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&qualify, STATUS_OK_V1, qualification),
-                    );
-
-                    let sign = read_operation(&mut stream);
-                    assert_eq!(sign.request_id, 2);
-                    assert_eq!(sign.operation, OPERATION_SIGN_V1);
-                    let decoded = decode_canonical::<SignRequestWireV1>(
-                        &sign.payload,
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("decode sign request");
-                    assert_eq!(decoded.payload, b"canonical-governance-payload");
-                    let signature = encode_canonical(
-                        &SignResultWireV1 {
-                            signature: [0x55; 64],
-                        },
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("encode signature result");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&sign, STATUS_OK_V1, signature),
-                    );
-
-                    let requalify = read_operation(&mut stream);
-                    assert_eq!(requalify.request_id, 3);
-                    assert_eq!(requalify.operation, OPERATION_QUALIFY_V1);
-                    let qualification = encode_canonical(
-                        &QualificationResultWireV1 {
-                            revision: 7,
-                            policy_digest: TEST_POLICY_DIGEST,
-                        },
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("encode second qualification result");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&requalify, STATUS_OK_V1, qualification),
-                    );
-                });
-
-                let binding = signer_binding();
-                let (session, observations) =
-                    BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
-                        .expect("connect broker session");
-                let publisher_peer_id = binding
-                    .governance_dag_publisher_peer_id
-                    .clone()
-                    .expect("configured signer peer ID");
-                let public_key = binding
-                    .governance_dag_publisher_public_key
-                    .expect("configured signer key");
-                let signer = GovernanceDagBrokerSigner {
-                    session,
-                    binding,
-                    metadata_digest: observations[0].metadata_digest,
-                    publisher_peer_id,
-                    public_key,
-                };
-                assert_eq!(
-                    signer.live_qualification().expect("qualify signer"),
-                    sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
-                        7,
-                        TEST_POLICY_DIGEST
-                    )
-                );
-                assert_eq!(
-                    sorafs_node::GovernanceDagRuntimeSigner::sign(
-                        &signer,
-                        b"canonical-governance-payload"
-                    )
-                    .expect("sign through broker"),
-                    [0x55; 64]
-                );
-                sorafs_node::GovernanceDagRuntimeSigner::qualification(&signer)
-                    .expect("requalify signer");
-                server.join().expect("join fake broker");
-            }
-
-            #[test]
-            fn fake_broker_resolves_and_operates_moderation_quarantine_wrapper() {
-                let (_directory, _path, policy, listener) = bind_fake_broker();
-                let context_digest = [0x31; 32];
-                let dek = [0x52; 32];
-                let wrapped_dek = vec![0xA7; MAX_MODERATION_QUARANTINE_WRAPPED_DEK_BYTES_V1];
-                let expected_wrapped_dek = wrapped_dek.clone();
-                let server = thread::spawn(move || {
-                    let (mut stream, _) = listener.accept().expect("accept fake broker client");
-                    let handshake = read_handshake(&mut stream);
-                    assert_eq!(handshake.requested_catalog, vec![moderation_binding()]);
-                    send_handshake(&mut stream, &handshake_response(&handshake));
-
-                    for request_id in 1..=2 {
-                        let qualify = read_operation(&mut stream);
-                        assert_eq!(qualify.request_id, request_id);
-                        assert_eq!(qualify.operation, OPERATION_QUALIFY_V1);
-                        decode_canonical::<()>(&qualify.payload, MAX_OPERATION_FRAME_BYTES_V1)
-                            .expect("decode moderation qualification request");
-                        let qualification = encode_canonical(
-                            &QualificationResultWireV1 {
-                                revision: 7,
-                                policy_digest: TEST_POLICY_DIGEST,
-                            },
-                            MAX_OPERATION_FRAME_BYTES_V1,
-                        )
-                        .expect("encode moderation qualification result");
-                        send_operation(
-                            &mut stream,
-                            &operation_response(&qualify, STATUS_OK_V1, qualification),
-                        );
-                    }
-
-                    let wrap = read_operation(&mut stream);
-                    assert_eq!(wrap.request_id, 3);
-                    assert_eq!(wrap.operation, OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1);
-                    assert_eq!(
-                        decode_canonical::<ModerationQuarantineWrapDekRequestWireV1>(
-                            &wrap.payload,
-                            MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1,
-                        )
-                        .expect("decode moderation wrap request"),
-                        ModerationQuarantineWrapDekRequestWireV1 {
-                            context_digest,
-                            dek,
-                        }
-                    );
-                    let wrapped = encode_canonical(
-                        &ModerationQuarantineWrapDekResultWireV1 {
-                            wrapped_dek: wrapped_dek.clone(),
-                        },
-                        MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1,
-                    )
-                    .expect("encode moderation wrapped DEK");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&wrap, STATUS_OK_V1, wrapped),
-                    );
-
-                    let unwrap = read_operation(&mut stream);
-                    assert_eq!(unwrap.request_id, 4);
-                    assert_eq!(
-                        unwrap.operation,
-                        OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1
-                    );
-                    assert_eq!(
-                        decode_nested_canonical::<ModerationQuarantineUnwrapDekRequestWireV1>(
-                            &unwrap.payload,
-                            MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1,
-                        )
-                        .expect("decode moderation unwrap request"),
-                        ModerationQuarantineUnwrapDekRequestWireV1 {
-                            key_id: SERVER_TEST_MODERATION_KEY_ID.to_owned(),
-                            context_digest,
-                            wrapped_dek,
-                        }
-                    );
-                    let unwrapped = encode_canonical(
-                        &ModerationQuarantineUnwrapDekResultWireV1 { dek },
-                        MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1,
-                    )
-                    .expect("encode moderation unwrapped DEK");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&unwrap, STATUS_OK_V1, unwrapped),
-                    );
-                });
-
-                let dependencies = resolve(&moderation_server_test_catalog(), &policy)
-                    .expect("resolve moderation quarantine broker wrapper");
-                let key_wrapper = dependencies
-                    .moderation_quarantine_key_wrapper
-                    .expect("moderation wrapper dependency");
-                assert_eq!(
-                    key_wrapper
-                        .qualification()
-                        .expect("requalify moderation wrapper"),
-                    sorafs_node::ModerationQuarantineKeyProviderQualificationV1::new(
-                        7,
-                        TEST_POLICY_DIGEST,
-                    )
-                );
-                assert_eq!(key_wrapper.active_key_id(), SERVER_TEST_MODERATION_KEY_ID);
-                assert_eq!(
-                    key_wrapper
-                        .wrap_dek(context_digest, &dek)
-                        .expect("wrap DEK through broker"),
-                    expected_wrapped_dek
-                );
-                assert_eq!(
-                    key_wrapper
-                        .unwrap_dek(
-                            SERVER_TEST_MODERATION_KEY_ID,
-                            context_digest,
-                            &expected_wrapped_dek,
-                        )
-                        .expect("unwrap DEK through broker"),
-                    dek
-                );
-                server.join().expect("join fake moderation broker");
-            }
-
-            #[test]
-            fn moderation_wrap_disconnect_is_ambiguous_and_never_replayed() {
-                let (_directory, _path, policy, listener) = bind_fake_broker();
-                let seen_operations = Arc::new(AtomicU64::new(0));
-                let server_seen = Arc::clone(&seen_operations);
-                let server = thread::spawn(move || {
-                    let (mut stream, _) = listener.accept().expect("accept fake broker client");
-                    let handshake = read_handshake(&mut stream);
-                    assert_eq!(handshake.requested_catalog, vec![moderation_binding()]);
-                    send_handshake(&mut stream, &handshake_response(&handshake));
-
-                    let qualify = read_operation(&mut stream);
-                    server_seen.fetch_add(1, Ordering::SeqCst);
-                    let qualification = encode_canonical(
-                        &QualificationResultWireV1 {
-                            revision: 7,
-                            policy_digest: TEST_POLICY_DIGEST,
-                        },
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("encode moderation qualification");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&qualify, STATUS_OK_V1, qualification),
-                    );
-
-                    let wrap = read_operation(&mut stream);
-                    server_seen.fetch_add(1, Ordering::SeqCst);
-                    assert_eq!(wrap.operation, OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1);
-                    stream
-                        .shutdown(std::net::Shutdown::Both)
-                        .expect("drop wrap response after dispatch");
-                });
-
-                let dependencies = resolve(&moderation_server_test_catalog(), &policy)
-                    .expect("resolve moderation wrapper");
-                let key_wrapper = dependencies
-                    .moderation_quarantine_key_wrapper
-                    .expect("moderation wrapper dependency");
-                let context_digest = [0x31; 32];
-                let dek = [0x52; 32];
-                assert_eq!(
-                    key_wrapper.wrap_dek(context_digest, &dek),
-                    Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::Ambiguous)
-                );
-                assert_eq!(
-                    key_wrapper.wrap_dek(context_digest, &dek),
-                    Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::Unavailable),
-                    "the poisoned session must reject locally rather than replay"
-                );
-                server.join().expect("join disconnecting broker");
-                assert_eq!(
-                    seen_operations.load(Ordering::SeqCst),
-                    2,
-                    "only qualification and the single dispatched wrap reach the provider"
-                );
-            }
-
-            #[test]
-            fn moderation_provider_unavailable_status_remains_definitive() {
-                let (_directory, _path, policy, listener) = bind_fake_broker();
-                let server = thread::spawn(move || {
-                    let (mut stream, _) = listener.accept().expect("accept fake broker client");
-                    let handshake = read_handshake(&mut stream);
-                    send_handshake(&mut stream, &handshake_response(&handshake));
-
-                    let qualify = read_operation(&mut stream);
-                    let qualification = encode_canonical(
-                        &QualificationResultWireV1 {
-                            revision: 7,
-                            policy_digest: TEST_POLICY_DIGEST,
-                        },
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("encode moderation qualification");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&qualify, STATUS_OK_V1, qualification),
-                    );
-
-                    let wrap = read_operation(&mut stream);
-                    let redacted = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
-                        .expect("encode payload-free unavailable result");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&wrap, STATUS_UNAVAILABLE_V1, redacted),
-                    );
-                });
-
-                let dependencies = resolve(&moderation_server_test_catalog(), &policy)
-                    .expect("resolve moderation wrapper");
-                let key_wrapper = dependencies
-                    .moderation_quarantine_key_wrapper
-                    .expect("moderation wrapper dependency");
-                assert_eq!(
-                    key_wrapper.wrap_dek([0x31; 32], &[0x52; 32]),
-                    Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::Unavailable),
-                    "an authenticated provider-unavailable response proves no wrap completed"
-                );
-                server.join().expect("join unavailable broker");
-            }
-
-            #[test]
-            fn reputation_threshold_disconnect_is_ambiguous_and_never_replayed() {
-                let (_directory, _path, policy, listener) = bind_fake_broker();
-                let seen = Arc::new(AtomicU64::new(0));
-                let server_seen = Arc::clone(&seen);
-                let server = thread::spawn(move || {
-                    let (mut stream, _) = listener.accept().expect("accept fake broker client");
-                    let handshake = read_handshake(&mut stream);
-                    send_handshake(&mut stream, &handshake_response(&handshake));
-
-                    let qualify = read_operation(&mut stream);
-                    server_seen.fetch_add(1, Ordering::SeqCst);
-                    assert_eq!(qualify.operation, OPERATION_QUALIFY_V1);
-                    assert_eq!(
-                        qualify.binding.slot,
-                        IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id()
-                    );
-                    let qualification = encode_canonical(
-                        &QualificationResultWireV1 {
-                            revision: 7,
-                            policy_digest: TEST_POLICY_DIGEST,
-                        },
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("encode reputation threshold qualification");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&qualify, STATUS_OK_V1, qualification),
-                    );
-
-                    let reconcile = read_operation(&mut stream);
-                    server_seen.fetch_add(1, Ordering::SeqCst);
-                    assert_eq!(
-                        reconcile.operation,
-                        OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
-                    );
-                    stream
-                        .shutdown(std::net::Shutdown::Both)
-                        .expect("drop reputation threshold response after dispatch");
-                });
-
-                let dependencies = resolve(
-                    &reputation_runtime_test_catalog(
-                        IrohaRuntimeProviderSlotV1::ReputationThresholdSigner,
-                    ),
-                    &policy,
-                )
-                .expect("resolve reputation threshold signer");
-                let signer = dependencies
-                    .sorafs_reputation_threshold_signer
-                    .as_ref()
-                    .expect("reputation threshold dependency");
-                let request = reputation_test_threshold_request();
-                let first =
-                    sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1::
-                        reconcile_signature(signer.as_ref(), &request)
-                        .expect_err("disconnect after dispatch is ambiguous");
-                let second =
-                    sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1::
-                        reconcile_signature(signer.as_ref(), &request)
-                        .expect_err("poisoned session rejects locally");
-                assert_eq!(first.receipt(), request.idempotency_key);
-                assert_eq!(second.receipt(), request.idempotency_key);
-                server.join().expect("join disconnecting reputation broker");
-                assert_eq!(
-                    seen.load(Ordering::SeqCst),
-                    2,
-                    "only qualification and one reconcile reach the provider"
-                );
-            }
-
-            #[test]
-            fn fake_broker_rejects_drift_and_poisoned_session_without_replay() {
-                let (_directory, _path, policy, listener) = bind_fake_broker();
-                let seen = Arc::new(AtomicU64::new(0));
-                let server_seen = Arc::clone(&seen);
-                let server = thread::spawn(move || {
-                    let (mut stream, _) = listener.accept().expect("accept fake broker client");
-                    let handshake = read_handshake(&mut stream);
-                    send_handshake(&mut stream, &handshake_response(&handshake));
-                    let qualify = read_operation(&mut stream);
-                    server_seen.fetch_add(1, Ordering::SeqCst);
-                    let redacted = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
-                        .expect("encode redacted provider error");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&qualify, STATUS_STALE_OR_REVOKED_V1, redacted),
-                    );
-                });
-
-                let binding = signer_binding();
-                let (session, observations) =
-                    BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
-                        .expect("connect broker session");
-                let publisher_peer_id = binding
-                    .governance_dag_publisher_peer_id
-                    .clone()
-                    .expect("configured signer peer ID");
-                let public_key = binding
-                    .governance_dag_publisher_public_key
-                    .expect("configured signer key");
-                let signer = GovernanceDagBrokerSigner {
-                    session,
-                    binding,
-                    metadata_digest: observations[0].metadata_digest,
-                    publisher_peer_id,
-                    public_key,
-                };
-                assert_eq!(
-                    sorafs_node::GovernanceDagRuntimeSigner::qualification(&signer),
-                    Err(ERROR_STALE_OR_REVOKED.to_owned())
-                );
-                assert_eq!(
-                    sorafs_node::GovernanceDagRuntimeSigner::qualification(&signer),
-                    Err(ERROR_UNAVAILABLE.to_owned())
-                );
-                server.join().expect("join fake broker");
-                assert_eq!(seen.load(Ordering::SeqCst), 1);
-            }
-
-            #[test]
-            fn fake_broker_reports_cas_ambiguity_and_never_retries() {
-                let (_directory, _path, policy, listener) = bind_fake_broker();
-                let seen = Arc::new(AtomicU64::new(0));
-                let server_seen = Arc::clone(&seen);
-                let server = thread::spawn(move || {
-                    let (mut stream, _) = listener.accept().expect("accept fake broker client");
-                    let handshake = read_handshake(&mut stream);
-                    send_handshake(&mut stream, &handshake_response(&handshake));
-
-                    let qualify = read_operation(&mut stream);
-                    server_seen.fetch_add(1, Ordering::SeqCst);
-                    let qualification = encode_canonical(
-                        &QualificationResultWireV1 {
-                            revision: 7,
-                            policy_digest: TEST_POLICY_DIGEST,
-                        },
-                        MAX_OPERATION_FRAME_BYTES_V1,
-                    )
-                    .expect("encode qualification result");
-                    send_operation(
-                        &mut stream,
-                        &operation_response(&qualify, STATUS_OK_V1, qualification),
-                    );
-
-                    let compare_and_swap = read_operation(&mut stream);
-                    server_seen.fetch_add(1, Ordering::SeqCst);
-                    assert_eq!(compare_and_swap.request_id, 2);
-                    assert_eq!(
-                        compare_and_swap.operation,
-                        OPERATION_SEALED_COMPARE_AND_SWAP_V1
-                    );
-                    drop(stream);
-                });
-
-                let binding = checkpoint_binding();
-                let (session, observations) =
-                    BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
-                        .expect("connect broker session");
-                let store = GovernanceDagBrokerCheckpointStore {
-                    session,
-                    binding,
-                    metadata_digest: observations[0].metadata_digest,
-                };
-                store.live_qualification().expect("qualify store");
-                let slot = sorafs_node::GovernanceDagSealedStateSlot::PublishIntent;
-                let next = sorafs_node::GovernanceDagSealedStateRecord::new(slot, 1, vec![1, 2, 3]);
-                assert_eq!(
-                    sorafs_node::GovernanceDagSealedCheckpointStore::compare_and_swap(
-                        &store,
-                        slot,
-                        None,
-                        next.clone(),
-                    ),
-                    Err(ERROR_AMBIGUOUS.to_owned())
-                );
-                assert_eq!(
-                    sorafs_node::GovernanceDagSealedCheckpointStore::compare_and_swap(
-                        &store, slot, None, next,
-                    ),
-                    Err(ERROR_UNAVAILABLE.to_owned())
-                );
-                server.join().expect("join fake broker");
-                assert_eq!(
-                    seen.load(Ordering::SeqCst),
-                    2,
-                    "the ambiguous mutation must not be replayed"
-                );
-            }
-
-            #[test]
-            fn fake_broker_rejects_substituted_handshake_catalog() {
-                let (_directory, _path, policy, listener) = bind_fake_broker();
-                let server = thread::spawn(move || {
-                    let (mut stream, _) = listener.accept().expect("accept fake broker client");
-                    let handshake = read_handshake(&mut stream);
-                    let mut response = handshake_response(&handshake);
-                    response.requested_catalog[0]
-                        .handle
-                        .push_str("-substituted");
-                    response.observations[0].binding = response.requested_catalog[0].clone();
-                    let transcript = ServerTranscriptFieldsV1 {
-                        chain_id: response.chain_id.clone(),
-                        requested_catalog: response.requested_catalog.clone(),
-                        client_nonce: response.client_nonce,
-                        catalog_digest: response.catalog_digest,
-                        client_transcript_digest: response.client_transcript_digest,
-                        session_id: response.session_id,
-                        observations: response.observations.clone(),
-                    };
-                    response.server_transcript_digest = server_transcript_digest(&transcript)
-                        .expect("seal substituted server transcript");
-                    send_handshake(&mut stream, &response);
-                });
-                assert!(matches!(
-                    BrokerSession::connect(&policy, "test-chain", vec![signer_binding()]),
-                    Err(BrokerError::BindingMismatch)
-                ));
-                server.join().expect("join fake broker");
-            }
-
-            #[test]
-            fn billing_catalog_requires_all_six_exact_backends() {
-                use IrohaRuntimeProviderSlotV1 as Slot;
-
-                let billing_slots = [
-                    Slot::BillingFinalizedQuery,
-                    Slot::BillingJournalVerifier,
-                    Slot::BillingStatementSigner,
-                    Slot::BillingStatementPublisher,
-                    Slot::BillingAcknowledgementAuthority,
-                    Slot::BillingEpochWitnessStore,
-                ];
-                for slot in billing_slots {
-                    let catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
-                        "server-test-chain",
-                        slot,
-                        billing_runtime_test_handle(slot),
-                        7,
-                        TEST_POLICY_DIGEST,
-                    );
-                    prepare_server_state(&catalog, billing_runtime_backends(slot, false))
-                        .unwrap_or_else(|error| {
-                            panic!("accept exact {slot:?} billing backend: {error:?}")
-                        });
-                    assert!(matches!(
-                        prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new(),),
-                        Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
-                    ));
-                    assert!(matches!(
-                        prepare_server_state(&catalog, billing_runtime_backends(slot, true),),
-                        Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
-                    ));
-                }
-            }
-
-            #[test]
-            fn billing_runtime_operation_matrix_is_strict_and_bounded() {
-                use IrohaRuntimeProviderSlotV1 as Slot;
-
-                let billing_slots = [
-                    Slot::BillingFinalizedQuery,
-                    Slot::BillingJournalVerifier,
-                    Slot::BillingStatementSigner,
-                    Slot::BillingStatementPublisher,
-                    Slot::BillingAcknowledgementAuthority,
-                    Slot::BillingEpochWitnessStore,
-                ];
-                let unit = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)
-                    .expect("encode billing control request");
-                for (index, slot) in billing_slots.into_iter().enumerate() {
-                    validate_wire_binding(&billing_runtime_test_binding(slot))
-                        .expect("accept exact payload-free billing binding");
-                    let qualify = billing_operation_request(
-                        slot,
-                        u64::try_from(index + 1).expect("request id"),
-                        OPERATION_QUALIFY_V1,
-                        unit.clone(),
-                    );
-                    validate_operation_request(&qualify)
-                        .expect("accept billing qualification request");
-                    let readiness = billing_operation_request(
-                        slot,
-                        u64::try_from(index + 10).expect("request id"),
-                        OPERATION_BILLING_READINESS_V1,
-                        unit.clone(),
-                    );
-                    validate_operation_request(&readiness)
-                        .expect("accept role-matched billing readiness request");
-                }
-
-                for operation in
-                    OPERATION_BILLING_IDENTITY_V1..=OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1
-                {
-                    assert!(operation_is_known(operation));
-                    assert!(operation_frame_limit(operation) <= MAX_OPERATION_FRAME_BYTES_V1);
-                }
-                assert!(
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1 < MAX_OPERATION_FRAME_BYTES_V1,
-                    "billing frames must not inherit the 512 MiB appeal-finance ceiling"
-                );
-                assert_eq!(
-                    operation_frame_limit(OPERATION_BILLING_QUERY_PAGE_V1),
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1
-                );
-                assert_eq!(
-                    operation_frame_limit(OPERATION_BILLING_LOOKUP_PUBLICATION_V1),
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1
-                );
-                assert_eq!(
-                    operation_frame_limit(OPERATION_BILLING_IDENTITY_V1),
-                    MAX_BILLING_CONTROL_FRAME_BYTES_V1
-                );
-
-                let epoch_identity = billing_operation_request(
-                    Slot::BillingEpochWitnessStore,
-                    30,
-                    OPERATION_BILLING_IDENTITY_V1,
-                    unit.clone(),
-                );
-                assert_eq!(
-                    validate_operation_request(&epoch_identity),
-                    Err(BrokerError::BindingMismatch),
-                    "the witness store rejects another slot's fabricated identity operation"
-                );
-
-                let zero_digest = billing_operation_request(
-                    Slot::BillingStatementSigner,
-                    31,
-                    OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1,
-                    encode_canonical(
-                        &BillingSignDigestRequestWireV1 { digest: [0; 32] },
-                        MAX_BILLING_CONTROL_FRAME_BYTES_V1,
-                    )
-                    .expect("encode zero billing digest"),
-                );
-                assert_eq!(
-                    validate_operation_request(&zero_digest),
-                    Err(BrokerError::Rejected)
-                );
-                let valid_digest = billing_operation_request(
-                    Slot::BillingStatementSigner,
-                    32,
-                    OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1,
-                    encode_canonical(
-                        &BillingSignDigestRequestWireV1 { digest: [0xB2; 32] },
-                        MAX_BILLING_CONTROL_FRAME_BYTES_V1,
-                    )
-                    .expect("encode billing digest"),
-                );
-                validate_operation_request(&valid_digest)
-                    .expect("accept nonzero statement-signing digest");
-                let substituted_role = billing_operation_request(
-                    Slot::BillingFinalizedQuery,
-                    33,
-                    OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1,
-                    valid_digest.payload.clone(),
-                );
-                assert_eq!(
-                    validate_operation_request(&substituted_role),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut publication = billing_operation_request(
-                    Slot::BillingStatementPublisher,
-                    34,
-                    OPERATION_BILLING_PUBLISH_STATEMENT_V1,
-                    unit.clone(),
-                );
-                assert_eq!(
-                    validate_operation_result(&publication, STATUS_AMBIGUOUS_V1, &unit,),
-                    Ok(()),
-                    "uncertain immutable publication is reconciled by lookup"
-                );
-                publication.operation = OPERATION_BILLING_LOOKUP_PUBLICATION_V1;
-                assert_eq!(
-                    validate_operation_result(&publication, STATUS_AMBIGUOUS_V1, &unit,),
-                    Err(BrokerError::Protocol),
-                    "read-only publication lookup cannot be ambiguous"
-                );
-
-                let mut witness = billing_operation_request(
-                    Slot::BillingEpochWitnessStore,
-                    35,
-                    OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1,
-                    unit.clone(),
-                );
-                assert_eq!(
-                    validate_operation_result(&witness, STATUS_CONFLICT_V1, &unit),
-                    Ok(())
-                );
-                witness.operation = OPERATION_BILLING_LOAD_LATEST_EPOCH_V1;
-                assert_eq!(
-                    validate_operation_result(&witness, STATUS_CONFLICT_V1, &unit),
-                    Err(BrokerError::Protocol)
-                );
-            }
+            include!("runtime_provider_broker/runtime_operation_tests.rs");
         }
     }
 
@@ -44050,5 +43850,18 @@ mod protocol {
         R: FnOnce(),
     {
         platform::serve_with_lifecycle(bindings, backends, lifecycle, on_ready)
+    }
+
+    /// Serve the stock catalog with a fallible readiness publication.
+    pub(super) fn serve_with_fallible_readiness<R>(
+        bindings: &IrohaRuntimeProviderBindingsV1,
+        backends: RuntimeProviderBrokerBackendsV1,
+        lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+        on_ready: R,
+    ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+    where
+        R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
+    {
+        platform::serve_with_fallible_readiness(bindings, backends, lifecycle, on_ready)
     }
 }

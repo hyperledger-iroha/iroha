@@ -100,10 +100,11 @@ impl NexusToriiSubmitter for DemoToriiSubmitter {
 }
 
 fn transfer_input(authority: AccountId) -> NexusTransferInput {
-    let asset_definition = AssetDefinitionId::from_uuid_bytes_unchecked([
+    let asset_definition = AssetDefinitionId::from_uuid_bytes([
         0x7e, 0xad, 0x8e, 0xf0, 0x22, 0x22, 0x42, 0x22, 0x82, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
         0x22,
-    ]);
+    ])
+    .expect("demo asset definition UUID is valid");
     NexusTransferInput {
         source_asset_id: AssetId::new(asset_definition, authority.clone()),
         quantity: "12.34".parse::<Quantity>().expect("quantity"),

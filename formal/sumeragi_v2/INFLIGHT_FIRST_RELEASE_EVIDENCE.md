@@ -47,15 +47,18 @@ selected conjunction.
 
 ## Evidence status and projection boundary
 
-This kernel is **bounded abstract model-checking evidence only**. It is not a
-production trace-extraction theorem. Schema 5 of
+The TLC corpus in this file is **bounded abstract model-checking evidence**; it
+does not by itself establish a production refinement theorem. Schema 5 of
 `multilane_source_bindings.json` records the separate
-`composed_state_action_relation_no_trace_extraction` contract. That source
-binding fails closed if the model, configs, runners, documentation, accepted
-version constants, exact payload/reservation fields, queue durability order,
-Kura execution-input persistence/recovery consumers, composed Rust/Verus
-projection, or the formal release receipt's distinct layout-only result row
-drift. It remains outside the five production-refinement kernels.
+`composed_state_action_relation_with_source_bound_trace_extraction` contract.
+The production trace-extraction certificate independently binds every model
+action to its concrete checked-transition producer and move-only consumer, the
+Rust refinement kernel, and the matching Verus theorem. That source binding
+fails closed if the model, configs, runners, documentation, accepted version
+constants, exact payload/reservation fields, Queue durability order, Kura
+execution-input/recovery consumers, or certificate inputs drift. Release still
+requires fresh positive and mutation-engine results; the source binding alone
+does not claim those runs passed.
 
 Within that deliberately limited contract, the reservation journal's local
 primitive transition seam is also source-bound. The binding covers the

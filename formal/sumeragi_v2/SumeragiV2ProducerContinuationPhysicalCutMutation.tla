@@ -23,7 +23,7 @@ These bounded pairs are mutation evidence for the source-level selector, not
 a deductive liveness proof of the asynchronous production specification.
 ***************************************************************************)
 
-Phases == {"Ingress", "Continuation", "Done"}
+Phases == {"Ingress", "Continuation", "TimeoutSelection", "Done"}
 ReplayStages == {"Envelope", "Completion"}
 Owners == {"Target", "Replay"}
 Selections == {"None"} \cup Owners
@@ -152,6 +152,47 @@ ReplaceReplayBySameLogicalOwner ==
        <<phase, targetDone, replayActive,
          targetHasPhysicalSource>>
 
+(***************************************************************************
+The timeout-selector pair isolates the repaired filter-before-minimum order.
+Target is a true pre-cut continuation with logical ordinal two.  Replay is a
+later physical occurrence at the frozen timeout cut, but it retains logical
+ordinal one.  The repair removes Replay before logical selection and services
+Target.  The mutation selects the obsolete ordinal and can replace it forever.
+***************************************************************************)
+TimeoutCutSelectionInit ==
+  /\ phase = "TimeoutSelection"
+  /\ ~targetDone
+  /\ replayActive
+  /\ replayEpoch = FALSE
+  /\ replayStage = "Completion"
+  /\ replaySourcePhysicalOrdinal = 2
+  /\ targetHasPhysicalSource
+  /\ lastSelected = "None"
+
+TimeoutCutFilteredSelectsPreCutTarget ==
+  /\ phase = "TimeoutSelection"
+  /\ replayActive
+  /\ SourcePhysicalOrdinal("Target") < 2
+  /\ SourcePhysicalOrdinal("Replay") >= 2
+  /\ LogicalOrdinal("Target") < 3
+  /\ phase' = "Done"
+  /\ targetDone'
+  /\ lastSelected' = "Target"
+  /\ UNCHANGED
+       <<replayActive, replayEpoch, replayStage,
+         replaySourcePhysicalOrdinal, targetHasPhysicalSource>>
+
+TimeoutCutLogicalMinimumSelectsPostCutReplay ==
+  /\ phase = "TimeoutSelection"
+  /\ replayActive
+  /\ SourcePhysicalOrdinal("Replay") >= 2
+  /\ LogicalOnlyPrecedes("Replay", "Target")
+  /\ replayEpoch' = ~replayEpoch
+  /\ lastSelected' = "Replay"
+  /\ UNCHANGED
+       <<phase, targetDone, replayActive, replayStage,
+         replaySourcePhysicalOrdinal, targetHasPhysicalSource>>
+
 CurrentIngressFixedRunner ==
   \/ DrainExactOrdinaryIngressCarrier
   \/ ShedReplayEnvelopeRetainingPhysicalRoot
@@ -167,6 +208,12 @@ ContinuationPhysicalCutFixedRunner ==
 ContinuationLogicalOnlyBugRunner ==
   \/ ShedReplayEnvelopeDroppingPhysicalRoot
   \/ ReplaceReplayBySameLogicalOwner
+
+TimeoutCutFilteredFixedRunner ==
+  TimeoutCutFilteredSelectsPreCutTarget
+
+TimeoutCutLogicalMinimumBugRunner ==
+  TimeoutCutLogicalMinimumSelectsPostCutReplay
 
 CurrentIngressFixedSpec ==
   /\ CurrentIngressInit
@@ -187,6 +234,16 @@ ContinuationLogicalOnlyBugSpec ==
   /\ ContinuationInit
   /\ [][ContinuationLogicalOnlyBugRunner]_mutationVars
   /\ WF_mutationVars(ContinuationLogicalOnlyBugRunner)
+
+TimeoutCutFilteredFixedSpec ==
+  /\ TimeoutCutSelectionInit
+  /\ [][TimeoutCutFilteredFixedRunner]_mutationVars
+  /\ WF_mutationVars(TimeoutCutFilteredFixedRunner)
+
+TimeoutCutLogicalMinimumBugSpec ==
+  /\ TimeoutCutSelectionInit
+  /\ [][TimeoutCutLogicalMinimumBugRunner]_mutationVars
+  /\ WF_mutationVars(TimeoutCutLogicalMinimumBugRunner)
 
 MutationTypeInvariant ==
   /\ phase \in Phases
@@ -213,6 +270,9 @@ CausalSuccessorRetainsPostCutPhysicalRoot ==
 
 CurrentIngressTurnSelectsExactCarrier ==
   phase # "Ingress" \/ lastSelected # "Replay"
+
+TimeoutCutFilterNeverSelectsPostCutReplay ==
+  phase # "TimeoutSelection" \/ lastSelected # "Replay"
 
 EventuallyExactTargetCompletes == <>targetDone
 

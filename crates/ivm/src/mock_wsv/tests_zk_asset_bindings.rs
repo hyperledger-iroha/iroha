@@ -9,10 +9,11 @@ fn register_without_vk_allows_shield() {
         "domain",
     );
     let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("domain", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
@@ -43,15 +44,16 @@ fn register_without_vk_allows_shield() {
 }
 
 #[test]
-fn unshield_appends_private_change_outputs_and_rejects_duplicate_inputs_without_mutation() {
+fn unshield_consumes_nullifiers_without_guest_supplied_outputs() {
     let caller: AccountId = test_account_id(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
         "domain",
     );
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("domain", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let mut wsv = MockWorldStateView::with_balances(&[(
         (caller.clone(), asset.clone()),
         Quantity::from(10_u64),
@@ -75,44 +77,29 @@ fn unshield_appends_private_change_outputs_and_rejects_duplicate_inputs_without_
         iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
     );
     let inputs = [[1u8; 32], [2u8; 32]];
-    let outputs = [[9u8; 32], [10u8; 32]];
-    assert!(wsv.unshield(
-        &caller,
-        &asset,
-        Quantity::from(4_u64),
-        &inputs,
-        &outputs,
-        &proof,
-    ));
+    assert!(wsv.unshield(&caller, &asset, Quantity::from(4_u64), &inputs, &proof,));
     assert_eq!(
         wsv.balance(caller.clone(), asset.clone()),
         Quantity::from(14_u64)
     );
     let (latest_root, roots, depth) = wsv.get_roots(&asset, 8);
-    assert_eq!(depth, 2);
-    assert_eq!(roots.len(), 2);
-    assert_eq!(latest_root, roots[1]);
+    assert_eq!(depth, 0);
+    let empty_root = iroha_data_model::zk::CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT;
+    assert_eq!(latest_root, empty_root);
+    assert_eq!(
+        hex::encode(latest_root),
+        "ce4066b230f348190183f90dd35871c13823a358bb37c2ce8b43526ae7197c3c"
+    );
+    assert_eq!(roots, vec![empty_root]);
 
     let events = wsv.drain_zk_events();
     assert_eq!(
         events,
-        vec![
-            ZkEvent::CommitmentAdded {
-                asset: asset.clone(),
-                commitment: outputs[0],
-                new_root: roots[0],
-            },
-            ZkEvent::CommitmentAdded {
-                asset: asset.clone(),
-                commitment: outputs[1],
-                new_root: roots[1],
-            },
-            ZkEvent::Unshielded {
-                asset: asset.clone(),
-                to: caller.clone(),
-                public_amount: Quantity::from(4_u64),
-            },
-        ]
+        vec![ZkEvent::Unshielded {
+            asset: asset.clone(),
+            to: caller.clone(),
+            public_amount: Quantity::from(4_u64),
+        }]
     );
 
     let duplicate_inputs = [[3u8; 32], [3u8; 32]];
@@ -121,7 +108,6 @@ fn unshield_appends_private_change_outputs_and_rejects_duplicate_inputs_without_
         &asset,
         Quantity::from(1_u64),
         &duplicate_inputs,
-        &[[11u8; 32]],
         &proof,
     ));
     assert_eq!(
@@ -129,7 +115,7 @@ fn unshield_appends_private_change_outputs_and_rejects_duplicate_inputs_without_
         Quantity::from(14_u64)
     );
     let (latest_after_failure, roots_after_failure, depth_after_failure) = wsv.get_roots(&asset, 8);
-    assert_eq!(depth_after_failure, 2);
+    assert_eq!(depth_after_failure, 0);
     assert_eq!(roots_after_failure, roots);
     assert_eq!(latest_after_failure, latest_root);
     assert!(wsv.drain_zk_events().is_empty());
@@ -141,10 +127,11 @@ fn register_asset_definition_does_not_require_domain_row_for_opaque_id() {
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
         "domain",
     );
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonder", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonder", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
         &norito::to_bytes(&asset).expect("encode asset definition"),
     )
@@ -171,8 +158,10 @@ fn unregister_domain_ignores_opaque_asset_definition_ids() {
         "domain",
     );
     let domain: DomainId = DomainId::try_new("wonder", "universal").unwrap();
-    let projected =
-        iroha_data_model::asset::AssetDefinitionId::new(domain.clone(), "rose".parse().unwrap());
+    let projected = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+        domain.clone(),
+        "rose".parse().unwrap(),
+    );
     let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
         &norito::to_bytes(&projected).expect("encode asset definition"),
     )

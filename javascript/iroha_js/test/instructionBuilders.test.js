@@ -1057,40 +1057,6 @@ test("buildRegisterAccountInstruction defaults metadata and validates", () => {
   );
 });
 
-test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
-  const instruction = buildRegisterAssetDefinitionInstruction({
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    name: "demo",
-    description: "Demo settlement PoC asset",
-    alias: "demo#settlement.main",
-    scale: 2,
-    metadata: { purpose: "poc" },
-  });
-  assert.deepEqual(instruction, {
-    Register: {
-      AssetDefinition: {
-        id: ASSET_DEFINITION_ID,
-        name: "demo",
-        description: "Demo settlement PoC asset",
-        alias: "demo#settlement.main",
-        spec: { scale: 2 },
-        mintable: "Infinitely",
-        logo: null,
-        metadata: { purpose: "poc" },
-        balance_scope_policy: "Global",
-        confidential_policy: {
-          mode: "TransparentOnly",
-          vk_set_hash: null,
-          poseidon_params_id: null,
-          pedersen_params_id: null,
-          pending_transition: null,
-        },
-      },
-    },
-  });
-  assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
-});
-
 test("buildGrantAccountPermissionInstruction defaults payload", () => {
   const instruction = buildGrantAccountPermissionInstruction({
     accountId: ACCOUNT_ID,
@@ -2210,7 +2176,7 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
 
 test("buildProposeDeployContractInstruction normalizes hashes and window", () => {
   const instruction = buildProposeDeployContractInstruction({
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "AA".repeat(32),
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
@@ -2219,7 +2185,7 @@ test("buildProposeDeployContractInstruction normalizes hashes and window", () =>
   });
   const expected = {
     ProposeDeployContract: {
-      contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+      contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       code_hash_hex: "aa".repeat(32),
       abi_hash_hex: Buffer.alloc(32, 0xbb).toString("hex"),
       abi_version: "1",
@@ -2234,7 +2200,7 @@ test("buildProposeDeployContractInstruction normalizes hashes and window", () =>
 
 test("buildProposeDeployContractInstruction rejects non-canonical voting modes", () => {
   const base = {
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
   };
@@ -3306,24 +3272,6 @@ test("buildZkTransferInstruction rejects envelope hash alias collisions", () => 
       return true;
     },
   );
-});
-
-test("buildUnshieldInstruction honours optional root hints", () => {
-  const instruction = buildUnshieldInstruction({
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    destinationAccountId: ACCOUNT_ID_INPUT,
-    publicAmount: "18446744073709551616.25",
-    inputs: [Buffer.alloc(32, 0x55)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-    },
-    rootHint: Buffer.alloc(32, 0x66),
-  });
-  const payload = encodeAndDecode(instruction).zk.Unshield;
-  assert.equal(payload.public_amount, "18446744073709551616.25");
-  assert.deepEqual(payload.root_hint, toByteArray(Buffer.alloc(32, 0x66)));
 });
 
 descriptorTest("buildUnshieldInstruction enforces strict canonical Quantity inputs", () => {

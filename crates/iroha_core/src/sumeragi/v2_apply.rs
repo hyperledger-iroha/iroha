@@ -62,20 +62,27 @@ use super::{
         ProductionInFlightFirstReleaseTransitionProjection,
         ProductionQuorumCertificateIdentityProjection, TagProjection,
         check_production_application_transition,
+        check_production_in_flight_first_release_recover_reservation_snapshot_transition,
         check_production_in_flight_first_release_repair_post_carrier_evidence_transition,
         check_production_in_flight_first_release_transition,
     },
     v2_effects::{ApplyTask, DurableApplyCompletion, EffectWorkId},
-    v2_lifecycle_recovery::RecoveredAutonomousLifecycleStartup,
+    v2_lifecycle_recovery::{
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff, RecoveredAutonomousLifecycleStartup,
+        complete_deferred_autonomous_lifecycle_terminal_outcomes_after_queue_actions,
+    },
 };
 use crate::{
     EventsSender,
     block::{BlockValidationError, ValidBlock},
     kura::{
         AutonomousLaneReservationEvidenceError, AutonomousLaneReservationEvidenceV1,
-        AutonomousLaneSlotRetirementV1, CommitManifest, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
-        HistoricalAutonomousLaneRecoveryPersistOutcome, HistoricalAutonomousLaneRecoveryRecordV1,
-        Kura, KuraV2CommitReceipt, NativeAmxParticipantApplicationEvidenceByteBudgetError,
+        AutonomousLaneRetirementQueueSnapshotPhaseV1, AutonomousLaneRetirementSnapshotEvidenceV1,
+        AutonomousLaneSlotRetirementV1, AutonomousLifecyclePendingCanonicalCarrierRecovery,
+        AutonomousLifecyclePendingTerminalOutcomeRecovery, CommitManifest,
+        HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS, HistoricalAutonomousLaneRecoveryPersistOutcome,
+        HistoricalAutonomousLaneRecoveryRecordV1, Kura, KuraV2CommitReceipt,
+        NativeAmxParticipantApplicationEvidenceByteBudgetError,
     },
     lane_consensus::{LaneExecutablePayloadV1, deterministic_lane_author},
     queue::{
@@ -85,6 +92,7 @@ use crate::{
         LaneReservationStartupReconciliationReceipt, Queue, QueueLaneRetirementObserver,
         RoutingDecision, canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
+        strictly_absent_lane_reservation_snapshot_recovery_state,
     },
     state::{
         MergeLedgerCommitError, MergeLedgerPublicationMode, State, StateBlockCommitAuthorization,
@@ -387,59 +395,226 @@ pub(crate) struct LaneReservationReconciliationSummary {
     pub(crate) resumed_retirement: usize,
 }
 
+struct AuthenticatedCommittedCanonicalCarrierGroup {
+    reservation_group: LaneQueueReservationGroupBindingV1,
+    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+    application: AuthenticatedCarrierApplicationProjection,
+}
+
+struct AuthenticatedCommittedCanonicalCarrier {
+    reference: CertifiedMergeLedgerReference,
+    carrier_height: NonZeroUsize,
+    carrier_block_hash: HashOf<BlockHeader>,
+    groups: Vec<AuthenticatedCommittedCanonicalCarrierGroup>,
+}
+
+/// Authenticate a complete merge carrier against authoritative State and Kura
+/// before constructing any Queue mutation authority.
+fn authenticate_committed_canonical_carrier(
+    state: &State,
+    kura: &Kura,
+    entry: &MergeLedgerEntry,
+    expected_chain_hash: Hash,
+) -> Result<AuthenticatedCommittedCanonicalCarrier, V2ReservationLifecycleError> {
+    let invalid = |detail: &str| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+        detail: detail.to_owned(),
+    };
+    let reference = CertifiedMergeLedgerReference::new(entry);
+    if kura.merge_entry_by_hash(reference.entry_hash)?.as_ref() != Some(entry) {
+        return Err(invalid(
+            "canonical carrier preflight lost its exact committed merge entry",
+        ));
+    }
+    let carrier = kura
+        .merge_carrier_for_entry(reference.entry_hash)?
+        .ok_or_else(|| invalid("canonical carrier preflight lost its carrier index"))?;
+    let carrier_height = NonZeroUsize::new(usize::try_from(carrier.block_height)?)
+        .ok_or_else(|| invalid("canonical carrier preflight has zero block height"))?;
+    if carrier.version != 1
+        || carrier.entry_hash != reference.entry_hash
+        || carrier.epoch_id != entry.epoch_id
+        || kura
+            .get_merge_entry_by_carrier_height(carrier_height)?
+            .as_ref()
+            != Some(entry)
+        || kura.get_durable_block_hash(carrier_height) != Some(carrier.block_hash)
+        || state.committed_height() < carrier_height.get()
+        || state.committed_block_hash_at_height(carrier.block_height) != Some(carrier.block_hash)
+    {
+        return Err(invalid(
+            "canonical carrier preflight is not the exact State/Kura canonical block",
+        ));
+    }
+
+    let applications = authenticated_autonomous_carrier_application_projections(
+        &reference,
+        entry,
+        expected_chain_hash,
+    )
+    .map_err(|detail| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization { detail })?;
+    let carrier_groups = crate::state::certified_merge_queue_reservation_groups(entry)?;
+    if carrier_groups.is_empty() || carrier_groups.len() != applications.len() {
+        return Err(invalid(
+            "canonical carrier preflight application/group cardinality differs",
+        ));
+    }
+
+    let nexus = state.nexus_snapshot();
+    let mut seen_transactions = BTreeSet::new();
+    let mut groups = Vec::with_capacity(carrier_groups.len());
+    for (group, application) in carrier_groups.into_iter().zip(applications) {
+        let ordered_keys = group
+            .iter()
+            .map(|(transaction_hash, key)| {
+                if *transaction_hash != key.signed_transaction_hash
+                    || !seen_transactions.insert(*transaction_hash)
+                    || state.committed_transaction_height(transaction_hash) != Some(carrier_height)
+                {
+                    return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
+                        lane_id: key.lane_id,
+                        proposal_height: key.proposal_height,
+                    });
+                }
+                Ok(*key)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter()).map_err(
+                |detail| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                    detail: detail.to_owned(),
+                },
+            )?;
+        if application.reservation_group != reservation_group
+            || state.lane_incarnation_at_height(
+                reservation_group.identity.lane_id,
+                reservation_group.identity.proposal_height,
+            ) != Some(reservation_group.identity.lane_incarnation)
+            || crate::state::consensus_lane_dataspace_at_height(
+                reservation_group.identity.lane_id,
+                &nexus,
+                reservation_group.identity.proposal_height,
+            ) != Some(reservation_group.identity.dataspace_id)
+        {
+            return Err(V2ReservationLifecycleError::StaleReservationContext {
+                lane_id: reservation_group.identity.lane_id,
+                proposal_height: reservation_group.identity.proposal_height,
+            });
+        }
+        let indexed_heights = group
+            .iter()
+            .map(|(transaction_hash, _)| {
+                kura.get_block_heights_by_transaction_hash(*transaction_hash)
+                    .ok_or(
+                        V2ReservationLifecycleError::CommittedTransactionIndexUnavailable {
+                            transaction_hash: *transaction_hash,
+                        },
+                    )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let exact_group = LaneQueueReservationReconciliationGroupV1 {
+            identity: reservation_group.identity,
+            ordered_keys: ordered_keys.clone(),
+        };
+        if exact_committed_carrier_height_for_group(&exact_group, &indexed_heights)?
+            != carrier_height
+        {
+            return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
+                lane_id: reservation_group.identity.lane_id,
+                proposal_height: reservation_group.identity.proposal_height,
+            });
+        }
+        groups.push(AuthenticatedCommittedCanonicalCarrierGroup {
+            reservation_group,
+            ordered_keys,
+            application,
+        });
+    }
+
+    Ok(AuthenticatedCommittedCanonicalCarrier {
+        reference,
+        carrier_height,
+        carrier_block_hash: carrier.block_hash,
+        groups,
+    })
+}
+
 fn finalize_certified_merge_reservations(
     state: &State,
     queue: &Queue,
+    kura: &Kura,
     entry: &MergeLedgerEntry,
-    applications: Vec<AuthenticatedCarrierApplicationProjection>,
+    expected_chain_hash: Hash,
 ) -> Result<usize, V2ReservationLifecycleError> {
-    let groups = crate::state::certified_merge_queue_reservation_groups(entry)?;
-    if groups.len() != applications.len() {
+    let authenticated =
+        authenticate_committed_canonical_carrier(state, kura, entry, expected_chain_hash)?;
+    let carrier_height = authenticated.carrier_height;
+    let carrier_block_hash = authenticated.carrier_block_hash;
+    let groups = authenticated.groups;
+
+    // Persist the complete carrier source-outcome set and consume its
+    // canonical-lane-order publication before constructing any Queue input.
+    // `None` is valid only for a merge entry with no execution batch, which
+    // cannot have produced the non-empty reservation groups above.
+    let source_publication = kura
+        .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(entry)?
+        .ok_or_else(
+            || V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                detail: "canonical execution groups lack a durable source-outcome publication"
+                    .to_owned(),
+            },
+        )?;
+    let queue_sources = source_publication
+        .consume_for_v2_apply(entry)
+        .ok_or_else(
+            || V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                detail:
+                    "canonical source-outcome publication differs from its committed merge entry"
+                        .to_owned(),
+            },
+        )?;
+    if queue_sources.len() != groups.len() {
         return Err(
             V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
-                detail: "authenticated ApplyCarrier cardinality differs from canonical reservation groups"
+                detail: "canonical source-outcome cardinality differs from reservation groups"
                     .to_owned(),
             },
         );
     }
 
-    // Authenticate the complete canonical State membership cut before the
-    // first Queue journal mutation. A malformed or partially committed later
-    // group must leave every earlier reservation owner untouched.
-    for (transaction_hash, _) in groups.iter().flatten() {
-        if !state.has_committed_transaction(*transaction_hash) {
-            return Err(V2ReservationLifecycleError::UncommittedMergeTransaction {
-                transaction_hash: *transaction_hash,
-            });
-        }
-    }
-
     let mut authorized_groups = Vec::with_capacity(groups.len());
-    for (group, application) in groups.into_iter().zip(applications) {
-        let ordered_keys = group.into_iter().map(|(_, key)| key).collect::<Vec<_>>();
-        let reservation_group =
-            lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter()).map_err(
-                |reason| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
-                    detail: reason.to_owned(),
-                },
-            )?;
-        if reservation_group != application.reservation_group {
+    for (group, (source_group, source_authorization)) in groups.into_iter().zip(queue_sources) {
+        if group.reservation_group != source_group {
             return Err(
                 V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
-                    detail: "authenticated ApplyCarrier names another ordered reservation group"
+                    detail: "ApplyCarrier or source-outcome authority names another ordered reservation group"
                         .to_owned(),
                 },
             );
         }
-        let authorization = application
+        let authorization = group
+            .application
             .queue_cleanup_authorization()
             .map_err(
                 |detail| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization { detail },
             )?;
-        authorized_groups.push((ordered_keys, authorization));
+        authorized_groups.push((source_authorization, authorization));
     }
 
-    Ok(queue.commit_lane_reservation_groups_with_authorization(authorized_groups)?)
+    let cleanup = queue
+        .authenticate_autonomous_lifecycle_pending_canonical_queue_terminal_outcomes(
+            authorized_groups,
+        )?;
+    let finalized_reservations = cleanup.finalized_reservations();
+    let (_, terminal_evidence) = cleanup.into_parts();
+    for evidence in terminal_evidence {
+        kura.complete_autonomous_lifecycle_canonical_terminal_outcome(evidence)?;
+    }
+    kura.release_post_wsv_lane_artifact_budget_reservation(
+        entry,
+        u64::try_from(carrier_height.get())?,
+        carrier_block_hash,
+    )?;
+    Ok(finalized_reservations)
 }
 
 fn committed_block_merge_entry(
@@ -500,13 +675,7 @@ fn finalize_committed_block_merge_reservations(
     if reference.execution_batch_hash.is_none() {
         return Ok(0);
     }
-    let applications = authenticated_autonomous_carrier_application_projections(
-        reference,
-        &entry,
-        expected_chain_hash,
-    )
-    .map_err(|detail| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization { detail })?;
-    finalize_certified_merge_reservations(state, queue, &entry, applications)
+    finalize_certified_merge_reservations(state, queue, kura, &entry, expected_chain_hash)
 }
 
 /// Execute or resume the complete crash-safe retirement/release hand-off.
@@ -517,8 +686,9 @@ fn finalize_committed_block_merge_reservations(
 /// 1. Kura persists the exact slot retirement and `ReleasePending` claims.
 /// 2. Queue persists the exact ordered barrier while reservations remain live.
 /// 3. Kura changes the exact claims to `Released`.
-/// 4. Queue completes ownership transfer, restores FIFO order, and forgets the
-///    replay barrier.
+/// 4. Kura persists a terminal-outcome Pending record for the exact release.
+/// 5. Queue completes ownership transfer, restores FIFO order, and forgets the
+///    replay barrier, then Kura consumes Queue's positive terminal evidence.
 pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
     kura: &Kura,
     queue: &Queue,
@@ -549,232 +719,24 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
             expected_epoch,
             durable_queue_barrier,
         )?;
-    Ok(
-        queue.finalize_lane_reservation_release_barrier_with_authorization(
-            &barrier,
-            finalization_authorization,
-        )?,
-    )
+    let source_outcome_authorization = kura
+        .persist_autonomous_lifecycle_release_terminal_outcome_pending(
+            retirement,
+            expected_chain_id_hash,
+            expected_epoch,
+        )?;
+    let completion = queue.finalize_lane_reservation_release_barrier_with_authorization(
+        &barrier,
+        finalization_authorization,
+        source_outcome_authorization,
+    )?;
+    let finalized_reservations = completion.finalized_reservations();
+    let (_, terminal_evidence) = completion.into_parts();
+    kura.complete_autonomous_lifecycle_release_terminal_outcome(terminal_evidence)?;
+    Ok(finalized_reservations)
 }
 
-fn reservation_group_identity(
-    key: &crate::queue::LaneQueueReservationKeyV2,
-) -> LaneQueueReservationGroupIdentityV1 {
-    LaneQueueReservationGroupIdentityV1 {
-        lane_id: key.lane_id,
-        dataspace_id: key.dataspace_id,
-        lane_incarnation: key.lane_incarnation,
-        proposal_height: key.proposal_height,
-        lane_block_height: key.lane_block_height,
-        lane_block_view: key.lane_block_view,
-        reservation_owner_hash: key.reservation_owner_hash,
-        proposal_identity_hash: key.proposal_identity_hash,
-    }
-}
-
-fn reservation_key_matches_group(
-    key: &crate::queue::LaneQueueReservationKeyV2,
-    group: &LaneQueueReservationGroupIdentityV1,
-) -> bool {
-    reservation_group_identity(key) == *group
-}
-
-fn canonical_payload_contains_group_in_order(
-    payload: &LaneExecutablePayloadV1,
-    group: &LaneQueueReservationReconciliationGroupV1,
-) -> bool {
-    payload.reservation_keys == group.ordered_keys
-}
-
-fn autonomous_payload_overlaps_group_transaction_identity(
-    payload: &LaneExecutablePayloadV1,
-    group: &LaneQueueReservationReconciliationGroupV1,
-) -> bool {
-    payload.reservation_keys.iter().any(|candidate| {
-        group.ordered_keys.iter().any(|expected| {
-            candidate.signed_transaction_hash == expected.signed_transaction_hash
-                || candidate.entrypoint_hash == expected.entrypoint_hash
-        })
-    })
-}
-
-fn proposal_from_canonical_lane_ownership(
-    ownership: &SumeragiLanePayloadOwnership,
-    block_hash: HashOf<BlockHeader>,
-) -> Option<LaneBlockProposalV1> {
-    let descriptor_hash = ownership.lane_block_descriptor_hash?;
-    let descriptor = LaneBlockDescriptorV1 {
-        lane_id: ownership.lane_id,
-        dataspace_id: ownership.dataspace_id,
-        lane_incarnation: ownership.lane_incarnation,
-        proposal_height: ownership.proposal_height,
-        previous_lane_block_height: ownership.previous_lane_block_height,
-        previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
-        lane_block_height: ownership.lane_block_height,
-        lane_block_view: ownership.lane_block_view,
-        subject_hash: ownership.subject_hash,
-        payload_ownership_hash: ownership.payload_ownership_hash,
-        rbc_instance_hash: ownership.rbc_instance_hash,
-        accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
-        accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
-        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: HashOf::new(&ownership.lane_block_descriptor_validator_set),
-        validator_set: ownership.lane_block_descriptor_validator_set.clone(),
-        validator_count: ownership.lane_block_descriptor_validator_count,
-        min_quorum: ownership.lane_block_descriptor_min_quorum,
-        qc_mode_tag: ownership.qc_mode_tag.clone(),
-        descriptor_hash,
-    };
-    if descriptor.computed_descriptor_hash() != descriptor_hash {
-        return None;
-    }
-    let mut proposal = LaneBlockProposalV1 {
-        descriptor,
-        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-        payload_block_hint: Some(LaneBlockProposalPayloadHintV1 {
-            proposal_height: ownership.proposal_height,
-            proposal_view: ownership.proposal_view,
-            proposal_block_hash: block_hash,
-        }),
-    };
-    proposal.proposal_hash = proposal.computed_proposal_hash();
-    Some(proposal)
-}
-
-/// Immutable, finality-authenticated installation input for one unfinished
-/// historical autonomous lane proposal.
-///
-/// This Encode-only value is an in-memory planner DTO, not a durable schema.
-/// Kura publishes a separately versioned, decodeable recovery record only
-/// after the referenced executable payload, historical PoPs, and execution
-/// input are validated and durable. The Queue startup gate may then treat an
-/// exact durable-record read-back as a persistent owner which the lane adapter
-/// can hydrate after publication resumes.
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
-pub(crate) struct HistoricalAutonomousReservationInstallV1 {
-    /// Schema version of the installation identity.
-    pub(crate) version: u16,
-    /// Domain-separated digest of every remaining field.
-    pub(crate) recovery_id: Hash,
-    /// Exact finality/execution identity of the canonical global carrier.
-    pub(crate) canonical_body: CanonicalExecutedBlockNeedV1,
-    /// Complete frozen consensus context which authenticated the carrier.
-    pub(crate) historical_context: wire::HeightContext,
-    /// Redundant context identifier used by reservation-identity validation.
-    pub(crate) historical_context_id: wire::HeightContextId,
-    /// Hash of the complete historical context, including its roster. Validator
-    /// PoPs are not carried by `HeightContext` and must be pinned separately by
-    /// the durable installer.
-    pub(crate) historical_context_hash: HashOf<wire::HeightContext>,
-    /// Canonical global view of the carrier block.
-    pub(crate) carrier_view: u64,
-    /// Exact producer-authenticated payload, with its canonical global hint.
-    pub(crate) payload: LaneExecutablePayloadV1,
-    /// Exact FIFO-ordered Queue ownership group carried by the payload.
-    pub(crate) reservation_group: LaneQueueReservationReconciliationGroupV1,
-}
-
-impl HistoricalAutonomousReservationInstallV1 {
-    pub(crate) const VERSION: u16 = 1;
-    const DIGEST_DOMAIN: &'static [u8] =
-        b"iroha:sumeragi:historical-autonomous-reservation-recovery:v1\0";
-
-    fn new(
-        canonical_body: CanonicalExecutedBlockNeedV1,
-        historical_context: wire::HeightContext,
-        carrier_view: u64,
-        payload: LaneExecutablePayloadV1,
-        reservation_group: LaneQueueReservationReconciliationGroupV1,
-    ) -> Self {
-        let historical_context_id = historical_context.id();
-        let historical_context_hash = HashOf::new(&historical_context);
-        let mut install = Self {
-            version: Self::VERSION,
-            recovery_id: Hash::prehashed([0; Hash::LENGTH]),
-            canonical_body,
-            historical_context,
-            historical_context_id,
-            historical_context_hash,
-            carrier_view,
-            payload,
-            reservation_group,
-        };
-        install.recovery_id = install.computed_recovery_id();
-        install
-    }
-
-    /// Recompute the exact immutable record identity. Kura must reject any
-    /// installation whose stored identity differs from this value.
-    #[must_use]
-    pub(crate) fn computed_recovery_id(&self) -> Hash {
-        let mut canonical = self.clone();
-        canonical.recovery_id = Hash::prehashed([0; Hash::LENGTH]);
-        let identity: Hash = HashOf::new(&canonical).into();
-        Hash::new_from_chunks(&[Self::DIGEST_DOMAIN, identity.as_ref()])
-    }
-
-    #[must_use]
-    pub(crate) fn has_valid_identity(&self) -> bool {
-        self.version == Self::VERSION
-            && self.historical_context.id() == self.historical_context_id
-            && HashOf::new(&self.historical_context) == self.historical_context_hash
-            && self.computed_recovery_id() == self.recovery_id
-    }
-}
-
-/// Durable publication result for one immutable historical autonomous record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HistoricalAutonomousLaneRecoveryInstallOutcome {
-    /// Payload, execution input, and recovery record crossed their durability barriers.
-    Installed,
-    /// The exact complete record and both dependencies were already durable.
-    AlreadyInstalled,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum CanonicalAutonomousCarrierDisposition {
-    NotFinalized,
-    Absent,
-    /// A unique canonical autonomous envelope contains the complete executable
-    /// payload needed to install historical certification work.
-    ExactAutonomous(HistoricalAutonomousReservationInstallV1),
-    /// The canonical body contains only ordinary ownership. This authenticates
-    /// the proposal but cannot reconstruct autonomous executable bytes.
-    ExactOrdinary,
-}
-
-impl CanonicalAutonomousCarrierDisposition {
-    fn is_exact(&self) -> bool {
-        matches!(self, Self::ExactAutonomous(_) | Self::ExactOrdinary)
-    }
-
-    fn is_absent(&self) -> bool {
-        matches!(self, Self::Absent)
-    }
-}
-
-enum CanonicalAutonomousCarrierInspection {
-    Available(CanonicalAutonomousCarrierDisposition),
-    MissingBody(CanonicalExecutedBlockNeedV1),
-}
-
-fn collect_canonical_executed_block_need(
-    needs: &mut BTreeMap<u64, CanonicalExecutedBlockNeedV1>,
-    need: CanonicalExecutedBlockNeedV1,
-) -> Result<(), V2ReservationLifecycleError> {
-    match needs.entry(need.height) {
-        std::collections::btree_map::Entry::Vacant(entry) => {
-            entry.insert(need);
-        }
-        std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &need => {}
-        std::collections::btree_map::Entry::Occupied(_) => {
-            return Err(V2ReservationLifecycleError::CanonicalContextMismatch {
-                height: need.height,
-            });
-        }
-    }
-    Ok(())
-}
+include!("v2_apply/autonomous_recovery_types.rs");
 
 /// Revalidate the exact finalized proposal body before using envelope absence
 /// as terminal-loser evidence. A retained header/hash alone never proves that
@@ -1039,16 +1001,6 @@ fn canonical_autonomous_carrier_disposition(
     ))
 }
 
-fn invalid_historical_autonomous_recovery(
-    input: &HistoricalAutonomousReservationInstallV1,
-    detail: impl Into<String>,
-) -> V2ReservationLifecycleError {
-    V2ReservationLifecycleError::InvalidHistoricalAutonomousRecovery {
-        recovery_id: input.recovery_id,
-        detail: detail.into(),
-    }
-}
-
 /// One complete, collision-checked recovery inventory indexed once for an
 /// immutable startup authority boundary.
 struct HistoricalAutonomousRecoveryInventory {
@@ -1291,7 +1243,7 @@ fn preflight_historical_autonomous_lane_recovery_inner(
                 descriptor.lane_incarnation,
                 height,
             ) || !state
-                .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(
                     &input.payload.origin_proposal,
                 )))
     {
@@ -1589,157 +1541,8 @@ pub(crate) fn validate_installed_historical_autonomous_lane_recoveries(
     Ok(())
 }
 
-struct ReservationReconciliationGroupInput {
-    group: LaneQueueReservationReconciliationGroupV1,
-    /// Queue owners which remain after an earlier grouped Commit-prefix or
-    /// ForgetCommit-prefix crash. Committed groups replace
-    /// `group.ordered_keys` with the complete canonical MergeLedger membership
-    /// during read-only preflight and resume against that full identity.
-    owned_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
-    release_barrier: Option<LaneQueueReservationReleaseBarrierV3>,
-    committed: bool,
-    commit_authorization: Option<AutonomousLaneQueueCarrierCleanupAuthorization>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ReservationRetainDisposition {
-    Current,
-    Certified,
-    PendingMerge,
-    HistoricalRecovery(HistoricalAutonomousReservationInstallV1),
-}
-
-enum ReservationReconciliationAction {
-    Commit {
-        keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
-        authorization: AutonomousLaneQueueCarrierCleanupAuthorization,
-    },
-    Retain {
-        keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
-        disposition: ReservationRetainDisposition,
-    },
-    Retire {
-        retirement: AutonomousLaneSlotRetirementV1,
-        epoch: u64,
-        resumed: bool,
-    },
-    DirectRelease,
-}
-
-/// Read-only startup classification result.
-///
-/// A recovery outcome contains only immutable, finality-authenticated body
-/// identities. A ready plan owns every Queue mutation input and can be
-/// applied only after its exact Queue snapshot is revalidated.
-pub(crate) enum LaneReservationReconciliationPlanning {
-    /// Every dependency is locally durable; mutation may begin under the
-    /// process fail-stop operation.
-    Ready(LaneReservationReconciliationPlan),
-    /// One or more canonical executed bodies must be recovered first.
-    RecoverCanonicalBodies(Vec<CanonicalExecutedBlockNeedV1>),
-    /// Exact historical autonomous work must cross its durable Kura/State
-    /// installation boundary before Queue publication may resume.
-    InstallHistoricalAutonomousRecoveries(Vec<HistoricalAutonomousReservationInstallV1>),
-}
-
-/// Complete immutable mutation plan for one Queue/Kura/State startup cut.
-pub(crate) struct LaneReservationReconciliationPlan {
-    snapshot: LaneQueueReservationReconciliationSnapshotV1,
-    replay_receipt: LaneReservationStartupReconciliationReceipt,
-    actions: Vec<ReservationReconciliationAction>,
-    direct_release: Vec<crate::queue::LaneQueueReservationKeyV2>,
-    chain_hash: Hash,
-    recovered: usize,
-}
-
-fn exact_pending_merge_for_group(
-    group: &LaneQueueReservationReconciliationGroupV1,
-    pending_by_transaction: &BTreeMap<
-        HashOf<SignedTransaction>,
-        (
-            HashOf<MergeLedgerEntry>,
-            crate::queue::LaneQueueReservationKeyV2,
-        ),
-    >,
-    pending_by_entry: &BTreeMap<
-        HashOf<MergeLedgerEntry>,
-        Vec<crate::queue::LaneQueueReservationKeyV2>,
-    >,
-) -> Result<bool, V2ReservationLifecycleError> {
-    let mut entry_hash = None;
-    let mut matched = 0usize;
-    for key in &group.ordered_keys {
-        let Some((candidate_hash, pending_key)) =
-            pending_by_transaction.get(&key.signed_transaction_hash)
-        else {
-            continue;
-        };
-        if pending_key != key || entry_hash.is_some_and(|existing| existing != *candidate_hash) {
-            return Err(V2ReservationLifecycleError::PendingMergeBindingMismatch {
-                lane_id: group.identity.lane_id,
-                proposal_height: group.identity.proposal_height,
-            });
-        }
-        entry_hash = Some(*candidate_hash);
-        matched = matched.saturating_add(1);
-    }
-    if matched == 0 {
-        return Ok(false);
-    }
-    if matched != group.ordered_keys.len() {
-        return Err(V2ReservationLifecycleError::PendingMergeBindingMismatch {
-            lane_id: group.identity.lane_id,
-            proposal_height: group.identity.proposal_height,
-        });
-    }
-    let entry_hash = entry_hash.expect("a matched pending group has one entry hash");
-    let exact_group = pending_by_entry
-        .get(&entry_hash)
-        .into_iter()
-        .flatten()
-        .filter(|key| reservation_key_matches_group(key, &group.identity))
-        .copied()
-        .collect::<Vec<_>>();
-    if exact_group != group.ordered_keys {
-        return Err(V2ReservationLifecycleError::PendingMergeBindingMismatch {
-            lane_id: group.identity.lane_id,
-            proposal_height: group.identity.proposal_height,
-        });
-    }
-    Ok(true)
-}
-
-fn exact_committed_carrier_height_for_group(
-    group: &LaneQueueReservationReconciliationGroupV1,
-    carrier_heights: &[BTreeSet<NonZeroUsize>],
-) -> Result<NonZeroUsize, V2ReservationLifecycleError> {
-    if carrier_heights.len() != group.ordered_keys.len() {
-        return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
-            lane_id: group.identity.lane_id,
-            proposal_height: group.identity.proposal_height,
-        });
-    }
-    let mut exact_carrier = None;
-    for (key, heights) in group.ordered_keys.iter().zip(carrier_heights) {
-        let mut heights = heights.iter().copied();
-        let Some(height) = heights.next() else {
-            return Err(V2ReservationLifecycleError::MissingCommittedBinding {
-                transaction_hash: key.signed_transaction_hash,
-            });
-        };
-        if heights.next().is_some() || exact_carrier.is_some_and(|existing| existing != height) {
-            return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
-                lane_id: group.identity.lane_id,
-                proposal_height: group.identity.proposal_height,
-            });
-        }
-        exact_carrier = Some(height);
-    }
-    exact_carrier.ok_or(V2ReservationLifecycleError::CommittedCarrierMismatch {
-        lane_id: group.identity.lane_id,
-        proposal_height: group.identity.proposal_height,
-    })
-}
+include!("v2_apply/reconciliation_authority.rs");
+include!("v2_apply/committed_carrier_cleanup.rs");
 
 /// Build one immutable Queue/Kura/State reservation reconciliation plan.
 ///
@@ -1757,20 +1560,23 @@ pub(crate) fn plan_lane_reservation_ownership(
 ) -> Result<LaneReservationReconciliationPlanning, V2ReservationLifecycleError> {
     let active_context = verified_active_context.context();
     let current_snapshot = queue.lane_reservation_reconciliation_snapshot()?;
-    let (snapshot, recovered_receipt) = match lifecycle_handoff {
+    let (snapshot, recovered_receipt, deferred_terminal_recovery) = match lifecycle_handoff {
         Some(handoff) => {
-            let (snapshot, receipt) = handoff.into_queue_handoff();
+            let (snapshot, receipt, deferred_terminal_recovery) = handoff.into_queue_handoff();
             if snapshot != current_snapshot
                 || !queue.revalidate_lane_reservation_startup_reconciliation_receipt(
-                    &receipt,
-                    &snapshot,
+                    &receipt, &snapshot,
                 )?
             {
                 return Err(V2ReservationLifecycleError::QueueSnapshotChanged);
             }
-            (snapshot, Some(receipt))
+            (snapshot, Some(receipt), deferred_terminal_recovery)
         }
-        None => (current_snapshot, None),
+        None => (
+            current_snapshot,
+            None,
+            AutonomousLifecycleDeferredTerminalRecoveryHandoff::empty(),
+        ),
     };
     if snapshot.is_empty() {
         let replay_receipt = match recovered_receipt {
@@ -1785,6 +1591,7 @@ pub(crate) fn plan_lane_reservation_ownership(
                 replay_receipt,
                 actions: Vec::new(),
                 direct_release: Vec::new(),
+                deferred_terminal_recovery,
                 chain_hash: Hash::new(active_context.chain_id.clone().into_inner().as_bytes()),
                 recovered: 0,
             },
@@ -2057,6 +1864,8 @@ pub(crate) fn plan_lane_reservation_ownership(
             .ok_or_else(|| V2ReservationLifecycleError::MissingCommittedBinding {
                 transaction_hash: input.owned_keys[0].signed_transaction_hash,
             })?;
+        let carrier_groups =
+            crate::state::certified_merge_queue_reservation_groups(&carrier_entry)?;
         if !authenticated_committed_carriers.contains_key(&carrier_height) {
             let carrier_reference = CertifiedMergeLedgerReference::new(&carrier_entry);
             let applications = authenticated_autonomous_carrier_application_projections(
@@ -2067,10 +1876,67 @@ pub(crate) fn plan_lane_reservation_ownership(
             .map_err(|detail| {
                 V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization { detail }
             })?;
+            if applications.len() != carrier_groups.len() {
+                return Err(
+                    V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                        detail: "committed carrier application/group cardinality differs during startup preflight"
+                            .to_owned(),
+                    },
+                );
+            }
+            // Validate State and Kura transaction membership for every group in
+            // this carrier, including groups whose Queue owner was already
+            // forgotten before the crash. Whole-carrier source reconstruction
+            // later receives no authority to fill this gap itself.
+            for carrier_group in &carrier_groups {
+                let ordered_keys = carrier_group
+                    .iter()
+                    .map(|(transaction_hash, key)| {
+                        if *transaction_hash != key.signed_transaction_hash
+                            || state.committed_transaction_height(transaction_hash)
+                                != Some(carrier_height)
+                        {
+                            return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
+                                lane_id: key.lane_id,
+                                proposal_height: key.proposal_height,
+                            });
+                        }
+                        Ok(*key)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let reservation_group =
+                    lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+                        .map_err(|detail| {
+                            V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                                detail: detail.to_owned(),
+                            }
+                        })?;
+                let indexed_heights = carrier_group
+                    .iter()
+                    .map(|(transaction_hash, _)| {
+                        kura.get_block_heights_by_transaction_hash(*transaction_hash)
+                            .ok_or(
+                                V2ReservationLifecycleError::CommittedTransactionIndexUnavailable {
+                                    transaction_hash: *transaction_hash,
+                                },
+                            )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let exact_group = LaneQueueReservationReconciliationGroupV1 {
+                    identity: reservation_group.identity,
+                    ordered_keys,
+                };
+                if exact_committed_carrier_height_for_group(&exact_group, &indexed_heights)?
+                    != carrier_height
+                {
+                    return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
+                        lane_id: reservation_group.identity.lane_id,
+                        proposal_height: reservation_group.identity.proposal_height,
+                    });
+                }
+            }
             authenticated_committed_carriers.insert(carrier_height, applications);
         }
-        let carrier_groups =
-            crate::state::certified_merge_queue_reservation_groups(&carrier_entry)?;
         let mut matching_groups = carrier_groups.iter().filter(|group| {
             group
                 .first()
@@ -2364,7 +2230,15 @@ pub(crate) fn plan_lane_reservation_ownership(
                     CanonicalAutonomousCarrierDisposition::NotFinalized
                     | CanonicalAutonomousCarrierDisposition::Absent => {
                         direct_release_groups.insert(input.group.identity);
-                        ReservationReconciliationAction::DirectRelease
+                        let keys = input.group.ordered_keys.clone();
+                        let authorization = StrictAbsenceDirectReleaseAuthorization::from_snapshot(
+                            &snapshot,
+                            keys.clone(),
+                        )?;
+                        ReservationReconciliationAction::DirectRelease {
+                            keys,
+                            authorization,
+                        }
                     }
                 }
             }
@@ -2475,13 +2349,14 @@ pub(crate) fn plan_lane_reservation_ownership(
                                 retirement: AutonomousLaneSlotRetirementV1::from_payload(&payload),
                                 epoch,
                                 resumed: false,
+                                snapshot_release: None,
                             }
                         }
                     }
                 }
             }
             AutonomousLaneReservationEvidenceV1::ExactRetired {
-                payload: _,
+                payload,
                 retirement,
                 certification,
             } => {
@@ -2522,10 +2397,50 @@ pub(crate) fn plan_lane_reservation_ownership(
                         retirement_hash: exact_barrier.retirement_hash,
                     });
                 }
+                let snapshot_release = if input.release_barrier.is_some() {
+                    let prepared = snapshot
+                        .prepared_release_barriers
+                        .iter()
+                        .filter(|barrier| *barrier == &exact_barrier)
+                        .count();
+                    let completed = snapshot
+                        .completed_releases
+                        .iter()
+                        .filter(|completion| completion.barrier.eq(&exact_barrier))
+                        .count();
+                    let phase = match (prepared, completed) {
+                        (1, 0) => AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared,
+                        (0, 1) => AutonomousLaneRetirementQueueSnapshotPhaseV1::Completed,
+                        _ => {
+                            return Err(V2ReservationLifecycleError::ReleaseRetirementMismatch {
+                                retirement_hash: exact_barrier.retirement_hash,
+                            });
+                        }
+                    };
+                    let expected_group = lane_queue_reservation_group_binding_from_ordered_keys(
+                        exact_barrier.ordered_keys.iter(),
+                    )
+                    .map_err(|_| {
+                        V2ReservationLifecycleError::ReleaseRetirementMismatch {
+                            retirement_hash: exact_barrier.retirement_hash,
+                        }
+                    })?;
+                    Some(
+                        kura.authenticate_autonomous_lane_retirement_snapshot_evidence(
+                            &payload,
+                            &retirement,
+                            expected_group,
+                            phase,
+                        )?,
+                    )
+                } else {
+                    None
+                };
                 ReservationReconciliationAction::Retire {
                     retirement,
                     epoch,
                     resumed: true,
+                    snapshot_release,
                 }
             }
         };
@@ -2578,6 +2493,7 @@ pub(crate) fn plan_lane_reservation_ownership(
             replay_receipt,
             actions,
             direct_release,
+            deferred_terminal_recovery,
             chain_hash,
             recovered: unique_recovered.len(),
         },
@@ -2590,6 +2506,7 @@ pub(crate) fn plan_lane_reservation_ownership(
 /// first mutation. Callers must hold the process fail-stop operation across
 /// this function.
 pub(crate) fn apply_lane_reservation_reconciliation_plan(
+    state: &State,
     queue: &Queue,
     kura: &Kura,
     plan: LaneReservationReconciliationPlan,
@@ -2599,6 +2516,7 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
         replay_receipt,
         actions,
         direct_release,
+        deferred_terminal_recovery,
         chain_hash,
         recovered,
     } = plan;
@@ -2653,6 +2571,7 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
         ..LaneReservationReconciliationSummary::default()
     };
     let mut authorized_commit_groups = Vec::new();
+    let mut authorized_direct_release_groups = Vec::new();
     let mut remaining_actions = Vec::with_capacity(actions.len());
     for action in actions {
         match action {
@@ -2660,16 +2579,48 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
                 keys,
                 authorization,
             } => authorized_commit_groups.push((keys, authorization)),
+            ReservationReconciliationAction::DirectRelease {
+                keys,
+                authorization,
+            } => {
+                let Some((_, authorized_keys, _)) = authorization.queue_group() else {
+                    return Err(
+                        V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                            detail: "strict-absence direct-release authority is malformed at application"
+                                .to_owned(),
+                        },
+                    );
+                };
+                if authorized_keys != keys {
+                    return Err(
+                        V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+                            detail:
+                                "strict-absence action keys differ from direct-release authority"
+                                    .to_owned(),
+                        },
+                    );
+                }
+                authorized_direct_release_groups.push(authorization);
+            }
             other => remaining_actions.push(other),
         }
     }
-    summary.finalized_committed = summary.finalized_committed.saturating_add(
-        queue.commit_lane_reservation_groups_with_authorization(authorized_commit_groups)?,
-    );
+    let finalized_committed = finalize_startup_committed_canonical_carriers(
+        state,
+        queue,
+        kura,
+        chain_hash,
+        authorized_commit_groups,
+    )?;
+    summary.finalized_committed = summary
+        .finalized_committed
+        .saturating_add(finalized_committed);
     for action in remaining_actions {
         match action {
-            ReservationReconciliationAction::DirectRelease => {}
             ReservationReconciliationAction::Commit { .. } => {}
+            ReservationReconciliationAction::DirectRelease { .. } => {
+                unreachable!("direct-release authorities are partitioned before Queue mutation")
+            }
             ReservationReconciliationAction::Retain { keys, disposition } => {
                 for key in &keys {
                     let _ = queue.retain_lane_reservation(key)?;
@@ -2697,6 +2648,7 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
                 retirement,
                 epoch,
                 resumed,
+                snapshot_release: _,
             } => {
                 let released = retire_autonomous_lane_slot_and_release_reservations(
                     kura,
@@ -2715,7 +2667,10 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
             }
         }
     }
-    summary.released_strictly_absent = queue.release_lane_reservations_in_order(&direct_release)?;
+    summary.released_strictly_absent = queue.release_strictly_absent_lane_reservations_in_order(
+        &direct_release,
+        authorized_direct_release_groups,
+    )?;
     let final_snapshot = queue.lane_reservation_reconciliation_snapshot()?;
     if !final_snapshot.commit_barriers.is_empty() {
         return Err(V2ReservationLifecycleError::IncompleteQueueBarrier { kind: "commit" });
@@ -2725,6 +2680,17 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
     {
         return Err(V2ReservationLifecycleError::IncompleteQueueBarrier { kind: "release" });
     }
+    let _completed_deferred_outcomes =
+        complete_deferred_autonomous_lifecycle_terminal_outcomes_after_queue_actions(
+            state,
+            queue,
+            kura,
+            chain_hash,
+            deferred_terminal_recovery,
+        )
+        .map_err(|detail| {
+            V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization { detail }
+        })?;
     queue.complete_lane_reservation_startup_reconciliation(replay_receipt)?;
     Ok(summary)
 }
@@ -3431,37 +3397,14 @@ impl AutonomousLaneQueueCarrierCleanupAuthorization {
         })
     }
 
-    #[cfg(test)]
-    fn from_projection_for_test(
-        reservation_group: LaneQueueReservationGroupBindingV1,
-        projection: ProductionInFlightFirstReleaseTransitionProjection,
-    ) -> Result<Self, String> {
-        let checked_apply_carrier = check_production_in_flight_first_release_transition(projection)
-            .ok_or_else(|| {
-                "test ApplyCarrier projection failed the composed first-release transition gate"
-                    .to_owned()
-            })?;
-        Ok(Self {
-            reservation_group,
-            checked_apply_carrier,
-        })
-    }
-
-    #[cfg(test)]
-    fn accepted_projection_for_test(&self) -> ProductionInFlightFirstReleaseTransitionProjection {
-        *self.checked_apply_carrier.accepted_projection()
-    }
-
-    /// Consume this proof for Queue's exact ordered group and return the
-    /// accepted ApplyCarrier projection whose `after` state seeds cleanup.
-    pub(crate) fn consume_for_queue(
-        self,
+    fn validated_projection_for_group(
+        &self,
         expected_group: &LaneQueueReservationGroupBindingV1,
     ) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
         if self.reservation_group != *expected_group {
             return None;
         }
-        let projection = self.checked_apply_carrier.into_projection();
+        let projection = *self.checked_apply_carrier.accepted_projection();
         let binding_a = canonical_lane_queue_reservation_group_identity_projection(*expected_group);
         let zero_cleanup_prefixes = |state: ProductionInFlightFirstReleaseStateProjection| {
             state.history.reservation_committed_prefix == 0
@@ -3481,10 +3424,35 @@ impl AutonomousLaneQueueCarrierCleanupAuthorization {
             && projection.after.queue.reservation_state == IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE
             && zero_cleanup_prefixes(projection.before)
             && zero_cleanup_prefixes(projection.after)
+            && projection.after.decision.lane_commit_scope == binding_a
             && projection.after.decision.wsv_committed
             && projection.after.decision.application_count == 1
             && projection.after.decision.applied_by == projection.actor)
             .then_some(projection)
+    }
+
+    /// Lend the exact authenticated post-`ApplyCarrier` state to the immutable startup planner.
+    ///
+    /// The move-only cleanup proof remains owned by the plan and must still be consumed at Queue
+    /// mutation. This observer only lets the same plan bind action-25 recovery to the already
+    /// authenticated canonical carrier identity.
+    pub(crate) fn snapshot_recovery_applied_state(
+        &self,
+        expected_group: &LaneQueueReservationGroupBindingV1,
+    ) -> Option<ProductionInFlightFirstReleaseStateProjection> {
+        self.validated_projection_for_group(expected_group)
+            .map(|projection| projection.after)
+    }
+
+    /// Consume this proof for Queue's exact ordered group and return the
+    /// accepted ApplyCarrier projection whose `after` state seeds cleanup.
+    pub(crate) fn consume_for_queue(
+        self,
+        expected_group: &LaneQueueReservationGroupBindingV1,
+    ) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
+        let expected_projection = self.validated_projection_for_group(expected_group)?;
+        let projection = self.checked_apply_carrier.into_projection();
+        (projection == expected_projection).then_some(projection)
     }
 }
 
@@ -4779,6 +4747,17 @@ impl V2ApplyService {
             #[cfg(test)]
             self.inject_test_crash(tests::CrashPoint::ReputationArchiveCapture)?;
         }
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        if let Some(execution_context) = committed_block.execution_context() {
+            for external in &execution_context.external {
+                if let Some(receipt) = &external.native_amx_receipt {
+                    crate::native_amx_fault_injection::maybe_abort(
+                        crate::native_amx_fault_injection::NativeAmxFaultPhase::BeforeWorldCommit,
+                        receipt.source_id,
+                    );
+                }
+            }
+        }
         let carries_scale_in = state_block
             .pending_autoscale_retirement_binding()
             .map_err(|error| {
@@ -4885,137 +4864,7 @@ impl V2ApplyService {
     }
 }
 
-/// Fail-closed application or recovery failure.
-#[derive(Debug, Error)]
-pub(crate) enum V2ApplyError {
-    /// Frozen wire input is malformed.
-    #[error(transparent)]
-    Wire(#[from] wire::ValidationError),
-    /// Finality artifact is malformed.
-    #[error(transparent)]
-    Finality(#[from] wire::finality::V2FinalityValidationError),
-    /// Frozen PoPs or the exact CommitQC failed cryptographic verification.
-    #[error("invalid Sumeragi v2 durable finality cryptography: {0}")]
-    FinalityCryptography(wire::finality::V2QuorumCertificateVerificationError),
-    /// Exact-body loading or marker verification failed.
-    #[error(transparent)]
-    Body(#[from] super::v2_body_store::V2BodyStoreError),
-    /// Kura persistence or canonical association failed.
-    #[error(transparent)]
-    Kura(#[from] crate::kura::Error),
-    /// Apply task and frozen context do not identify one exact decision.
-    #[error("Sumeragi v2 Apply task differs from its frozen context or body")]
-    TaskMismatch,
-    /// Height cannot be represented by local storage indexes.
-    #[error("Sumeragi v2 decision height is not representable")]
-    HeightOverflow,
-    /// WSV is unexpectedly ahead of the decision.
-    #[error("WSV height {state_height} is ahead of v2 decision height {decision_height}")]
-    StateAhead {
-        /// Current WSV height.
-        state_height: usize,
-        /// Decided height.
-        decision_height: usize,
-    },
-    /// More than one unapplied height separates WSV and the decision.
-    #[error("WSV height {state_height} has a gap before v2 decision height {decision_height}")]
-    StateGap {
-        /// Current WSV height.
-        state_height: usize,
-        /// Decided height.
-        decision_height: usize,
-    },
-    /// Kura already contains a different block at the decided height.
-    #[error("Kura contains a conflicting block at the Sumeragi v2 decision height")]
-    KuraConflict,
-    /// WSV reports application but Kura has no canonical block.
-    #[error("WSV is ahead of Kura while completing a Sumeragi v2 decision")]
-    StateAheadOfKura,
-    /// Deterministic validation rejected the exact durable body.
-    #[error("Sumeragi v2 application validation failed: {0}")]
-    Validation(String),
-    /// Proposal ingress carried execution results or a result-root commitment.
-    #[error("Sumeragi v2 proposal body must be resultless")]
-    ResultBearingProposal,
-    /// Deterministic validation did not produce the StateBlock execution witness.
-    #[error("Sumeragi v2 validation produced no execution witness")]
-    ExecutionCommitmentUnavailable,
-    /// Execution-witness projection itself was malformed.
-    #[error("invalid Sumeragi v2 execution commitment: {0}")]
-    ExecutionCommitment(String),
-    /// A proposal or executed block could not be encoded canonically.
-    #[error("invalid canonical Sumeragi v2 block: {0}")]
-    CanonicalBlock(String),
-    /// The signed or persisted execution result differs from deterministic replay.
-    #[error("Sumeragi v2 execution commitment differs from deterministic validation")]
-    ExecutionCommitmentMismatch,
-    /// The exact certified merge sidecar has not reached durable local storage yet.
-    #[error("certified merge sidecar `{}` is not available locally yet", reference.entry_hash)]
-    MissingCertifiedMergeSidecar {
-        /// Compact, certificate-bound reference used for bounded recovery.
-        reference: CertifiedMergeLedgerReference,
-    },
-    /// Certificate-aware block commit conversion failed.
-    #[error("Sumeragi v2 block commit conversion failed: {0}")]
-    Commit(String),
-    /// Kura or WSV crossed the canonical commit point but the complete durable transition failed.
-    #[error("Sumeragi v2 committed transition requires restart recovery at {stage}: {detail}")]
-    CommittedRecoveryRequired {
-        /// Post-commit stage that could not be completed.
-        stage: &'static str,
-        /// Underlying persistence diagnostic.
-        detail: String,
-    },
-    /// Test-only crash boundary after Kura commits and before WSV publication.
-    #[cfg(test)]
-    #[error("injected crash after Kura store and before WSV commit")]
-    InjectedCrashAfterKuraStore,
-    /// Test-only crash boundary between staged WSV checkpoint and State publication.
-    #[cfg(test)]
-    #[error("injected crash after staged WSV checkpoint and before WSV commit")]
-    InjectedCrashAfterWsvCheckpoint,
-    /// Test-only crash boundary between provider-ingest archive and State publication.
-    #[cfg(test)]
-    #[error("injected crash after provider-ingest archive capture and before WSV commit")]
-    InjectedCrashAfterProviderIngestArchiveCapture,
-    /// Test-only crash boundary between reputation archive and State publication.
-    #[cfg(test)]
-    #[error("injected crash after reputation archive capture and before WSV commit")]
-    InjectedCrashAfterReputationArchiveCapture,
-}
-
-impl V2ApplyError {
-    fn committed_recovery_required(stage: &'static str, error: &impl std::fmt::Display) -> Self {
-        Self::CommittedRecoveryRequired {
-            stage,
-            detail: error.to_string(),
-        }
-    }
-
-    /// Return whether the live consensus process must stop producing output until restart.
-    #[must_use]
-    pub(crate) const fn requires_restart_recovery(&self) -> bool {
-        match self {
-            Self::Kura(error) => error.requires_restart_recovery(),
-            Self::CommittedRecoveryRequired { .. } => true,
-            #[cfg(test)]
-            Self::InjectedCrashAfterKuraStore
-            | Self::InjectedCrashAfterWsvCheckpoint
-            | Self::InjectedCrashAfterProviderIngestArchiveCapture
-            | Self::InjectedCrashAfterReputationArchiveCapture => true,
-            _ => false,
-        }
-    }
-}
-
-impl BodyValidationError for V2ApplyError {
-    fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
-        match self {
-            Self::MissingCertifiedMergeSidecar { reference } => Some(reference),
-            _ => None,
-        }
-    }
-}
+include!("v2_apply/error_recovery.rs");
 
 #[cfg(test)]
 #[path = "v2_apply_tests.rs"]

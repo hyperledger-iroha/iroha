@@ -205,14 +205,17 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         "tunnel_addresses",
         "mtu_bytes",
         "display_billing_label",
-        "fee_asset_id",
-        "escrow_account_id",
         "operator_account_id",
         "lease_fee",
         "settlement_grace_secs",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
     ];
     assert_strict_object_schema(schemas, "VpnProfileResponse", &profile_fields, &[]);
 
@@ -238,10 +241,14 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         "meter_family",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
         "metering_public_key_hex",
         "open_lease_instruction",
-        "tx_instructions",
     ];
     assert_strict_object_schema(schemas, "VpnQuoteResponse", &quote_fields, &[]);
 
@@ -263,7 +270,12 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         "lease_fee",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
         "route_pushes",
         "excluded_routes",
         "dns_servers",
@@ -366,7 +378,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         "refunded_fee",
         "lease_id_hex",
         "settle_lease_instruction",
-        "tx_instructions",
     ];
     assert_strict_object_schema(schemas, "VpnReceiptResponse", &receipt_fields, &[]);
     assert_strict_object_schema(schemas, "VpnReceiptListResponse", &["items", "total"], &[]);
@@ -376,8 +387,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         ("VpnProfileResponse", "relay_endpoint"),
         ("VpnProfileResponse", "meter_family"),
         ("VpnProfileResponse", "display_billing_label"),
-        ("VpnProfileResponse", "fee_asset_id"),
-        ("VpnProfileResponse", "escrow_account_id"),
         ("VpnProfileResponse", "operator_account_id"),
         ("VpnQuoteResponse", "payment_reference"),
         ("VpnQuoteResponse", "account_id"),

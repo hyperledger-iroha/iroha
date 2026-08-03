@@ -39,6 +39,7 @@ use norito::{
 };
 use reqwest::Client;
 use sorafs_car::ChunkStore;
+use sorafs_manifest::{ProviderAdmissionCouncilPolicy, canonical_manifest_root_cid};
 
 use super::{ingest::ManifestArtifacts, storage_class_label};
 use crate::{
@@ -2553,6 +2554,7 @@ pub(crate) fn validate_taikai_ssm(
     envelope_bytes: &[u8],
     expected_sequence: u64,
     alias_policy: &AliasCachePolicy,
+    alias_council_policy: Option<&ProviderAdmissionCouncilPolicy>,
     telemetry: &MaybeTelemetry,
 ) -> Result<TaikaiSsmOutcome, (StatusCode, String)> {
     let signing_manifest: TaikaiSegmentSigningManifestV1 =
@@ -2633,18 +2635,33 @@ pub(crate) fn validate_taikai_ssm(
     }
 
     let alias_label = format!("{}/{}", alias_binding.namespace, alias_binding.name);
-    let alias_proof = crate::sorafs::decode_alias_proof(&alias_binding.proof).map_err(|err| {
-        taikai_ingest::bad_request(
-            META_TAIKAI_SSM,
-            format!("alias proof failed validation for `{alias_label}`: {err}"),
+    let alias_council_policy = alias_council_policy.ok_or_else(|| {
+        taikai_ingest::internal_error(
+            "Taikai alias admission requires a configured SoraFS council trust policy".into(),
         )
     })?;
+    let alias_proof = crate::sorafs::decode_alias_proof(&alias_binding.proof, alias_council_policy)
+        .map_err(|err| {
+            taikai_ingest::bad_request(
+                META_TAIKAI_SSM,
+                format!("alias proof failed validation for `{alias_label}`: {err}"),
+            )
+        })?;
     if alias_proof.binding.alias != alias_label {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_SSM,
             format!(
                 "alias proof binding `{}` does not match signing manifest alias `{alias_label}`",
                 alias_proof.binding.alias
+            ),
+        ));
+    }
+    let expected_manifest_cid = canonical_manifest_root_cid(*manifest_hash.as_bytes());
+    if alias_proof.binding.manifest_cid != expected_manifest_cid {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_SSM,
+            format!(
+                "alias proof manifest CID does not commit to the canonical DA manifest for `{alias_label}`"
             ),
         ));
     }

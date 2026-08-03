@@ -2217,7 +2217,6 @@ impl Builtin {
                     "AccountId",
                     "quantity",
                     "bytes",
-                    "bytes?",
                     "string",
                     "bytes",
                     "bytes",
@@ -2522,7 +2521,6 @@ impl Builtin {
                 "destination",
                 "amount",
                 "inputs",
-                "outputs",
                 "backend",
                 "proof",
                 "verification_key",
@@ -3340,10 +3338,32 @@ mod tests {
     }
 
     #[test]
-    fn unshield_builder_registry_exposes_nominal_quantity_amount() {
+    fn unshield_builder_registry_exposes_exact_output_free_signature() {
         let signature = Builtin::BuildUnshieldInline.signature();
-        assert_eq!(signature.parameters[2], "quantity");
-        assert_eq!(signature.parameter_names[2], "amount");
+        assert_eq!(
+            signature.parameters,
+            &[
+                "AssetDefinitionId",
+                "AccountId",
+                "quantity",
+                "bytes",
+                "string",
+                "bytes",
+                "bytes",
+            ]
+        );
+        assert_eq!(
+            signature.parameter_names,
+            &[
+                "asset_definition",
+                "destination",
+                "amount",
+                "inputs",
+                "backend",
+                "proof",
+                "verification_key",
+            ]
+        );
         assert_eq!(signature.return_type, "bytes");
         assert_eq!(
             Builtin::BuildUnshieldInline.source_name(),

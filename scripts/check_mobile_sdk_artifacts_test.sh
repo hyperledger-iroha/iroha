@@ -628,11 +628,12 @@ bridge_dir = root / "crates/connect_norito_bridge"
 (bridge_dir / "src").mkdir(parents=True, exist_ok=True)
 (bridge_dir / "include").mkdir(parents=True, exist_ok=True)
 (bridge_dir / "include/connect_norito_bridge.h").write_text(
-    "\n".join(f"int {symbol}(void);" for symbol in c_symbols) + "\n",
+    "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 21\n"
+    + "\n".join(f"int {symbol}(void);" for symbol in c_symbols) + "\n",
     encoding="utf-8",
 )
 rust_lines = [
-    "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;",
+    "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;",
     *(f'pub unsafe extern "C" fn {symbol}() {{}}' for symbol in c_symbols),
 ]
 for namespace in (
@@ -644,6 +645,11 @@ for namespace in (
         for method in jni_methods
     )
 (bridge_dir / "src/lib.rs").write_text("\n".join(rust_lines) + "\n", encoding="utf-8")
+canonical_abi = root / "crates/iroha_data_model/src/privacy/protocol.rs"
+canonical_abi.parent.mkdir(parents=True, exist_ok=True)
+canonical_abi.write_text(
+    "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;\n", encoding="utf-8"
+)
 
 kotlin = root / (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/"
@@ -1374,6 +1380,45 @@ fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
 
+substituted_abi_alias="$TMP_DIR/substituted-abi-alias"
+make_fixture "$substituted_abi_alias"
+sed -i.bak 's/= PRIVACY_BRIDGE_ABI_VERSION_V1;/= SUBSTITUTE_ABI_VERSION;/' \
+  "$substituted_abi_alias/crates/connect_norito_bridge/src/lib.rs"
+rm "$substituted_abi_alias/crates/connect_norito_bridge/src/lib.rs.bak"
+run_expect_fail "$substituted_abi_alias" "bridge source does not bind its ABI to the canonical privacy constant"
+
+fallback_abi_definition="$TMP_DIR/fallback-abi-definition"
+make_fixture "$fallback_abi_definition"
+printf '%s\n' 'const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;' \
+  >>"$fallback_abi_definition/crates/connect_norito_bridge/src/lib.rs"
+run_expect_fail "$fallback_abi_definition" "bridge source does not bind its ABI to the canonical privacy constant"
+
+missing_canonical_abi="$TMP_DIR/missing-canonical-abi"
+make_fixture "$missing_canonical_abi"
+: >"$missing_canonical_abi/crates/iroha_data_model/src/privacy/protocol.rs"
+run_expect_fail "$missing_canonical_abi" "canonical privacy bridge ABI constant is missing or non-numeric"
+
+nonnumeric_canonical_abi="$TMP_DIR/nonnumeric-canonical-abi"
+make_fixture "$nonnumeric_canonical_abi"
+sed -i.bak 's/= 21;/= ABI_TWENTY_ONE;/' \
+  "$nonnumeric_canonical_abi/crates/iroha_data_model/src/privacy/protocol.rs"
+rm "$nonnumeric_canonical_abi/crates/iroha_data_model/src/privacy/protocol.rs.bak"
+run_expect_fail "$nonnumeric_canonical_abi" "canonical privacy bridge ABI constant is missing or non-numeric"
+
+canonical_abi_drift="$TMP_DIR/canonical-abi-drift"
+make_fixture "$canonical_abi_drift"
+sed -i.bak 's/= 21;/= 20;/' \
+  "$canonical_abi_drift/crates/iroha_data_model/src/privacy/protocol.rs"
+rm "$canonical_abi_drift/crates/iroha_data_model/src/privacy/protocol.rs.bak"
+run_expect_fail "$canonical_abi_drift" "canonical privacy bridge ABI constant drifted from 21"
+
+header_abi_drift="$TMP_DIR/header-abi-drift"
+make_fixture "$header_abi_drift"
+sed -i.bak 's/ABI_VERSION 21/ABI_VERSION 20/' \
+  "$header_abi_drift/crates/connect_norito_bridge/include/connect_norito_bridge.h"
+rm "$header_abi_drift/crates/connect_norito_bridge/include/connect_norito_bridge.h.bak"
+run_expect_fail "$header_abi_drift" "bridge header ABI macro drifted from 21"
+
 custom_apple_artifact_dir="$TMP_DIR/custom-apple-artifact-dir"
 make_fixture "$custom_apple_artifact_dir"
 mv \
@@ -1734,7 +1779,7 @@ retired_bridge_source="$TMP_DIR/retired-bridge-source"
 make_fixture "$retired_bridge_source"
 mkdir -p "$retired_bridge_source/crates/connect_norito_bridge/src"
 cat >"$retired_bridge_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v3() {}

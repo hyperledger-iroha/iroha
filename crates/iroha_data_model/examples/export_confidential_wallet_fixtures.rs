@@ -96,7 +96,7 @@ struct FixtureContext {
 
 fn fixture_context() -> Result<FixtureContext, Box<dyn Error>> {
     let chain_id = ChainId::from_str("00000000-0000-0000-0000-000000000000")?;
-    let asset_id = AssetDefinitionId::new(
+    let asset_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "rose".parse()?,
     );

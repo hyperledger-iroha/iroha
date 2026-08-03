@@ -138,7 +138,6 @@ fn stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id: &str) -> bool
         iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
         iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
         iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
-        iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
         iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
     ]
     .into_iter()

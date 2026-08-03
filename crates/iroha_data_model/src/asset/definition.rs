@@ -15,7 +15,7 @@ use norito::json::Value;
 pub use self::model::*;
 use super::{alias::AssetDefinitionAlias, id::AssetDefinitionId};
 use crate::{
-    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*,
+    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*, domain::DomainId,
     isi::error::MintabilityError, metadata::Metadata, sorafs_uri::SorafsUri,
 };
 
@@ -132,24 +132,12 @@ mod model {
 
     /// Balance partition policy for transparent asset ownership buckets.
     #[derive(
-        Debug,
-        Display,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Decode,
-        Encode,
-        IntoSchema,
-        Default,
+        Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(u8)]
     pub enum AssetBalancePolicy {
         /// Keep balances in a global bucket shared across dataspaces.
-        #[default]
         #[display("Global")]
         Global,
         /// Partition balances by the transaction dataspace context.
@@ -187,7 +175,6 @@ mod model {
         pub id: AssetDefinitionId,
         /// Human-readable asset name shown in UX surfaces.
         #[getset(get = "pub")]
-        #[registrable_builder(default = String::new())]
         pub name: String,
         /// Optional human-readable description.
         #[getset(get = "pub")]
@@ -213,9 +200,13 @@ mod model {
         pub metadata: Metadata,
         /// Balance partition policy for concrete ownership buckets.
         #[getset(get_copy = "pub")]
-        #[registrable_builder(default = AssetBalancePolicy::default())]
-        #[norito(default)]
         pub balance_scope_policy: AssetBalancePolicy,
+        /// Immutable owning domain for a dataspace-restricted definition.
+        ///
+        /// Global definitions may also be domain-owned. Alias bindings are routing labels and
+        /// are deliberately independent from this ownership relationship.
+        #[getset(get = "pub")]
+        pub owning_domain: Option<DomainId>,
         /// The account that owns this asset. Usually the [`Account`] that registered it.
         #[getset(get = "pub")]
         #[registrable_builder(skip, init = authority.clone())]
@@ -486,22 +477,37 @@ mod model {
 impl AssetDefinition {
     /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
     ///
-    /// Callers must provide a human-facing name with [`NewAssetDefinition::with_name`]
-    /// before registration.
+    /// The human-facing `name` is explicit and cannot be omitted from construction.
     #[must_use]
     #[inline]
-    pub fn new(id: AssetDefinitionId, spec: NumericSpec) -> <Self as Registered>::With {
-        <Self as Registered>::With::new(id, spec)
+    pub fn new(
+        id: AssetDefinitionId,
+        name: impl Into<String>,
+        spec: NumericSpec,
+        balance_scope_policy: AssetBalancePolicy,
+        owning_domain: Option<DomainId>,
+    ) -> <Self as Registered>::With {
+        <Self as Registered>::With::new(id, name.into(), spec, balance_scope_policy, owning_domain)
     }
 
     /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
     ///
-    /// Callers must provide a human-facing name with [`NewAssetDefinition::with_name`]
-    /// before registration.
+    /// The human-facing `name` is explicit and cannot be omitted from construction.
     #[must_use]
     #[inline]
-    pub fn numeric(id: AssetDefinitionId) -> <Self as Registered>::With {
-        <Self as Registered>::With::new(id, NumericSpec::default())
+    pub fn numeric(
+        id: AssetDefinitionId,
+        name: impl Into<String>,
+        balance_scope_policy: AssetBalancePolicy,
+        owning_domain: Option<DomainId>,
+    ) -> <Self as Registered>::With {
+        <Self as Registered>::With::new(
+            id,
+            name.into(),
+            NumericSpec::default(),
+            balance_scope_policy,
+            owning_domain,
+        )
     }
 
     /// Mutable access to asset definition metadata for in-place updates.
@@ -912,6 +918,7 @@ mod validation_tests {
         logo: Option<SorafsUri>,
         metadata: Metadata,
         balance_scope_policy: AssetBalancePolicy,
+        owning_domain: Option<DomainId>,
         owned_by: AccountId,
         total_quantity: Numeric,
         confidential_policy: AssetConfidentialPolicy,
@@ -924,34 +931,60 @@ mod validation_tests {
     }
 
     #[test]
-    fn constructors_leave_name_empty_without_explicit_with_name() {
-        let id = AssetDefinitionId::new(
+    fn constructors_require_explicit_name() {
+        let id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
 
-        let numeric = AssetDefinition::numeric(id.clone());
-        assert!(
-            numeric.name.is_empty(),
-            "numeric constructor must not auto-fill name"
+        let numeric = AssetDefinition::numeric(
+            id.clone(),
+            "Rose",
+            crate::asset::AssetBalancePolicy::Global,
+            None,
         );
+        assert_eq!(numeric.name, "Rose");
 
-        let custom = AssetDefinition::new(id, NumericSpec::fractional(2));
-        assert!(
-            custom.name.is_empty(),
-            "new constructor must not auto-fill name"
+        let custom = AssetDefinition::new(
+            id,
+            "Rose fractional",
+            NumericSpec::fractional(2),
+            crate::asset::AssetBalancePolicy::Global,
+            None,
         );
+        assert_eq!(custom.name, "Rose fractional");
+    }
+
+    #[test]
+    fn constructor_requires_explicit_ownership_intent() {
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain");
+        let id = AssetDefinitionId::derive_from_components(
+            domain.clone(),
+            "rose".parse().expect("name"),
+        );
+        let definition =
+            AssetDefinition::numeric(id, "Rose", crate::asset::AssetBalancePolicy::Global, None);
+        assert_eq!(definition.alias, None);
+        assert_eq!(definition.owning_domain, None);
+
+        let explicit = definition.with_owning_domain(Some(domain.clone()));
+        let encoded = explicit.encode();
+        let decoded = NewAssetDefinition::decode(&mut encoded.as_slice())
+            .expect("canonical registration payload");
+        assert_eq!(decoded.id, explicit.id);
+        assert_eq!(decoded.alias, None);
+        assert_eq!(decoded.owning_domain, Some(domain));
     }
 
     #[test]
     fn negative_numeric_payload_cannot_decode_as_asset_definition_total() {
-        let id = AssetDefinitionId::new(
+        let id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
-        let definition = AssetDefinition::numeric(id)
-            .with_name("Rose".to_owned())
-            .build(&owner());
+        let definition =
+            AssetDefinition::numeric(id, "Rose", crate::asset::AssetBalancePolicy::Global, None)
+                .build(&owner());
         let forged = ForgedAssetDefinition {
             id: definition.id.clone(),
             name: definition.name.clone(),
@@ -962,6 +995,7 @@ mod validation_tests {
             logo: definition.logo.clone(),
             metadata: definition.metadata.clone(),
             balance_scope_policy: definition.balance_scope_policy,
+            owning_domain: definition.owning_domain.clone(),
             owned_by: definition.owned_by.clone(),
             total_quantity: Numeric::new(-1_i32, 0),
             confidential_policy: definition.confidential_policy,
@@ -1009,7 +1043,7 @@ mod validation_tests {
     fn asset_alias_validation_accepts_any_allowed_stem() {
         let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("alias");
         validate_asset_alias_against_names(Some(&alias), ["US Dollar", "usd"])
-            .expect("projected id name should also be accepted");
+            .expect("one allowed display-name stem should be accepted");
     }
 }
 
@@ -1026,7 +1060,10 @@ mod json_tests {
     #[test]
     fn new_asset_definition_json_roundtrip_preserves_policy() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let id = AssetDefinitionId::new(domain, Name::from_str("rose").expect("asset name"));
+        let id = AssetDefinitionId::derive_from_components(
+            domain.clone(),
+            Name::from_str("rose").expect("asset name"),
+        );
         let mut metadata = Metadata::default();
         metadata.insert("unit".parse().expect("metadata key"), "bloom");
         let transition = ConfidentialPolicyTransition {
@@ -1057,6 +1094,7 @@ mod json_tests {
             ),
             metadata: metadata.clone(),
             balance_scope_policy: AssetBalancePolicy::DataspaceRestricted,
+            owning_domain: Some(domain),
             confidential_policy: policy,
         };
 
@@ -1077,13 +1115,17 @@ mod json_tests {
             decoded.balance_scope_policy,
             new_definition.balance_scope_policy
         );
+        assert_eq!(decoded.owning_domain, new_definition.owning_domain);
         assert_eq!(decoded.confidential_policy, policy);
     }
 
     #[test]
     fn new_asset_definition_fast_from_json_matches_value() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let id = AssetDefinitionId::new(domain, Name::from_str("rose").expect("asset name"));
+        let id = AssetDefinitionId::derive_from_components(
+            domain,
+            Name::from_str("rose").expect("asset name"),
+        );
         let new_definition = NewAssetDefinition {
             id,
             name: "Rose".to_owned(),
@@ -1094,14 +1136,72 @@ mod json_tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: None,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let json = norito::json::to_json(&new_definition).expect("serialize asset definition");
+        assert!(
+            json.contains("\"owning_domain\":null"),
+            "unowned global definitions must encode explicit null ownership"
+        );
+        assert!(
+            json.contains("\"balance_scope_policy\":\"Global\""),
+            "global balance policy must be encoded explicitly"
+        );
         let mut walker = TapeWalker::new(&json);
         let mut arena = Arena::new();
         let parsed =
             <NewAssetDefinition as FastFromJson>::parse(&mut walker, &mut arena).expect("parse");
         assert_eq!(parsed, new_definition);
+    }
+
+    #[test]
+    fn new_asset_definition_json_rejects_missing_ownership_intent() {
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let definition = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                domain,
+                Name::from_str("rose").expect("asset name"),
+            ),
+            "Rose",
+            crate::asset::AssetBalancePolicy::Global,
+            None,
+        );
+        let value = norito::json::to_value(&definition).expect("serialize registration payload");
+        let Value::Object(mut object) = value else {
+            panic!("asset-definition registration payload must be an object");
+        };
+        assert!(object.remove("owning_domain").is_some());
+        let missing =
+            norito::json::to_json(&Value::Object(object)).expect("serialize malformed payload");
+        assert!(
+            norito::json::from_json::<NewAssetDefinition>(&missing).is_err(),
+            "missing ownership intent must not default to an unowned definition"
+        );
+    }
+
+    #[test]
+    fn new_asset_definition_json_rejects_missing_balance_policy_intent() {
+        let definition = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").expect("domain id"),
+                Name::from_str("rose").expect("asset name"),
+            ),
+            "Rose",
+            AssetBalancePolicy::Global,
+            None,
+        );
+        let value = norito::json::to_value(&definition).expect("serialize registration payload");
+        let Value::Object(mut object) = value else {
+            panic!("asset-definition registration payload must be an object");
+        };
+        assert!(object.remove("balance_scope_policy").is_some());
+        let missing =
+            norito::json::to_json(&Value::Object(object)).expect("serialize malformed payload");
+        assert!(
+            norito::json::from_json::<NewAssetDefinition>(&missing).is_err(),
+            "missing balance policy intent must not default to Global"
+        );
     }
 }

@@ -27,6 +27,7 @@ mod multihash;
 #[cfg(not(feature = "ffi_import"))]
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
+mod protocol_key;
 #[cfg(not(feature = "ffi_import"))]
 /// RAM-LFE commitment and evaluation interfaces.
 pub mod ram_lfe;
@@ -136,12 +137,13 @@ pub use hybrid::{
 use iroha_macro::ffi_impl_opaque;
 use iroha_primitives::const_vec::{ConstVec, ToConstVec};
 use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
-pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree};
+pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
 #[cfg(not(feature = "ffi_import"))]
 pub use privacy::{
     CommitmentScheme, LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness,
     PrivacyError, PrivacyWitness, lane_merkle_leaf_hash, lane_merkle_node_hash,
 };
+pub use protocol_key::derive_non_signing_ed25519_public_key;
 #[cfg(not(feature = "ffi_import"))]
 pub use ram_lfe::*;
 #[cfg(feature = "sm")]

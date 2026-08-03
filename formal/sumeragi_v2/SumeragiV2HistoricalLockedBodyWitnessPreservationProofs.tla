@@ -579,7 +579,11 @@ BY IsaT(240)
        HistoricalLockedPrepareQcLineage,
        CommandSuccessorsScheduledAfter,
        ExecuteDecisionFetch, CommandSuccessors, CausalCandidate,
-       AsyncCandidateFrom, AsyncCandidateWithIdentity,
+       AsyncCandidateFrom,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorSemanticPhase,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncCandidateWithIdentityAndOrigin,
        CandidateConsumerCurrent, CandidateScheduled
 
 THEOREM HistoricalCertifiedFetchStagesBodyAndSchedulesLineagedStore ==
@@ -607,7 +611,11 @@ BY IsaT(360)
        InstallCertifiedBodyEffect, CertifiedBodyRecoveryAuthority,
        LockedPrepareRecoverySource, RestartLockedPrepareQCs,
        CommandMatches, CommandSuccessors, CausalCandidate,
-       AsyncCandidateFrom, AsyncCandidateWithIdentity,
+       AsyncCandidateFrom,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorSemanticPhase,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncCandidateWithIdentityAndOrigin,
        CandidateConsumerCurrent, CandidateScheduled,
        SamePrepareRecoveryRef, SameCertificateRef, CertificateRefOf
 
@@ -631,7 +639,11 @@ BY IsaT(240)
        CommandSuccessorsScheduledAfter,
        ExecuteCommand, ExecuteRegularCommand, RegularCoreCommand,
        StoreBody, CommandSuccessors, CausalCandidate,
-       AsyncCandidateFrom, AsyncCandidateWithIdentity,
+       AsyncCandidateFrom,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorSemanticPhase,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncCandidateWithIdentityAndOrigin,
        CandidateConsumerCurrent, CandidateScheduled
 
 THEOREM HistoricalValidationSchedulesLineagedBeginLockOrTerminal ==
@@ -666,7 +678,11 @@ BY ValidationCommandSelectsValidationAction, IsaT(480)
        ExecuteCommand, ExecuteRegularCommand, RegularCoreCommand,
        ValidateBody, ValidateDecidedBody, ValidateLockedBody, RejectBody,
        CommandMatches, CommandSuccessors, CausalCandidate,
-       AsyncCandidateFrom, AsyncCandidateWithIdentity,
+       AsyncCandidateFrom,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorSemanticPhase,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncCandidateWithIdentityAndOrigin,
        CandidateConsumerCurrent, CandidateScheduled
 
 (***************************************************************************

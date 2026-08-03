@@ -588,7 +588,7 @@ class NoritoJavaCodecAdapterParityTest {
     companion object {
         private const val SBD_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
         private const val CONTRACT_ADDRESS =
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
         private val RAW_BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.rawByteVecAdapter()
     }

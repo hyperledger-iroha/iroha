@@ -3683,21 +3683,7 @@ fn commit_qc_status(
     certificate.validate(context)?;
     let signer_count = u32::try_from(certificate.signers.len())
         .map_err(|_| wire::ValidationError::TooManySigners)?;
-    let signed_power = certificate.signers.iter().try_fold(
-        0_u64,
-        |total, signer| -> Result<u64, AdapterError> {
-            let index = usize::try_from(*signer)
-                .map_err(|_| AdapterError::ValidatorIndexOutOfRange(*signer))?;
-            let power = context
-                .roster
-                .get(index)
-                .ok_or(AdapterError::ValidatorIndexOutOfRange(*signer))?
-                .power;
-            total
-                .checked_add(power)
-                .ok_or_else(|| wire::ValidationError::VotingPowerOverflow.into())
-        },
-    )?;
+    let signed_power = u64::from(signer_count);
     let validator_count =
         u32::try_from(context.roster.len()).map_err(|_| wire::ValidationError::RosterTooLarge)?;
     Ok(wire::SumeragiV2CommitQcStatus {
@@ -5255,14 +5241,14 @@ impl SumeragiV2Adapter {
         )
     }
 
-    /// Restore a body-store validation marker into the replayed wire registry.
+    /// Bind an exact body-store validation marker into the wire registry.
     ///
-    /// Proposal intent persistence deliberately precedes signing. On restart,
-    /// the safety WAL reconstructs that intent while the exact execution
-    /// commitment remains in the independently fsynced body store. Reassociating
-    /// those same-round durable records before dispatching startup effects lets
-    /// the replayed proposal continue directly into its Prepare vote.
-    pub(crate) fn recover_validated_body(
+    /// This monotone authority update is independent of the reducer consumer
+    /// incarnation. A validation worker can finish after its view-local
+    /// consumer was retired; the obsolete reducer event must remain a
+    /// stutter, but the independently fsynced execution commitment must still
+    /// release authenticated votes for this exact `(round, subject)`.
+    pub(crate) fn bind_validated_body(
         &mut self,
         manifest: &wire::PayloadManifest,
         validated_receipt: &ValidatedBodyReceipt,
@@ -5278,8 +5264,9 @@ impl SumeragiV2Adapter {
         }
         validated_receipt.execution_commitment().validate()?;
 
-        // Stage registry expansion so any mismatch leaves replayed authority
-        // unchanged and causes startup to fail closed at the caller.
+        // Stage registry expansion so any mismatch leaves canonical authority
+        // unchanged. Registration is idempotent for the exact receipt and
+        // rejects a conflicting commitment before mutation.
         let mut registry = self.registry.clone();
         let core_manifest = registry.manifest_to_core(manifest, &self.wire_context)?;
         let round = registry.round_to_core(manifest.round, &self.wire_context)?;
@@ -5290,6 +5277,21 @@ impl SumeragiV2Adapter {
         )?;
         self.registry = registry;
         Ok(())
+    }
+
+    /// Restore a body-store validation marker into the replayed wire registry.
+    ///
+    /// Proposal intent persistence deliberately precedes signing. On restart,
+    /// the safety WAL reconstructs that intent while the exact execution
+    /// commitment remains in the independently fsynced body store. Reassociating
+    /// those same-round durable records before dispatching startup effects lets
+    /// the replayed proposal continue directly into its Prepare vote.
+    pub(crate) fn recover_validated_body(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), AdapterError> {
+        self.bind_validated_body(manifest, validated_receipt)
     }
 
     /// Complete a body reconstruction requested by [`AdapterEffect::FetchBody`].
@@ -5527,6 +5529,52 @@ impl SumeragiV2Adapter {
                     )),
                 )
             })
+    }
+
+    /// Return the adapter admission ordinals of exact Busy-deferred owners.
+    ///
+    /// The serialized runtime joins these ordinals to its retained lifecycle
+    /// sidecars before it permits an owner-aware completion to coalesce.
+    pub(crate) fn deferred_body_pipeline_completion_exact_owner_ordinals(
+        &self,
+        tag: reducer::EventTag,
+        candidate: &BodyPipelineCompletionEvidence,
+    ) -> Vec<u128> {
+        let (wire_round, wire_subject, expected_stage) = match candidate {
+            BodyPipelineCompletionEvidence::LocalProposalReady { manifest, .. } => (
+                manifest.round,
+                manifest.subject,
+                DeferredBodyPipelineCompletionStage::LocalProposalReady,
+            ),
+            BodyPipelineCompletionEvidence::BodyAvailable { manifest } => (
+                manifest.round,
+                manifest.subject,
+                DeferredBodyPipelineCompletionStage::BodyAvailable,
+            ),
+            BodyPipelineCompletionEvidence::BodyStored { round, subject, .. } => (
+                *round,
+                *subject,
+                DeferredBodyPipelineCompletionStage::BodyStored,
+            ),
+            BodyPipelineCompletionEvidence::ValidationSucceeded { round, subject, .. }
+            | BodyPipelineCompletionEvidence::ValidationFailed { round, subject } => (
+                *round,
+                *subject,
+                DeferredBodyPipelineCompletionStage::Validation,
+            ),
+        };
+        let round = reducer::Round::new(wire_round.height, wire_round.view);
+        let subject = reducer::Subject::new(Hash::new(wire_subject.encode()).into());
+        self.deferred_completions
+            .iter()
+            .chain(&self.deferred_inputs)
+            .filter(|input| {
+                input.completion_evidence.as_ref() == Some(candidate)
+                    && deferred_body_pipeline_completion_stage(input, tag, round, subject)
+                        == Some(expected_stage)
+            })
+            .map(|input| input.admission_ordinal)
+            .collect()
     }
 
     /// Classify exact decided `LocalProposalReady` owners without mutating any
@@ -5896,12 +5944,17 @@ impl SumeragiV2Adapter {
         Ok(())
     }
 
-    fn rollback_deferred_conflicting_proposal(
-        &mut self,
+    fn deferred_conflicting_proposal_owner(
+        &self,
         round: reducer::Round,
         subject: reducer::Subject,
         canonical: &wire::PayloadManifest,
-    ) -> bool {
+    ) -> Option<(
+        wire::PayloadManifest,
+        wire::Proposal,
+        IngressSemanticKey,
+        IngressEquivocationRecord,
+    )> {
         // Busy authenticated ingress deliberately retains its staged registry
         // expansion. A canonical body completion may overtake that deferred
         // proposal, but may roll back only the exact proposal-owned manifest;
@@ -5909,19 +5962,19 @@ impl SumeragiV2Adapter {
         // registered for subsequent progress.
         let key = (round, subject);
         let Some(registered_manifest) = self.registry.manifests.get(&key).cloned() else {
-            return false;
+            return None;
         };
         if registered_manifest == *canonical {
-            return false;
+            return None;
         }
         let Some(registered_proposal) = self.registry.proposals.get(&key).cloned() else {
-            return false;
+            return None;
         };
         if registered_proposal.round != canonical.round
             || registered_proposal.subject != canonical.subject
             || registered_proposal.manifest != registered_manifest
         {
-            return false;
+            return None;
         }
         let admission_key = IngressSemanticKey::Proposal {
             round: registered_proposal.round,
@@ -5931,10 +5984,10 @@ impl SumeragiV2Adapter {
             IngressFingerprint::Proposal(Hash::new(registered_proposal.signature_preimage()));
         let Some(registered_equivocation) = self.ingress_equivocations.get(&admission_key).copied()
         else {
-            return false;
+            return None;
         };
         if registered_equivocation.fingerprint != expected_fingerprint {
-            return false;
+            return None;
         }
         let owns_conflict = |input: &DeferredInput| {
             Self::deferred_input_owns_registered_proposal(
@@ -5945,8 +5998,40 @@ impl SumeragiV2Adapter {
             )
         };
         if !self.deferred_inputs.iter().any(owns_conflict) {
-            return false;
+            return None;
         }
+        Some((
+            registered_manifest,
+            registered_proposal,
+            admission_key,
+            registered_equivocation,
+        ))
+    }
+
+    fn rollback_deferred_conflicting_proposal(
+        &mut self,
+        round: reducer::Round,
+        subject: reducer::Subject,
+        canonical: &wire::PayloadManifest,
+    ) -> bool {
+        let Some((
+            registered_manifest,
+            registered_proposal,
+            admission_key,
+            registered_equivocation,
+        )) = self.deferred_conflicting_proposal_owner(round, subject, canonical)
+        else {
+            return false;
+        };
+        let key = (round, subject);
+        let owns_conflict = |input: &DeferredInput| {
+            Self::deferred_input_owns_registered_proposal(
+                input,
+                round,
+                subject,
+                &registered_proposal,
+            )
+        };
 
         self.deferred_inputs.retain(|input| !owns_conflict(input));
         self.retire_unowned_deferred_producer_continuations();
@@ -6183,6 +6268,17 @@ impl SumeragiV2Adapter {
                 AdapterCommand::BodyAvailable { manifest } => {
                     let round = registry.round_to_core(manifest.round, &self.wire_context)?;
                     let subject = registry.register_subject(manifest.subject)?;
+                    if self
+                        .deferred_conflicting_proposal_owner(round, subject, manifest)
+                        .is_some()
+                    {
+                        // Mirror the exact dispatch-side rollback in the
+                        // cloned preflight registry. No live proposal,
+                        // delivery, equivocation, or deferred owner is retired
+                        // until the admitted callback actually dispatches.
+                        registry.proposals.remove(&(round, subject));
+                        registry.manifests.remove(&(round, subject));
+                    }
                     let core_manifest = registry.manifest_to_core(manifest, &self.wire_context)?;
                     if core_manifest.subject() != subject {
                         return Err(AdapterError::DurableBodyMismatch);
@@ -6323,27 +6419,30 @@ impl SumeragiV2Adapter {
             None,
         );
         if let Some((key, _, _)) = serviced_candidate {
-            if self.serviced_candidates.contains_key(&key) {
-                return Preflight::Coalesce;
-            }
+            let serviced = self.serviced_candidates.contains_key(&key);
             let matching = self
                 .producer_continuations
                 .iter()
                 .filter(|(_, record)| record.identity().candidate() == key)
                 .collect::<Vec<_>>();
             match matching.len() {
+                0 if serviced => return Preflight::Coalesce,
                 0 => {}
                 1 => {
                     let (address, record) = matching[0];
-                    if record.status() != ProducerContinuationStatus::Reserved
+                    let identity = record.identity();
+                    if serviced
+                        || record.status() != ProducerContinuationStatus::Reserved
                         || !self
                             .restored_dormant_producer_continuations
                             .contains(address)
                         || self.durable_producer_continuations.get(address) != Some(record)
                     {
-                        return Preflight::Coalesce;
+                        return Preflight::CoalesceOwned {
+                            causal_lifecycle_key: identity.causal_lifecycle_key(),
+                            admission_ordinal: identity.admission_ordinal(),
+                        };
                     }
-                    let identity = record.identity();
                     // `ServicedCandidateKey` is deliberately route/priority
                     // neutral. This branch is nevertheless class-exact:
                     // only internal completion commands reach this
@@ -11107,11 +11206,11 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
-                max_payload_size_bytes: 1024 * 1024,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 512 * 1024,
                 max_chunk_count: 1024,
             },
             leader_seed: [0xA5; 32],
@@ -11141,140 +11240,7 @@ mod tests {
         VerifiedHeightContext::genesis(context, proofs).expect("verified genesis context")
     }
 
-    #[test]
-    fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
-        let _guard = crate::sumeragi::status::rbc_status_test_guard();
-        crate::sumeragi::status::clear_v2_status();
-        let directory = TempDir::new().expect("temporary directory");
-        let context = context();
-        let (mut adapter, startup) = SumeragiV2Adapter::open_deferred_status(
-            directory.path().join("deferred-status.wal"),
-            verified_genesis(context.clone()),
-            None,
-            reducer::Generation::new(context.height),
-            [0xA6; 32],
-            AdapterFingerprints {
-                node: Hash::new(b"deferred node"),
-                build: Hash::new(b"deferred build"),
-                config: Hash::new(b"deferred config"),
-            },
-            DeferredAdmissionOrdinalSource::new(1),
-        )
-        .expect("open replayed adapter without status publication");
-
-        assert!(startup.is_empty());
-        assert!(
-            crate::sumeragi::status::v2_status().is_none(),
-            "successor replay must remain invisible while its remaining constructors are fallible"
-        );
-        let prepared = adapter
-            .successor_activation_status()
-            .expect("prepare reducer-owned activation snapshot");
-        assert_eq!(prepared.height, context.height);
-        assert!(matches!(
-            prepared.liveness.last_progress,
-            Some(wire::SumeragiV2ProgressTransitionStatus {
-                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-                ..
-            })
-        ));
-        assert!(
-            crate::sumeragi::status::v2_status().is_none(),
-            "preparing a snapshot is not publication"
-        );
-        crate::sumeragi::status::set_v2_status(prepared);
-
-        let stale_tag = reducer::EventTag::new(
-            context.height,
-            0,
-            reducer::Generation::new(context.height.saturating_sub(1)),
-        );
-        let ignored = adapter
-            .retransmit_elapsed(stale_tag)
-            .expect("publish an ignored post-activation retransmission");
-        assert_eq!(
-            ignored.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::StaleGeneration)
-        );
-        let republished = crate::sumeragi::status::v2_status().expect("republished status");
-        assert!(matches!(
-            republished.liveness.last_progress,
-            Some(wire::SumeragiV2ProgressTransitionStatus {
-                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-                ..
-            })
-        ));
-        crate::sumeragi::status::clear_v2_status();
-    }
-
-    #[test]
-    fn executable_leader_rotation_matches_the_canonical_wire_context() {
-        let wire_context = context();
-        let mut registry = WireRegistry::new(&wire_context).expect("wire registry");
-        let core_context = registry
-            .core_context(&wire_context)
-            .expect("executable context");
-
-        for view in 0..=100 {
-            let wire_leader = wire_context.leader(view);
-            assert_eq!(
-                registry
-                    .validator_index(core_context.leader(view))
-                    .expect("core leader maps to wire roster"),
-                wire_leader,
-                "leader mismatch in view {view}"
-            );
-        }
-    }
-
-    #[test]
-    fn successor_core_context_preserves_the_parent_certificate_binding() {
-        let parent_context = context();
-        let parent_round = wire::ConsensusRound {
-            context_id: parent_context.id(),
-            height: parent_context.height,
-            view: 3,
-        };
-        let parent_qc = wire::QuorumCertificate {
-            round: parent_round,
-            proposal_round: parent_round,
-            phase: wire::GlobalPhase::Commit,
-            subject: subject(0x6d),
-            execution_commitment: execution_commitment(0x6d),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x6d; 48],
-        };
-        let mut successor = parent_context.clone();
-        successor.height += 1;
-        successor.parent_commit_qc = Some(parent_qc);
-        successor.validate().expect("structural successor context");
-        let successor_id = successor.id();
-
-        let mut registry = WireRegistry::new(&successor).expect("successor wire registry");
-        let core_context = registry
-            .core_context(&successor)
-            .expect("parent-bound successor context");
-        let core_parent = core_context
-            .parent_commit()
-            .expect("successor retains its parent CommitQC");
-
-        assert_eq!(core_parent.context_id(), context_id(parent_context.id()));
-        assert_ne!(core_parent.context_id(), context_id(successor_id));
-        assert_eq!(core_parent.round().height(), parent_context.height);
-        assert_eq!(core_parent.proposal_round().view(), parent_round.view);
-
-        let parent_reference = successor
-            .parent_commit_qc
-            .as_ref()
-            .expect("successor parent CommitQC")
-            .as_ref();
-        assert!(matches!(
-            registry.qc_reference_to_core(&parent_reference),
-            Err(AdapterError::WireValidation(
-                wire::ValidationError::WrongHeightContext
-            ))
-        ));
-    }
+    include!("tests/v2_adapter_activation_context.rs");
 
     #[cfg(feature = "bls")]
     fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) {
@@ -11314,11 +11280,11 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"authenticated nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
-                max_payload_size_bytes: 1024 * 1024,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 512 * 1024,
                 max_chunk_count: 1024,
             },
             leader_seed: [0x5A; 32],
@@ -11825,14 +11791,9 @@ mod tests {
     }
 
     #[test]
-    fn commit_qc_status_reports_exact_frozen_signer_power() {
+    fn commit_qc_status_reports_equal_vote_projection_in_npos_mode() {
         let mut context = context();
         context.mode = wire::ConsensusMode::Npos;
-        for (index, validator) in context.roster.iter_mut().enumerate() {
-            validator.power = u64::try_from(index + 1).expect("fixture power fits u64");
-        }
-        context.quorum =
-            wire::DualQuorum::from_roster(&context.roster).expect("weighted fixture quorum");
         let certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
                 context_id: context.id(),
@@ -11857,8 +11818,8 @@ mod tests {
         assert_eq!(summary.validator_count, 4);
         assert_eq!(summary.signer_count, 3);
         assert_eq!(summary.min_signers, 3);
-        assert_eq!(summary.signed_power, 8);
-        assert_eq!(summary.total_power, 10);
+        assert_eq!(summary.signed_power, 3);
+        assert_eq!(summary.total_power, 4);
     }
 
     #[test]

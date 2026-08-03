@@ -15,6 +15,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
+import org.hyperledger.iroha.sdk.core.util.HashLiteral
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -113,6 +115,7 @@ class NativeAmxV2GroupedFixtureTest {
                     "coherent_stale_settlement_hash",
                     "coherent_duplicate_validator_set",
                     "coherent_over_quorum_requirement",
+                    "manifest_leaf_hash_tampering",
                     "non_canonical_validator_peer_id",
                     "execution_commitment_merge_carrier_wrong_version",
                     "execution_commitment_missing_merge_carrier_field",
@@ -255,9 +258,9 @@ class NativeAmxV2GroupedFixtureTest {
         val mergeCarrierEntryHash = mergeCarrier.getValue("entry_hash").jsonPrimitive
         require(mergeCarrierEntryHash.isString)
         NativeAmxV2.ConsensusHash(mergeCarrierEntryHash.content)
+        val manifestCount = execution.int("native_amx_application_manifest_count")
         require(
-            execution.int("native_amx_application_manifest_count") == artifacts.size &&
-                artifacts.size == 1,
+            manifestCount == artifacts.size && artifacts.size == 1,
         )
         val artifact = artifacts.single().jsonObject
         val leaf = artifact.objectValue("leaf")
@@ -265,12 +268,15 @@ class NativeAmxV2GroupedFixtureTest {
         require(artifact.int("version") == 1 && leaf.int("version") == 1)
         require(artifact.int("leaf_index") == 0 && proof.int("leaf_index") == 0)
         require(proof.arrayValue("audit_path").isEmpty())
-        require(artifact.int("manifest_leaf_count") == 1)
+        require(artifact.int("manifest_leaf_count") == manifestCount)
+        val expectedManifestRoot =
+            applicationManifestSingletonRoot(artifact.string("leaf_hash"))
         require(
-            artifact.getValue("manifest_root") ==
-                execution.getValue("native_amx_application_manifest_root"),
-        )
-        require(artifact.getValue("manifest_root") == artifact.getValue("leaf_hash"))
+            artifact.string("manifest_root") == expectedManifestRoot &&
+                execution.string("native_amx_application_manifest_root") == expectedManifestRoot,
+        ) {
+            "singleton manifest root must authenticate the domain-separated leaf hash"
+        }
         require(
             leaf.getValue("executed_block_wire_hash") ==
                 execution.getValue("executed_block_wire_hash"),
@@ -470,6 +476,16 @@ class NativeAmxV2GroupedFixtureTest {
         return pointer.drop(1).split('/').map {
             it.replace("~1", "/").replace("~0", "~")
         }
+    }
+
+    private fun applicationManifestSingletonRoot(leafHash: String): String {
+        val leafHashBytes = HashLiteral.decode(leafHash)
+        require(HashLiteral.canonicalize(leafHashBytes) == leafHash) {
+            "manifest leaf hash must be canonical"
+        }
+        val domain =
+            "iroha:merkle:leaf:v1\u0000".toByteArray(StandardCharsets.UTF_8)
+        return HashLiteral.canonicalize(IrohaHash.prehash(domain + leafHashBytes))
     }
 
     private fun fixture(): JsonObject =

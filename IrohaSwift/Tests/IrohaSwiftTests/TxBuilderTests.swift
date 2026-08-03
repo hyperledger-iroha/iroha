@@ -235,7 +235,7 @@ final class TxBuilderTests: XCTestCase {
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
     private static let fixtureDomain = "wonderland.universal"
     private static let fixtureGovernanceContractAddress =
-        "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+        "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
     private static let fixtureClaimPolicyId = "email#retail"
     private static let fixtureClaimProgramId = "identifier_lookup_retail"
     private static let fixtureClaimProgramDigestHex =
@@ -466,7 +466,6 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testBuildSignedExecutableBatchPreservesMixedOrderAndTag() throws {
-        try requireEd25519Encoder()
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let instruction = try TransactionInstructionFrame(
@@ -478,7 +477,7 @@ final class TxBuilderTests: XCTestCase {
             )
         )
         let invocation = try TransactionContractInvocation(
-            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             expectedCodeHash: Data(repeating: 0xA5, count: 32),
             entrypoint: "run",
             arguments: Data([4, 5, 6])
@@ -503,24 +502,54 @@ final class TxBuilderTests: XCTestCase {
         )
 
         var signedReader = CanonicalNoritoReader(data: envelope.signedTransaction)
-        _ = try signedReader.readField()
-        let payload = try signedReader.readField()
+        let transactionSignature = try signedReader.readCompactField()
+        var transactionSignatureReader = CanonicalNoritoReader(data: transactionSignature)
+        let signaturePayload = try transactionSignatureReader.readCompactField()
+        XCTAssertEqual(transactionSignatureReader.remaining(), 0)
+        var signatureReader = CanonicalNoritoReader(data: signaturePayload)
+        XCTAssertEqual(try signatureReader.readUInt64LE(), 64)
+        for _ in 0..<64 {
+            XCTAssertEqual(try signatureReader.readCompactField().count, 1)
+        }
+        XCTAssertEqual(signatureReader.remaining(), 0)
+
+        let payload = try signedReader.readCompactField()
+        XCTAssertEqual(try signedReader.readCompactField(), Data([0]))
+        XCTAssertEqual(signedReader.remaining(), 0)
         var payloadReader = CanonicalNoritoReader(data: payload)
-        _ = try payloadReader.readField()
-        _ = try payloadReader.readField()
-        _ = try payloadReader.readField()
-        let executable = try payloadReader.readField()
+        let chainIdPayload = try payloadReader.readCompactField()
+        var chainIdReader = CanonicalNoritoReader(data: chainIdPayload)
+        XCTAssertEqual(
+            try chainIdReader.readCompactField(),
+            CompactNorito.encodeString(Self.fixtureChainId)
+        )
+        XCTAssertEqual(chainIdReader.remaining(), 0)
+        _ = try payloadReader.readCompactField()
+        _ = try payloadReader.readCompactField()
+        let executable = try payloadReader.readCompactField()
         var executableReader = CanonicalNoritoReader(data: executable)
         XCTAssertEqual(try executableReader.readUInt32LE(), 4)
-        let sequence = try executableReader.readField()
+        let sequence = try executableReader.readCompactField()
         var sequenceReader = CanonicalNoritoReader(data: sequence)
         XCTAssertEqual(try sequenceReader.readUInt64LE(), 3)
-        var first = CanonicalNoritoReader(data: try sequenceReader.readField())
-        var second = CanonicalNoritoReader(data: try sequenceReader.readField())
-        var third = CanonicalNoritoReader(data: try sequenceReader.readField())
+        var first = CanonicalNoritoReader(data: try sequenceReader.readCompactField())
+        var second = CanonicalNoritoReader(data: try sequenceReader.readCompactField())
+        var third = CanonicalNoritoReader(data: try sequenceReader.readCompactField())
         XCTAssertEqual(try first.readUInt32LE(), 0)
         XCTAssertEqual(try second.readUInt32LE(), 1)
         XCTAssertEqual(try third.readUInt32LE(), 0)
+        XCTAssertEqual(
+            try first.readCompactField(),
+            instruction.compactInstructionBoxPayload()
+        )
+        _ = try second.readCompactField()
+        XCTAssertEqual(
+            try third.readCompactField(),
+            instruction.compactInstructionBoxPayload()
+        )
+        XCTAssertEqual(first.remaining(), 0)
+        XCTAssertEqual(second.remaining(), 0)
+        XCTAssertEqual(third.remaining(), 0)
         XCTAssertEqual(sequenceReader.remaining(), 0)
     }
 
@@ -528,14 +557,14 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         XCTAssertThrowsError(try TransactionContractInvocation(
-            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             expectedCodeHash: Data(repeating: 0x10, count: 32),
             entrypoint: "run"
         )) { error in
             XCTAssertEqual(error as? ExecutableBatchInputError, .invalidExpectedCodeHashMarker)
         }
         let invocation = try TransactionContractInvocation(
-            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             expectedCodeHash: Data(repeating: 0x11, count: 32),
             entrypoint: "run"
         )
@@ -567,8 +596,8 @@ final class TxBuilderTests: XCTestCase {
 
     func testContractInvocationRequiresCanonicalV1Bech32mAddress() throws {
         let validAddresses = [
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtydf6x",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qhfvtnk",
         ]
         for address in validAddresses {
             XCTAssertNoThrow(try TransactionContractInvocation(
@@ -580,13 +609,13 @@ final class TxBuilderTests: XCTestCase {
 
         let invalidAddresses = [
             "abc",
-            " tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            " irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             "TAIRAC1QYQQQQQQQQQQQQPUTUV64ZHF0A0A4HHLQDJ2LHNWUZQ4XJQDDCYQ8",
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyqp",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
-            "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkqaty5s",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8pkjeu85",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyqp",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+            "irohac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qhk43nl",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkk75nd5",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8p2lc7wy",
         ]
         for address in invalidAddresses {
             XCTAssertThrowsError(try TransactionContractInvocation(

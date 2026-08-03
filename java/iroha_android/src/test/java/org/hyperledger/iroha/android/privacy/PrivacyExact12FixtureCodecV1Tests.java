@@ -40,8 +40,8 @@ public final class PrivacyExact12FixtureCodecV1Tests {
 
     assertEquals(PrivacyExact12FixtureCodecV1.VERSION, bundle.version());
     assertEquals(PrivacyExact12FixtureCodecV1.ROW_COUNT, bundle.rows().size());
-    final PrivacyNativeBridge.ProtocolIdV1[] protocols =
-        PrivacyNativeBridge.ProtocolIdV1.values();
+    final PrivacyProtocolIdV1[] protocols =
+        PrivacyProtocolIdV1.values();
     for (int index = 0; index < bundle.rows().size(); index++) {
       final PrivacyExact12TypedFixtureRowV1 row = bundle.rows().get(index);
       assertEquals(protocols[index], row.protocolId());
@@ -217,7 +217,7 @@ public final class PrivacyExact12FixtureCodecV1Tests {
   }
 
   @Test
-  public void reorderAndSameShapeSubstitutionAreRejected() throws IOException {
+  public void reorderAndEveryNestedCrossRowSubstitutionAreRejected() throws IOException {
     final Fixture fixture = loadFixture();
     final PrivacyExact12FixtureBundleV1 bundle =
         PrivacyExact12FixtureCodecV1.decodeCanonical(fixture.archive);
@@ -240,22 +240,20 @@ public final class PrivacyExact12FixtureCodecV1Tests {
         () -> PrivacyExact12FixtureCodecV1.decodeCanonical(reorderedArchive));
 
     final PrivacyExact12TypedFixtureRowV1 source = bundle.rows().get(0);
-    final PrivacyExact12TypedFixtureRowV1 substituted =
-        copyRow(source, bundle.rows().get(1).statementNorito());
-    final List<PrivacyExact12TypedFixtureRowV1> substitutedRows =
-        new ArrayList<>(bundle.rows());
-    substitutedRows.set(0, substituted);
-    final byte[] candidate =
-        PrivacyExact12FixtureCodecV1.encodeCanonical(
-            new PrivacyExact12FixtureBundleV1(
-                PrivacyExact12FixtureCodecV1.VERSION, substitutedRows));
-    assertFalse(Arrays.equals(candidate, fixture.archive));
-    PrivacyExact12FixtureCodecV1.decodeCanonical(candidate);
-    assertThrows(
-        IllegalArgumentException.class,
-        () ->
-            PrivacyExact12FixtureCodecV1.requireCanonicalArchive(
-                candidate, fixture.archive));
+    final PrivacyExact12TypedFixtureRowV1 donor = bundle.rows().get(1);
+    for (int field = 0; field < 8; field++) {
+      final PrivacyExact12TypedFixtureRowV1 substituted =
+          copyRowFieldFrom(source, donor, field);
+      final List<PrivacyExact12TypedFixtureRowV1> substitutedRows =
+          new ArrayList<>(bundle.rows());
+      substitutedRows.set(0, substituted);
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              PrivacyExact12FixtureCodecV1.encodeCanonical(
+                  new PrivacyExact12FixtureBundleV1(
+                      PrivacyExact12FixtureCodecV1.VERSION, substitutedRows)));
+    }
   }
 
   @Test
@@ -264,14 +262,14 @@ public final class PrivacyExact12FixtureCodecV1Tests {
         IllegalArgumentException.class,
         () ->
             syntheticRow(
-                PrivacyNativeBridge.ProtocolIdV1.values()[0],
+                PrivacyProtocolIdV1.values()[0],
                 new byte[PrivacyExact12FixtureCodecV1.MAX_STATEMENT_BYTES + 1],
                 new byte[] {1}));
     final byte[] largeSigned = new byte[180_000];
     Arrays.fill(largeSigned, (byte) 0x5A);
     final List<PrivacyExact12TypedFixtureRowV1> aggregateRows = new ArrayList<>();
-    for (final PrivacyNativeBridge.ProtocolIdV1 protocol :
-        PrivacyNativeBridge.ProtocolIdV1.values()) {
+    for (final PrivacyProtocolIdV1 protocol :
+        PrivacyProtocolIdV1.values()) {
       aggregateRows.add(syntheticRow(protocol, new byte[] {1}, largeSigned));
     }
     assertThrows(
@@ -459,23 +457,31 @@ public final class PrivacyExact12FixtureCodecV1Tests {
         .array();
   }
 
-  private static PrivacyExact12TypedFixtureRowV1 copyRow(
-      final PrivacyExact12TypedFixtureRowV1 row, final byte[] statementNorito) {
+  private static PrivacyExact12TypedFixtureRowV1 copyRowFieldFrom(
+      final PrivacyExact12TypedFixtureRowV1 row,
+      final PrivacyExact12TypedFixtureRowV1 donor,
+      final int field) {
     return new PrivacyExact12TypedFixtureRowV1(
         row.protocolId(),
-        statementNorito,
-        row.envelopeNorito(),
+        field == 0 ? donor.statementNorito() : row.statementNorito(),
+        field == 1 ? donor.envelopeNorito() : row.envelopeNorito(),
         row.submitProofWireId(),
-        row.submitProofInstructionNorito(),
-        row.transactionIntentProjectionNorito(),
-        row.transactionIntentDigest(),
-        row.unsignedTransactionPayloadNorito(),
-        row.signedTransactionVersionedNorito(),
-        row.signedTransactionHash());
+        field == 2 ? donor.submitProofInstructionNorito() : row.submitProofInstructionNorito(),
+        field == 3
+            ? donor.transactionIntentProjectionNorito()
+            : row.transactionIntentProjectionNorito(),
+        field == 4 ? donor.transactionIntentDigest() : row.transactionIntentDigest(),
+        field == 5
+            ? donor.unsignedTransactionPayloadNorito()
+            : row.unsignedTransactionPayloadNorito(),
+        field == 6
+            ? donor.signedTransactionVersionedNorito()
+            : row.signedTransactionVersionedNorito(),
+        field == 7 ? donor.signedTransactionHash() : row.signedTransactionHash());
   }
 
   private static PrivacyExact12TypedFixtureRowV1 syntheticRow(
-      final PrivacyNativeBridge.ProtocolIdV1 protocol,
+      final PrivacyProtocolIdV1 protocol,
       final byte[] statement,
       final byte[] signed) {
     return new PrivacyExact12TypedFixtureRowV1(

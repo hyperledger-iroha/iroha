@@ -161,7 +161,18 @@ New networks that start with confidentiality enabled encode the desired policy d
 - Separate registries (`PedersenParams`, `PoseidonParams`) mirror verifier lifecycle controls, each with `params_id`, hashes of generators/constants, activation, deprecation, and withdraw heights.
 
 ## Deterministic Ordering & Nullifiers
-- Each asset maintains a `CommitmentTree` with `next_leaf_index`; blocks append commitments in deterministic order: iterate transactions in block order; within each transaction iterate shielded outputs by ascending serialized `output_idx`.
+- Each registered asset persists `ConfidentialTreeProfile::PoseidonPastaV1` in
+  `ZkAssetState`. This fixed-depth Pasta Poseidon profile is the only
+  first-release tree construction. `RegisterZkAsset` validates every configured
+  shield, transfer, and unshield verifier against it; key rotation may retain
+  the profile, but no populated asset can switch profiles.
+- All shield, transfer, unshield-change, and Kagemusha append paths use the same
+  profile-aware batch operation. It first validates the retained root suffix and
+  every frontier checkpoint against the ordered commitment prefix, computes the
+  complete next state, and commits only after the whole batch succeeds. Blocks
+  therefore append commitments deterministically in transaction order and in
+  each proof's canonical authenticated output order, without leaving a partial
+  prefix after capacity or commitment validation fails.
 - `note_position` is derived from the tree offsets but **not** part of the nullifier; it only feeds membership paths within the proof witness.
 - Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, chain_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
 
@@ -183,6 +194,20 @@ balance mutation. Supporting fractional or wider public amounts in a future
 ZK-ACE circuit requires an explicitly versioned statement schema and migration
 plan.
 
+### Proof-authenticated unshield outputs
+
+`Unshield` has exactly six first-release wire fields: `asset`, `to`,
+`public_amount`, `inputs`, `proof`, and `root_hint`. It has no caller-supplied
+output field. Norito rejects the retired seven-field layout and JSON decoding
+rejects unknown fields.
+
+The verifier-profile dispatcher is the sole source of private outputs. A valid
+full-unshield V2 proof returns an empty output set; a valid change-unshield V3
+proof returns either no change output or the single commitment authenticated by
+the proof. Quota accounting, events, and tree insertion consume that returned
+set directly. This prevents an instruction from adding a commitment that is not
+covered by the verified conservation statement.
+
 ## Ledger Flow
 1. **MintConfidential { asset_id, amount, recipient_hint }**
    - Requires asset policy `Convertible` or `ShieldedOnly`; admission checks asset authority, retrieves current `params_id`, samples `rho`, emits commitment, updates Merkle tree.
@@ -200,8 +225,17 @@ plan.
 - `ConfidentialEncryptedPayload` wraps AEAD memo bytes with `{ version, ephemeral_pubkey, nonce, ciphertext }`, defaulting to `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` for the XChaCha20-Poly1305 layout.
 - Canonical positive key-derivation vectors for nonzero spend keys live in `specs/confidential_key_vectors.json`; both the CLI and Torii endpoint regress against these fixtures. Wallet-facing derivatives and negative all-zero spend-key admission coverage for the spend/nullifier/viewing ladder are published in `fixtures/confidential/keyset_derivation_v1.json` and exercised by the Rust + Swift SDK tests to guarantee cross-language parity.
 - `asset::AssetDefinition` gains `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`.
-- `ZkAssetState` persists the `(backend, name, commitment)` binding for transfer/unshield verifiers; execution rejects proofs whose referenced verifying key fails to match the registered commitment, whose proof envelope does not bind the expected confidential-transfer-v2 schema and active verifier metadata, or whose auxiliary bytes are non-empty, and verifies transfer/unshield proofs against the resolved backend key before mutating state.
-- `CommitmentTree` (per asset with frontier checkpoints), `NullifierSet` keyed by `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` stored in world state.
+- `ZkAssetState` persists the sole first-release tree profile together with the
+  `(backend, name, commitment)` bindings for shield, transfer, and unshield
+  verifiers. Execution rejects proofs whose referenced verifying key fails to
+  match the registered commitment, whose proof envelope does not bind the
+  expected schema and active verifier metadata, or whose auxiliary bytes are
+  non-empty. Populated state is also rejected if its retained roots or frontier
+  checkpoints do not recompute under the persisted profile.
+- The ordered commitment prefix and bounded exact root suffix (per asset with
+  frontier checkpoints), `NullifierSet` keyed by
+  `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, and
+  `PoseidonParams` are stored in world state.
 - Mempool maintains transient `NullifierIndex` and `AnchorIndex` structures for early duplicate detection and anchor age checks.
 - Norito schema updates include canonical ordering for public inputs; round-trip tests ensure encoding determinism.
 - Encrypted payload roundtrips are locked in via unit tests (`crates/iroha_data_model/src/confidential.rs`), and the wallet key-derivation vectors above anchor the AEAD envelope derivations for auditors. `norito.md` documents the on-wire header for the envelope.
@@ -358,6 +392,15 @@ lockstep.
 - Registry emergencies: emergency withdrawal freezes affected assets at `withdraw_height` and rejects proofs afterwards.
 - Capability gating: validators with mismatched `conf_features` reject blocks; observers with `assume_valid=true` keep up without affecting consensus.
 - State equivalence: validator/full/observer nodes produce identical state roots on the canonical chain.
+- Authenticated outputs: full-unshield V2 admits no private output;
+  change-unshield V3 inserts only its proof-bound zero-or-one change commitment;
+  retired, substituted, missing, extra, and reordered output layouts fail before
+  effects.
+- Tree integrity and atomicity: mixed/profile-changing verifier registrations,
+  retained-root or checkpoint drift, and over-capacity multi-output batches fail
+  without changing commitments, roots, checkpoints, nullifiers, balances,
+  metadata, or events. Restart and reorg tests preserve the exact persisted
+  profile and checkpoint tuple.
 - Negative fuzzing: malformed proofs, oversized payloads, and nullifier collisions reject deterministically.
 
 ## Outstanding Work
@@ -485,7 +528,7 @@ logic while the fixtures above keep the signed transaction bytes consistent.
 
 Phase M2 now exports CommitmentTree health directly via Prometheus and Grafana:
 
-- `iroha_confidential_tree_commitments`, `iroha_confidential_tree_depth`, `iroha_confidential_root_history_entries`, and `iroha_confidential_frontier_checkpoints` expose the live Merkle frontier per asset while `iroha_confidential_root_evictions_total` / `iroha_confidential_frontier_evictions_total` count the LRU trims enforced by `zk.root_history_cap` and the checkpoint depth window.
+- `iroha_confidential_tree_commitments`, `iroha_confidential_tree_depth`, `iroha_confidential_root_history_entries`, and `iroha_confidential_frontier_checkpoints` expose the live Merkle frontier per asset while `iroha_confidential_root_evictions_total` / `iroha_confidential_frontier_evictions_total` count the LRU trims enforced by `confidential.tree_roots_history_len` and the checkpoint depth window.
 - `iroha_confidential_frontier_last_checkpoint_height` and `iroha_confidential_frontier_last_checkpoint_commitments` publish the height + commitment count of the most recent frontier checkpoint so reorg drills and rollbacks can prove that checkpoints advance and retain the expected payload volume.
 - The Grafana board (`dashboards/grafana/confidential_assets.json`) includes a depth series, eviction-rate panels, and the existing verifier cache widgets so operators can prove that CommitmentTree depth never collapses even as checkpoints churn.
 - Alert `ConfidentialTreeDepthZero` (in `dashboards/alerts/confidential_assets_rules.yml`) trips once commitments are observed but the reported depth sticks at zero for five minutes.

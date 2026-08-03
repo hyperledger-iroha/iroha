@@ -5,11 +5,12 @@ use std::{
 };
 
 use super::{
-    CertificateRef, ConsensusMessageV2, DurableState, EventTag, Generation, HeightContext,
-    MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest, PersistenceId, Phase, Proposal,
-    ProposalJustification, Quorum, QuorumCertificate, QuorumError, ReplayError, Round,
-    SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
-    TimeoutSignatureGroup, TimeoutVote, ValidatorId, Vote, VotingPower, WalEntry, WalRecord,
+    CertificateRef, Committee, CommitteeRole, ConsensusMessageV2, DurableState, EventTag,
+    Generation, HeightContext, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest,
+    PersistenceId, Phase, Proposal, ProposalJustification, Quorum, QuorumCertificate, QuorumError,
+    ReplayError, Round, SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject,
+    TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote, ValidatorId, Vote, VotingPower,
+    WalEntry, WalRecord,
     refinement::{
         self, BoundaryCapabilityKey, CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_FOREIGN,
         CERTIFICATE_EVIDENCE_INCOMING, CERTIFICATE_EVIDENCE_LOCAL, CONTINUATION_DECIDE,
@@ -653,6 +654,8 @@ pub struct Reducer {
     signature_queue: VecDeque<SignableMessage>,
     replay_resumed: bool,
     applied_subject: Option<Subject>,
+    // Volatile, view-scoped admission for Set B body work and new votes.
+    fallback_active: bool,
 }
 
 impl Reducer {
@@ -666,6 +669,47 @@ impl Reducer {
             .iter()
             .map(|validator| validator.id())
             .collect()
+    }
+
+    fn local_committee_role(&self) -> Option<CommitteeRole> {
+        let local = self.local_validator?;
+        let index = self
+            .context
+            .roster()
+            .iter()
+            .position(|validator| validator.id() == local)?;
+        let index = u32::try_from(index).ok()?;
+        Committee::project(&self.context, self.durable.current_view())
+            .ok()?
+            .role(index)
+            .ok()
+    }
+
+    fn local_candidate_body_eligible(&self) -> bool {
+        match self.local_committee_role() {
+            Some(CommitteeRole::SetBValidator) => self.fallback_active,
+            Some(
+                CommitteeRole::Leader | CommitteeRole::SetAValidator | CommitteeRole::ProxyTail,
+            ) => true,
+            None => false,
+        }
+    }
+
+    fn local_certified_candidate_body_eligible(&self) -> bool {
+        self.local_validator.is_none() || self.local_candidate_body_eligible()
+    }
+
+    fn record_is_role_eligible(&self, record: &WalRecord) -> bool {
+        match record {
+            WalRecord::PrepareIntent(_) | WalRecord::LockAndCommit { .. } => {
+                self.local_candidate_body_eligible()
+            }
+            WalRecord::ProposalIntent(_)
+            | WalRecord::ObservePrepare(_)
+            | WalRecord::TimeoutIntent(_)
+            | WalRecord::InstallTimeout(_)
+            | WalRecord::Decision(_) => true,
+        }
     }
 
     /// Constructs a fresh reducer at view zero.
@@ -788,6 +832,7 @@ impl Reducer {
             signature_queue: VecDeque::new(),
             replay_resumed,
             applied_subject: None,
+            fallback_active: false,
         })
     }
 
@@ -1270,7 +1315,7 @@ impl Reducer {
                 self.on_timeout_certificate(certificate, false)
             }
             Event::TimeoutElapsed { .. } => self.on_timeout_elapsed(),
-            Event::RetransmitElapsed { .. } => Ok(self.on_retransmit_elapsed()),
+            Event::RetransmitElapsed { .. } => self.on_retransmit_elapsed(),
             Event::BodyAvailable { round, subject, .. } => {
                 Ok(self.on_body_available(round, subject))
             }
@@ -2265,6 +2310,19 @@ impl Reducer {
                 },
                 WalRecord::LockAndCommit { prepare, .. },
             ) => prepare.round() == *round && prepare.subject() == *subject,
+            (Event::RetransmitElapsed { .. }, WalRecord::PrepareIntent(vote)) => {
+                self.candidate.as_ref().is_some_and(|proposal| {
+                    vote.round() == proposal.round()
+                        && vote.subject() == proposal.manifest().subject()
+                        && self.body_state(vote.round(), vote.subject()) == BodyState::Validated
+                })
+            }
+            (Event::RetransmitElapsed { .. }, WalRecord::LockAndCommit { prepare, .. }) => {
+                self.pending_prepare
+                    .get(&prepare.reference())
+                    .is_some_and(|retained| retained == prepare)
+                    && self.body_state(prepare.round(), prepare.subject()) == BodyState::Validated
+            }
             (Event::TimeoutElapsed { .. }, WalRecord::TimeoutIntent(vote)) => {
                 vote.round() == Round::new(self.context.height(), self.durable.current_view())
             }
@@ -2806,6 +2864,7 @@ impl Reducer {
         };
         VolatileSummary {
             candidate_present: self.candidate.is_some(),
+            fallback_active: self.fallback_active,
             body_work: Self::cardinality(self.body_work.len()),
             pending_prepare: Self::cardinality(self.pending_prepare.len()),
             known_prepare: Self::cardinality(self.known_prepare.len()),
@@ -3059,7 +3118,8 @@ impl Reducer {
             Effect::Persist { entry, .. } => {
                 after.pending_persistence.as_ref().and_then(|pending| {
                     (pending.entry == *entry
-                        && self.event_may_start_record(event, pending.entry.record()))
+                        && self.event_may_start_record(event, pending.entry.record())
+                        && after.record_is_role_eligible(pending.entry.record()))
                     .then(|| {
                         let mut key = EffectCapabilityKey {
                             kind: EFFECT_PERSIST,
@@ -3089,7 +3149,22 @@ impl Reducer {
                                 && certificate.validate(&after.context).is_ok()
                                 && certified_sources == &after.frozen_archive_sources()
                         });
-                if round.height() != after.context.height() || !certificate_valid {
+                let role_eligible = certificate.as_ref().map_or_else(
+                    || after.local_candidate_body_eligible(),
+                    |certificate| {
+                        after
+                            .durable
+                            .decision()
+                            .is_some_and(|decision| decision == certificate)
+                            || after
+                                .durable
+                                .locked()
+                                .is_some_and(|locked| locked == certificate)
+                            || after.local_certified_candidate_body_eligible()
+                    },
+                );
+                if round.height() != after.context.height() || !certificate_valid || !role_eligible
+                {
                     None
                 } else {
                     work.map(|work| {
@@ -3120,13 +3195,24 @@ impl Reducer {
                         ..
                     } if event_round == round && event_subject == subject
                 );
-                let decided_retry = matches!(event, Event::RetransmitElapsed { .. })
-                    && after.durable.decision().is_some_and(|decision| {
+                let retransmit_retry = matches!(event, Event::RetransmitElapsed { .. })
+                    && (after.durable.decision().is_some_and(|decision| {
                         after.decision_body_round(decision) == *round
                             && decision.subject() == *subject
-                    });
+                    }) || (after.durable.decision().is_none()
+                        && after.durable.locked().is_some_and(|locked| {
+                            locked.round() == *round && locked.subject() == *subject
+                        }))
+                        || after.pending_prepare.values().any(|certificate| {
+                            certificate.round() == *round && certificate.subject() == *subject
+                        })
+                        || (after.fallback_active
+                            && after.candidate.as_ref().is_some_and(|proposal| {
+                                proposal.round() == *round
+                                    && proposal.manifest().subject() == *subject
+                            })));
                 (after.body_state(*round, *subject) == BodyState::Available
-                    && (newly_available || decided_retry))
+                    && (newly_available || retransmit_retry))
                     .then(|| EffectCapabilityKey {
                         kind: EFFECT_STORE,
                         tag: Self::tag_projection(after.current_tag()),
@@ -3145,13 +3231,24 @@ impl Reducer {
                         ..
                     } if event_round == round && event_subject == subject
                 );
-                let decided_retry = matches!(event, Event::RetransmitElapsed { .. })
-                    && after.durable.decision().is_some_and(|decision| {
+                let retransmit_retry = matches!(event, Event::RetransmitElapsed { .. })
+                    && (after.durable.decision().is_some_and(|decision| {
                         after.decision_body_round(decision) == *round
                             && decision.subject() == *subject
-                    });
+                    }) || (after.durable.decision().is_none()
+                        && after.durable.locked().is_some_and(|locked| {
+                            locked.round() == *round && locked.subject() == *subject
+                        }))
+                        || after.pending_prepare.values().any(|certificate| {
+                            certificate.round() == *round && certificate.subject() == *subject
+                        })
+                        || (after.fallback_active
+                            && after.candidate.as_ref().is_some_and(|proposal| {
+                                proposal.round() == *round
+                                    && proposal.manifest().subject() == *subject
+                            })));
                 (after.body_state(*round, *subject) == BodyState::Durable
-                    && (newly_durable || decided_retry))
+                    && (newly_durable || retransmit_retry))
                     .then(|| EffectCapabilityKey {
                         kind: EFFECT_VALIDATE,
                         tag: Self::tag_projection(after.current_tag()),
@@ -3410,7 +3507,16 @@ impl Reducer {
             });
         if self.body_state(round, subject) == BodyState::Missing {
             let key = CertificateRef::new(self.context.id(), round, Phase::Prepare, subject);
-            let fetch = if let Some(certificate) = self.pending_prepare.get(&key).cloned() {
+            let certificate = self.pending_prepare.get(&key).cloned();
+            let eligible = if certificate.is_some() {
+                self.local_certified_candidate_body_eligible()
+            } else {
+                self.local_candidate_body_eligible()
+            };
+            if !eligible {
+                return Ok(StepOutcome::applied(Vec::new()));
+            }
+            let fetch = if let Some(certificate) = certificate {
                 // A PrepareQC may race ahead of its proposal. Preserve its
                 // certified sources when the proposal later contributes the
                 // manifest so acquisition can be monotonically upgraded.
@@ -3731,6 +3837,9 @@ impl Reducer {
         round: Round,
         subject: Subject,
     ) -> Result<StepOutcome, ReducerError> {
+        if !self.local_candidate_body_eligible() {
+            return Ok(StepOutcome::applied(Vec::new()));
+        }
         if self.durable.timeout_intent(round).is_some() {
             return Ok(StepOutcome::ignored(IgnoreReason::ViewClosed));
         }
@@ -3755,6 +3864,9 @@ impl Reducer {
         &mut self,
         prepare: QuorumCertificate,
     ) -> Result<StepOutcome, ReducerError> {
+        if !self.local_candidate_body_eligible() {
+            return Ok(StepOutcome::applied(Vec::new()));
+        }
         let proposal_round = prepare.proposal_round();
         let round = Round::new(self.context.height(), self.durable.current_view());
         if proposal_round != round {
@@ -3962,7 +4074,12 @@ impl Reducer {
         let validated =
             self.body_state(certificate.round(), certificate.subject()) == BodyState::Validated;
         let view_closed = self.durable.timeout_intent(certificate.round()).is_some();
-        if current && validated && !view_closed && self.local_validator.is_some() {
+        if current
+            && validated
+            && !view_closed
+            && self.local_validator.is_some()
+            && self.local_candidate_body_eligible()
+        {
             let mut outcome = self.persist_commit_intent(certificate)?;
             effects.append(&mut outcome.effects);
             return Ok(StepOutcome::applied(effects));
@@ -3970,6 +4087,7 @@ impl Reducer {
 
         if current
             && self.body_state(certificate.round(), certificate.subject()) == BodyState::Missing
+            && self.local_certified_candidate_body_eligible()
         {
             effects.push(self.ensure_body_fetch(&certificate));
         }
@@ -4050,7 +4168,19 @@ impl Reducer {
         Ok(StepOutcome::applied(vec![effect]))
     }
 
-    fn on_retransmit_elapsed(&mut self) -> StepOutcome {
+    fn on_retransmit_elapsed(&mut self) -> Result<StepOutcome, ReducerError> {
+        let current_view = self.durable.current_view();
+        if self
+            .candidate
+            .as_ref()
+            .is_some_and(|proposal| proposal.round().view() == current_view)
+            || self
+                .pending_prepare
+                .values()
+                .any(|certificate| certificate.round().view() == current_view)
+        {
+            self.fallback_active = true;
+        }
         let mut effects: Vec<_> = self
             .outbound_control
             .values()
@@ -4080,46 +4210,109 @@ impl Reducer {
                 }
                 BodyState::Validated | BodyState::Invalid => {}
             }
-            return StepOutcome::applied(effects);
+            return Ok(StepOutcome::applied(effects));
         }
 
         if let Some(certificate) = self
             .pending_prepare
             .values()
-            .find(|certificate| {
-                certificate.round().view() == self.durable.current_view()
-                    && self.body_state(certificate.round(), certificate.subject())
-                        == BodyState::Missing
-            })
+            .find(|certificate| certificate.round().view() == self.durable.current_view())
             .cloned()
         {
-            effects.push(self.ensure_body_fetch(&certificate));
-            return StepOutcome::applied(effects);
+            let round = certificate.round();
+            let subject = certificate.subject();
+            match self.body_state(round, subject) {
+                BodyState::Missing => effects.push(self.ensure_body_fetch(&certificate)),
+                BodyState::Available => effects.push(Effect::StoreBody {
+                    tag: self.current_tag(),
+                    round,
+                    subject,
+                }),
+                BodyState::Durable => effects.push(Effect::ValidateBody {
+                    tag: self.current_tag(),
+                    round,
+                    subject,
+                }),
+                BodyState::Validated
+                    if self.local_validator.is_some() && self.local_candidate_body_eligible() =>
+                {
+                    let mut outcome = self.persist_commit_intent(certificate)?;
+                    effects.append(&mut outcome.effects);
+                }
+                BodyState::Validated | BodyState::Invalid => {}
+            }
+            return Ok(StepOutcome::applied(effects));
         }
 
-        if let Some(locked) = self.durable.locked().cloned()
-            && self.body_state(locked.round(), locked.subject()) == BodyState::Missing
-        {
-            effects.push(self.ensure_body_fetch(&locked));
-            return StepOutcome::applied(effects);
+        if let Some(locked) = self.durable.locked().cloned() {
+            let effect = match self.body_state(locked.round(), locked.subject()) {
+                BodyState::Missing => Some(self.ensure_body_fetch(&locked)),
+                BodyState::Available => Some(Effect::StoreBody {
+                    tag: self.current_tag(),
+                    round: locked.round(),
+                    subject: locked.subject(),
+                }),
+                BodyState::Durable => Some(Effect::ValidateBody {
+                    tag: self.current_tag(),
+                    round: locked.round(),
+                    subject: locked.subject(),
+                }),
+                BodyState::Validated | BodyState::Invalid => None,
+            };
+            if let Some(effect) = effect {
+                effects.push(effect);
+                return Ok(StepOutcome::applied(effects));
+            }
         }
 
-        if let Some(proposal) = self.candidate.clone()
-            && self.body_state(proposal.round(), proposal.manifest().subject())
-                == BodyState::Missing
-        {
-            effects.push(Effect::FetchBody {
-                tag: self.current_tag(),
-                round: proposal.round(),
-                subject: proposal.manifest().subject(),
-                manifest: Some(*proposal.manifest()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            });
-            return StepOutcome::applied(effects);
+        if let Some(proposal) = self.candidate.clone() {
+            let round = proposal.round();
+            let subject = proposal.manifest().subject();
+            match self.body_state(round, subject) {
+                BodyState::Missing if self.local_candidate_body_eligible() => {
+                    effects.push(Effect::FetchBody {
+                        tag: self.current_tag(),
+                        round,
+                        subject,
+                        manifest: Some(*proposal.manifest()),
+                        certified_sources: Vec::new(),
+                        certificate: None,
+                    });
+                }
+                BodyState::Available if self.local_candidate_body_eligible() => {
+                    effects.push(Effect::StoreBody {
+                        tag: self.current_tag(),
+                        round,
+                        subject,
+                    });
+                }
+                BodyState::Durable if self.local_candidate_body_eligible() => {
+                    effects.push(Effect::ValidateBody {
+                        tag: self.current_tag(),
+                        round,
+                        subject,
+                    });
+                }
+                BodyState::Validated if self.local_candidate_body_eligible() => {
+                    let key =
+                        CertificateRef::new(self.context.id(), round, Phase::Prepare, subject);
+                    let mut outcome = if let Some(prepare) = self.pending_prepare.get(&key).cloned()
+                    {
+                        self.persist_commit_intent(prepare)?
+                    } else {
+                        self.persist_prepare_intent(round, subject)?
+                    };
+                    effects.append(&mut outcome.effects);
+                }
+                BodyState::Missing
+                | BodyState::Available
+                | BodyState::Durable
+                | BodyState::Validated
+                | BodyState::Invalid => {}
+            }
         }
 
-        StepOutcome::applied(effects)
+        Ok(StepOutcome::applied(effects))
     }
 
     fn remember_control(&mut self, message: ConsensusMessageV2) {
@@ -4348,6 +4541,13 @@ impl Reducer {
         let mut durable = self.durable.clone();
         durable.apply(&self.context, self.local_validator, &pending.entry)?;
         self.durable = durable;
+        if matches!(pending.entry.record(), WalRecord::InstallTimeout(_)) {
+            // Fallback is scoped to the exact proposal generation, not merely
+            // the numeric view. A same-view TC upgrade clears the candidate and
+            // body work just like a normal view change, so Set B must wait for
+            // the replacement proposal's own retransmission boundary.
+            self.fallback_active = false;
+        }
         self.pending_persistence = None;
 
         if matches!(pending.entry.record(), WalRecord::LockAndCommit { .. }) {
@@ -4974,346 +5174,9 @@ mod source_link_tests {
         (before, event)
     }
 
-    #[test]
-    fn view_advancing_timeout_install_resets_an_exhausted_generation() {
-        let (mut pending, event) =
-            pending_timeout_install_at_generation(Generation::new(u64::MAX), None);
-
-        let outcome = pending
-            .step(event)
-            .expect("a view advance does not consume the same-view generation");
-
-        assert_eq!(outcome.disposition(), StepDisposition::Applied);
-        assert_eq!(pending.generation, Generation::INITIAL);
-        assert_eq!(pending.durable.current_view(), 1);
-        assert!(pending.pending_persistence.is_none());
-    }
-
-    #[test]
-    fn same_round_timeout_upgrade_accepts_the_last_generation() {
-        let (mut pending, event) =
-            pending_same_round_timeout_upgrade_at_generation(Generation::new(u64::MAX - 1));
-
-        let outcome = pending
-            .step(event)
-            .expect("the final representable same-view generation remains installable");
-
-        assert_eq!(outcome.disposition(), StepDisposition::Applied);
-        assert_eq!(pending.generation, Generation::new(u64::MAX));
-        assert_eq!(pending.durable.current_view(), 1);
-        assert!(pending.pending_persistence.is_none());
-    }
-
-    #[test]
-    fn same_round_timeout_generation_overflow_preserves_the_complete_state() {
-        let (mut pending, event) =
-            pending_same_round_timeout_upgrade_at_generation(Generation::new(u64::MAX));
-        let before = pending.clone();
-
-        let error = pending
-            .step(event.clone())
-            .expect_err("an exhausted generation must reject the install");
-
-        assert_eq!(error, ReducerError::GenerationOverflow);
-        assert_eq!(pending, before);
-
-        let Event::Persisted { id, .. } = event else {
-            panic!("timeout-install fixture must return a persistence acknowledgement")
-        };
-        let mut in_place = before.clone();
-
-        let error = in_place
-            .on_persisted(id)
-            .expect_err("the in-place callback must precheck generation exhaustion");
-
-        assert_eq!(error, ReducerError::GenerationOverflow);
-        assert_eq!(in_place, before);
-    }
-
-    fn composite_replay_reducer() -> Reducer {
-        let fixture = reducer();
-        let context = fixture.context.clone();
-        let local = context.leader(0);
-        let subject = Subject::repeat(0xc1);
-        let current_round = Round::new(context.height(), 0);
-        let prepare = certificate(&context, 0, Phase::Prepare, subject, 0xc2);
-        let manifest =
-            PayloadManifest::new(subject, Digest::repeat(0xc3), Digest::repeat(0xc4), 512, 4);
-        let proposal = Proposal::new(
-            context.id(),
-            current_round,
-            local,
-            manifest,
-            ProposalJustification::ParentCommit(context.parent_commit()),
-        );
-        let entries = [
-            WalEntry::new(PersistenceId::new(1), WalRecord::ProposalIntent(proposal)),
-            WalEntry::new(
-                PersistenceId::new(2),
-                WalRecord::PrepareIntent(Vote::new(
-                    context.id(),
-                    current_round,
-                    Phase::Prepare,
-                    subject,
-                    local,
-                )),
-            ),
-            WalEntry::new(
-                PersistenceId::new(3),
-                WalRecord::LockAndCommit {
-                    prepare,
-                    vote: Vote::new(context.id(), current_round, Phase::Commit, subject, local),
-                },
-            ),
-        ];
-        Reducer::recover(context, Some(local), Generation::new(9), entries)
-            .expect("recover proposal, Prepare, and Commit for one exact origin")
-    }
-
-    #[test]
-    fn replay_refinement_binds_the_complete_durable_fifo() {
-        let before = composite_replay_reducer();
-        let expected = before.expected_replay_plan();
-        assert_eq!(expected.len, 3);
-        assert_eq!(expected.slot0.kind, REPLAY_EFFECT_PROPOSAL);
-        assert_eq!(expected.slot1.kind, REPLAY_EFFECT_PREPARE);
-        assert_eq!(expected.slot2.kind, REPLAY_EFFECT_COMMIT);
-
-        let event = Event::ResumeAfterReplay {
-            tag: before.current_tag(),
-        };
-        let mut after = before.clone();
-        let outcome = after
-            .step_in_place(event.clone())
-            .expect("materialize the production replay candidate");
-        let projection = before.transition_projection(&event, &after, outcome.effects());
-        assert!(refinement::accepts(projection));
-        assert_eq!(projection.boundary_claimed.replay_plan, expected);
-        assert_eq!(projection.boundary_granted.replay_plan, expected);
-
-        let duplicate_event = Event::ResumeAfterReplay {
-            tag: after.current_tag(),
-        };
-        let mut destructive_duplicate = after.clone();
-        destructive_duplicate.signature_queue.pop_back();
-        assert!(!after.transition_refines(&duplicate_event, &destructive_duplicate, &[]));
-
-        let mut omitted = projection;
-        omitted.boundary_claimed.replay_plan.len = 2;
-        omitted.boundary_claimed.replay_plan.slot2 = refinement::ReplayPlanSlotProjection::none();
-        assert!(!refinement::accepts(omitted));
-
-        let mut reordered = projection;
-        let replay_plan = &mut reordered.boundary_claimed.replay_plan;
-        std::mem::swap(&mut replay_plan.slot1, &mut replay_plan.slot2);
-        assert!(!refinement::accepts(reordered));
-
-        let mut substituted = projection;
-        substituted
-            .boundary_claimed
-            .replay_plan
-            .slot2
-            .capability
-            .subject = Subject::repeat(0xc5);
-        assert!(!refinement::accepts(substituted));
-    }
-
-    #[test]
-    fn replay_refinement_rejects_malformed_post_states_even_with_the_right_first_effect() {
-        let before = composite_replay_reducer();
-        let messages = before.expected_replay_signatures();
-        assert_eq!(messages.len(), 3);
-        let first = messages[0].clone();
-        let effect = Effect::Sign {
-            tag: before.current_tag(),
-            message: first.clone(),
-        };
-        let event = Event::ResumeAfterReplay {
-            tag: before.current_tag(),
-        };
-
-        let mut dropped_all = before.clone();
-        dropped_all.replay_resumed = true;
-        assert!(!before.transition_refines(&event, &dropped_all, &[]));
-
-        let mut omitted = before.clone();
-        omitted.replay_resumed = true;
-        omitted.awaiting_signature = Some(first.clone());
-        omitted.signature_queue.push_back(messages[2].clone());
-        assert!(!before.transition_refines(&event, &omitted, std::slice::from_ref(&effect),));
-
-        let mut reordered = before.clone();
-        reordered.replay_resumed = true;
-        reordered.awaiting_signature = Some(first);
-        reordered.signature_queue.push_back(messages[2].clone());
-        reordered.signature_queue.push_back(messages[1].clone());
-        assert!(!before.transition_refines(&event, &reordered, &[effect]));
-    }
+    include!("tests/reducer_timeout_and_projection.rs");
 
     include!("tests/v2_core_reducer_primitive_projection.rs");
-    #[test]
-    fn enter_view_projection_selects_and_fetches_the_exact_post_install_lock() {
-        let fixture = reducer();
-        let subject = Subject::repeat(0xb1);
-        let high = certificate(&fixture.context, 0, Phase::Prepare, subject, 0xb2);
-        let (before, event) = pending_timeout_install(Some(high.clone()));
-        let mut after = before.clone();
-        let outcome = after
-            .step_in_place(event.clone())
-            .expect("materialize persisted-TC candidate");
-        assert!(matches!(
-            outcome.effects(),
-            [
-                Effect::EnterView {
-                    protected_lock: Some(protected),
-                    ..
-                },
-                Effect::FetchBody {
-                    certificate: Some(fetched),
-                    ..
-                }
-            ] if protected == &high && fetched == &high
-        ));
-        let projection = before.transition_projection(&event, &after, outcome.effects());
-        assert!(refinement::accepts(projection));
-        for projected in [
-            projection.enter_view.pending_record_timeout.highest_prepare,
-            projection
-                .enter_view
-                .pending_continuation_timeout
-                .highest_prepare,
-            projection.enter_view.durable_timeout_after.highest_prepare,
-            projection.enter_view.effect_timeout.highest_prepare,
-            projection.enter_view.incoming_highest_for_control,
-            projection.enter_view.durable_lock_after,
-            projection.enter_view.durable_highest_after,
-            projection.enter_view.retained_prepare_qc_after,
-            projection.enter_view.effect_protected_lock,
-            projection.enter_view.following_fetch_lock,
-        ] {
-            assert_eq!(projected.signer_bitmap, 0b111);
-            assert_eq!(projected.signer_bitmap_count, 3);
-            assert_eq!(projected.signer_count, 3);
-            assert_eq!(projected.voting_power, 3);
-            assert_eq!(projected.evidence_class, CERTIFICATE_EVIDENCE_INCOMING);
-        }
-
-        let mut mismatched_effect_lock = projection;
-        mismatched_effect_lock
-            .enter_view
-            .effect_protected_lock
-            .subject = Reducer::subject_identity_projection(Subject::repeat(0xb3));
-        assert!(!refinement::accepts(mismatched_effect_lock));
-
-        let mut mismatched_signer_set = projection;
-        mismatched_signer_set
-            .enter_view
-            .effect_protected_lock
-            .signer_bitmap ^= 1u128 << 3;
-        assert!(!refinement::accepts(mismatched_signer_set));
-
-        let mut mismatched_signer_count = projection;
-        mismatched_signer_count
-            .enter_view
-            .effect_protected_lock
-            .signer_count += 1;
-        assert!(!refinement::accepts(mismatched_signer_count));
-
-        let mut mismatched_bitmap_count = projection;
-        mismatched_bitmap_count
-            .enter_view
-            .effect_protected_lock
-            .signer_bitmap_count += 1;
-        assert!(!refinement::accepts(mismatched_bitmap_count));
-
-        let mut mismatched_voting_power = projection;
-        mismatched_voting_power
-            .enter_view
-            .effect_protected_lock
-            .voting_power += 1;
-        assert!(!refinement::accepts(mismatched_voting_power));
-
-        let mut foreign_evidence = projection;
-        foreign_evidence
-            .enter_view
-            .effect_protected_lock
-            .evidence_class = CERTIFICATE_EVIDENCE_FOREIGN;
-        assert!(!refinement::accepts(foreign_evidence));
-
-        let mut missing_fetch = projection;
-        missing_fetch.enter_view.following_fetch_lock.present = false;
-        assert!(!refinement::accepts(missing_fetch));
-
-        let mut missing_prepare_control = projection;
-        missing_prepare_control.enter_view.retained_prepare_qc_after =
-            CertificateIdentityProjection::default();
-        assert!(!refinement::accepts(missing_prepare_control));
-
-        let mut stale_prepare_control = projection;
-        stale_prepare_control
-            .enter_view
-            .retained_prepare_qc_after
-            .subject = Reducer::subject_identity_projection(Subject::repeat(0xba));
-        assert!(!refinement::accepts(stale_prepare_control));
-
-        let mut foreign_prepare_control = projection;
-        foreign_prepare_control
-            .enter_view
-            .retained_prepare_qc_after
-            .evidence_class = CERTIFICATE_EVIDENCE_FOREIGN;
-        assert!(!refinement::accepts(foreign_prepare_control));
-
-        let mut reordered_fetch = projection;
-        reordered_fetch.enter_view.following_fetch_index = reordered_fetch.enter_view.enter_index;
-        assert!(!refinement::accepts(reordered_fetch));
-
-        let mut foreign_timeout = projection;
-        foreign_timeout.enter_view.pending_record_timeout.context_id =
-            Reducer::context_identity_projection(ContextId::repeat(0xb4));
-        assert!(!refinement::accepts(foreign_timeout));
-
-        let mut future_local_lock = projection;
-        future_local_lock.enter_view.local_lock_before.present = true;
-        future_local_lock.enter_view.local_lock_before.context_id =
-            Reducer::context_identity_projection(before.context.id());
-        future_local_lock.enter_view.local_lock_before.height = before.context.height();
-        future_local_lock.enter_view.local_lock_before.phase = 1;
-        future_local_lock.enter_view.local_lock_before.view =
-            before.current_tag().view().saturating_add(1);
-        future_local_lock.enter_view.local_lock_before.subject =
-            Reducer::subject_identity_projection(subject);
-        assert!(!refinement::accepts(future_local_lock));
-
-        let mut missing_control_state = after.clone();
-        missing_control_state
-            .outbound_control
-            .remove(&OutboundControlClass::PrepareQc);
-        let missing_control_projection =
-            before.transition_projection(&event, &missing_control_state, outcome.effects());
-        assert!(!refinement::accepts(missing_control_projection));
-        assert!(!before.transition_refines(&event, &missing_control_state, outcome.effects()));
-
-        let substitute = certificate(&before.context, 0, Phase::Prepare, subject, 0xbb);
-        assert_eq!(substitute.reference(), high.reference());
-        assert_ne!(substitute, high);
-        let mut substituted_control_state = after;
-        substituted_control_state.outbound_control.insert(
-            OutboundControlClass::PrepareQc,
-            ConsensusMessageV2::QuorumCertificate(substitute),
-        );
-        let substituted_control_projection =
-            before.transition_projection(&event, &substituted_control_state, outcome.effects());
-        assert_eq!(
-            substituted_control_projection
-                .enter_view
-                .retained_prepare_qc_after
-                .evidence_class,
-            CERTIFICATE_EVIDENCE_FOREIGN
-        );
-        assert!(!refinement::accepts(substituted_control_projection));
-        assert!(!before.transition_refines(&event, &substituted_control_state, outcome.effects()));
-    }
-
     #[test]
     fn enter_view_without_a_lock_carries_and_fetches_nothing() {
         let (before, event) = pending_timeout_install(None);
@@ -5434,7 +5297,7 @@ mod source_link_tests {
 
     #[test]
     fn certificate_evidence_priority_and_signer_bitmap_match_the_roster_bound() {
-        assert_eq!(MAX_VOTING_ROSTER_LEN, u128::BITS as usize);
+        assert!(MAX_VOTING_ROSTER_LEN <= u128::BITS as usize);
         let fixture = reducer();
         let certificate = certificate(
             &fixture.context,

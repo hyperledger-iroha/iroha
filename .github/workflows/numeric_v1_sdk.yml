@@ -231,4 +231,7 @@ jobs:
         run: >-
           dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj
           --configuration Release
-          --filter "FullyQualifiedName~NumericV1Tests|FullyQualifiedName~AssetQuantityInstructionTests|FullyQualifiedName~ContractManifestTests"
+          --
+          --filter-class Hyperledger.Iroha.Sdk.Tests.NumericV1Tests
+          --filter-class Hyperledger.Iroha.Sdk.Tests.AssetQuantityInstructionTests
+          --filter-class Hyperledger.Iroha.Sdk.Tests.ContractManifestTests

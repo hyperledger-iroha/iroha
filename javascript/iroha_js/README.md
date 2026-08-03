@@ -509,6 +509,11 @@ semantic-verifier selector: V1 workspace builds target Rust `std`, and browser
 WebAssembly artifacts are not a supported release output. The authenticated
 compiler service supplies canonical Rust output, and committed ledger admission
 remains authoritative for semantic validation.
+Contract-address derivation requires the exact canonical `chainId` in both
+`deriveContractAddress(...)` and `deploySmartContractBrowser(...)`. The full
+identifier is length-framed into the address digest; `chainDiscriminant`
+remains required only for strict I105 authority decoding. Every canonical V1
+contract address uses the fixed lowercase `irohac` Bech32m prefix.
 The first release accepts only `provenance: null`; signed provenance remains
 disabled until its exact message and public-key algorithm can be verified.
 The native binding and service receive the same canonical JSON-shaped request,
@@ -616,15 +621,74 @@ import {
 
 const torii = new ToriiBrowserClient("https://taira.sora.org");
 const proofs = await torii.getLedgerBlockProof(blockHeight, transactionHash);
-const verification = verifyBlockProofs(proofs);
+// Obtain this from the application's authenticated block/finality verifier,
+// never from the same Torii proof response.
+const trustedAnchor = authenticatedLedger.blockProofAnchor(blockHeight);
+const verification = verifyBlockProofs(proofs, trustedAnchor);
 
 if (!verification.valid) throw new Error("invalid transaction Merkle evidence");
 ```
 
-This verifies the entry and optional execution-result Merkle paths only. State
-roots and commit QCs returned by `getLedgerStateRoot()` and
-`getLedgerStateProof()` remain node-provided evidence until an official
-browser QC/BLS verifier is available.
+The trusted anchor binds the requested entry hash and execution-order index,
+the block height and hash, authenticated executed-block wire hash, and exact
+`{root, leaf_count}` entry/result commitments, plus the exact FASTPQ transcript
+projection from that authenticated executed block. Entry proofs use the full
+executed-entrypoint tree so their indices are identical to result-proof indices.
+Verification fails closed when the anchor is omitted or when Torii returns a
+locally valid proof for another entry, index, or root. This SDK deliberately
+exposes no helper that derives a trusted anchor from `proofs`: copying those
+fields is circular evidence, not authentication. `verification.valid` means
+only that the response is consistent with the independently authenticated
+anchor supplied by the caller; it is not a finality verdict. Browser callers
+therefore need an application-provided native/WASM or otherwise authenticated
+finality bridge before calling this helper. Application Merkle leaves and
+internal nodes use
+distinct `iroha:merkle:leaf:v1\0` and `iroha:merkle:internal:v1\0` hash domains;
+the raw transaction/result hash is passed as the proof leaf and the verifier
+applies the leaf boundary itself. State roots and commit QCs returned by
+`getLedgerStateRoot()` and `getLedgerStateProof()` remain node-provided evidence
+until an official browser QC/BLS verifier is available.
+
+Node callers can authenticate the finality anchor and the proof together with
+the native Rust bridge. `expectedEntryHash` is the application-selected
+32-byte entrypoint hash, not a value copied from the proof response:
+
+```js
+import {
+  AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
+  ToriiClient,
+  verifyAuthenticatedBlockProofsV1,
+} from "@iroha/iroha-js";
+
+const torii = new ToriiClient("https://taira.sora.org");
+const executedBlockWire = await torii.getLedgerExecutedBlockWire(blockHeight);
+const verdict = await verifyAuthenticatedBlockProofsV1({
+  version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
+  chainId: pinnedChainId,
+  trustedContextId: pinnedHeightContextId,
+  expectedEntryHash: requestedTransactionEntrypointHash,
+  // Include the last accepted proof only when advancing one exact height.
+  previousFinalityProofNorito,
+  finalityProofNorito,
+  executedBlockWire,
+  blockProofsNorito,
+});
+
+if (!verdict.valid) throw new Error(verdict.code);
+```
+
+Malformed archives and wrong-chain, wrong-context, stale, skipped, forged-QC,
+or executed-wire mismatches reject the promise. Authenticated finality with a
+substituted entry or invalid Merkle/result/transcript proof resolves with
+`valid: false`. Retain the accepted finality proof and
+`heightContextIdHex` together as the next application-pinned successor state.
+The canonical finality and `BlockProofs` archives are available from Torii,
+and `getLedgerExecutedBlockWire(height)` fetches the exact result-bearing
+`SignedBlockWire` from `/v1/ledger/block/{height}`. Torii binds the body to the
+finalized state hash journal before returning it; staged, resultless, missing,
+or hash-inconsistent bodies fail closed. Both the route and SDK enforce the
+native verifier's 32 MiB carrier bound. Explorer/header JSON and
+`/v1/blocks/stream` are not equivalent carriers.
 
 `createConnectCanonicalRequestAuth()` passes the exact canonical request
 message (including its timestamp and nonce) to `signRaw()` under
@@ -833,7 +897,7 @@ const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
 const request = buildMultisigContractCallProposeRequest({
   multisigAccountAlias: "mintops@banka",
   signerAccountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-  contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   entrypoint: "execute",
   trigger: "staged_mint_request_hbl",
   args,
@@ -1018,8 +1082,10 @@ if (recovery) {
 ### Iterating NFTs, RWAs, and account assets
 
 The iterable helpers accept `requirePermissions` to fail fast when credentials are missing. NFT
-and RWA explorer filters accept owner/domain pagination, while account-asset queries allow
-quantity comparisons.
+and RWA Explorer lists use opaque seek cursors (`cursor` plus a `limit` from 1 through 100) and
+accept owner/domain filters, while account-asset queries allow quantity comparisons. Pass
+`pagination.nextCursor` unchanged to continue a list; a cursor is bound to its collection and
+filters.
 
 ```js
 const torii = new ToriiClient("https://torii.example", {
@@ -1035,12 +1101,12 @@ console.log("first nft page:", nftPage.items.map((it) => it.id));
 
 const rwaPage = await torii.listExplorerRwas({
   ownedBy: authority,
-  perPage: 2,
+  limit: 2,
 });
 console.log("first RWA page:", rwaPage.items.map((it) => it.id));
 
 for await (const lot of torii.iterateAccountRwas(authority, {
-  pageSize: 2,
+  limit: 2,
   domainId: "commodities",
 })) {
   console.log(`${lot.id} => ${lot.quantity}`);
@@ -2720,7 +2786,7 @@ const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
 
 const response = await torii.prepareContractCall({
   authority: AUTHORITY_ACCOUNT_ID,
-  contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   entrypoint: "increment",
   payload: { amount: 1 },
   feePayment: {
@@ -2906,7 +2972,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   authority,
   feePayment,
   proposal: {
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: Buffer.alloc(32, 0xaa),
     abiHash: "hash:…#…",
     abiVersion: "1",
@@ -2984,6 +3050,7 @@ and reuse the `ProofAttachmentInput` structure to describe verifier references.
 import {
   buildRegisterZkAssetTransaction,
   buildShieldTransaction,
+  buildUnshieldTransaction,
   buildZkTransferTransaction,
 } from "@iroha/iroha-js";
 
@@ -3037,7 +3104,30 @@ const transferTx = buildZkTransferTransaction({
   },
   privateKey,
 });
+
+const unshieldTx = buildUnshieldTransaction({
+  chainId: "test-chain",
+  authority,
+  feePayment,
+  unshield: {
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    destinationAccountId: authority,
+    publicAmount: "3",
+    inputs: [Buffer.alloc(32, 0x03)],
+    proof: {
+      backend: "halo2/ipa",
+      proof: Buffer.from("proof-bytes", "base64"),
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
+    },
+  },
+  privateKey,
+});
 ```
+
+`UnshieldInstructionInput` has no caller-supplied output commitments. The
+verified statement determines every private output; an `outputs` property is a
+retired pre-release shape and is rejected by both the builder and the canonical
+Norito codec rather than ignored.
 
 `ProofAttachmentInput` requires the exact `{ backend, name }`
 `verifyingKeyRef` shape; string shorthands, aliases, and embedded key bytes are
@@ -3563,7 +3653,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18, 20]
+        node-version: [18, 20, 22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -3587,9 +3677,8 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - run: npm install
-      - run: npm run build:native
-      - run: npm test
+      - run: npm ci --ignore-scripts
+      - run: npm run lint:test
 ```
 
 ## Integration Smoke Tests
@@ -3605,7 +3694,7 @@ file; selecting the live suite without `IROHA_TORII_INTEGRATION_URL` fails.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the payload for `createConnectSession()` (`{"sid":"<hex>","node":"torii.devnet.example"}` is a common pattern).
 - `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}` is sufficient). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
-- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"feePayment":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"pipeline_gas","value":null},"asset_definition_id":"xor#universal","max_amount":"1500000"}],"gas_limit":1500000}}}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.prepareContractCall` and validates the returned local-signing draft. The helper accepts camelCase keys plus overrides for `authority` and the required exact quoted `feePayment` intent.
+- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw","entrypoint":"ping","payload":{"value":1},"feePayment":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"pipeline_gas","value":null},"asset_definition_id":"xor#universal","max_amount":"1500000"}],"gas_limit":1500000}}}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.prepareContractCall` and validates the returned local-signing draft. The helper accepts camelCase keys plus overrides for `authority` and the required exact quoted `feePayment` intent.
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
 - `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional override for the default devnet chain id (`00000000-0000-0000-0000-000000000000`).
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
@@ -3637,25 +3726,32 @@ node --test javascript/iroha_js/test/integrationTorii.test.js
 
 ### Dockerised harness (`npm run test:integration`)
 
-Use the bundled integration harness to spin up the single-node Docker Compose
-topology, wait for `/status`, and run the mutation-enabled smoke suite:
+Use the bundled integration harness to spin up the four-validator Docker
+Compose topology, wait for `/status`, and run the mutation-enabled smoke suite.
+The `docker-compose.single.yml` filename is retained for compatibility; it no
+longer denotes a one-validator network.
 
 ```bash
-target/debug/kagami keys --out-dir target/js-integration-genesis
-export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/js-integration-genesis/public.key"
-export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/js-integration-genesis/private.key"
+export IROHA_GENESIS_SIGNED_FILE="$PWD/target/js-integration-genesis/genesis.signed.nrt"
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/js-integration-genesis/genesis.public_key"
+export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/js-integration-genesis/genesis.expected_hash"
 npm run test:integration
 ```
 
-Build `kagami` first if it is not already available. The default Compose stack
-contains no genesis signing key; the harness validates both runtime file paths
-before starting it. Never commit the private file.
+The default stack is an explicitly seeded development fixture. Prepare those
+artifacts for its exact validator roster with Kagami beforehand; do not reuse a
+random localnet body. The stack contains no genesis signing key or runtime
+signer; the harness validates all three read-only inputs before starting it.
+Normal generated deployments use seedless `kagami docker` prepared-bundle mode
+and embed validated artifact paths directly.
 
 `scripts/run_integration.mjs` performs the following steps:
 
 1. Runs `npm ci` and rebuilds the native binding.
-2. Starts `docker compose -f defaults/docker-compose.single.yml up -d irohad0`
-   unless `--no-start` (or `JS_TORII_START=0`) is supplied.
+2. Starts all four validators in
+   `defaults/docker-compose.single.yml` unless `--no-start` (or
+   `JS_TORII_START=0`) is supplied. Use `--service` only to select one
+   explicit service for a custom workflow.
 3. Waits up to 90 s for `http://127.0.0.1:8080/status` (override via
    `--torii-url`/`--wait-seconds`/`IROHA_TORII_INTEGRATION_URL`).
 4. Sets the mutation env vars (chain id, account id, private key) and runs
@@ -3665,10 +3761,12 @@ before starting it. Never commit the private file.
 Flags/environment variables:
 
 - `--compose-file` (or `JS_TORII_COMPOSE_FILE`) to point at a custom compose manifest.
-- `--service` / `COMPOSE_SERVICE` to target a different service name.
+- `--service` / `COMPOSE_SERVICE` to start only one explicitly selected
+  service instead of the full validator stack.
 - `--compose-bin` / `JS_TORII_COMPOSE_BIN` to use a non-default compose command.
-- `IROHA_GENESIS_PUBLIC_KEY_FILE` and `IROHA_GENESIS_PRIVATE_KEY_FILE` supply
-  the runtime-only genesis custody required by the default Compose manifest.
+- `IROHA_GENESIS_SIGNED_FILE`, `IROHA_GENESIS_PUBLIC_KEY_FILE`, and
+  `IROHA_GENESIS_EXPECTED_HASH_FILE` supply the runtime-only trust-root bundle
+  required by the default Compose manifest.
 - `--no-start` to reuse an existing node (the harness still waits for `/status`).
 - `--qualification` (or `JS_TORII_QUALIFICATION=1`) to require the complete live SoraFS, UAID/dataspace, Space Directory, DA ticket, and dual-gateway input set before any test starts. `npm run test:integration:qualification` is the equivalent package command.
 - Pass additional `node --test` arguments after `--`, for example:
@@ -3852,7 +3950,7 @@ for await (const balance of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶr�
 }
 
 const governedContract = await torii.getGovernanceContract(
-  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
 );
 console.log("governed contract:", governedContract.contract_address, governedContract.code_hash_hex);
 
@@ -3968,7 +4066,7 @@ console.log("matching NFTs", nftIds);
 const ownedNfts = [];
 for await (const nft of torii.iterateAccountNfts("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   domainId: "wonderland",
-  pageSize: 10,
+  limit: 10,
 })) {
   ownedNfts.push(nft.id);
 }
@@ -3993,7 +4091,7 @@ for await (const event of torii.streamEvents({
 }
 
 const governanceBinding = await torii.getGovernanceContract(
-  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
 );
 console.log(
   `${governanceBinding.contract_address} :: ${governanceBinding.code_hash_hex}`,
@@ -4026,7 +4124,7 @@ if (!tallyResult.found) {
 // Governance write helpers also accept AbortSignal options so transactions can be cancelled.
 const writeController = new AbortController();
 const deployDraft = await torii.governanceProposeDeployContract({
-  contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   codeHash: "hash:7B38...#ABCD",
   abiHash: Buffer.alloc(32, 0xaa),
   abiVersion: "1",

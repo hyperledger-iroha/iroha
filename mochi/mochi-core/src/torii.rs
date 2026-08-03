@@ -14,8 +14,11 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use futures::SinkExt;
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
+};
+use futures::{SinkExt, future::join_all};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     Identifiable,
@@ -446,6 +449,100 @@ pub struct ReadinessOptions {
     pub timeout: Duration,
     /// Delay between successive probes while waiting for readiness.
     pub poll_interval: Duration,
+}
+
+/// A managed Torii peer that failed to report a committed genesis block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedPeerGenesisFailure {
+    /// Stable peer alias from the managed topology.
+    pub alias: String,
+    /// Torii base URL that was probed.
+    pub base_url: String,
+    /// Classified failure returned by the peer's readiness probe.
+    pub error: ToriiErrorInfo,
+}
+
+/// Failure of the all-managed-peer genesis readiness gate.
+#[derive(Debug, thiserror::Error)]
+pub enum ManagedPeerGenesisReadinessError {
+    /// No managed peers were supplied to the gate.
+    #[error("cannot wait for committed genesis because no managed Torii peers were supplied")]
+    NoManagedPeers,
+    /// One or more managed peers failed to report committed genesis before the deadline.
+    #[error("not every managed Torii peer reported committed genesis: {diagnostics}")]
+    PeerFailures {
+        /// Actionable alias, endpoint, and error details for every failed peer.
+        diagnostics: String,
+        /// Structured failures for callers that render their own diagnostics.
+        failures: Vec<ManagedPeerGenesisFailure>,
+    },
+}
+
+impl ManagedPeerGenesisReadinessError {
+    /// Structured per-peer failures, or an empty slice when no peers were supplied.
+    #[must_use]
+    pub fn failures(&self) -> &[ManagedPeerGenesisFailure] {
+        match self {
+            Self::NoManagedPeers => &[],
+            Self::PeerFailures { failures, .. } => failures,
+        }
+    }
+}
+
+/// Wait concurrently until every managed Torii peer reports at least one committed block.
+///
+/// Each peer receives the same bounded readiness deadline. Running the probes concurrently keeps
+/// the topology-wide gate bounded by that deadline rather than multiplying it by the peer count.
+/// No transaction should be submitted to a managed multi-peer network before this gate succeeds.
+pub async fn wait_for_all_managed_peers_genesis(
+    peers: Vec<(String, ToriiClient)>,
+    options: ReadinessOptions,
+) -> Result<Vec<(String, ToriiStatusSnapshot)>, ManagedPeerGenesisReadinessError> {
+    if peers.is_empty() {
+        return Err(ManagedPeerGenesisReadinessError::NoManagedPeers);
+    }
+
+    let probes = peers.into_iter().map(|(alias, client)| async move {
+        let base_url = client.base_url().to_owned();
+        let result = client.wait_for_genesis_commit(options).await;
+        (alias, base_url, result)
+    });
+    let mut committed = Vec::new();
+    let mut failures = Vec::new();
+    for (alias, base_url, result) in join_all(probes).await {
+        match result {
+            Ok(snapshot) => committed.push((alias, snapshot)),
+            Err(error) => failures.push(ManagedPeerGenesisFailure {
+                alias,
+                base_url,
+                error: error.summarize(),
+            }),
+        }
+    }
+
+    if failures.is_empty() {
+        return Ok(committed);
+    }
+
+    let diagnostics = failures
+        .iter()
+        .map(|failure| {
+            let detail = failure
+                .error
+                .detail
+                .as_deref()
+                .map_or_else(String::new, |detail| format!(" ({detail})"));
+            format!(
+                "{} at {}: {}{}",
+                failure.alias, failure.base_url, failure.error.message, detail
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(ManagedPeerGenesisReadinessError::PeerFailures {
+        diagnostics,
+        failures,
+    })
 }
 
 impl ReadinessOptions {
@@ -1229,6 +1326,147 @@ impl ExplorerPaginationMeta {
     }
 }
 
+const EXPLORER_CURSOR_MAX_LENGTH: usize = 1_424;
+const EXPLORER_CURSOR_MAX_LIMIT: u32 = 100;
+
+fn require_exact_explorer_fields(
+    record: &json::Map,
+    expected: &[&str],
+    context: &str,
+) -> ToriiResult<()> {
+    if record.len() != expected.len() || expected.iter().any(|field| !record.contains_key(*field)) {
+        return Err(decode_error(
+            context,
+            format!("must contain exactly these fields: {}", expected.join(", ")),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_explorer_items_len(
+    items_len: usize,
+    pagination: &ExplorerCursorMeta,
+    context: &str,
+) -> ToriiResult<()> {
+    if items_len > pagination.limit as usize {
+        return Err(decode_error(
+            context,
+            format!(
+                "must contain at most {} entries, matching pagination.limit",
+                pagination.limit
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Seek-pagination metadata returned by Explorer world-collection APIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerCursorMeta {
+    /// Maximum number of entries requested for this page.
+    pub limit: u32,
+    /// Opaque cursor for the next page, when another page exists.
+    pub next_cursor: Option<String>,
+    /// Whether another page exists for the same collection and filters.
+    pub has_more: bool,
+}
+
+impl ExplorerCursorMeta {
+    fn from_json(value: &json::Value, context: &str) -> ToriiResult<Self> {
+        let record = value
+            .as_object()
+            .ok_or_else(|| decode_error(context, "must be a JSON object"))?;
+        require_exact_explorer_fields(record, &["limit", "next_cursor", "has_more"], context)?;
+        let limit_value = record
+            .get("limit")
+            .ok_or_else(|| decode_error(&format!("{context}.limit"), "missing field"))?;
+        let limit = parse_u64_value(limit_value, false, &format!("{context}.limit"))?;
+        let limit = u32::try_from(limit)
+            .ok()
+            .filter(|limit| *limit <= EXPLORER_CURSOR_MAX_LIMIT)
+            .ok_or_else(|| {
+                decode_error(
+                    &format!("{context}.limit"),
+                    format!("must be between 1 and {EXPLORER_CURSOR_MAX_LIMIT}"),
+                )
+            })?;
+        let next_cursor = match record.get("next_cursor") {
+            Some(value) if value.is_null() => None,
+            Some(value) => {
+                let cursor = value.as_str().ok_or_else(|| {
+                    decode_error(
+                        &format!("{context}.next_cursor"),
+                        "must be a string or null",
+                    )
+                })?;
+                validate_explorer_cursor(cursor, &format!("{context}.next_cursor"))?;
+                Some(cursor.to_owned())
+            }
+            None => {
+                return Err(decode_error(
+                    &format!("{context}.next_cursor"),
+                    "missing field",
+                ));
+            }
+        };
+        let has_more = record
+            .get("has_more")
+            .and_then(json::Value::as_bool)
+            .ok_or_else(|| decode_error(&format!("{context}.has_more"), "must be a boolean"))?;
+        if has_more != next_cursor.is_some() {
+            return Err(decode_error(
+                context,
+                "has_more must match next_cursor availability",
+            ));
+        }
+        Ok(Self {
+            limit,
+            next_cursor,
+            has_more,
+        })
+    }
+}
+
+fn validate_explorer_cursor<'a>(cursor: &'a str, context: &str) -> ToriiResult<&'a str> {
+    let canonical = !cursor.is_empty()
+        && cursor.len() <= EXPLORER_CURSOR_MAX_LENGTH
+        && URL_SAFE_NO_PAD
+            .decode(cursor)
+            .map(|decoded| URL_SAFE_NO_PAD.encode(decoded) == cursor)
+            .unwrap_or(false);
+    if !canonical {
+        return Err(decode_error(
+            context,
+            format!(
+                "must be canonical base64url without padding and at most {EXPLORER_CURSOR_MAX_LENGTH} characters"
+            ),
+        ));
+    }
+    Ok(cursor)
+}
+
+fn append_explorer_cursor_params(
+    params: &mut Vec<(&'static str, String)>,
+    cursor: Option<String>,
+    limit: Option<u32>,
+    context: &str,
+) -> ToriiResult<()> {
+    if let Some(cursor) = cursor {
+        validate_explorer_cursor(&cursor, &format!("{context}.cursor"))?;
+        params.push(("cursor", cursor));
+    }
+    if let Some(limit) = limit {
+        if !(1..=EXPLORER_CURSOR_MAX_LIMIT).contains(&limit) {
+            return Err(decode_error(
+                &format!("{context}.limit"),
+                format!("must be between 1 and {EXPLORER_CURSOR_MAX_LIMIT}"),
+            ));
+        }
+        params.push(("limit", limit.to_string()));
+    }
+    Ok(())
+}
+
 /// Explorer block summary returned by `/v1/blocks` endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerBlockRecord {
@@ -1431,8 +1669,8 @@ impl ExplorerAccountRecord {
 /// Explorer `/v1/explorer/accounts` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountsPage {
-    /// Pagination metadata returned by Explorer.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Explorer.
+    pub pagination: ExplorerCursorMeta,
     /// Account entries in the requested page.
     pub items: Vec<ExplorerAccountRecord>,
 }
@@ -1442,16 +1680,20 @@ impl ExplorerAccountsPage {
         let doc = value
             .as_object()
             .ok_or_else(|| decode_error("explorer accounts page", "must be a JSON object"))?;
+        require_exact_explorer_fields(doc, &["pagination", "items"], "explorer accounts page")?;
         let pagination = doc
             .get("pagination")
             .ok_or_else(|| decode_error("explorer accounts page", "missing pagination field"))
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer accounts page.pagination")
+            })?;
         let items_value = doc
             .get("items")
             .ok_or_else(|| decode_error("explorer accounts page", "missing items field"))?;
         let items = items_value
             .as_array()
             .ok_or_else(|| decode_error("explorer accounts page.items", "must be a JSON array"))?;
+        validate_explorer_items_len(items.len(), &pagination, "explorer accounts page.items")?;
         let mut parsed = Vec::with_capacity(items.len());
         for (index, entry) in items.iter().enumerate() {
             let record = ExplorerAccountRecord::from_json(entry).map_err(|err| {
@@ -1472,10 +1714,10 @@ impl ExplorerAccountsPage {
 /// Parameters accepted by `/v1/explorer/accounts`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerAccountsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional domain filter (canonical identifier).
     pub domain: Option<String>,
     /// Optional asset definition filter (`definition#domain` literal).
@@ -1548,8 +1790,8 @@ impl ExplorerDomainRecord {
 /// Explorer `/v1/explorer/domains` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerDomainsPage {
-    /// Pagination metadata returned by Torii.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
     /// Domain entries contained in the page.
     pub items: Vec<ExplorerDomainRecord>,
 }
@@ -1559,16 +1801,28 @@ impl ExplorerDomainsPage {
         let record = value
             .as_object()
             .ok_or_else(|| decode_error("explorer domains response", "must be a JSON object"))?;
+        require_exact_explorer_fields(
+            record,
+            &["pagination", "items"],
+            "explorer domains response",
+        )?;
         let pagination = record
             .get("pagination")
             .ok_or_else(|| decode_error("explorer domains response", "missing pagination field"))
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer domains response.pagination")
+            })?;
         let items_value = record
             .get("items")
             .ok_or_else(|| decode_error("explorer domains response", "missing items field"))?;
         let items_array = items_value.as_array().ok_or_else(|| {
             decode_error("explorer domains response.items", "must be a JSON array")
         })?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer domains response.items",
+        )?;
         let mut items = Vec::with_capacity(items_array.len());
         for (index, entry) in items_array.iter().enumerate() {
             let record = ExplorerDomainRecord::from_json(entry).map_err(|err| {
@@ -1586,10 +1840,10 @@ impl ExplorerDomainsPage {
 /// Parameters accepted by `/v1/explorer/domains`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerDomainsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional filter restricting the owning account.
     pub owned_by: Option<String>,
 }
@@ -1657,8 +1911,8 @@ impl ExplorerAssetDefinitionRecord {
 /// Explorer `/v1/explorer/asset-definitions` response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetDefinitionsPage {
-    /// Pagination metadata returned by Torii.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
     /// Asset definition entries contained in the page.
     pub items: Vec<ExplorerAssetDefinitionRecord>,
 }
@@ -1671,6 +1925,11 @@ impl ExplorerAssetDefinitionsPage {
                 "must be a JSON object",
             )
         })?;
+        require_exact_explorer_fields(
+            record,
+            &["pagination", "items"],
+            "explorer asset definitions response",
+        )?;
         let pagination = record
             .get("pagination")
             .ok_or_else(|| {
@@ -1679,7 +1938,12 @@ impl ExplorerAssetDefinitionsPage {
                     "missing pagination field",
                 )
             })
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(
+                    value,
+                    "explorer asset definitions response.pagination",
+                )
+            })?;
         let items_value = record.get("items").ok_or_else(|| {
             decode_error("explorer asset definitions response", "missing items field")
         })?;
@@ -1689,6 +1953,11 @@ impl ExplorerAssetDefinitionsPage {
                 "must be a JSON array",
             )
         })?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer asset definitions response.items",
+        )?;
         let mut items = Vec::with_capacity(items_array.len());
         for (index, entry) in items_array.iter().enumerate() {
             let record = ExplorerAssetDefinitionRecord::from_json(entry).map_err(|err| {
@@ -1706,10 +1975,10 @@ impl ExplorerAssetDefinitionsPage {
 /// Parameters accepted by `/v1/explorer/asset-definitions`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerAssetDefinitionsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional domain filter restricting results.
     pub domain: Option<String>,
     /// Optional owning account filter.
@@ -1755,8 +2024,8 @@ impl ExplorerAssetRecord {
 /// Explorer `/v1/explorer/assets` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetsPage {
-    /// Pagination metadata returned by Torii.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
     /// Asset entries in the page.
     pub items: Vec<ExplorerAssetRecord>,
 }
@@ -1766,16 +2035,28 @@ impl ExplorerAssetsPage {
         let record = value
             .as_object()
             .ok_or_else(|| decode_error("explorer assets response", "must be a JSON object"))?;
+        require_exact_explorer_fields(
+            record,
+            &["pagination", "items"],
+            "explorer assets response",
+        )?;
         let pagination = record
             .get("pagination")
             .ok_or_else(|| decode_error("explorer assets response", "missing pagination field"))
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer assets response.pagination")
+            })?;
         let items_value = record
             .get("items")
             .ok_or_else(|| decode_error("explorer assets response", "missing items field"))?;
         let items_array = items_value.as_array().ok_or_else(|| {
             decode_error("explorer assets response.items", "must be a JSON array")
         })?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer assets response.items",
+        )?;
         let mut items = Vec::with_capacity(items_array.len());
         for (index, entry) in items_array.iter().enumerate() {
             let record = ExplorerAssetRecord::from_json(entry).map_err(|err| {
@@ -1793,10 +2074,10 @@ impl ExplorerAssetsPage {
 /// Parameters accepted by `/v1/explorer/assets`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerAssetsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional owning account filter.
     pub owned_by: Option<String>,
     /// Optional definition filter (`definition#domain` literal).
@@ -1837,8 +2118,8 @@ impl ExplorerNftRecord {
 /// Explorer `/v1/explorer/nfts` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerNftsPage {
-    /// Pagination metadata returned by Torii.
-    pub pagination: ExplorerPaginationMeta,
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
     /// NFT entries included in the page.
     pub items: Vec<ExplorerNftRecord>,
 }
@@ -1848,16 +2129,24 @@ impl ExplorerNftsPage {
         let record = value
             .as_object()
             .ok_or_else(|| decode_error("explorer nfts response", "must be a JSON object"))?;
+        require_exact_explorer_fields(record, &["pagination", "items"], "explorer nfts response")?;
         let pagination = record
             .get("pagination")
             .ok_or_else(|| decode_error("explorer nfts response", "missing pagination field"))
-            .and_then(ExplorerPaginationMeta::from_json)?;
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer nfts response.pagination")
+            })?;
         let items_value = record
             .get("items")
             .ok_or_else(|| decode_error("explorer nfts response", "missing items field"))?;
         let items_array = items_value
             .as_array()
             .ok_or_else(|| decode_error("explorer nfts response.items", "must be a JSON array"))?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer nfts response.items",
+        )?;
         let mut items = Vec::with_capacity(items_array.len());
         for (index, entry) in items_array.iter().enumerate() {
             let record = ExplorerNftRecord::from_json(entry).map_err(|err| {
@@ -1875,13 +2164,182 @@ impl ExplorerNftsPage {
 /// Parameters accepted by `/v1/explorer/nfts`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerNftsQuery {
-    /// Page number (1-indexed). Mirrors Torii defaults when omitted.
-    pub page: Option<u64>,
-    /// Maximum number of entries per page.
-    pub per_page: Option<u64>,
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
     /// Optional owning account filter.
     pub owned_by: Option<String>,
     /// Optional domain filter restricting NFT IDs.
+    pub domain: Option<String>,
+}
+
+/// Parent-lot quantity returned with an Explorer RWA record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerRwaParentRecord {
+    /// Canonical parent RWA identifier.
+    pub rwa: String,
+    /// Quantity inherited from the parent lot.
+    pub quantity: String,
+}
+
+impl ExplorerRwaParentRecord {
+    fn from_json(value: &json::Value) -> ToriiResult<Self> {
+        let record = value
+            .as_object()
+            .ok_or_else(|| decode_error("explorer RWA parent", "must be a JSON object"))?;
+        Ok(Self {
+            rwa: parse_required_string(record, &["rwa"], "explorer RWA parent.rwa")?,
+            quantity: parse_required_string(record, &["quantity"], "explorer RWA parent.quantity")?,
+        })
+    }
+}
+
+/// Explorer RWA entry returned by `/v1/explorer/rwas`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerRwaRecord {
+    /// Canonical RWA identifier.
+    pub id: String,
+    /// Account that currently owns the RWA.
+    pub owned_by: String,
+    /// Total lot quantity.
+    pub quantity: String,
+    /// Quantity currently held from transfer.
+    pub held_quantity: String,
+    /// Primary external reference for the RWA.
+    pub primary_reference: String,
+    /// Optional lifecycle status.
+    pub status: Option<String>,
+    /// Whether transfers are frozen.
+    pub is_frozen: bool,
+    /// Metadata attached to the RWA.
+    pub metadata: json::Value,
+    /// Parent-lot relationships.
+    pub parents: Vec<ExplorerRwaParentRecord>,
+}
+
+impl ExplorerRwaRecord {
+    fn from_json(value: &json::Value) -> ToriiResult<Self> {
+        let record = value
+            .as_object()
+            .ok_or_else(|| decode_error("explorer RWA record", "must be a JSON object"))?;
+        let status = match record.get("status") {
+            None | Some(json::Value::Null) => None,
+            Some(value) => {
+                let status = value.as_str().ok_or_else(|| {
+                    decode_error("explorer RWA record.status", "must be a string or null")
+                })?;
+                if status.is_empty() {
+                    return Err(decode_error(
+                        "explorer RWA record.status",
+                        "must not be empty",
+                    ));
+                }
+                Some(status.to_owned())
+            }
+        };
+        let is_frozen = record
+            .get("is_frozen")
+            .and_then(json::Value::as_bool)
+            .ok_or_else(|| decode_error("explorer RWA record.is_frozen", "must be a boolean"))?;
+        let parents = match record.get("parents") {
+            None => Vec::new(),
+            Some(value) => value
+                .as_array()
+                .ok_or_else(|| decode_error("explorer RWA record.parents", "must be a JSON array"))?
+                .iter()
+                .enumerate()
+                .map(|(index, parent)| {
+                    ExplorerRwaParentRecord::from_json(parent).map_err(|error| {
+                        decode_error(
+                            "explorer RWA record.parents",
+                            format!("failed to decode entry {index}: {error}"),
+                        )
+                    })
+                })
+                .collect::<ToriiResult<Vec<_>>>()?,
+        };
+        Ok(Self {
+            id: parse_required_string(record, &["id"], "explorer RWA record.id")?,
+            owned_by: parse_required_string(record, &["owned_by"], "explorer RWA record.owned_by")?,
+            quantity: parse_required_string(record, &["quantity"], "explorer RWA record.quantity")?,
+            held_quantity: parse_required_string(
+                record,
+                &["held_quantity"],
+                "explorer RWA record.held_quantity",
+            )?,
+            primary_reference: parse_required_string(
+                record,
+                &["primary_reference"],
+                "explorer RWA record.primary_reference",
+            )?,
+            status,
+            is_frozen,
+            metadata: record
+                .get("metadata")
+                .cloned()
+                .unwrap_or_else(|| json::Value::Object(json::Map::new())),
+            parents,
+        })
+    }
+}
+
+/// Explorer `/v1/explorer/rwas` response model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerRwasPage {
+    /// Seek-pagination metadata returned by Torii.
+    pub pagination: ExplorerCursorMeta,
+    /// RWA entries included in the page.
+    pub items: Vec<ExplorerRwaRecord>,
+}
+
+impl ExplorerRwasPage {
+    fn from_json(value: &json::Value) -> ToriiResult<Self> {
+        let record = value
+            .as_object()
+            .ok_or_else(|| decode_error("explorer rwas response", "must be a JSON object"))?;
+        require_exact_explorer_fields(record, &["pagination", "items"], "explorer rwas response")?;
+        let pagination = record
+            .get("pagination")
+            .ok_or_else(|| decode_error("explorer rwas response", "missing pagination field"))
+            .and_then(|value| {
+                ExplorerCursorMeta::from_json(value, "explorer rwas response.pagination")
+            })?;
+        let items_array = record
+            .get("items")
+            .and_then(json::Value::as_array)
+            .ok_or_else(|| decode_error("explorer rwas response.items", "must be a JSON array"))?;
+        validate_explorer_items_len(
+            items_array.len(),
+            &pagination,
+            "explorer rwas response.items",
+        )?;
+        let items = items_array
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                ExplorerRwaRecord::from_json(value).map_err(|error| {
+                    decode_error(
+                        "explorer rwas response.items",
+                        format!("failed to decode entry {index}: {error}"),
+                    )
+                })
+            })
+            .collect::<ToriiResult<Vec<_>>>()?;
+        Ok(Self { pagination, items })
+    }
+}
+
+/// Parameters accepted by `/v1/explorer/rwas`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExplorerRwasQuery {
+    /// Opaque cursor returned by the preceding page.
+    pub cursor: Option<String>,
+    /// Maximum number of entries to return (1 through 100).
+    pub limit: Option<u32>,
+    /// Optional owning account filter.
+    pub owned_by: Option<String>,
+    /// Optional domain filter restricting RWA IDs.
     pub domain: Option<String>,
 }
 
@@ -2623,6 +3081,11 @@ impl ToriiClient {
     /// URL of the `/v1/explorer/nfts` endpoint.
     pub fn explorer_nfts_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/nfts")
+    }
+
+    /// URL of the `/v1/explorer/rwas` endpoint.
+    pub fn explorer_rwas_endpoint(&self) -> ToriiResult<Url> {
+        self.http_endpoint("v1/explorer/rwas")
     }
 
     /// URL of the `/v1/explorer/transactions/{hash}` endpoint.
@@ -3396,12 +3859,12 @@ impl ToriiClient {
         let url = self.explorer_accounts_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer accounts query",
+        )?;
         if let Some(domain) = query.domain {
             let trimmed = domain.trim();
             if !trimmed.is_empty() {
@@ -3438,12 +3901,12 @@ impl ToriiClient {
         let url = self.explorer_domains_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer domains query",
+        )?;
         if let Some(owned_by) = query
             .owned_by
             .as_ref()
@@ -3476,12 +3939,12 @@ impl ToriiClient {
         let url = self.explorer_asset_definitions_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer asset definitions query",
+        )?;
         if let Some(domain) = query
             .domain
             .as_ref()
@@ -3522,12 +3985,12 @@ impl ToriiClient {
         let url = self.explorer_assets_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer assets query",
+        )?;
         if let Some(owned_by) = query
             .owned_by
             .as_ref()
@@ -3568,12 +4031,12 @@ impl ToriiClient {
         let url = self.explorer_nfts_endpoint()?;
         let mut request = self.http.get(url);
         let mut params: Vec<(&str, String)> = Vec::new();
-        if let Some(page) = query.page {
-            params.push(("page", page.to_string()));
-        }
-        if let Some(per_page) = query.per_page {
-            params.push(("per_page", per_page.to_string()));
-        }
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer nfts query",
+        )?;
         if let Some(owned_by) = query
             .owned_by
             .as_ref()
@@ -3604,6 +4067,52 @@ impl ToriiClient {
         let bytes = response.bytes().await?;
         let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
         ExplorerNftsPage::from_json(&value)
+    }
+
+    /// Fetch Explorer RWA summaries from `/v1/explorer/rwas`.
+    pub async fn fetch_explorer_rwas_page(
+        &self,
+        query: ExplorerRwasQuery,
+    ) -> ToriiResult<ExplorerRwasPage> {
+        let url = self.explorer_rwas_endpoint()?;
+        let mut request = self.http.get(url);
+        let mut params: Vec<(&str, String)> = Vec::new();
+        append_explorer_cursor_params(
+            &mut params,
+            query.cursor,
+            query.limit,
+            "explorer rwas query",
+        )?;
+        if let Some(owned_by) = query
+            .owned_by
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            params.push(("owned_by", owned_by.to_owned()));
+        }
+        if let Some(domain) = query
+            .domain
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            params.push(("domain", domain.to_owned()));
+        }
+        if !params.is_empty() {
+            request = request.query(&params);
+        }
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        ExplorerRwasPage::from_json(&value)
     }
 
     /// List triggers exposed by `/v1/triggers`.
@@ -4400,6 +4909,9 @@ fn data_summary(event: &DataEvent) -> (String, String) {
     match event {
         DataEvent::Peer(peer) => peer_event_summary(peer),
         DataEvent::Domain(domain) => domain_event_summary(domain),
+        DataEvent::Account(account) => account_event_summary(account),
+        DataEvent::Asset(asset) => asset_event_summary(asset),
+        DataEvent::AssetDefinition(definition) => asset_definition_event_summary(definition),
         DataEvent::Trigger(trigger) => ("Trigger".to_owned(), format!("{trigger:?}")),
         DataEvent::Role(role) => ("Role".to_owned(), format!("{role:?}")),
         DataEvent::Configuration(config) => ("Configuration".to_owned(), format!("{config:?}")),
@@ -4431,8 +4943,11 @@ fn domain_event_summary(event: &DomainEvent) -> (String, String) {
     match event {
         DomainEvent::Created(domain) => ("Domain created".to_owned(), domain.id().to_string()),
         DomainEvent::Deleted(id) => ("Domain deleted".to_owned(), id.to_string()),
-        DomainEvent::Account(account) => account_event_summary(account),
-        DomainEvent::AssetDefinition(definition) => asset_definition_event_summary(definition),
+        DomainEvent::Account(account) => account_event_summary(&account.event),
+        DomainEvent::Asset(asset) => asset_event_summary(&asset.event),
+        DomainEvent::AssetDefinition(definition) => {
+            asset_definition_event_summary(&definition.event)
+        }
         DomainEvent::Nft(nft) => nft_event_summary(nft),
         DomainEvent::MetadataInserted(change) => (
             "Domain metadata inserted".to_owned(),
@@ -4456,7 +4971,6 @@ fn account_event_summary(event: &AccountEvent) -> (String, String) {
             account.account.id().to_string(),
         ),
         AccountEvent::Deleted(id) => ("Account deleted".to_owned(), id.to_string()),
-        AccountEvent::Asset(asset_event) => asset_event_summary(asset_event),
         AccountEvent::ControllerReplaced(change) => (
             "Account controller replaced".to_owned(),
             format!(
@@ -4899,662 +5413,7 @@ impl Drop for EventStream {
     }
 }
 
-const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
-const MAX_BACKOFF: Duration = Duration::from_secs(8);
-
-/// Reconnecting wrapper around [`BlockStream`] that automatically retries with backoff.
-#[derive(Debug)]
-pub struct ManagedBlockStream {
-    sender: broadcast::Sender<BlockStreamEvent>,
-    shutdown: watch::Sender<bool>,
-    worker: JoinHandle<()>,
-    alias: Arc<str>,
-}
-
-impl ManagedBlockStream {
-    /// Spawn a reconnection loop for `/v1/blocks/stream` using the provided runtime handle.
-    ///
-    /// The `alias` is used for diagnostics so UI layers can attribute log messages
-    /// and reconnection notices to the originating peer.
-    pub fn spawn(handle: &Handle, alias: String, client: ToriiClient) -> Self {
-        Self::spawn_with_factory(handle, alias, move || {
-            let client = client.clone();
-            async move { client.subscribe_block_stream().await }
-        })
-    }
-
-    fn spawn_with_factory<F, Fut>(handle: &Handle, alias: impl Into<String>, factory: F) -> Self
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ToriiResult<WsSubscription>> + Send + 'static,
-    {
-        let (shutdown, mut shutdown_rx) = watch::channel(false);
-        let (sender, _) = broadcast::channel(128);
-        let alias: Arc<str> = Arc::from(alias.into().into_boxed_str());
-        let factory = Arc::new(factory);
-        let run_factory = factory.clone();
-        let run_sender = sender.clone();
-        let run_alias = alias.clone();
-        let worker = handle.spawn(async move {
-            run_managed_block_stream(run_alias, run_factory, run_sender, &mut shutdown_rx).await;
-        });
-
-        Self {
-            sender,
-            shutdown,
-            worker,
-            alias,
-        }
-    }
-
-    /// Acquire a receiver that yields decoded block events with reconnection semantics.
-    pub fn subscribe(&self) -> broadcast::Receiver<BlockStreamEvent> {
-        self.sender.subscribe()
-    }
-
-    /// Abort the reconnection loop and underlying subscription, if running.
-    pub fn abort(&self) {
-        let _ = self.shutdown.send(true);
-        if !self.worker.is_finished() {
-            self.worker.abort();
-        }
-    }
-
-    /// Returns `true` when the reconnection loop has finished executing.
-    pub fn is_finished(&self) -> bool {
-        self.worker.is_finished()
-    }
-
-    /// Returns the alias associated with this managed stream.
-    pub fn alias(&self) -> &str {
-        self.alias.as_ref()
-    }
-}
-
-impl Drop for ManagedBlockStream {
-    fn drop(&mut self) {
-        self.abort();
-    }
-}
-
-async fn run_managed_block_stream<F, Fut>(
-    alias: Arc<str>,
-    factory: Arc<F>,
-    sender: broadcast::Sender<BlockStreamEvent>,
-    shutdown: &mut watch::Receiver<bool>,
-) where
-    F: Fn() -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ToriiResult<WsSubscription>> + Send + 'static,
-{
-    let mut backoff = INITIAL_BACKOFF;
-    let mut has_connected = false;
-    loop {
-        if shutdown_requested(shutdown) {
-            break;
-        }
-
-        let subscription = match (factory.as_ref())().await {
-            Ok(subscription) => subscription,
-            Err(err) => {
-                let _ = sender.send(BlockStreamEvent::DecodeError {
-                    error: BlockStreamDecodeError::new(
-                        BlockDecodeStage::Stream,
-                        0,
-                        err.to_string(),
-                    ),
-                });
-                let _ = sender.send(BlockStreamEvent::Text {
-                    text: format!(
-                        "Block stream `{}` reconnecting after error: {err}",
-                        alias.as_ref()
-                    ),
-                });
-
-                if wait_for_shutdown_or_delay(shutdown, backoff).await {
-                    break;
-                }
-                backoff = (backoff.saturating_mul(2)).min(MAX_BACKOFF);
-                continue;
-            }
-        };
-
-        if has_connected {
-            let _ = sender.send(BlockStreamEvent::Text {
-                text: format!("Block stream `{}` reconnected.", alias.as_ref()),
-            });
-        } else {
-            has_connected = true;
-        }
-        backoff = INITIAL_BACKOFF;
-        let block_stream = BlockStream::new(subscription);
-        let mut receiver = block_stream.subscribe();
-        let mut should_stop = false;
-
-        loop {
-            tokio::select! {
-                changed = shutdown.changed() => {
-                    match changed {
-                        Ok(_) => {
-                            if shutdown_requested(shutdown) {
-                                should_stop = true;
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            should_stop = true;
-                            break;
-                        }
-                    }
-                }
-                item = receiver.recv() => {
-                    match item {
-                        Ok(event) => {
-                            let _ = sender.send(event.clone());
-                            if matches!(event, BlockStreamEvent::Closed) {
-                                break;
-                            }
-                        }
-                        Err(RecvError::Lagged(skipped)) => {
-                            let _ = sender.send(BlockStreamEvent::Lagged {
-                                skipped: lag_to_usize(skipped),
-                            });
-                        }
-                        Err(RecvError::Closed) => {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        block_stream.abort();
-        if should_stop || shutdown_requested(shutdown) {
-            break;
-        }
-
-        if wait_for_shutdown_or_delay(shutdown, backoff).await {
-            break;
-        }
-    }
-}
-
-/// Reconnecting wrapper around [`EventStream`] with exponential backoff.
-#[derive(Debug)]
-pub struct ManagedEventStream {
-    sender: broadcast::Sender<EventStreamEvent>,
-    shutdown: watch::Sender<bool>,
-    worker: JoinHandle<()>,
-    alias: Arc<str>,
-}
-
-impl ManagedEventStream {
-    /// Spawn a reconnection loop for `/v1/events/ws` using the provided runtime handle.
-    pub fn spawn(handle: &Handle, alias: String, client: ToriiClient) -> Self {
-        Self::spawn_with_factory(handle, alias, move || {
-            let client = client.clone();
-            async move { client.subscribe_events_stream().await }
-        })
-    }
-
-    fn spawn_with_factory<F, Fut>(handle: &Handle, alias: impl Into<String>, factory: F) -> Self
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ToriiResult<WsSubscription>> + Send + 'static,
-    {
-        let (shutdown, mut shutdown_rx) = watch::channel(false);
-        let (sender, _) = broadcast::channel(128);
-        let alias: Arc<str> = Arc::from(alias.into().into_boxed_str());
-        let factory = Arc::new(factory);
-        let run_factory = factory.clone();
-        let run_sender = sender.clone();
-        let run_alias = alias.clone();
-        let worker = handle.spawn(async move {
-            run_managed_event_stream(run_alias, run_factory, run_sender, &mut shutdown_rx).await;
-        });
-
-        Self {
-            sender,
-            shutdown,
-            worker,
-            alias,
-        }
-    }
-
-    /// Acquire a receiver that yields decoded events with reconnection semantics.
-    pub fn subscribe(&self) -> broadcast::Receiver<EventStreamEvent> {
-        self.sender.subscribe()
-    }
-
-    /// Abort the reconnection loop and underlying subscription, if running.
-    pub fn abort(&self) {
-        let _ = self.shutdown.send(true);
-        if !self.worker.is_finished() {
-            self.worker.abort();
-        }
-    }
-
-    /// Returns `true` when the reconnection loop has finished executing.
-    pub fn is_finished(&self) -> bool {
-        self.worker.is_finished()
-    }
-
-    /// Returns the alias associated with this managed stream.
-    pub fn alias(&self) -> &str {
-        self.alias.as_ref()
-    }
-}
-
-impl Drop for ManagedEventStream {
-    fn drop(&mut self) {
-        self.abort();
-    }
-}
-
-async fn run_managed_event_stream<F, Fut>(
-    alias: Arc<str>,
-    factory: Arc<F>,
-    sender: broadcast::Sender<EventStreamEvent>,
-    shutdown: &mut watch::Receiver<bool>,
-) where
-    F: Fn() -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ToriiResult<WsSubscription>> + Send + 'static,
-{
-    let mut backoff = INITIAL_BACKOFF;
-    let mut has_connected = false;
-    loop {
-        if shutdown_requested(shutdown) {
-            break;
-        }
-
-        let subscription = match (factory.as_ref())().await {
-            Ok(subscription) => subscription,
-            Err(err) => {
-                let _ = sender.send(EventStreamEvent::DecodeError {
-                    error: EventStreamDecodeError::new(
-                        EventDecodeStage::Stream,
-                        0,
-                        err.to_string(),
-                    ),
-                });
-                let _ = sender.send(EventStreamEvent::Text {
-                    text: format!(
-                        "Event stream `{}` reconnecting after error: {err}",
-                        alias.as_ref()
-                    ),
-                });
-
-                if wait_for_shutdown_or_delay(shutdown, backoff).await {
-                    break;
-                }
-                backoff = (backoff.saturating_mul(2)).min(MAX_BACKOFF);
-                continue;
-            }
-        };
-
-        if has_connected {
-            let _ = sender.send(EventStreamEvent::Text {
-                text: format!("Event stream `{}` reconnected.", alias.as_ref()),
-            });
-        } else {
-            has_connected = true;
-        }
-        backoff = INITIAL_BACKOFF;
-        let event_stream = EventStream::new(subscription);
-        let mut receiver = event_stream.subscribe();
-        let mut should_stop = false;
-
-        loop {
-            tokio::select! {
-                changed = shutdown.changed() => {
-                    match changed {
-                        Ok(_) => {
-                            if shutdown_requested(shutdown) {
-                                should_stop = true;
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            should_stop = true;
-                            break;
-                        }
-                    }
-                }
-                item = receiver.recv() => {
-                    match item {
-                        Ok(event) => {
-                            let _ = sender.send(event.clone());
-                            if matches!(event, EventStreamEvent::Closed) {
-                                break;
-                            }
-                        }
-                        Err(RecvError::Lagged(skipped)) => {
-                            let _ = sender.send(EventStreamEvent::Lagged {
-                                skipped: lag_to_usize(skipped),
-                            });
-                        }
-                        Err(RecvError::Closed) => {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        event_stream.abort();
-        if should_stop || shutdown_requested(shutdown) {
-            break;
-        }
-
-        if wait_for_shutdown_or_delay(shutdown, backoff).await {
-            break;
-        }
-    }
-}
-
-/// Events emitted by the status polling helper.
-#[derive(Debug, Clone)]
-pub enum StatusStreamEvent {
-    /// Fresh status snapshot returned by Torii.
-    Snapshot {
-        /// Shared telemetry snapshot.
-        snapshot: Arc<ToriiStatusSnapshot>,
-        /// Optional Sumeragi status payload.
-        sumeragi: Option<Arc<SumeragiV2Status>>,
-        /// Optional non-authoritative Sumeragi diagnostics payload.
-        sumeragi_diagnostics: Option<Arc<SumeragiDiagnosticsStatus>>,
-        /// Optional metrics payload parsed from `/metrics`. When metrics polling is throttled,
-        /// this value reuses the last successfully fetched snapshot until the refresh interval
-        /// elapses.
-        metrics: Option<Arc<ToriiMetricsSnapshot>>,
-        /// Error information describing why metrics could not be fetched.
-        metrics_error: Option<ToriiErrorInfo>,
-    },
-    /// Failed to fetch a snapshot; includes summary and failure count.
-    Error {
-        /// Classified error information suitable for UI display.
-        error: ToriiErrorInfo,
-        /// Number of consecutive failures observed so far.
-        consecutive_failures: u32,
-    },
-    /// Status polling loop exited.
-    Closed,
-}
-
-/// Configuration values used when spawning [`ManagedStatusStream`].
-#[derive(Debug, Clone)]
-pub struct StatusStreamOptions {
-    /// Delay between successive `/status` polls.
-    pub poll_interval: Duration,
-    /// Optional refresh cadence for `/metrics`. When unset, metrics are fetched on every poll.
-    /// Supply `Some(Duration::ZERO)` to disable metrics entirely, or a positive duration to
-    /// throttle sampling to at most once per interval.
-    pub metrics_poll_interval: Option<Duration>,
-}
-
-impl StatusStreamOptions {
-    /// Create options with the supplied poll interval and default metrics behaviour.
-    #[must_use]
-    pub const fn new(poll_interval: Duration) -> Self {
-        Self {
-            poll_interval,
-            metrics_poll_interval: None,
-        }
-    }
-
-    /// Override the metrics refresh cadence.
-    #[must_use]
-    pub const fn with_metrics_poll_interval(mut self, interval: Option<Duration>) -> Self {
-        self.metrics_poll_interval = interval;
-        self
-    }
-}
-
-/// Periodic status poller with exponential backoff on failures.
-#[derive(Debug)]
-pub struct ManagedStatusStream {
-    sender: broadcast::Sender<StatusStreamEvent>,
-    shutdown: watch::Sender<bool>,
-    worker: JoinHandle<()>,
-    alias: Arc<str>,
-}
-
-impl ManagedStatusStream {
-    /// Spawn a polling loop that fetches `/status` on the requested interval.
-    ///
-    /// `poll_interval` controls the delay between successful samples. Failures
-    /// automatically retry using the standard exponential backoff window shared
-    /// with the streamed endpoints.
-    pub fn spawn(
-        handle: &Handle,
-        alias: impl Into<String>,
-        client: ToriiClient,
-        poll_interval: Duration,
-    ) -> Self {
-        Self::spawn_with_options(
-            handle,
-            alias,
-            client,
-            StatusStreamOptions::new(poll_interval),
-        )
-    }
-
-    /// Spawn a polling loop using the supplied options.
-    pub fn spawn_with_options(
-        handle: &Handle,
-        alias: impl Into<String>,
-        client: ToriiClient,
-        options: StatusStreamOptions,
-    ) -> Self {
-        let (shutdown, mut shutdown_rx) = watch::channel(false);
-        let (sender, _) = broadcast::channel(128);
-        let alias: Arc<str> = Arc::from(alias.into().into_boxed_str());
-        let worker_alias = alias.clone();
-        let worker_sender = sender.clone();
-        let worker_client = client.clone();
-        let worker_options = options.clone();
-        let worker = handle.spawn(async move {
-            run_managed_status_stream(
-                worker_alias,
-                worker_client,
-                worker_options,
-                worker_sender,
-                &mut shutdown_rx,
-            )
-            .await;
-        });
-
-        Self {
-            sender,
-            shutdown,
-            worker,
-            alias,
-        }
-    }
-
-    /// Acquire a receiver yielding poll results and failure notices.
-    pub fn subscribe(&self) -> broadcast::Receiver<StatusStreamEvent> {
-        self.sender.subscribe()
-    }
-
-    /// Abort the polling loop immediately.
-    pub fn abort(&self) {
-        let _ = self.shutdown.send(true);
-        if !self.worker.is_finished() {
-            self.worker.abort();
-        }
-    }
-
-    /// Returns `true` once the polling loop has terminated.
-    pub fn is_finished(&self) -> bool {
-        self.worker.is_finished()
-    }
-
-    /// Returns the alias associated with this status stream.
-    pub fn alias(&self) -> &str {
-        self.alias.as_ref()
-    }
-}
-
-impl Drop for ManagedStatusStream {
-    fn drop(&mut self) {
-        self.abort();
-    }
-}
-
-#[derive(Default)]
-struct MetricsCache {
-    last_snapshot: Option<Arc<ToriiMetricsSnapshot>>,
-    last_error: Option<ToriiErrorInfo>,
-    last_poll: Option<Instant>,
-}
-
-async fn run_managed_status_stream(
-    _alias: Arc<str>,
-    client: ToriiClient,
-    options: StatusStreamOptions,
-    sender: broadcast::Sender<StatusStreamEvent>,
-    shutdown: &mut watch::Receiver<bool>,
-) {
-    let mut backoff = INITIAL_BACKOFF;
-    let mut consecutive_failures = 0u32;
-    let mut metrics_cache = MetricsCache::default();
-    let poll_interval = options.poll_interval;
-    let metrics_interval = options.metrics_poll_interval;
-
-    loop {
-        if shutdown_requested(shutdown) {
-            break;
-        }
-
-        match client.fetch_status_snapshot().await {
-            Ok(snapshot) => {
-                let snapshot_arc = Arc::new(snapshot);
-                let sumeragi = match client.fetch_sumeragi_status().await {
-                    Ok(status) => Some(Arc::new(status)),
-                    Err(err) => {
-                        let _ = sender.send(StatusStreamEvent::Error {
-                            error: err.summarize(),
-                            consecutive_failures,
-                        });
-                        None
-                    }
-                };
-                let sumeragi_diagnostics = match client.fetch_sumeragi_diagnostics().await {
-                    Ok(diagnostics) => Some(Arc::new(diagnostics)),
-                    Err(_) => None,
-                };
-                let (metrics, metrics_error) =
-                    fetch_metrics_snapshot_if_needed(&client, metrics_interval, &mut metrics_cache)
-                        .await;
-                consecutive_failures = 0;
-                backoff = INITIAL_BACKOFF;
-                let _ = sender.send(StatusStreamEvent::Snapshot {
-                    snapshot: snapshot_arc,
-                    sumeragi,
-                    sumeragi_diagnostics,
-                    metrics,
-                    metrics_error,
-                });
-            }
-            Err(err) => {
-                consecutive_failures = consecutive_failures.saturating_add(1);
-                let _ = sender.send(StatusStreamEvent::Error {
-                    error: err.summarize(),
-                    consecutive_failures,
-                });
-
-                if wait_for_shutdown_or_delay(shutdown, backoff).await {
-                    let _ = sender.send(StatusStreamEvent::Closed);
-                    return;
-                }
-                backoff = (backoff.saturating_mul(2)).min(MAX_BACKOFF);
-                continue;
-            }
-        }
-
-        if wait_for_shutdown_or_delay(shutdown, poll_interval).await {
-            break;
-        }
-    }
-
-    let _ = sender.send(StatusStreamEvent::Closed);
-}
-
-async fn fetch_metrics_snapshot_if_needed(
-    client: &ToriiClient,
-    interval: Option<Duration>,
-    cache: &mut MetricsCache,
-) -> (Option<Arc<ToriiMetricsSnapshot>>, Option<ToriiErrorInfo>) {
-    match interval {
-        Some(delay) if delay.is_zero() => (None, None),
-        None => fetch_metrics_snapshot_now(client, cache).await,
-        Some(delay) => {
-            let now = Instant::now();
-            let should_fetch = cache
-                .last_poll
-                .map(|last| now.saturating_duration_since(last) >= delay)
-                .unwrap_or(true);
-            if should_fetch {
-                cache.last_poll = Some(now);
-                match client.fetch_metrics_snapshot().await {
-                    Ok(snapshot) => {
-                        let arc = Arc::new(snapshot);
-                        cache.last_snapshot = Some(arc.clone());
-                        cache.last_error = None;
-                        (Some(arc), None)
-                    }
-                    Err(err) => {
-                        let summary = err.summarize();
-                        cache.last_error = Some(summary.clone());
-                        (cache.last_snapshot.clone(), Some(summary))
-                    }
-                }
-            } else {
-                (cache.last_snapshot.clone(), cache.last_error.clone())
-            }
-        }
-    }
-}
-
-async fn fetch_metrics_snapshot_now(
-    client: &ToriiClient,
-    cache: &mut MetricsCache,
-) -> (Option<Arc<ToriiMetricsSnapshot>>, Option<ToriiErrorInfo>) {
-    cache.last_poll = Some(Instant::now());
-    match client.fetch_metrics_snapshot().await {
-        Ok(snapshot) => {
-            let arc = Arc::new(snapshot);
-            cache.last_snapshot = Some(arc.clone());
-            cache.last_error = None;
-            (Some(arc), None)
-        }
-        Err(err) => {
-            let summary = err.summarize();
-            cache.last_error = Some(summary.clone());
-            (None, Some(summary))
-        }
-    }
-}
-
-fn shutdown_requested(shutdown: &watch::Receiver<bool>) -> bool {
-    *shutdown.borrow()
-}
-
-async fn wait_for_shutdown_or_delay(shutdown: &mut watch::Receiver<bool>, delay: Duration) -> bool {
-    if shutdown_requested(shutdown) {
-        return true;
-    }
-
-    tokio::select! {
-        changed = shutdown.changed() => {
-            match changed {
-                Ok(_) => shutdown_requested(shutdown),
-                Err(_) => true,
-            }
-        }
-        _ = sleep(delay) => false,
-    }
-}
+include!("torii/managed_streams.rs");
 
 #[cfg(test)]
 mod tests {

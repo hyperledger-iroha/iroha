@@ -21,14 +21,17 @@ class VpnProfile(
     @JvmField val tunnelAddresses: List<String>,
     @JvmField val mtuBytes: Long,
     @JvmField val displayBillingLabel: String,
-    @JvmField val feeAssetId: String,
-    @JvmField val escrowAccountId: String,
     @JvmField val operatorAccountId: String,
     @JvmField val leaseFee: String,
     @JvmField val settlementGraceSecs: Long,
     @JvmField val flowLabelBits: Int,
     @JvmField val paddingBudgetMs: Int,
-    @JvmField val relayTlsSpkiSha256Hex: String?,
+    @JvmField val relayIdHex: String,
+    @JvmField val descriptorCommitHex: String,
+    @JvmField val tlsServerName: String,
+    @JvmField val relayTlsSpkiSha256Hex: String,
+    @JvmField val relayCertificateSha256Hex: String,
+    @JvmField val directorySnapshotDigestHex: String,
 )
 
 /** Request body for `POST /v1/vpn/quotes`. */
@@ -62,10 +65,14 @@ class VpnQuote(
     @JvmField val meterFamily: String,
     @JvmField val flowLabelBits: Int,
     @JvmField val paddingBudgetMs: Int,
-    @JvmField val relayTlsSpkiSha256Hex: String?,
+    @JvmField val relayIdHex: String,
+    @JvmField val descriptorCommitHex: String,
+    @JvmField val tlsServerName: String,
+    @JvmField val relayTlsSpkiSha256Hex: String,
+    @JvmField val relayCertificateSha256Hex: String,
+    @JvmField val directorySnapshotDigestHex: String,
     @JvmField val meteringPublicKeyHex: String,
-    @JvmField val openLeaseInstruction: VpnTxInstruction?,
-    @JvmField val txInstructions: List<VpnTxInstruction>,
+    @JvmField val openLeaseInstruction: VpnTxInstruction,
 )
 
 /** Request body for `POST /v1/vpn/sessions`. */
@@ -98,7 +105,12 @@ class VpnSession(
     @JvmField val leaseFee: String,
     @JvmField val flowLabelBits: Int,
     @JvmField val paddingBudgetMs: Int,
-    @JvmField val relayTlsSpkiSha256Hex: String?,
+    @JvmField val relayIdHex: String,
+    @JvmField val descriptorCommitHex: String,
+    @JvmField val tlsServerName: String,
+    @JvmField val relayTlsSpkiSha256Hex: String,
+    @JvmField val relayCertificateSha256Hex: String,
+    @JvmField val directorySnapshotDigestHex: String,
     @JvmField val routePushes: List<String>,
     @JvmField val excludedRoutes: List<String>,
     @JvmField val dnsServers: List<String>,
@@ -144,7 +156,6 @@ class VpnReceipt(
     @JvmField val refundedFee: String,
     @JvmField val leaseIdHex: String,
     @JvmField val settleLeaseInstruction: VpnTxInstruction?,
-    @JvmField val txInstructions: List<VpnTxInstruction>,
 )
 
 /** Response emitted by `GET /v1/vpn/receipts`. */

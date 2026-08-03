@@ -16,8 +16,8 @@ fn memory_compact_bundle_roundtrip() {
     assert_eq!(cp2.depth(), cp.depth());
     assert_eq!(cp2.dirs(), cp.dirs());
 
-    // Also expand to full proof via bundle and verify
-    use iroha_crypto::{Hash, HashOf};
+    // Also expand the self-contained bundle and reconstruct its partial root.
+    use iroha_crypto::{Hash, HashOf, MerkleError};
     use sha2::Digest as _;
     let base = (addr / 32) * 32;
     let mut chunk = [0u8; 32];
@@ -26,9 +26,30 @@ fn memory_compact_bundle_roundtrip() {
     leaf.copy_from_slice(&sha2::Sha256::digest(chunk));
     let leaf_t = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf));
     let root_t = root;
-    let full = bundle.into_full_proof((addr / 32) as u32);
+    let depth = bundle.depth;
+    let dirs = bundle.dirs;
+    let mut noncanonical = bundle.clone();
+    noncanonical.dirs |= 1u32
+        .checked_shl(u32::from(depth))
+        .expect("memory bundle is capped below depth 32");
+    assert!(matches!(
+        noncanonical.try_into_full_proof(),
+        Err(MerkleError::NonCanonicalCompactProof)
+    ));
+    let mut wrong_sibling_count = bundle.clone();
+    wrong_sibling_count.siblings.pop();
+    assert!(matches!(
+        wrong_sibling_count.try_into_full_proof(),
+        Err(MerkleError::NonCanonicalCompactProof)
+    ));
+
+    let full = bundle
+        .try_into_full_proof()
+        .expect("helper emitted a canonical compact proof");
+    assert_eq!(full.leaf_index(), dirs);
+    assert_eq!(dirs, (addr / 32) as u32 & ((1u32 << depth) - 1));
     let computed = full
-        .compute_root_sha256(&leaf_t, 32)
+        .compute_partial_root_sha256(&leaf_t, usize::from(depth))
         .expect("memory proof should produce a root");
     assert_eq!(computed, root_t, "memory compact bundle root mismatch");
 }
@@ -47,8 +68,10 @@ fn registers_compact_bundle_roundtrip() {
     assert_eq!(cp2.depth(), cp.depth());
     assert_eq!(cp2.dirs(), cp.dirs());
 
-    // Also expand to full proof via bundle and verify (tag=false default)
-    use iroha_crypto::{Hash, HashOf};
+    // The uncapped 8-level register proof has a fixed, authenticated count.
+    use std::num::NonZeroU64;
+
+    use iroha_crypto::{Hash, HashOf, MerkleTreeCommitment};
     use sha2::Digest as _;
     let val = vm.register(3);
     let mut bytes = [0u8; 9];
@@ -58,9 +81,13 @@ fn registers_compact_bundle_roundtrip() {
     leaf.copy_from_slice(&sha2::Sha256::digest(bytes));
     let leaf_t = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf));
     let root_t = root;
-    let full = bundle.into_full_proof(3);
-    let computed = full
-        .compute_root_sha256(&leaf_t, 32)
-        .expect("register proof should produce a root");
-    assert_eq!(computed, root_t, "register compact bundle root mismatch");
+    let full = bundle
+        .try_into_full_proof()
+        .expect("helper emitted a canonical compact proof");
+    assert_eq!(full.leaf_index(), 3);
+    let commitment = MerkleTreeCommitment::new(
+        root_t,
+        NonZeroU64::new(256).expect("register count is non-zero"),
+    );
+    assert!(full.verify_sha256(&leaf_t, &commitment));
 }

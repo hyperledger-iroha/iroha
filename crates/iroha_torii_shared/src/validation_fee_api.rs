@@ -37,6 +37,12 @@ const VALIDATION_FEE_PLAIN_BALLOT_AMOUNT_V1: u64 = 150;
 const VALIDATION_FEE_PLAIN_BALLOT_DURATION_BLOCKS_V1: u64 = 3_600;
 /// Current validation-fee proposal read/draft layout.
 pub const VALIDATION_FEE_PROPOSAL_API_VERSION_V1: u16 = 1;
+/// Default number of validation-fee proposals returned by one list request.
+pub const VALIDATION_FEE_PROPOSAL_PAGE_DEFAULT_LIMIT_V1: u32 = 50;
+/// Hard maximum number of validation-fee proposals returned by one list request.
+pub const VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1: u32 = 100;
+/// Maximum encoded length of a validation-fee proposal continuation cursor.
+pub const VALIDATION_FEE_PROPOSAL_CURSOR_MAX_ENCODED_LEN_V1: usize = 96;
 /// Maximum number of consecutive finality proofs, including the trusted checkpoint proof.
 pub const VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_PROOFS: usize = 64;
 /// Maximum canonical bytes occupied by the bounded finality chain.
@@ -894,7 +900,88 @@ pub struct ValidationFeeProposalRecordV1 {
     pub enacted_at_height: Option<String>,
 }
 
-/// Canonically ordered list of all validation-fee proposals.
+fn validation_fee_proposal_default_page_limit() -> u32 {
+    VALIDATION_FEE_PROPOSAL_PAGE_DEFAULT_LIMIT_V1
+}
+
+/// Bounded query for one canonical validation-fee proposal page.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeProposalListQueryV1 {
+    /// Opaque continuation token returned by the preceding page.
+    #[norito(default)]
+    pub cursor: Option<String>,
+    /// Requested record limit. Values outside `1..=100` are rejected.
+    #[norito(default = "validation_fee_proposal_default_page_limit")]
+    pub limit: u32,
+}
+
+impl Default for ValidationFeeProposalListQueryV1 {
+    fn default() -> Self {
+        Self {
+            cursor: None,
+            limit: VALIDATION_FEE_PROPOSAL_PAGE_DEFAULT_LIMIT_V1,
+        }
+    }
+}
+
+const VALIDATION_FEE_PROPOSAL_CURSOR_MAGIC_V1: [u8; 8] = *b"vfprop01";
+const VALIDATION_FEE_PROPOSAL_CURSOR_BYTES_V1: usize = 8 + 8 + 32;
+
+/// Encode one proposal-order key as a collection-bound canonical cursor.
+#[must_use]
+pub fn encode_validation_fee_proposal_cursor_v1(
+    created_height: u64,
+    proposal_id: [u8; 32],
+) -> String {
+    let mut frame = [0_u8; VALIDATION_FEE_PROPOSAL_CURSOR_BYTES_V1];
+    frame[..8].copy_from_slice(&VALIDATION_FEE_PROPOSAL_CURSOR_MAGIC_V1);
+    frame[8..16].copy_from_slice(&created_height.to_be_bytes());
+    frame[16..].copy_from_slice(&proposal_id);
+    hex::encode(frame)
+}
+
+/// Decode and validate one canonical validation-fee proposal cursor.
+///
+/// # Errors
+///
+/// Returns a stable validation message when the cursor is oversized,
+/// non-canonical, belongs to another collection/version, or has the wrong
+/// fixed-width payload.
+pub fn decode_validation_fee_proposal_cursor_v1(encoded: &str) -> Result<(u64, [u8; 32]), String> {
+    if encoded.is_empty() || encoded.len() > VALIDATION_FEE_PROPOSAL_CURSOR_MAX_ENCODED_LEN_V1 {
+        return Err(
+            "cursor must be a non-empty canonical lowercase-hex token within 96 bytes".into(),
+        );
+    }
+    if !encoded
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("cursor must use canonical lowercase hexadecimal".to_owned());
+    }
+    let frame = hex::decode(encoded)
+        .map_err(|_| "cursor must use canonical lowercase hexadecimal".to_owned())?;
+    if frame.len() != VALIDATION_FEE_PROPOSAL_CURSOR_BYTES_V1 || hex::encode(&frame) != encoded {
+        return Err("cursor has a non-canonical or invalid fixed-width frame".into());
+    }
+    if frame[..8] != VALIDATION_FEE_PROPOSAL_CURSOR_MAGIC_V1 {
+        return Err("cursor belongs to another collection or API version".into());
+    }
+    let created_height = u64::from_be_bytes(
+        frame[8..16]
+            .try_into()
+            .expect("validated cursor height has fixed width"),
+    );
+    let proposal_id = frame[16..]
+        .try_into()
+        .expect("validated proposal id has fixed width");
+    Ok((created_height, proposal_id))
+}
+
+/// Canonically ordered bounded page of validation-fee proposals.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
@@ -902,8 +989,12 @@ pub struct ValidationFeeProposalRecordV1 {
 pub struct ValidationFeeProposalListV1 {
     /// Response layout version.
     pub version: u16,
+    /// Effective bounded page size requested by the caller.
+    pub limit: u32,
     /// Records ordered by creation height then proposal id.
     pub proposals: Vec<ValidationFeeProposalRecordV1>,
+    /// Opaque continuation token, or `None` after the final page.
+    pub next_cursor: Option<String>,
 }
 
 /// Exact validation-fee proposal detail response.
@@ -1587,6 +1678,39 @@ mod tests {
             checkpoint = next;
         }
         assert_eq!(pages, vec![(1, 64), (64, 127), (127, 190), (190, 250)]);
+    }
+
+    #[test]
+    fn proposal_cursor_roundtrip_is_canonical_and_collection_bound() {
+        let proposal_id = [0xA5; 32];
+        let encoded = encode_validation_fee_proposal_cursor_v1(42, proposal_id);
+        assert_eq!(
+            encoded.len(),
+            VALIDATION_FEE_PROPOSAL_CURSOR_MAX_ENCODED_LEN_V1
+        );
+        assert_eq!(
+            decode_validation_fee_proposal_cursor_v1(&encoded),
+            Ok((42, proposal_id))
+        );
+
+        let mut wrong_collection = hex::decode(&encoded).expect("decode valid cursor fixture");
+        wrong_collection[0] ^= 0x01;
+        let wrong_collection = hex::encode(wrong_collection);
+        assert!(
+            decode_validation_fee_proposal_cursor_v1(&wrong_collection)
+                .expect_err("collection marker mismatch must fail")
+                .contains("another collection")
+        );
+        assert!(decode_validation_fee_proposal_cursor_v1(&encoded.to_uppercase()).is_err());
+        assert!(decode_validation_fee_proposal_cursor_v1("").is_err());
+    }
+
+    #[test]
+    fn proposal_list_query_defaults_to_a_bounded_page() {
+        let query: ValidationFeeProposalListQueryV1 =
+            norito::json::from_str("{}").expect("decode default proposal page query");
+        assert_eq!(query, ValidationFeeProposalListQueryV1::default());
+        assert_eq!(query.limit, VALIDATION_FEE_PROPOSAL_PAGE_DEFAULT_LIMIT_V1);
     }
 
     #[test]

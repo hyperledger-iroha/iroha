@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Debug,
     io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     ops::Bound,
     path::{Path, PathBuf},
     sync::{
@@ -49,14 +49,16 @@ use iroha_config::{
     },
 };
 use iroha_crypto::KeyPair;
-use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof, MerkleTree, PublicKey, Signature};
+use iroha_crypto::{
+    Algorithm, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, PublicKey, Signature,
+};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
     AccountId, ChainId,
     block::{
-        BlockHeader, SignedBlock,
+        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
             CertPhase, ExecWitness, LaneBlockCommitment, LaneBlockDescriptorV1,
             LaneBlockProposalV1, LaneBlockQcV1, LanePayloadAvailabilityBodyV1, NativeAmxReceipt,
@@ -113,9 +115,12 @@ use crate::merge::reduce_merge_hint_roots;
 use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use crate::{
     block::CommittedBlock,
-    commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError},
+    commit_roster_journal::{
+        CommitRosterJournal, CommitRosterJournalError, CommitRosterJournalPruneProjectionV2,
+    },
     queue::{
-        AutonomousLaneKuraActivationAuthorization, DurableLaneQueueReleaseBarrierAuthorization,
+        AutonomousLaneCanonicalQueueTerminalEvidence, AutonomousLaneKuraActivationAuthorization,
+        AutonomousLaneReleaseQueueTerminalEvidence, DurableLaneQueueReleaseBarrierAuthorization,
         LaneQueueReservationGroupBindingV1, LaneQueueReservationGroupIdentityV1,
         LaneQueueReservationKeyV2, LaneQueueReservationReconciliationGroupV1,
         LaneQueueReservationReleaseBarrierV3, RoutingPlan,
@@ -212,17 +217,40 @@ const KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME: &str =
 const KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME: &str = "kagemusha_active_receiver_finality";
 const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
 const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 32 * 1024;
-/// Hard limit for one immutable canonical block-retention record.
+/// Legacy hard limit for one version-two canonical block-retention record.
 ///
 /// The 512-message first-release cap and 4 KiB canonical payload cap require a
 /// little over 2 MiB at their joint maximum. Four MiB leaves deterministic
 /// framing/context headroom while preventing hostile on-disk data from turning
 /// startup or proof serving into an unbounded allocation.
-const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RETAINED_BLOCK_RECORD_V2_BYTES: usize = 4 * 1024 * 1024;
+/// Hard limit for the compact merge reference added by retained-record version three.
+///
+/// Consensus accepts at most a 4 MiB merge QC. The remaining 256 KiB bounds
+/// reference metadata and Norito framing without coupling Kura to an
+/// implementation-specific encoded-size estimate.
+const MAX_RETAINED_MERGE_REFERENCE_BYTES: usize = 4 * 1024 * 1024 + 256 * 1024;
+/// Norito envelope headroom when the version-three optional field is present.
+///
+/// The two component maxima are complete independent encodings; this separate
+/// allowance covers the option tag, field framing, and any packed-struct
+/// envelope delta instead of assuming those bytes disappear into either
+/// component's budget.
+const MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES: usize = 256 * 1024;
+/// Hard limit for one immutable version-three canonical block-retention record.
+///
+/// This is the sum of the complete legacy SCCP/archive envelope and the new
+/// independently bounded merge-reference witness. Keeping the joint maximum
+/// explicit prevents a valid near-maximum archive and merge QC from making
+/// finality persistence or pre-eviction retention fail.
+const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = MAX_RETAINED_BLOCK_RECORD_V2_BYTES
+    + MAX_RETAINED_MERGE_REFERENCE_BYTES
+    + MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES;
+const RETAINED_BLOCK_RECORD_VERSION_V2: u16 = 2;
 const RETAINED_BLOCK_RECORD_VERSION: u16 = 3;
 /// Hard limit for the consensus artifact embedded in one Kura finality record.
 ///
-/// The maximum 4,096-validator roster, its current PoPs, and a boundary
+/// The maximum 31-validator revision-4 roster, its current PoPs, and a boundary
 /// snapshot containing the next roster and PoPs fit well below this limit.
 const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 /// Hard limit for the complete private record, including its retained block header.
@@ -285,6 +313,8 @@ const AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX: &str = "autonomous_attempt_v1";
 const AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX: &str = "autonomous_attempt_view_v1";
 const AUTONOMOUS_LIFECYCLE_CURSOR_PREFIX: &str = "autonomous_lifecycle_v2";
 const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PREFIX: &str = "autonomous_lifecycle_bootstrap_v1";
+const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_PREFIX: &str =
+    "autonomous_lifecycle_terminal_outcome_v1";
 const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX: &str = ".autonomous-lifecycle-bootstrap-";
 const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_FILE: &str =
     "autonomous_lifecycle_process_generation_v1.norito";
@@ -301,12 +331,15 @@ const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norit
 const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES: usize = 4 * 1024;
 const AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES: usize = 8 * 1024;
+const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES: usize = 8 * 1024;
 const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES: usize = AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES;
 const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES: usize = 4 * 1024;
 const AUTONOMOUS_LIFECYCLE_CURSOR_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-cursor:v2\0";
 const AUTONOMOUS_LIFECYCLE_CURSOR_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-signature:v2\0";
+const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-terminal-outcome:v1\0";
 const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-process-generation:v1\0";
 const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_HASH_DOMAIN: &[u8] =
@@ -427,185 +460,6 @@ pub(crate) const MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES: usize =
 #[cfg(test)]
 const DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES: u64 =
     V2_PENDING_CONTROL_SIDECAR_BYTES.get() as u64;
-const MERGE_CARRIERS_DIR: &str = "merge_carriers";
-const MERGE_CARRIER_MAX_BYTES: usize = 4 * 1024;
-const PRUNE_INTENT_FILE_NAME: &str = "prune_intent.norito";
-const PRUNE_INTENT_MAX_BYTES: usize = 4 * 1024;
-const PRUNE_STAGE_INTENT: usize = 1;
-const PRUNE_STAGE_BLOCK_MARKER: usize = 2;
-const PRUNE_STAGE_BLOCK_INDEX: usize = 3;
-const PRUNE_STAGE_BLOCK_HASHES: usize = 4;
-const PRUNE_STAGE_BLOCK_DATA: usize = 5;
-const PRUNE_STAGE_DA_SIDECARS: usize = 6;
-const PRUNE_STAGE_MERGE_CARRIERS: usize = 7;
-const PRUNE_STAGE_MERGE_LOG: usize = 8;
-const PRUNE_STAGE_ROSTER: usize = 9;
-const PRUNE_STAGE_WSV_CHECKPOINTS: usize = 10;
-const PRUNE_STAGE_COMMIT_MANIFESTS: usize = 11;
-const PRUNE_STAGE_PIPELINE_SIDECARS: usize = 12;
-const PRUNE_STAGE_MEMORY: usize = 13;
-const PRUNE_SIDECAR_PROMOTION_DATA: usize = 1;
-const PRUNE_SIDECAR_PROMOTION_INDEX: usize = 2;
-#[cfg(test)]
-const CANONICAL_HASH_READER_OBSERVED: usize = 1 << 0;
-#[cfg(test)]
-const CANONICAL_BLOCK_READER_OBSERVED: usize = 1 << 1;
-#[cfg(test)]
-const OFFLINE_OPERATION_READER_OBSERVED: usize = 1 << 2;
-fn numbered_norito_sidecar_height(path: &Path) -> Option<u64> {
-    let file_name = path.file_name()?.to_str()?;
-    let height = file_name
-        .strip_suffix(".norito")
-        .or_else(|| file_name.strip_suffix(".norito.tmp"))?;
-    height.parse().ok()
-}
-
-#[cfg(test)]
-const CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX: &str = ".configured-primary-open-identity-swap";
-#[cfg(test)]
-const CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX: &str =
-    ".configured-primary-open-identity-displaced";
-
-#[cfg(test)]
-fn configured_primary_open_identity_test_path(path: &Path, suffix: &str) -> Result<PathBuf> {
-    let file_name = path.file_name().ok_or_else(|| {
-        Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "configured-primary identity test path has no file name",
-            ),
-            path.to_path_buf(),
-        )
-    })?;
-    let mut sibling_name = file_name.to_os_string();
-    sibling_name.push(suffix);
-    Ok(path.with_file_name(sibling_name))
-}
-
-/// Deterministically model an inode replacement after authenticated preflight.
-///
-/// Test fixtures opt in by placing a replacement at the reserved sibling path.
-/// The constructor must reject that replacement at its next identity boundary,
-/// before opening it for mutation.
-#[cfg(test)]
-fn configured_primary_open_identity_swap_boundary(path: &Path) -> Result<()> {
-    let replacement = configured_primary_open_identity_test_path(
-        path,
-        CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX,
-    )?;
-    match std::fs::symlink_metadata(&replacement) {
-        Ok(_) => {}
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(Error::IO(error, replacement)),
-    }
-
-    let displaced = configured_primary_open_identity_test_path(
-        path,
-        CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX,
-    )?;
-    if std::fs::symlink_metadata(&displaced).is_ok() {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::AlreadyExists,
-                "configured-primary identity test displaced path already exists",
-            ),
-            displaced,
-        ));
-    }
-    std::fs::rename(path, &displaced).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    if let Err(error) = std::fs::rename(&replacement, path) {
-        let _ = std::fs::rename(&displaced, path);
-        return Err(Error::IO(error, replacement));
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PendingControlSidecarLimits {
-    certified_merge_entries: usize,
-    queue_plan_admissions: usize,
-    aggregate_bytes: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PendingCertifiedMergeVisitOutcome {
-    Complete,
-    VisitorStopped,
-    ScanLimitExceeded,
-}
-
-/// Result of a bounded, filtered pending certified-merge evidence scan.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PendingCertifiedMergeEvidenceScan {
-    /// The complete bounded inventory was scanned; these hashes matched.
-    Complete(Vec<HashOf<MergeLedgerEntry>>),
-    /// The stable inventory exceeded the caller's scan limit before decoding.
-    LimitExceeded,
-}
-
-impl Default for PendingControlSidecarLimits {
-    fn default() -> Self {
-        Self {
-            certified_merge_entries: V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY.get(),
-            queue_plan_admissions: V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY.get(),
-            aggregate_bytes: V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
-        }
-    }
-}
-
-impl PendingControlSidecarLimits {
-    fn from_config(config: &SumeragiV2RuntimeLimits, store_root: &Path) -> Result<Self> {
-        let limits = Self {
-            certified_merge_entries: config.pending_certified_merge_entry_capacity.get(),
-            queue_plan_admissions: config.pending_queue_plan_admission_capacity.get(),
-            aggregate_bytes: config.pending_control_sidecar_bytes.get(),
-        };
-        if limits.certified_merge_entries > V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX {
-            return Err(Self::invalid_config(
-                store_root,
-                "sumeragi.limits.pending_certified_merge_entry_capacity exceeds its hard maximum",
-            ));
-        }
-        if limits.queue_plan_admissions > V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX {
-            return Err(Self::invalid_config(
-                store_root,
-                "sumeragi.limits.pending_queue_plan_admission_capacity exceeds its hard maximum",
-            ));
-        }
-        if limits.aggregate_bytes < V2_PENDING_CONTROL_SIDECAR_BYTES_MIN
-            || limits.aggregate_bytes > V2_PENDING_CONTROL_SIDECAR_BYTES_MAX
-        {
-            return Err(Self::invalid_config(
-                store_root,
-                "sumeragi.limits.pending_control_sidecar_bytes is outside its hard bounds",
-            ));
-        }
-        Ok(limits)
-    }
-
-    fn invalid_config(store_root: &Path, message: &'static str) -> Error {
-        Error::IO(
-            std::io::Error::new(ErrorKind::InvalidInput, message),
-            store_root.to_path_buf(),
-        )
-    }
-
-    const fn merge_bytes_within_limit(self, bytes: usize) -> bool {
-        bytes <= self.aggregate_bytes
-    }
-
-    const fn combined_bytes_within_limit(
-        self,
-        pending_merge_bytes: usize,
-        pending_queue_plan_admission_bytes: usize,
-    ) -> bool {
-        match pending_merge_bytes.checked_add(pending_queue_plan_admission_bytes) {
-            Some(total) => total <= self.aggregate_bytes,
-            None => false,
-        }
-    }
-}
-
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("kura fixture key generation should succeed")
@@ -660,6 +514,8 @@ fn default_fastpq_proof_sidecar_max_bytes() -> usize {
 fn default_fastpq_proof_sidecar_max_retries() -> usize {
     FASTPQ_DEFAULTS::PROOF_SIDECAR_MAX_RETRIES.get()
 }
+
+include!("kura/certified_bundle_capacity_reservation_types.rs");
 
 /// The interface of Kura subsystem.
 ///
@@ -790,6 +646,13 @@ pub struct Kura {
     pending_budget_bytes: AtomicU64,
     /// Marks whether `pending_budget_bytes` currently reflects in-memory block state.
     pending_budget_bytes_valid: AtomicBool,
+    /// Carrier envelopes retained until every exact receipt, frontier, and Queue outcome is durable.
+    post_wsv_lane_artifact_budget_reservations:
+        Mutex<BTreeMap<HashOf<MergeLedgerEntry>, PostWsvLaneArtifactBudgetReservation>>,
+    /// READY-bearing certified frontiers whose exact certified/bundle pairs
+    /// have not both completed strict durable readback.
+    certified_bundle_capacity_reservations:
+        Mutex<BTreeMap<CertifiedBundleCapacityIdentity, CertifiedBundleCapacityReservation>>,
     /// Counts raw pending-budget scans for focused cache tests.
     #[cfg(test)]
     pending_budget_raw_scans: AtomicUsize,
@@ -845,6 +708,8 @@ pub struct Kura {
     /// Test hook for forcing the next synchronous block write to fail after pre-write work.
     #[cfg(test)]
     fail_next_block_write: AtomicBool,
+    #[cfg(test)]
+    fail_next_atomic_write_after_temporary_sync: AtomicBool,
     /// Test hook for forcing the next WSV checkpoint sidecar write to fail.
     #[cfg(test)]
     fail_next_wsv_checkpoint_write: AtomicBool,
@@ -996,7 +861,7 @@ impl MergeLedgerLog {
         let mut file = FileWrap::open_with(path.to_path_buf(), |opts| {
             opts.read(true).create(true).append(true);
         })?;
-        let (entries, total_entries, frames_by_hash, frames_by_epoch, latest_execution_heights) =
+        let (entries, total_entries, frames_by_hash, frames_by_epoch, latest_execution_entries) =
             Self::load_entries(&mut file, cache_capacity)?;
         file.try_io(|f| f.seek(SeekFrom::End(0)))?;
         Ok(Self {
@@ -1007,7 +872,7 @@ impl MergeLedgerLog {
             frames_by_hash,
             frames_by_epoch,
             in_memory_entries: BTreeMap::new(),
-            latest_execution_heights,
+            latest_execution_entries,
             append_recovery_offset: None,
             #[cfg(test)]
             full_history_scans: 0,
@@ -1034,7 +899,7 @@ impl MergeLedgerLog {
             frames_by_hash: BTreeMap::new(),
             frames_by_epoch: BTreeMap::new(),
             in_memory_entries: BTreeMap::new(),
-            latest_execution_heights: BTreeMap::new(),
+            latest_execution_entries: BTreeMap::new(),
             append_recovery_offset: None,
             #[cfg(test)]
             full_history_scans: 0,
@@ -1103,6 +968,7 @@ impl MergeLedgerLog {
                 "merge ledger append duplicates an indexed hash or epoch".to_owned(),
             ));
         }
+        Self::validate_execution_entry_index_update(&self.latest_execution_entries, entry)?;
         Ok(true)
     }
 
@@ -1202,100 +1068,10 @@ impl MergeLedgerLog {
         if self.file.is_none() {
             self.in_memory_entries.insert(entry_hash, entry.clone());
         }
-        Self::record_execution_heights(&mut self.latest_execution_heights, entry);
+        Self::record_execution_entry_unchecked(&mut self.latest_execution_entries, entry);
         self.entries.push(entry.clone());
         self.trim_cache();
         Ok(())
-    }
-
-    fn snapshot(&self) -> Vec<MergeLedgerEntry> {
-        self.entries.clone()
-    }
-
-    fn latest_snapshot(&self, limit: usize) -> Vec<MergeLedgerEntry> {
-        self.entries.iter().rev().take(limit).cloned().collect()
-    }
-
-    fn contains_hash(&mut self, hash: HashOf<MergeLedgerEntry>) -> bool {
-        #[cfg(test)]
-        {
-            self.indexed_membership_checks = self.indexed_membership_checks.saturating_add(1);
-        }
-        self.frames_by_hash.contains_key(&hash)
-    }
-
-    fn record_execution_heights(
-        heights: &mut BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
-        entry: &MergeLedgerEntry,
-    ) {
-        let Some(batch) = entry.execution_batch.as_ref() else {
-            return;
-        };
-        for execution in &batch.lanes {
-            let descriptor = &execution.proposal.descriptor;
-            heights
-                .entry((
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                    descriptor.lane_incarnation,
-                ))
-                .and_modify(|height| *height = (*height).max(descriptor.lane_block_height))
-                .or_insert(descriptor.lane_block_height);
-        }
-    }
-
-    #[cfg(test)]
-    fn latest_execution_heights(&self) -> BTreeMap<(LaneId, DataSpaceId, Hash), u64> {
-        self.latest_execution_heights.clone()
-    }
-
-    fn latest_execution_height(
-        &self,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        lane_incarnation: Hash,
-    ) -> Option<u64> {
-        self.latest_execution_heights
-            .get(&(lane_id, dataspace_id, lane_incarnation))
-            .copied()
-    }
-
-    fn has_execution_for_route(&self, lane_id: LaneId, dataspace_id: DataSpaceId) -> bool {
-        self.latest_execution_heights
-            .keys()
-            .any(|(candidate_lane, candidate_dataspace, _)| {
-                *candidate_lane == lane_id && *candidate_dataspace == dataspace_id
-            })
-    }
-
-    fn entry_by_hash(
-        &mut self,
-        hash: HashOf<MergeLedgerEntry>,
-    ) -> Result<Option<MergeLedgerEntry>> {
-        self.recover_failed_append_tail()?;
-        #[cfg(test)]
-        {
-            self.indexed_lookups = self.indexed_lookups.saturating_add(1);
-        }
-        let Some(frame) = self.frames_by_hash.get(&hash).copied() else {
-            return Ok(None);
-        };
-        let Some(file) = self.file.as_mut() else {
-            return self
-                .in_memory_entries
-                .get(&hash)
-                .cloned()
-                .map(Some)
-                .ok_or_else(|| {
-                    Error::MergeCarrierConflict(
-                        "in-memory merge frame index references a missing entry".to_owned(),
-                    )
-                });
-        };
-        let result = Self::read_indexed_frame(file, frame).map(Some);
-        let restore = file.try_io(|inner| inner.seek(SeekFrom::End(0)));
-        restore?;
-        result
     }
 
     fn read_indexed_frame(
@@ -1413,7 +1189,7 @@ impl MergeLedgerLog {
         usize,
         BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerFrameIndex>,
         BTreeMap<u64, MergeLedgerFrameIndex>,
-        BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
+        BTreeMap<(LaneId, DataSpaceId, Hash), (u64, HashOf<MergeLedgerEntry>)>,
     )> {
         file.try_io(|f| f.seek(SeekFrom::Start(0)))?;
         let file_len = file.try_io(|f| f.metadata().map(|meta| meta.len()))?;
@@ -1422,8 +1198,10 @@ impl MergeLedgerLog {
         let mut valid_len = 0u64;
         let mut frames_by_hash = BTreeMap::new();
         let mut frames_by_epoch = BTreeMap::new();
-        let mut latest_execution_heights: BTreeMap<(LaneId, DataSpaceId, Hash), u64> =
-            BTreeMap::new();
+        let mut latest_execution_entries: BTreeMap<
+            (LaneId, DataSpaceId, Hash),
+            (u64, HashOf<MergeLedgerEntry>),
+        > = BTreeMap::new();
         let truncated = loop {
             let mut len_buf = [0u8; 4];
             match file.try_io(|f| f.read_exact(&mut len_buf)) {
@@ -1494,7 +1272,7 @@ impl MergeLedgerLog {
                     };
                     frames_by_hash.insert(entry_hash, frame);
                     frames_by_epoch.insert(entry.epoch_id, frame);
-                    Self::record_execution_heights(&mut latest_execution_heights, &entry);
+                    Self::record_execution_entry(&mut latest_execution_entries, &entry)?;
                     total_entries = total_entries.saturating_add(1);
                     entries.push(entry);
                     valid_len = valid_len.saturating_add(4 + len as u64);
@@ -1524,7 +1302,7 @@ impl MergeLedgerLog {
             total_entries,
             frames_by_hash,
             frames_by_epoch,
-            latest_execution_heights,
+            latest_execution_entries,
         ))
     }
 
@@ -1556,14 +1334,14 @@ impl MergeLedgerLog {
             };
             file.try_io(|f| f.set_len(new_len))?;
             let sync_result = file.try_io(|f| f.sync_data());
-            let (entries, total_entries, frames_by_hash, frames_by_epoch, latest_execution_heights) =
+            let (entries, total_entries, frames_by_hash, frames_by_epoch, latest_execution_entries) =
                 Self::load_entries(file, self.cache_capacity)?;
             file.try_io(|inner| inner.seek(SeekFrom::End(0)))?;
             self.entries = entries;
             self.total_entries = total_entries;
             self.frames_by_hash = frames_by_hash;
             self.frames_by_epoch = frames_by_epoch;
-            self.latest_execution_heights = latest_execution_heights;
+            self.latest_execution_entries = latest_execution_entries;
             sync_result?;
         } else {
             self.frames_by_epoch
@@ -1588,10 +1366,7 @@ impl MergeLedgerLog {
                 .filter_map(|frame| self.in_memory_entries.get(&frame.entry_hash).cloned())
                 .collect();
             self.total_entries = keep;
-            self.latest_execution_heights.clear();
-            for entry in self.in_memory_entries.values() {
-                Self::record_execution_heights(&mut self.latest_execution_heights, entry);
-            }
+            self.latest_execution_entries = Self::execution_index_for_entries(&self.entries)?;
         }
 
         self.trim_cache();
@@ -1605,6 +1380,8 @@ impl MergeLedgerLog {
         }
     }
 }
+
+include!("kura/merge_ledger_latest_execution_index.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BlockNotify {
@@ -1640,6 +1417,17 @@ enum FinalizedMergeCarrierAtHeight {
     Complete,
     Repair(FinalizedMergeCarrierRepair),
     MissingBody(HashOf<BlockHeader>),
+}
+
+/// Result of one bounded lane-history compaction pass.
+///
+/// Capacity-blocked maintenance is deliberately distinct from incomplete
+/// progress: callers must exit the pass and retain the uncompacted evidence,
+/// never retry while holding the startup or retirement lock corridor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaneHistoryCompactionOutcome {
+    Complete,
+    CapacityBlocked,
 }
 
 impl FinalizedMergeCarrierRepairPreflight {
@@ -2497,7 +2285,6 @@ impl Kura {
             .map_err(|error| Error::IO(error, configured_store_dir))?;
         let store_root = store_dir.clone();
         let store_root_lock_file = Self::acquire_store_root_lock(&store_dir)?;
-        Self::read_autonomous_lifecycle_process_generation_record_for(&store_root)?;
         let roster_retention = config.block_sync_roster_retention;
         let roster_sidecar_retention = config.roster_sidecar_retention;
         let roster_log_path = Self::roster_log_path(&store_root);
@@ -2552,6 +2339,18 @@ impl Kura {
                 Self::configured_catalog_preflight_crash_boundary(&store_dir)?;
             }
         }
+        Self::recover_autonomous_lifecycle_process_generation_atomic_temporary_on_startup(
+            &store_root,
+            &store_root_lock_file,
+            authenticated_configured_catalog && !provisional_open,
+        )?;
+        Self::read_autonomous_lifecycle_process_generation_record_for(&store_root)?;
+        Self::recover_autonomous_lifecycle_bootstrap_atomic_temporary_on_startup(
+            &store_root,
+            lane_config,
+            &store_root_lock_file,
+            authenticated_configured_catalog && !provisional_open,
+        )?;
         let (blocks_root, merge_log_path, journal_resolved_primary) =
             if let Some(paths) = read_only_primary_paths {
                 paths
@@ -2678,11 +2477,21 @@ impl Kura {
             Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
         }
 
-        let prune_intent = Self::read_prune_intent(&store_root)?;
+        let prune_intent = Self::read_prune_intent_for_startup(&store_root, provisional_open)?;
         if prune_intent.is_some() && pending_rollback.is_some() {
             return Err(Error::PruneIntentConflict(
                 "durable prune and rollback intents are both active".to_owned(),
             ));
+        }
+        if let Some(intent) = prune_intent.as_ref() {
+            let configured_limit = config.max_disk_usage_bytes.get();
+            if configured_limit > 0 && intent.capacity.admitted_peak_bytes > configured_limit {
+                return Err(Error::StorageBudgetExceeded {
+                    limit: configured_limit,
+                    used: intent.capacity.source_physical_bytes,
+                    required: intent.capacity.admitted_peak_bytes,
+                });
+            }
         }
 
         if let Some(intent) = pending_rollback.as_ref() {
@@ -2710,7 +2519,8 @@ impl Kura {
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, false)?;
         }
-        let mut merge_log = MergeLedgerLog::open_at(&merge_log_path, merge_cache_capacity)?;
+        let mut merge_log =
+            MergeLedgerLog::startup(&merge_log_path, merge_cache_capacity, provisional_open)?;
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, true)?;
         }
@@ -2796,11 +2606,6 @@ impl Kura {
         if !provisional_open && let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, false)?;
         }
-        let mut merge_log = if provisional_open {
-            MergeLedgerLog::in_memory(merge_cache_capacity)
-        } else {
-            MergeLedgerLog::open_at(&merge_log_path, merge_cache_capacity)?
-        };
         if !provisional_open && let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, true)?;
         }
@@ -2903,6 +2708,8 @@ impl Kura {
             disk_usage_total_accounting_changed: Condvar::new(),
             pending_budget_bytes: AtomicU64::new(0),
             pending_budget_bytes_valid: AtomicBool::new(false),
+            post_wsv_lane_artifact_budget_reservations: Mutex::new(BTreeMap::new()),
+            certified_bundle_capacity_reservations: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             pending_budget_raw_scans: AtomicUsize::new(0),
             pending_budget_eviction_bytes: AtomicU64::new(0),
@@ -2934,6 +2741,8 @@ impl Kura {
             canonical_poison_paused_after_latch: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_block_write: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_atomic_write_after_temporary_sync: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_wsv_checkpoint_write: AtomicBool::new(false),
             #[cfg(test)]
@@ -3019,10 +2828,15 @@ impl Kura {
             _temp_store_dir: None,
         });
 
+        if let Some(intent) = prune_intent.as_ref() {
+            kura.preflight_recovered_prune_capacity_before_mutation(intent)?;
+        }
         kura.audit_retained_autonomous_lifecycle_cursor_generations()?;
 
         if !provisional_open {
             kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
+            kura.recover_lane_block_execution_input_pairs_on_startup()?;
+            kura.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
             let verified_finality = kura.validate_v2_finality_inventory_on_startup()?;
             kura.install_v2_startup_finality_verification_inventory(verified_finality);
             kura.prune_retained_block_records_from(
@@ -3031,16 +2845,21 @@ impl Kura {
             )?;
             kura.validate_retained_block_inventory_on_startup()?;
             kura.recover_canonical_association_stage()?;
-            kura.reconcile_merge_carriers_from_durable_blocks()?;
+            kura.reconcile_merge_carriers_from_durable_blocks_with_authority(
+                None,
+                prune_intent.is_some(),
+            )?;
             if let Some(intent) = prune_intent.as_ref() {
                 kura.complete_recovered_prune_intent(intent)?;
             }
-
+            kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
+            kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;
             kura.repair_lane_merge_application_frontiers_on_startup()?;
             kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
             kura.repair_autonomous_lane_merge_bundles_on_startup()?;
             kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
             kura.refresh_v2_startup_replay_auxiliary_binding()?;
+            kura.validate_configured_kura_capacity_after_startup_recovery()?;
         }
 
         match kura.kura_disk_usage_bytes() {
@@ -3246,6 +3065,8 @@ impl Kura {
             disk_usage_total_accounting_changed: Condvar::new(),
             pending_budget_bytes: AtomicU64::new(0),
             pending_budget_bytes_valid: AtomicBool::new(false),
+            post_wsv_lane_artifact_budget_reservations: Mutex::new(BTreeMap::new()),
+            certified_bundle_capacity_reservations: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             pending_budget_raw_scans: AtomicUsize::new(0),
             pending_budget_eviction_bytes: AtomicU64::new(0),
@@ -3279,6 +3100,8 @@ impl Kura {
             canonical_poison_paused_after_latch: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_block_write: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_atomic_write_after_temporary_sync: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_wsv_checkpoint_write: AtomicBool::new(false),
             #[cfg(test)]
@@ -4129,42 +3952,14 @@ impl Kura {
         block: &SignedBlock,
         merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<()> {
-        let block_wire = block.encode_wire()?;
-        let stage = CanonicalAssociationStageV1 {
-            format_version: CANONICAL_ASSOCIATION_STAGE_VERSION,
-            height: block.header().height().get(),
-            block_hash: block.hash(),
-            canonical_wire_hash: Hash::new(&block_wire),
-            block_wire,
-            merge_entry: merge_entry.cloned(),
-        };
-        let _ = self.validate_canonical_association_stage(&stage)?;
-        let bytes = norito::encode_canonical(&stage).map_err(Error::NoritoFrame)?;
-        if u64::try_from(bytes.len())? > MAX_CANONICAL_ASSOCIATION_STAGE_BYTES {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "canonical association stage exceeds its hard size limit",
-                ),
-                self.canonical_association_stage_path(),
-            ));
-        }
+        let publication = self.prepare_canonical_association_stage(block, merge_entry)?;
         let path = self.canonical_association_stage_path();
-        if let Some(existing) = self.read_canonical_association_stage()? {
-            if existing == stage {
-                return Ok(());
-            }
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    "a conflicting canonical association stage already exists",
-                ),
-                path,
-            ));
+        if publication.additional_bytes == 0 {
+            return Ok(());
         }
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let before = Self::file_len_or_zero(&path)?;
-        if !self.write_atomic_synced_noclobber(&path, &bytes)? {
+        if !self.write_atomic_synced_noclobber(&path, &publication.bytes)? {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::AlreadyExists,
@@ -5443,9 +5238,15 @@ impl Kura {
         *self.lane_storage_entries.lock() = restored_entries;
         drop(_canonical_chain_guard);
         drop(_prune_guard);
+        self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
+        self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
+        self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
+        self.repair_lane_merge_application_frontiers_on_startup()?;
         self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
         self.repair_autonomous_lane_merge_bundles_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
+        self.validate_configured_kura_capacity_after_startup_recovery()?;
         if let Err(err) = self.refresh_disk_usage_bytes() {
             warn!(
                 ?err,
@@ -5547,9 +5348,15 @@ impl Kura {
                 primary_merge_path,
             ));
         }
+        self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
+        self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
+        self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
+        self.repair_lane_merge_application_frontiers_on_startup()?;
         self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
         self.repair_autonomous_lane_merge_bundles_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
+        self.validate_configured_kura_capacity_after_startup_recovery()?;
         if let Err(err) = self.refresh_disk_usage_bytes() {
             warn!(
                 ?err,
@@ -5951,6 +5758,7 @@ impl Kura {
     }
 
     fn preflight_retire_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
+        self.ensure_lane_has_no_certified_bundle_capacity_reservation(entry)?;
         let blocks_dir = entry.blocks_dir(&self.store_root);
         if blocks_dir == *self.active_blocks_dir.lock() {
             return Ok(());
@@ -7443,6 +7251,10 @@ impl Kura {
             drop(build);
             let _ = Self::remove_bound_progress_temp_if_present(namespace, &build_path);
             let _ = Self::sync_bound_progress_intent_directories(namespace);
+            return None;
+        }
+        #[cfg(test)]
+        if should_fail_after_bound_progress_append_build_for_tests() {
             return None;
         }
         if let Err(error) = Self::promote_bound_progress_temp_noreplace(
@@ -9514,7 +9326,7 @@ impl Kura {
     }
 
     fn reconcile_merge_carriers_from_durable_blocks(&self) -> Result<()> {
-        self.reconcile_merge_carriers_from_durable_blocks_with_authority(None)
+        self.reconcile_merge_carriers_from_durable_blocks_with_authority(None, false)
     }
 
     fn reconcile_merge_carriers_during_snapshot_finalization(
@@ -9522,12 +9334,13 @@ impl Kura {
         authority: &SnapshotFinalizationMutationAuthority<'_>,
     ) -> Result<()> {
         authority.validate_for(self)?;
-        self.reconcile_merge_carriers_from_durable_blocks_with_authority(Some(authority))
+        self.reconcile_merge_carriers_from_durable_blocks_with_authority(Some(authority), false)
     }
 
     fn reconcile_merge_carriers_from_durable_blocks_with_authority(
         &self,
         finalization_authority: Option<&SnapshotFinalizationMutationAuthority<'_>>,
+        reject_missing_retained_carrier: bool,
     ) -> Result<()> {
         if let Some(authority) = finalization_authority {
             authority.validate_for(self)?;
@@ -9643,7 +9456,18 @@ impl Kura {
                     height.get()
                 )));
             }
-            self.append_committed_merge_entry_for_block_if_missing(&block, &entry)?;
+            if reject_missing_retained_carrier {
+                let record = Self::carrier_record_for_block_entry(&block, &entry)?;
+                let _guard = self.merge_carrier_lock.lock();
+                if self.preflight_merge_carrier_record_unlocked(record)? {
+                    return Err(Error::PruneIntentConflict(format!(
+                        "active prune cannot allocate missing retained merge carrier at block {}",
+                        height.get()
+                    )));
+                }
+            } else {
+                self.append_committed_merge_entry_for_block_if_missing(&block, &entry)?;
+            }
             self.set_transaction_entrypoint_index_entry_with_merge(
                 height.get(),
                 &block,
@@ -14741,6 +14565,7 @@ impl Kura {
                             executed_block_wire_len,
                             executed_block_wire_hash,
                             _,
+                            _,
                         ),
                         retained_identity,
                     ) = self
@@ -15526,6 +15351,7 @@ impl Kura {
                     executed_block_wire_len,
                     executed_block_wire_hash,
                     _,
+                    _,
                 )) => {
                     if executed_block_wire_len != indexed_wire_len {
                         return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
@@ -15808,6 +15634,33 @@ impl Kura {
         self.v2_finality_artifact_with_archive_under_prune_guard(height)
     }
 
+    /// Read verified finality and the immutable local merge-reference witness.
+    ///
+    /// The witness is extracted while the canonical body is present and is
+    /// retained only as bounded serving authority. A recipient independently
+    /// verifies the exact compact reference and merge QC against its canonical
+    /// block, so this API cannot create consensus authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if finality, the retained canonical association, or
+    /// the immutable retained record is invalid.
+    pub(crate) fn v2_finality_artifact_with_merge_reference(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            BlockHeader,
+            V2FinalityArtifact,
+            Option<CertifiedMergeLedgerReference>,
+        )>,
+    > {
+        let _prune_guard = self.prune_lock.lock();
+        Ok(self
+            .v2_finality_artifact_with_retained_witness_under_prune_guard(height)?
+            .map(|(header, artifact, _, reference)| (header, artifact, reference)))
+    }
+
     /// Inner finality reader for callers that already hold `prune_lock`.
     ///
     /// Keeping the complete canonical-header, retained-wire, and cryptographic
@@ -15823,10 +15676,26 @@ impl Kura {
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
     > {
+        Ok(self
+            .v2_finality_artifact_with_retained_witness_under_prune_guard(height)?
+            .map(|(header, artifact, archive, _)| (header, artifact, archive)))
+    }
+
+    fn v2_finality_artifact_with_retained_witness_under_prune_guard(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            BlockHeader,
+            V2FinalityArtifact,
+            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+            Option<CertifiedMergeLedgerReference>,
+        )>,
+    > {
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)
+        self.v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(height)
     }
 
     /// Inner finality reader for callers that already hold `prune_lock` and
@@ -15844,6 +15713,22 @@ impl Kura {
             BlockHeader,
             V2FinalityArtifact,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+        )>,
+    > {
+        Ok(self
+            .v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(height)?
+            .map(|(header, artifact, archive, _)| (header, artifact, archive)))
+    }
+
+    fn v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            BlockHeader,
+            V2FinalityArtifact,
+            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+            Option<CertifiedMergeLedgerReference>,
         )>,
     > {
         self.ensure_prune_recovery_not_required()?;
@@ -15877,6 +15762,7 @@ impl Kura {
             executed_block_wire_len,
             executed_block_wire_hash,
             archive,
+            merge_reference,
         ) = self
             .retained_block_record_at(&blocks_dir, height, block_hash)?
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
@@ -15891,7 +15777,12 @@ impl Kura {
             executed_block_wire_hash,
         )?;
         self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
-        Ok(Some((record.block_header, record.artifact, archive)))
+        Ok(Some((
+            record.block_header,
+            record.artifact,
+            archive,
+            merge_reference,
+        )))
     }
 
     /// Recover a validated durable v2 finality artifact together with the
@@ -17610,115 +17501,12 @@ impl Kura {
         sync_dir(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))?;
         Ok(())
     }
+}
 
-    include!("kura/durable_block_and_atomic_sidecar_io.rs");
+include!("kura/durable_block_and_atomic_sidecar_io.rs");
+include!("kura/prune_intent_publication.rs");
 
-    fn prune_intent_path_for(store_root: &Path) -> PathBuf {
-        store_root.join(PRUNE_INTENT_FILE_NAME)
-    }
-
-    fn decode_prune_intent(path: &Path, bytes: &[u8]) -> Result<KuraPruneIntentV1> {
-        if bytes.is_empty() || bytes.len() > PRUNE_INTENT_MAX_BYTES {
-            return Err(Error::PruneIntentConflict(format!(
-                "intent {} has invalid byte length {}",
-                path.display(),
-                bytes.len()
-            )));
-        }
-        let intent = norito::decode_canonical::<KuraPruneIntentV1>(bytes).map_err(|err| {
-            Error::PruneIntentConflict(format!(
-                "intent {} failed exact Norito decode: {err}",
-                path.display()
-            ))
-        })?;
-        if intent.version != 1
-            || intent.target_height >= intent.source_height
-            || (intent.source_height == 0) != intent.source_tip_hash.is_none()
-            || (intent.target_height == 0) != intent.target_tip_hash.is_none()
-            || (intent.retained_merge_entries == 0) != intent.retained_merge_tip_hash.is_none()
-        {
-            return Err(Error::PruneIntentConflict(format!(
-                "intent {} has a non-canonical identity",
-                path.display()
-            )));
-        }
-        Ok(intent)
-    }
-
-    fn read_prune_intent_path(path: &Path) -> Result<Option<KuraPruneIntentV1>> {
-        let metadata = match std::fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(Error::IO(err, path.to_path_buf())),
-        };
-        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-            return Err(Error::PruneIntentConflict(format!(
-                "intent {} is not a regular no-follow file",
-                path.display()
-            )));
-        }
-        if usize::try_from(metadata.len()).unwrap_or(usize::MAX) > PRUNE_INTENT_MAX_BYTES {
-            return Err(Error::PruneIntentConflict(format!(
-                "intent {} exceeds its hard byte limit",
-                path.display()
-            )));
-        }
-        let bytes = std::fs::read(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        Self::decode_prune_intent(path, &bytes).map(Some)
-    }
-
-    fn read_prune_intent(store_root: &Path) -> Result<Option<KuraPruneIntentV1>> {
-        let path = Self::prune_intent_path_for(store_root);
-        let temp_path = path.with_extension("norito.tmp");
-        let intent = Self::read_prune_intent_path(&path)?;
-        let temporary = Self::read_prune_intent_path(&temp_path)?;
-        match (intent, temporary) {
-            (Some(intent), Some(temporary)) if intent != temporary => {
-                Err(Error::PruneIntentConflict(
-                    "canonical and temporary prune intents disagree".to_owned(),
-                ))
-            }
-            (Some(intent), temporary) => {
-                if temporary.is_some() {
-                    std::fs::remove_file(&temp_path)
-                        .map_err(|err| Error::IO(err, temp_path.clone()))?;
-                    sync_dir(store_root).map_err(|err| Error::IO(err, store_root.to_path_buf()))?;
-                }
-                Ok(Some(intent))
-            }
-            (None, Some(_)) => {
-                // Publication did not reach the atomic rename, so no destructive
-                // prune stage was allowed to begin.
-                std::fs::remove_file(&temp_path)
-                    .map_err(|err| Error::IO(err, temp_path.clone()))?;
-                sync_dir(store_root).map_err(|err| Error::IO(err, store_root.to_path_buf()))?;
-                Ok(None)
-            }
-            (None, None) => Ok(None),
-        }
-    }
-
-    fn persist_prune_intent(&self, intent: &KuraPruneIntentV1) -> Result<()> {
-        let path = Self::prune_intent_path_for(&self.store_root);
-        if Self::read_prune_intent(&self.store_root)?.is_some() {
-            return Err(Error::PruneIntentConflict(
-                "another prune intent is already active".to_owned(),
-            ));
-        }
-        let bytes = norito::encode_canonical(intent).map_err(Error::NoritoFrame)?;
-        if bytes.len() > PRUNE_INTENT_MAX_BYTES {
-            return Err(Error::PruneIntentConflict(
-                "encoded prune intent exceeds its hard byte limit".to_owned(),
-            ));
-        }
-        if !self.write_atomic_synced_noclobber(&path, &bytes)? {
-            return Err(Error::PruneIntentConflict(
-                "another prune intent became active during publication".to_owned(),
-            ));
-        }
-        Ok(())
-    }
-
+impl Kura {
     fn rollback_intent_path(blocks_root: &Path) -> PathBuf {
         blocks_root.join(ROLLBACK_INTENT_FILE_NAME)
     }
@@ -17772,78 +17560,9 @@ impl Kura {
         }
     }
 
-    fn clear_prune_intent(&self) -> Result<()> {
-        let path = Self::prune_intent_path_for(&self.store_root);
-        let temp_path = path.with_extension("norito.tmp");
-        for candidate in [&path, &temp_path] {
-            if let Err(err) = std::fs::remove_file(candidate)
-                && err.kind() != ErrorKind::NotFound
-            {
-                return Err(Error::IO(err, candidate.to_path_buf()));
-            }
-        }
-        sync_dir(&self.store_root).map_err(|err| Error::IO(err, self.store_root.clone()))
-    }
-
-    fn finish_prune_intent(&self) -> Result<()> {
-        self.clear_prune_intent()?;
-        self.prune_recovery_required.store(false, Ordering::Release);
-        Ok(())
-    }
-
-    fn block_hash_from_store(
-        block_store: &mut BlockStore,
-        height: u64,
-    ) -> Result<Option<HashOf<BlockHeader>>> {
-        if height == 0 || block_store.read_durable_index_count()? < height {
-            return Ok(None);
-        }
-        Ok(block_store
-            .read_block_hashes(height.saturating_sub(1), 1)?
-            .into_iter()
-            .next())
-    }
-
-    fn apply_prune_intent_to_block_store(
-        block_store: &mut BlockStore,
-        intent: &KuraPruneIntentV1,
-    ) -> Result<()> {
-        let current = block_store.read_durable_index_count()?;
-        if current != intent.source_height && current != intent.target_height {
-            return Err(Error::PruneIntentConflict(format!(
-                "durable block height {current} matches neither prune source {} nor target {}",
-                intent.source_height, intent.target_height
-            )));
-        }
-        let expected_tip = if current == intent.source_height {
-            intent.source_tip_hash
-        } else {
-            intent.target_tip_hash
-        };
-        if Self::block_hash_from_store(block_store, current)? != expected_tip {
-            return Err(Error::PruneIntentConflict(format!(
-                "durable block tip at height {current} differs from the prune intent"
-            )));
-        }
-        if intent.target_height > 0
-            && Self::block_hash_from_store(block_store, intent.target_height)?
-                != intent.target_tip_hash
-        {
-            return Err(Error::PruneIntentConflict(
-                "durable target hash differs from the prune intent".to_owned(),
-            ));
-        }
-        // Re-run the idempotent block-store prune even when the target marker
-        // was already published. A crash immediately after that marker can
-        // leave the index/data/hash or DA-sidecar stages incomplete; the
-        // marker alone must not cause forward recovery to skip those stages.
-        block_store.prune(intent.target_height)?;
-        Ok(())
-    }
-
     fn validate_prune_intent_merge_prefix(
         merge_log: &mut MergeLedgerLog,
-        intent: &KuraPruneIntentV1,
+        intent: &KuraPruneIntentV2,
     ) -> Result<()> {
         let retained = usize::try_from(intent.retained_merge_entries)?;
         if retained > merge_log.total_entries {
@@ -17851,6 +17570,12 @@ impl Kura {
                 "intent retains {retained} merge entries but the log has only {}",
                 merge_log.total_entries
             )));
+        }
+        if intent.source_height == intent.target_height && retained != merge_log.total_entries {
+            return Err(Error::PruneIntentConflict(
+                "same-height prune intent does not retain the exact committed merge prefix"
+                    .to_owned(),
+            ));
         }
         let entries = merge_log.all_entries()?;
         let retained_tip = retained
@@ -18045,9 +17770,15 @@ impl Kura {
             .saturating_add(carrier_bytes))
     }
 
-    fn block_required_bytes_for_budget(&self, block: &SignedBlock, _limit: u64) -> Result<u64> {
+    fn block_required_bytes_for_budget(
+        &self,
+        block: &SignedBlock,
+        merge_entry: Option<&MergeLedgerEntry>,
+        _limit: u64,
+    ) -> Result<u64> {
         let required = Self::block_required_bytes(block)?;
-        Ok(required.saturating_add(self.lane_artifact_required_bytes_for_block(block)?))
+        Ok(required
+            .saturating_add(self.lane_artifact_required_bytes_for_block(block, merge_entry)?))
     }
 
     fn sidecar_bytes_with_historical_budget(
@@ -18229,7 +17960,7 @@ impl Kura {
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
             Err(err) => return Err(Error::IO(err, root.to_path_buf())),
         };
-        let mut total = 0u64;
+        let mut total = Self::blocks_root_debug_file_bytes(root)?;
         let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
         let mut historical_byte_budget = historical_byte_limit;
         for entry in entries {
@@ -18311,7 +18042,7 @@ impl Kura {
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
             Err(err) => return Err(Error::IO(err, root.to_path_buf())),
         };
-        let mut total = 0u64;
+        let mut total = Self::blocks_root_debug_file_bytes(root)?;
         let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
         let mut historical_byte_budget = historical_byte_limit;
         for entry in entries {
@@ -18492,12 +18223,20 @@ impl Kura {
                 .lane_geometry_journal_path()
                 .with_extension("norito.tmp"),
         )?);
+        used = used.saturating_add(
+            Self::canonical_prune_intent_artifact_inventory(&self.store_root)?.tracked_bytes()?,
+        );
         used = used.saturating_add(Self::file_len_or_zero(
             &Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
         )?);
         used = used.saturating_add(Self::file_len_or_zero(
             &Self::autonomous_lifecycle_process_generation_temp_path_for(&self.store_root),
         )?);
+        used = used.saturating_add(
+            Self::autonomous_lifecycle_process_generation_publication_residue_bytes(
+                &self.store_root,
+            )?,
+        );
         Ok(used)
     }
 
@@ -18552,12 +18291,20 @@ impl Kura {
                 .lane_geometry_journal_path()
                 .with_extension("norito.tmp"),
         )?);
+        used = used.saturating_add(
+            Self::canonical_prune_intent_artifact_inventory(&self.store_root)?.tracked_bytes()?,
+        );
         used = used.saturating_add(Self::file_len_or_zero(
             &Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
         )?);
         used = used.saturating_add(Self::file_len_or_zero(
             &Self::autonomous_lifecycle_process_generation_temp_path_for(&self.store_root),
         )?);
+        used = used.saturating_add(
+            Self::autonomous_lifecycle_process_generation_publication_residue_bytes(
+                &self.store_root,
+            )?,
+        );
         Ok(used)
     }
 
@@ -18743,9 +18490,20 @@ impl Kura {
 
         let mut pending_bytes = 0u64;
         for block in pending_blocks {
-            pending_bytes = pending_bytes.saturating_add(
-                self.block_required_bytes_for_budget(&block, self.max_disk_usage_bytes)?,
-            );
+            let merge_entry = if let Some(reference) = Self::block_merge_reference(&block) {
+                Some(self.merge_entry_by_hash(reference.entry_hash)?.ok_or(
+                    Error::MissingCertifiedMergeSidecar {
+                        entry_hash: reference.entry_hash,
+                    },
+                )?)
+            } else {
+                None
+            };
+            pending_bytes = pending_bytes.saturating_add(self.block_required_bytes_for_budget(
+                &block,
+                merge_entry.as_ref(),
+                self.max_disk_usage_bytes,
+            )?);
         }
         Ok(pending_bytes)
     }
@@ -18815,22 +18573,45 @@ impl Kura {
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
 
         let limit = self.max_disk_usage_bytes;
-        let block_required = self.block_required_bytes_for_budget(block, limit)?;
+        let block_required = self.block_required_bytes_for_budget(block, merge_entry, limit)?;
+        let association_stage_bytes =
+            self.canonical_association_stage_additional_bytes(block, merge_entry)?;
+        let post_wsv_artifact_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+        let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
+        let autonomous_terminal_reservations =
+            self.autonomous_global_terminal_outcome_reserved_bytes()?;
+        let prune_maintenance_headroom = Self::canonical_prune_intent_maintenance_headroom_bytes();
         let mut used = self.disk_usage.load(Ordering::Relaxed);
         let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
-        let mut budget_used = used.saturating_add(pending_bytes);
+        let mut budget_used = used
+            .saturating_add(pending_bytes)
+            .saturating_add(post_wsv_artifact_reservations)
+            .saturating_add(certified_bundle_reservations)
+            .saturating_add(autonomous_terminal_reservations)
+            .saturating_add(prune_maintenance_headroom);
         let mut required = budget_used
             .saturating_add(block_required)
-            .saturating_add(merge_entry_bytes);
+            .saturating_add(merge_entry_bytes)
+            .saturating_add(association_stage_bytes);
 
         if required > limit {
             if self.purge_retired_storage_under_prune_and_canonical_guards()? {
                 used = self.disk_usage.load(Ordering::Relaxed);
-                budget_used = used.saturating_add(pending_bytes);
+                budget_used = used
+                    .saturating_add(pending_bytes)
+                    .saturating_add(post_wsv_artifact_reservations)
+                    .saturating_add(certified_bundle_reservations)
+                    .saturating_add(autonomous_terminal_reservations)
+                    .saturating_add(prune_maintenance_headroom);
                 required = used
                     .saturating_add(pending_bytes)
+                    .saturating_add(post_wsv_artifact_reservations)
+                    .saturating_add(certified_bundle_reservations)
+                    .saturating_add(autonomous_terminal_reservations)
+                    .saturating_add(prune_maintenance_headroom)
                     .saturating_add(block_required)
-                    .saturating_add(merge_entry_bytes);
+                    .saturating_add(merge_entry_bytes)
+                    .saturating_add(association_stage_bytes);
                 if required <= limit {
                     if let Some(telemetry) = self.telemetry.get() {
                         telemetry.record_storage_budget_usage("kura", required, limit);
@@ -18891,8 +18672,10 @@ impl Kura {
         };
 
         let limit = self.max_disk_usage_bytes;
-        let new_bytes = self.block_required_bytes_for_budget(block, limit)?;
-        let old_bytes = self.block_required_bytes_for_budget(&old_block, limit)?;
+        let new_bytes = self.block_required_bytes_for_budget(block, None, limit)?;
+        let old_bytes = self.block_required_bytes_for_budget(&old_block, None, limit)?;
+        let association_stage_bytes =
+            self.canonical_association_stage_additional_bytes(block, None)?;
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         let pending_raw = self.pending_block_bytes_raw(persisted_count)?;
         let top_is_pending = block_count > persisted_count;
@@ -18904,31 +18687,65 @@ impl Kura {
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
 
         let pending_current = pending_raw.saturating_sub(unindexed_bytes);
+        let post_wsv_artifact_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+        let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
+        let autonomous_terminal_reservations =
+            self.autonomous_global_terminal_outcome_reserved_bytes()?;
+        let prune_maintenance_headroom = Self::canonical_prune_intent_maintenance_headroom_bytes();
         let mut used = self.disk_usage.load(Ordering::Relaxed);
-        let mut budget_used = used.saturating_add(pending_current);
-        let mut required = {
+        let mut budget_used = used
+            .saturating_add(pending_current)
+            .saturating_add(post_wsv_artifact_reservations)
+            .saturating_add(certified_bundle_reservations)
+            .saturating_add(autonomous_terminal_reservations)
+            .saturating_add(prune_maintenance_headroom);
+        let projected_after = {
             let used_after = if top_is_pending {
                 used
             } else {
                 used.saturating_sub(old_bytes)
             };
             let pending_after = pending_raw_after.saturating_sub(unindexed_bytes);
-            used_after.saturating_add(pending_after)
+            used_after
+                .saturating_add(pending_after)
+                .saturating_add(post_wsv_artifact_reservations)
+                .saturating_add(certified_bundle_reservations)
+                .saturating_add(autonomous_terminal_reservations)
+                .saturating_add(prune_maintenance_headroom)
         };
+        // The stage is atomically published while the old top is still
+        // physical, then remains stable through canonical replacement. Reserve
+        // it above the larger of those two sequential stable-state projections.
+        let mut required = budget_used
+            .max(projected_after)
+            .saturating_add(association_stage_bytes);
 
         if required > limit {
             if self.purge_retired_storage_under_prune_and_canonical_guards()? {
                 used = self.disk_usage.load(Ordering::Relaxed);
-                budget_used = used.saturating_add(pending_current);
-                required = {
+                budget_used = used
+                    .saturating_add(pending_current)
+                    .saturating_add(post_wsv_artifact_reservations)
+                    .saturating_add(certified_bundle_reservations)
+                    .saturating_add(autonomous_terminal_reservations)
+                    .saturating_add(prune_maintenance_headroom);
+                let projected_after = {
                     let used_after = if top_is_pending {
                         used
                     } else {
                         used.saturating_sub(old_bytes)
                     };
                     let pending_after = pending_raw_after.saturating_sub(unindexed_bytes);
-                    used_after.saturating_add(pending_after)
+                    used_after
+                        .saturating_add(pending_after)
+                        .saturating_add(post_wsv_artifact_reservations)
+                        .saturating_add(certified_bundle_reservations)
+                        .saturating_add(autonomous_terminal_reservations)
+                        .saturating_add(prune_maintenance_headroom)
                 };
+                required = budget_used
+                    .max(projected_after)
+                    .saturating_add(association_stage_bytes);
                 if required <= limit {
                     if let Some(telemetry) = self.telemetry.get() {
                         telemetry.record_storage_budget_usage("kura", required, limit);
@@ -18963,20 +18780,6 @@ impl Kura {
         }
 
         Ok(())
-    }
-
-    fn append_blocks_jsonl(path: &Path, blocks: &[Arc<SignedBlock>]) -> std::io::Result<()> {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        let mut writer = BufWriter::new(file);
-        for block in blocks {
-            norito::json::to_writer(&mut writer, block.as_ref())
-                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-            writer.write_all(b"\n")?;
-        }
-        writer.flush()
     }
 
     /// Store a block durably in Kura's canonical block store.
@@ -21243,9 +21046,12 @@ impl Kura {
         let temp_metadata = |path: &Path| -> Result<Option<std::fs::Metadata>> {
             match std::fs::symlink_metadata(path) {
                 Ok(metadata) => {
-                    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                    if metadata.file_type().is_symlink()
+                        || !metadata.file_type().is_file()
+                        || !Self::sidecar_is_single_link(&metadata)
+                    {
                         return Err(Error::PruneIntentConflict(format!(
-                            "{kind} temporary path {} is not a regular no-follow file",
+                            "{kind} temporary path {} is not an exact single-link regular no-follow file",
                             path.display()
                         )));
                     }
@@ -21335,8 +21141,19 @@ impl Kura {
         index_path: &Path,
         target_height: u64,
         kind: &'static str,
+        expected: KuraPruneSidecarPairProjectionV2,
     ) -> Result<()> {
         self.reconcile_prune_indexed_sidecar_temps(data_path, index_path, target_height, kind)?;
+        let actual =
+            Self::project_prune_indexed_sidecar_pair(data_path, index_path, target_height, kind)?;
+        if actual != expected {
+            return Err(Error::PruneIntentConflict(format!(
+                "{kind} retained rewrite projection changed before allocation"
+            )));
+        }
+        if !actual.required {
+            return Ok(());
+        }
         let temp_data_path = data_path.with_extension("norito.tmp");
         let temp_index_path = index_path.with_extension("index.tmp");
 
@@ -21361,18 +21178,6 @@ impl Kura {
                 "{kind} data path has no parent directory"
             )));
         };
-        if retained_entries == 0 {
-            for path in [data_path, index_path, &temp_data_path, &temp_index_path] {
-                if let Err(err) = std::fs::remove_file(path)
-                    && err.kind() != ErrorKind::NotFound
-                {
-                    return Err(Error::IO(err, path.to_path_buf()));
-                }
-            }
-            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-            return Ok(());
-        }
-
         let mut index = std::fs::File::open(index_path)
             .map_err(|err| Error::IO(err, index_path.to_path_buf()))?;
         index
@@ -21396,7 +21201,16 @@ impl Kura {
             std::fs::File::create(&temp_index_path)
                 .map_err(|err| Error::IO(err, temp_index_path.clone()))?,
         );
-        if layout.is_based() {
+        if retained_entries == 0 && target_height > 0 {
+            let empty_base = target_height.checked_add(1).ok_or_else(|| {
+                Error::PruneIntentConflict(format!(
+                    "{kind} empty retained index base height overflows"
+                ))
+            })?;
+            new_index
+                .write_all(&SidecarIndexLayout::base_header(empty_base))
+                .map_err(|err| Error::IO(err, temp_index_path.clone()))?;
+        } else if layout.is_based() {
             new_index
                 .write_all(&SidecarIndexLayout::base_header(layout.base_height))
                 .map_err(|err| Error::IO(err, temp_index_path.clone()))?;
@@ -21443,6 +21257,20 @@ impl Kura {
         drop(data);
         drop(index);
 
+        let staged_data_bytes = std::fs::symlink_metadata(&temp_data_path)
+            .map_err(|error| Error::IO(error, temp_data_path.clone()))?
+            .len();
+        let staged_index_bytes = std::fs::symlink_metadata(&temp_index_path)
+            .map_err(|error| Error::IO(error, temp_index_path.clone()))?
+            .len();
+        if staged_data_bytes != actual.retained_data_bytes
+            || staged_index_bytes != actual.retained_index_bytes
+        {
+            return Err(Error::PruneIntentConflict(format!(
+                "{kind} staged retained pair differs from its authenticated byte projection"
+            )));
+        }
+
         // Publish data first. If the process stops between renames, the durable prune intent and
         // the temporary index let the next startup finish the same prefix rewrite forward.
         self.rename_prune_sidecar_temp(&temp_data_path, data_path, PRUNE_SIDECAR_PROMOTION_DATA)?;
@@ -21463,18 +21291,44 @@ impl Kura {
         Ok(())
     }
 
-    fn truncate_pipeline_sidecars_for_prune(&self, target_height: u64) -> Result<()> {
+    fn truncate_pipeline_sidecars_for_prune(&self, intent: &KuraPruneIntentV2) -> Result<()> {
+        let target_height = intent.target_height;
+        let remaining = self.reconcile_and_project_prune_sidecar_rewrites_locked(target_height)?;
+        if !intent.sidecar_rewrite.authorizes(remaining) {
+            return Err(Error::PruneIntentConflict(
+                "remaining canonical sidecar rewrite exceeds its authenticated prune projection"
+                    .to_owned(),
+            ));
+        }
+        let remaining_roster = self
+            .roster_log
+            .read()
+            .project_truncate_to_height(target_height)
+            .map_err(|error| {
+                Error::PruneIntentConflict(format!(
+                    "failed to re-project commit-roster prune capacity: {error}"
+                ))
+            })?;
+        if !intent.capacity.roster.authorizes(remaining_roster) {
+            return Err(Error::PruneIntentConflict(
+                "remaining commit-roster state exceeds its authenticated prune projection"
+                    .to_owned(),
+            ));
+        }
+        self.validate_recovered_prune_capacity(intent, remaining_roster, remaining)?;
         let directory = self.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
-        for (data_file, index_file, kind) in [
+        for (data_file, index_file, kind, expected) in [
             (
                 PIPELINE_SIDECARS_DATA_FILE,
                 PIPELINE_SIDECARS_INDEX_FILE,
                 "pipeline recovery sidecar",
+                remaining.pipeline,
             ),
             (
                 ROSTER_SIDECARS_DATA_FILE,
                 ROSTER_SIDECARS_INDEX_FILE,
                 "roster metadata sidecar",
+                remaining.roster,
             ),
         ] {
             self.truncate_indexed_sidecar_to_height(
@@ -21482,6 +21336,7 @@ impl Kura {
                 &directory.join(index_file),
                 target_height,
                 kind,
+                expected,
             )?;
         }
         if directory.exists() {
@@ -21574,7 +21429,7 @@ impl Kura {
         Ok(())
     }
 
-    fn validate_completed_prune_intent(&self, intent: &KuraPruneIntentV1) -> Result<()> {
+    fn validate_completed_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<()> {
         let target = usize::try_from(intent.target_height)?;
         let data = self.block_data.lock();
         if data.len() != target || data.last().map(|(hash, _)| *hash) != intent.target_tip_hash {
@@ -21865,19 +21720,41 @@ impl Kura {
         Ok(())
     }
 
-    fn truncate_roster_for_prune(&self, height: u64) -> Result<()> {
+    fn truncate_roster_for_prune(
+        &self,
+        intent: &KuraPruneIntentV2,
+        remaining_sidecar: KuraPruneSidecarRewriteProjectionV2,
+    ) -> Result<()> {
+        let height = intent.target_height;
         let before = self.roster_journal_tracked_bytes()?;
         {
             // Keep the shared in-memory fence unchanged until the replacement
             // generation is durable. A post-intent failure is fail-stop, but
             // readers must still not observe a journal state never published.
             let mut roster_log = self.roster_log.write();
+            let remaining_roster =
+                roster_log
+                    .project_truncate_to_height(height)
+                    .map_err(|err| {
+                        Error::PruneIntentConflict(format!(
+                            "failed to project commit-roster journal at height {height}: {err}"
+                        ))
+                    })?;
+            if !intent.capacity.roster.authorizes(remaining_roster) {
+                return Err(Error::PruneIntentConflict(
+                    "remaining commit-roster state exceeds its authenticated prune projection"
+                        .to_owned(),
+                ));
+            }
+            self.validate_recovered_prune_capacity(intent, remaining_roster, remaining_sidecar)?;
             let mut candidate = roster_log.clone();
-            candidate.truncate_to_height(height).map_err(|err| {
-                Error::PruneIntentConflict(format!(
-                    "failed to truncate commit-roster journal to height {height}: {err}"
-                ))
-            })?;
+            candidate
+                .truncate_to_height_with_projection(height, intent.capacity.roster)
+                .map_err(|err| {
+                    Error::PruneIntentConflict(format!(
+                        "failed to truncate commit-roster journal to height {height}: {err}"
+                    ))
+                })?;
             *roster_log = candidate;
         }
         let after = self.roster_journal_tracked_bytes()?;
@@ -21885,7 +21762,43 @@ impl Kura {
         Ok(())
     }
 
-    fn complete_recovered_prune_intent(&self, intent: &KuraPruneIntentV1) -> Result<()> {
+    fn preflight_recovered_prune_capacity_before_mutation(
+        &self,
+        intent: &KuraPruneIntentV2,
+    ) -> Result<KuraPruneSidecarRewriteProjectionV2> {
+        // Normalize at most one non-growing sequential temp stage, authenticate
+        // the exact remaining projection, and reject insufficient configured
+        // physical capacity before any new retained-pair allocation or other
+        // forward-recovery mutation.
+        let _guard = self.sidecar_lock.lock();
+        let remaining =
+            self.reconcile_and_project_prune_sidecar_rewrites_locked(intent.target_height)?;
+        if !intent.sidecar_rewrite.authorizes(remaining) {
+            return Err(Error::PruneIntentConflict(
+                "startup sidecar rewrite exceeds its authenticated prune projection".to_owned(),
+            ));
+        }
+        let remaining_roster = self
+            .roster_log
+            .read()
+            .project_truncate_to_height(intent.target_height)
+            .map_err(|error| {
+                Error::PruneIntentConflict(format!(
+                    "failed to recover commit-roster prune projection: {error}"
+                ))
+            })?;
+        if !intent.capacity.roster.authorizes(remaining_roster) {
+            return Err(Error::PruneIntentConflict(
+                "startup commit-roster state exceeds its authenticated prune projection".to_owned(),
+            ));
+        }
+        self.validate_recovered_prune_capacity(intent, remaining_roster, remaining)?;
+        Ok(remaining)
+    }
+
+    fn complete_recovered_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<()> {
+        let remaining_sidecar =
+            self.preflight_recovered_prune_capacity_before_mutation(intent)?;
         // Merge reconciliation runs before this method and uses the durable
         // block height to remove future carriers and their merge-log suffix.
         let blocks_dir = self.active_blocks_dir.lock().clone();
@@ -21893,7 +21806,7 @@ impl Kura {
             &blocks_dir,
             intent.target_height.saturating_add(1),
         )?;
-        self.truncate_roster_for_prune(intent.target_height)?;
+        self.truncate_roster_for_prune(intent, remaining_sidecar)?;
         {
             let _guard = self.sidecar_lock.lock();
             let wsv_dir = self.wsv_checkpoint_dir();
@@ -21905,7 +21818,7 @@ impl Kura {
             for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
                 Self::prune_commit_manifests_above_in_dir(&directory, intent.target_height)?;
             }
-            self.truncate_pipeline_sidecars_for_prune(intent.target_height)?;
+            self.truncate_pipeline_sidecars_for_prune(intent)?;
         }
         self.validate_completed_prune_intent(intent)?;
         self.finish_prune_intent()
@@ -22016,21 +21929,15 @@ impl Kura {
         let blocks_dir = self.active_blocks_dir.lock().clone();
         self.resolve_retained_block_rewrite_stage_before_canonical_mutation(&blocks_dir)?;
         self.ensure_v2_finality_allows_rewrite_from(&blocks_dir, height.saturating_add(1))?;
+        // Preserve prune -> canonical -> pending-canonical snapshot order.
+        // The snapshot must precede every geometry or sidecar lock used by the
+        // composite live capacity gate.
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let (source_height, source_tip_hash, target_tip_hash) = {
             let data = self.block_data.lock();
             if keep > data.len() {
                 return Ok(());
-            }
-            if keep == data.len() {
-                // A caller can explicitly prune to the current canonical tip
-                // after a pre-publication crash left indexed pipeline or
-                // roster metadata for the next height. No canonical rewrite
-                // (and therefore no prune intent) is needed, but the
-                // unauthenticated indexed suffix must not survive merely
-                // because the block log is already at the requested height.
-                drop(data);
-                let _sidecar_guard = self.sidecar_lock.lock();
-                return self.truncate_pipeline_sidecars_for_prune(height);
             }
             (
                 u64::try_from(data.len())?,
@@ -22040,6 +21947,30 @@ impl Kura {
                     .map(|(hash, _)| *hash),
             )
         };
+        let sidecar_rewrite = {
+            let _sidecar_guard = self.sidecar_lock.lock();
+            self.reconcile_and_project_prune_sidecar_rewrites_locked(height)?
+        };
+        if keep == usize::try_from(source_height)? && !sidecar_rewrite.has_work() {
+            return Ok(());
+        }
+        let roster_projection = self
+            .roster_log
+            .read()
+            .project_truncate_to_height(height)
+            .map_err(|error| {
+                Error::PruneIntentConflict(format!(
+                    "failed to project commit-roster prune publication: {error}"
+                ))
+            })?;
+        let (marker_temporary_bytes, marker_stable_growth_bytes) =
+            self.canonical_prune_commit_marker_projection(height)?;
+        let capacity = self.canonical_prune_capacity_admission_snapshot(
+            pending_canonical_bytes,
+            marker_temporary_bytes,
+            marker_stable_growth_bytes,
+            roster_projection,
+        )?;
         let validated_carrier_records =
             self.merge_carrier_records_for_prune_under_prune_and_canonical_guards(height)?;
         let (carrier_records, carrier_generation) = {
@@ -22081,15 +22012,23 @@ impl Kura {
             .checked_sub(1)
             .and_then(|index| merge_entries.get(index))
             .map(MergeLedgerEntry::canonical_hash);
-        let intent = KuraPruneIntentV1 {
-            version: 1,
-            source_height,
-            source_tip_hash,
-            target_height: height,
-            target_tip_hash,
-            retained_merge_entries: u64::try_from(retained_merge_entries)?,
-            retained_merge_tip_hash,
-        };
+        if source_height == height && retained_merge_entries != merge_entries.len() {
+            return Err(Error::PruneIntentConflict(
+                "same-height sidecar cleanup would change the committed merge prefix".to_owned(),
+            ));
+        }
+        let intent =
+            self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV2 {
+                version: 2,
+                source_height,
+                source_tip_hash,
+                target_height: height,
+                target_tip_hash,
+                retained_merge_entries: u64::try_from(retained_merge_entries)?,
+                retained_merge_tip_hash,
+                sidecar_rewrite,
+                capacity,
+            })?;
 
         // Preserve the established lock order used by block publication. Holding
         // block_data keeps readers and appenders on the old tip until every
@@ -22124,6 +22063,28 @@ impl Kura {
             ));
         }
         let sidecar_guard = self.sidecar_lock.lock();
+        let current_sidecar_rewrite =
+            self.reconcile_and_project_prune_sidecar_rewrites_locked(height)?;
+        if current_sidecar_rewrite != sidecar_rewrite {
+            return Err(Error::PruneIntentConflict(
+                "canonical sidecar rewrite projection changed before prune intent publication"
+                    .to_owned(),
+            ));
+        }
+        let current_roster_projection = self
+            .roster_log
+            .read()
+            .project_truncate_to_height(height)
+            .map_err(|error| {
+            Error::PruneIntentConflict(format!(
+                "failed to re-project commit-roster prune publication: {error}"
+            ))
+        })?;
+        if current_roster_projection != roster_projection {
+            return Err(Error::PruneIntentConflict(
+                "commit-roster prune projection changed before prune intent publication".to_owned(),
+            ));
+        }
         Self::validate_no_numbered_sidecar_suffix(
             &self.wsv_checkpoint_dir(),
             source_height,
@@ -22139,7 +22100,7 @@ impl Kura {
             source_height,
             "Sumeragi v2 finality directory",
         )?;
-        self.validate_pipeline_sidecars_for_prune(source_height, false)?;
+        self.validate_pipeline_sidecars_for_prune(u64::MAX, false)?;
         let _write_guard = self.block_store_write_lock.lock();
         {
             let mut store = self.block_store.lock();
@@ -22230,7 +22191,7 @@ impl Kura {
 
         forward_or_stop!(
             "commit-roster suffix",
-            self.truncate_roster_for_prune(height)
+            self.truncate_roster_for_prune(&intent, sidecar_rewrite)
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_ROSTER);
 
@@ -22263,7 +22224,7 @@ impl Kura {
 
         forward_or_stop!(
             "pipeline and roster sidecar suffixes",
-            self.truncate_pipeline_sidecars_for_prune(height)
+            self.truncate_pipeline_sidecars_for_prune(&intent)
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_PIPELINE_SIDECARS);
         drop(sidecar_guard);
@@ -23376,40 +23337,6 @@ impl Kura {
         ))
     }
 
-    fn autonomous_two_height_coordinates(name: &str, prefix: &str) -> Option<(u64, u64)> {
-        let raw = name
-            .strip_prefix(prefix)?
-            .strip_prefix('_')?
-            .strip_suffix(".norito")?;
-        let (lane_block_height, proposal_height) = raw.split_once('_')?;
-        let lane_block_height = lane_block_height.parse::<u64>().ok()?;
-        let proposal_height = proposal_height.parse::<u64>().ok()?;
-        (lane_block_height != 0
-            && proposal_height != 0
-            && name == format!("{prefix}_{lane_block_height:020}_{proposal_height:020}.norito"))
-        .then_some((lane_block_height, proposal_height))
-    }
-
-    fn autonomous_lane_block_attempt_coordinates(name: &str) -> Option<(u64, u64)> {
-        Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX)
-    }
-
-    fn autonomous_lifecycle_cursor_coordinates(name: &str) -> Option<(u64, u64)> {
-        Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LIFECYCLE_CURSOR_PREFIX)
-    }
-
-    fn autonomous_lifecycle_bootstrap_coordinates(name: &str) -> Option<(u64, u64)> {
-        Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PREFIX)
-    }
-
-    fn autonomous_lane_block_attempt_view_temp_coordinates(name: &str) -> Option<(u64, u64)> {
-        let stable_name = name.strip_suffix(".tmp")?;
-        Self::autonomous_two_height_coordinates(
-            stable_name,
-            AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
-        )
-    }
-
     fn autonomous_one_height_coordinate(name: &str, prefix: &str) -> Option<u64> {
         let raw = name
             .strip_prefix(prefix)?
@@ -23418,162 +23345,16 @@ impl Kura {
         let height = raw.parse::<u64>().ok()?;
         (height != 0 && name == format!("{prefix}_{height:020}.norito")).then_some(height)
     }
+}
 
-    fn autonomous_lane_attempt_inventory_counts_locked(
-        &self,
-        entry: &LaneConfigEntry,
-        target_lane_block_height: u64,
-    ) -> Result<(usize, usize, u64)> {
-        let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
-        let entries = match std::fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok((0, 0, 0)),
-            Err(error) => return Err(Error::IO(error, directory)),
-        };
-        let mut related_files = 0_usize;
-        let mut attempts_at_height = 0_usize;
-        let mut related_bytes = 0_u64;
-        for directory_entry in entries {
-            let directory_entry =
-                directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
-            let path = directory_entry.path();
-            let name = directory_entry.file_name().into_string().map_err(|_| {
-                Self::invalid_lane_artifact_error(
-                    path.clone(),
-                    "autonomous attempt inventory contains a non-UTF-8 artifact",
-                )
-            })?;
-            if name.starts_with(".kura-sidecar-") {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous attempt inventory requires startup cleanup of an atomic temporary artifact",
-                ));
-            }
-            if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous lifecycle bootstrap atomic temporary requires fail-closed recovery",
-                ));
-            }
-            if !name.starts_with("autonomous_") {
-                continue;
-            }
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
-            if metadata.file_type().is_symlink()
-                || !metadata.file_type().is_file()
-                || !Self::sidecar_is_single_link(&metadata)
-            {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous attempt inventory contains a non-regular, linked, or symlinked artifact",
-                ));
-            }
-            related_files = related_files.checked_add(1).ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    directory.clone(),
-                    "autonomous attempt inventory count overflows",
-                )
-            })?;
-            if related_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
-                return Err(Self::invalid_lane_artifact_error(
-                    directory,
-                    "autonomous attempt inventory exceeds its hard file-count limit",
-                ));
-            }
-            related_bytes = related_bytes.checked_add(metadata.len()).ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    directory.clone(),
-                    "autonomous attempt inventory byte count overflows",
-                )
-            })?;
-            if related_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
-                return Err(Self::invalid_lane_artifact_error(
-                    directory,
-                    "autonomous attempt inventory exceeds the shared sidecar aggregate byte budget",
-                ));
-            }
-            if let Some((lane_block_height, _)) =
-                Self::autonomous_lane_block_attempt_coordinates(&name)
-            {
-                if lane_block_height == target_lane_block_height {
-                    attempts_at_height = attempts_at_height.saturating_add(1);
-                }
-                continue;
-            }
-            if Self::autonomous_two_height_coordinates(
-                &name,
-                AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
-            )
-            .is_some()
-                || Self::autonomous_lifecycle_cursor_coordinates(&name).is_some()
-                || Self::autonomous_lifecycle_bootstrap_coordinates(&name).is_some()
-                || Self::autonomous_one_height_coordinate(
-                    &name,
-                    AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
-                )
-                .is_some()
-                || name == AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE
-            {
-                continue;
-            }
-            return Err(Self::invalid_lane_artifact_error(
-                path,
-                "unexpected or obsolete autonomous persistence artifact",
-            ));
-        }
-        Ok((related_files, attempts_at_height, related_bytes))
-    }
+include!("kura/autonomous_terminal_capacity.rs");
+include!("kura/autonomous_publication_temp_recovery.rs");
+include!("kura/historical_autonomous_recovery_temp_reconciliation.rs");
+include!("kura/hot_path_capacity_preflight.rs");
+include!("kura/autonomous_execution_view_capacity.rs");
+include!("kura/certified_bundle_capacity.rs");
 
-    fn validate_autonomous_lifecycle_cursor_cas_budget(
-        related_files: usize,
-        related_bytes: u64,
-        previous_len: u64,
-        next_len: u64,
-        replacing_existing: bool,
-    ) -> std::result::Result<(), &'static str> {
-        if replacing_existing != (previous_len != 0) {
-            return Err("autonomous lifecycle cursor CAS replacement accounting is inconsistent");
-        }
-        let resulting_files = related_files
-            .checked_add(usize::from(!replacing_existing))
-            .ok_or("autonomous lifecycle cursor CAS file-count accounting overflowed")?;
-        if resulting_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
-            return Err(
-                "autonomous lifecycle cursor CAS would exceed the hard namespace file-count limit",
-            );
-        }
-        let resulting_bytes = related_bytes
-            .checked_sub(previous_len)
-            .and_then(|bytes| bytes.checked_add(next_len))
-            .ok_or("autonomous lifecycle cursor CAS byte accounting overflowed")?;
-        if resulting_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
-            return Err(
-                "autonomous lifecycle cursor CAS would exceed the shared sidecar aggregate byte budget",
-            );
-        }
-
-        // Atomic synced replacement materializes one `.kura-sidecar-*` temp.
-        // Bound that transient exposure separately from the resulting stable
-        // namespace so replacing a cursor is not miscounted as a second stable
-        // cursor, while a crash-staged temporary still has an explicit ceiling.
-        let peak_files = related_files
-            .checked_add(1)
-            .ok_or("autonomous lifecycle cursor CAS temporary file-count accounting overflowed")?;
-        if peak_files > MAX_AUTONOMOUS_LIFECYCLE_CURSOR_CAS_PEAK_FILES {
-            return Err(
-                "autonomous lifecycle cursor CAS would exceed its temporary file-count budget",
-            );
-        }
-        let peak_bytes = related_bytes
-            .checked_add(next_len)
-            .ok_or("autonomous lifecycle cursor CAS temporary byte accounting overflowed")?;
-        if peak_bytes > AUTONOMOUS_LIFECYCLE_CURSOR_CAS_PEAK_BYTES as u64 {
-            return Err("autonomous lifecycle cursor CAS would exceed its temporary byte budget");
-        }
-        Ok(())
-    }
-
+impl Kura {
     kura_autonomous_reservation_inventory_methods!();
 
     fn autonomous_lane_block_attempt_view_state_path_for_entry(
@@ -23988,11 +23769,10 @@ impl Kura {
         let root = HashOf::<MerkleTree<NativeAmxApplicationManifestLeafV1>>::from_untyped_unchecked(
             artifact.manifest_root,
         );
-        if !artifact.proof.clone().verify(
-            &leaf_hash,
-            &root,
-            NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT,
-        ) {
+        let leaf_count = NonZeroU64::new(u64::from(artifact.manifest_leaf_count))
+            .ok_or("Native AMX participant manifest leaf count is zero")?;
+        let commitment = MerkleTreeCommitment::new(root, leaf_count);
+        if !artifact.proof.verify(&leaf_hash, &commitment) {
             return Err("Native AMX participant manifest Merkle proof is invalid");
         }
         Ok(())
@@ -24765,73 +24545,11 @@ impl Kura {
         }
         Ok(signers)
     }
+}
 
-    fn lane_artifact_required_bytes_for_block(&self, block: &SignedBlock) -> Result<u64> {
-        let block_hash = block.hash();
-        let mut total = 0u64;
-        if let Some(bundle) = block.execution_context() {
-            for ownership in bundle
-                .lane_payload_ownerships
-                .iter()
-                .filter(|ownership| Self::lane_payload_ownership_is_durable(ownership))
-            {
-                let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
-                let encoded_len = u64::try_from(artifact.encode_framed()?.len())?;
-                total = total.saturating_add(encoded_len).saturating_add(
-                    Self::maximum_index_growth_for_unresolved_sidecar_write(
-                        ownership.lane_block_height,
-                    ),
-                );
-            }
-        }
+include!("kura/lane_artifact_budget.rs");
 
-        let native_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(block)
-                .map_err(|error| {
-                    Self::invalid_lane_artifact_error(
-                        PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
-                        format!("cannot account Native AMX application manifest: {error}"),
-                    )
-                })?;
-        let native_artifacts = native_amx_participant_application_artifacts(
-            &native_manifest,
-            native_amx_participant_application_finality_placeholder_hash(),
-        )
-        .ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
-                "cannot account missing Native AMX manifest proof",
-            )
-        })?;
-        let mut native_prune_intent_routes = BTreeSet::new();
-        for (manifest_artifact, receipt) in native_artifacts {
-            let (manifest_bytes, receipt_bytes) =
-                native_amx_participant_application_pair_framed_bytes(&manifest_artifact, &receipt)?;
-            let manifest_len = u64::try_from(manifest_bytes.len())?;
-            let receipt_len = u64::try_from(receipt_bytes.len())?;
-            let latest_len = u64::try_from(
-                norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
-                    &receipt,
-                ))?
-                .len(),
-            )?;
-            total = total
-                .saturating_add(manifest_len)
-                .saturating_add(receipt_len)
-                .saturating_add(latest_len);
-            if native_prune_intent_routes.insert((
-                manifest_artifact.leaf.lane_id,
-                manifest_artifact.leaf.dataspace_id,
-                manifest_artifact.leaf.lane_incarnation,
-            )) {
-                total = total.saturating_add(u64::try_from(
-                    self.native_amx_evidence_prune_intent_max_bytes(),
-                )?);
-            }
-        }
-        Ok(total)
-    }
-
+impl Kura {
     fn persist_lane_payload_ownership_artifacts_for_block(
         &self,
         block: &SignedBlock,
@@ -25396,131 +25114,6 @@ impl Kura {
         Ok(())
     }
 
-    fn decode_latest_certified_lane_block_frontier(
-        path: &Path,
-        bytes: &[u8],
-    ) -> Result<LatestCertifiedLaneBlockFrontierV1> {
-        let byte_limit = usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX);
-        if bytes.is_empty() || bytes.len() > byte_limit {
-            return Err(Self::invalid_lane_artifact_error(
-                path.to_path_buf(),
-                "latest certified lane block frontier has an invalid byte length",
-            ));
-        }
-        let frontier = norito::decode_canonical::<LatestCertifiedLaneBlockFrontierV1>(bytes)
-            .map_err(|error| {
-                Self::invalid_lane_artifact_error(
-                    path.to_path_buf(),
-                    format!(
-                        "latest certified lane block frontier is not exact framed Norito: {error}"
-                    ),
-                )
-            })?;
-        if frontier.version != LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_VERSION
-            || frontier.computed_integrity_hash() != Some(frontier.integrity_hash)
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                path.to_path_buf(),
-                "latest certified lane block frontier is non-canonical or has invalid integrity",
-            ));
-        }
-        Ok(frontier)
-    }
-
-    fn recover_latest_certified_lane_block_frontier_build_locked(
-        &self,
-        namespace: &BoundProgressNamespace,
-        build_path: &Path,
-    ) -> Result<()> {
-        match std::fs::symlink_metadata(build_path) {
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(Error::IO(error, build_path.to_path_buf())),
-            Ok(metadata) => {
-                let accounting_mutation = self.begin_total_disk_usage_mutation();
-                Self::remove_bound_progress_temp_if_present(namespace, build_path)
-                    .map_err(|error| Error::IO(error, build_path.to_path_buf()))?;
-                Self::sync_bound_progress_intent_directories(namespace)
-                    .map_err(|error| Error::IO(error, build_path.to_path_buf()))?;
-                self.update_disk_usage_delta(metadata.len(), 0);
-                accounting_mutation.finish();
-                Ok(())
-            }
-        }
-    }
-
-    fn read_latest_certified_lane_block_frontier_structural_locked(
-        &self,
-        entry: &LaneConfigEntry,
-        recover_build: bool,
-    ) -> Result<Option<LatestCertifiedLaneBlockFrontierRead>> {
-        if self
-            .latest_certified_frontier_storage_unknown
-            .load(Ordering::Acquire)
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "latest certified lane block frontier storage is ambiguous until restart",
-            ));
-        }
-        let (frontier_path, build_path) =
-            Self::latest_certified_lane_block_frontier_paths_for_entry(entry, &self.store_root);
-        let directory = frontier_path
-            .parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    frontier_path.clone(),
-                    "latest certified lane block frontier path has no parent",
-                )
-            })?;
-        let namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
-        if recover_build {
-            self.recover_latest_certified_lane_block_frontier_build_locked(
-                &namespace,
-                &build_path,
-            )?;
-        } else {
-            match std::fs::symlink_metadata(&build_path) {
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => return Err(Error::IO(error, build_path)),
-                Ok(_) => {
-                    return Err(Self::invalid_lane_artifact_error(
-                        build_path,
-                        "latest certified lane block frontier has an unresolved build",
-                    ));
-                }
-            }
-        }
-        let Some(snapshot) = self.read_regular_sidecar_snapshot(
-            &frontier_path,
-            &directory,
-            usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX),
-        )?
-        else {
-            return Ok(None);
-        };
-        let frontier =
-            Self::decode_latest_certified_lane_block_frontier(&frontier_path, &snapshot.bytes)?;
-        if !self.certified_frontier_artifact_validation_is_attested(
-            entry.lane_id,
-            &frontier.artifact,
-            &snapshot,
-        ) {
-            Self::validate_certified_lane_block_artifact(&frontier.artifact).map_err(
-                |message| {
-                    Self::invalid_lane_artifact_error(
-                        frontier_path.clone(),
-                        format!("latest certified lane block frontier is invalid: {message}"),
-                    )
-                },
-            )?;
-        }
-        Ok(Some(LatestCertifiedLaneBlockFrontierRead {
-            frontier,
-            snapshot,
-        }))
-    }
-
     fn read_latest_certified_lane_block_frontier_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -25671,7 +25264,9 @@ impl Kura {
             })?;
         let recovery_namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
         self.recover_latest_certified_lane_block_frontier_build_locked(
+            entry,
             &recovery_namespace,
+            &frontier_path,
             &build_path,
         )?;
         drop(recovery_namespace);
@@ -25747,6 +25342,13 @@ impl Kura {
             return Err(Self::invalid_lane_artifact_error(
                 build_path,
                 "latest certified lane block frontier namespace changed before publication",
+            ));
+        }
+        #[cfg(test)]
+        if FAIL_AFTER_NEXT_CERTIFIED_FRONTIER_BUILD.with(|flag| flag.replace(false)) {
+            return Err(Self::invalid_lane_artifact_error(
+                build_path,
+                "injected failure after certified frontier build durability",
             ));
         }
         if let Err(error) =
@@ -25829,6 +25431,9 @@ impl Kura {
                     artifact,
                     existing_bound,
                 ) {
+                    if artifact.prepare_qc.payload_availability_qc.is_some() {
+                        self.consume_certified_bundle_pair_capacity(artifact)?;
+                    }
                     return Ok(());
                 }
                 if !self.sync_bound_progress_sidecar(
@@ -25844,6 +25449,9 @@ impl Kura {
                     ));
                 }
                 self.note_certified_frontier_pair_durability(lane_id, artifact, existing_bound);
+                if artifact.prepare_qc.payload_availability_qc.is_some() {
+                    self.consume_certified_bundle_pair_capacity(artifact)?;
+                }
                 return Ok(());
             }
             let existing_is_active = self
@@ -25928,6 +25536,9 @@ impl Kura {
         {
             self.update_disk_usage_delta(before_bytes, after_bytes);
             accounting_mutation.finish();
+        }
+        if artifact.prepare_qc.payload_availability_qc.is_some() {
+            self.consume_certified_bundle_pair_capacity(artifact)?;
         }
         Ok(())
     }
@@ -26049,108 +25660,21 @@ impl Kura {
         self.persist_committed_lane_block_session_inner(session, signer_pops, Some(authority))
     }
 
-    fn persist_committed_lane_block_session_inner(
-        &self,
-        session: &crate::lane_consensus::CommittedLaneBlockSession,
-        signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
-        authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
-    ) -> Result<()> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        self.durable_mutation_authorized()?;
-        let artifact = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
-        let autonomous_context = artifact
-            .prepare_qc
-            .payload_availability_qc
-            .as_ref()
-            .map(|availability| (availability.body.chain_id_hash, availability.body.epoch));
-        let autonomous_source = if let Some((chain_id_hash, epoch)) = autonomous_context.as_ref() {
-            let descriptor = &artifact.proposal.descriptor;
-            Some(
-                self.durable_autonomous_lane_merge_source_under_prune_guard(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                    *chain_id_hash,
-                    *epoch,
-                    Some(&artifact),
-                    false,
-                )
-                .map_err(|message| {
-                    Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
-                })?,
-            )
-        } else {
-            None
-        };
-        let lane_commit_authorization = autonomous_source
-            .as_ref()
-            .map(|source| Self::authorize_autonomous_lane_commit_persistence(source, &artifact))
-            .transpose()
-            .map_err(|message| {
-                Self::invalid_lane_artifact_error(self.store_root.clone(), message)
-            })?;
-        self.write_certified_lane_block_artifact_with_authority(
-            &artifact,
-            authority,
-            lane_commit_authorization,
-        )?;
-        if let Some((chain_id_hash, epoch)) = autonomous_context.as_ref() {
-            let descriptor = &artifact.proposal.descriptor;
-            let source = self
-                .durable_autonomous_lane_merge_source_under_prune_guard(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                    *chain_id_hash,
-                    *epoch,
-                    None,
-                    false,
-                )
-                .map_err(|message| {
-                    Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
-                })?;
-            if source.bundle.certified != artifact {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "durable autonomous merge source retained another certificate".to_owned(),
-                ));
-            }
-            self.persist_autonomous_lane_merge_bundle_under_prune_guard(&source)?;
-            let published = self
-                .durable_autonomous_lane_merge_source_under_prune_guard(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                    *chain_id_hash,
-                    *epoch,
-                    None,
-                    true,
-                )
-                .map_err(|message| {
-                    Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
-                })?;
-            if published != source {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "published autonomous merge bundle differs from its exact source".to_owned(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn write_certified_lane_block_artifact(
-        &self,
-        artifact: &CertifiedLaneBlockArtifact,
-    ) -> Result<()> {
-        self.write_certified_lane_block_artifact_with_authority(artifact, None, None)
-    }
-
-    fn write_certified_lane_block_artifact_with_authority(
+    /// Persist one certified artifact while the caller retains `prune_lock`.
+    ///
+    /// READY-bearing admission uses this entry point so no competing ordinary
+    /// certificate can change the route frontier between capacity reservation
+    /// and exact durable publication.
+    fn write_certified_lane_block_artifact_with_authority_under_prune_guard(
         &self,
         artifact: &CertifiedLaneBlockArtifact,
         authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
         mut lane_commit_authorization: Option<AutonomousLaneCommitPersistenceAuthorization>,
     ) -> Result<()> {
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         self.durable_mutation_authorized()?;
         Self::validate_certified_lane_block_artifact(artifact).map_err(|message| {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
@@ -26211,7 +25735,7 @@ impl Kura {
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
                 lane_block_height,
-                true,
+                Some(pending_canonical_bytes),
             )?
         {
             if autonomous.artifact.executable_payload.origin_proposal != artifact.proposal {
@@ -26376,9 +25900,17 @@ impl Kura {
                 ));
             }
         }
-        let frontier_changed =
-            self.publish_latest_certified_lane_block_frontier_locked(&entry, artifact, authority)?;
+        let frontier_changed = self.publish_certified_frontier_and_consume_capacity_locked(
+            &entry,
+            artifact,
+            authority,
+            autonomous_certificate,
+            &data_path,
+        )?;
         if existing_exact {
+            if autonomous_certificate {
+                self.consume_certified_bundle_pair_capacity(artifact)?;
+            }
             if frontier_changed {
                 self.note_committed_lane_status_change();
             }
@@ -26451,39 +25983,11 @@ impl Kura {
         if accounting_complete {
             accounting_mutation.finish();
         }
+        if autonomous_certificate {
+            self.consume_certified_bundle_pair_capacity(artifact)?;
+        }
         self.note_committed_lane_status_change();
         Ok(())
-    }
-
-    /// Read a certified standalone lane block by lane and lane-local block height.
-    ///
-    /// Returns `None` when the artifact is absent, malformed, belongs to a different
-    /// lane/height or active geometry incarnation, fails proposal/QC consistency checks,
-    /// or cannot pass the complete progress-sidecar durability barrier sequence.
-    #[must_use]
-    pub fn read_certified_lane_block_artifact(
-        &self,
-        lane_id: LaneId,
-        lane_block_height: u64,
-    ) -> Option<CertifiedLaneBlockArtifact> {
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id).ok()?;
-        let (data_path, index_path) =
-            Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
-        let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        self.read_active_certified_lane_block_artifact_from_paths_durability_attested_locked(
-            &entry,
-            lane_block_height,
-            &data_path,
-            &index_path,
-            true,
-        )
     }
 
     /// Return the bounded durable latest-certified frontier for an active lane.
@@ -26672,6 +26176,7 @@ impl Kura {
     ) -> Result<Option<CertifiedLaneBlockArtifact>> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         let (data_path, index_path) =
@@ -27417,7 +26922,19 @@ impl Kura {
             }
             let file_name = entry.file_name();
             let file_name = file_name.to_string_lossy();
-            if file_name.starts_with(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX) {
+            if Self::validate_autonomous_publication_quarantine(
+                store_root,
+                &entry.path(),
+                AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES,
+                AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX,
+                "process-generation quarantine",
+            )? {
+                continue;
+            }
+            if Self::is_unresolved_autonomous_publication_temporary_name(
+                &file_name,
+                AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX,
+            ) {
                 return Err(Self::invalid_lane_artifact_error(
                     entry.path(),
                     "autonomous lifecycle process-generation atomic temporary requires fail-closed operator recovery",
@@ -27593,7 +27110,41 @@ impl Kura {
                 let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
                     continue;
                 };
-                if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                if let Some((_, raw)) = self
+                    .read_validated_autonomous_lifecycle_bootstrap_quarantine(
+                        &path,
+                        process_generation.as_ref(),
+                        "retained bootstrap quarantine",
+                    )?
+                {
+                    if bootstrap_allowed {
+                        let entry = self.lane_storage_entry(
+                            raw.body
+                                .executable_payload
+                                .origin_proposal
+                                .descriptor
+                                .lane_id,
+                        )?;
+                        if !self
+                            .validate_autonomous_lifecycle_bootstrap_quarantine_for_active_entry(
+                                &entry,
+                                process_generation.as_ref(),
+                                &path,
+                                "retained bootstrap quarantine",
+                            )?
+                        {
+                            return Err(Self::invalid_lane_artifact_error(
+                                path,
+                                "retained bootstrap quarantine changed during generation audit",
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                if Self::is_unresolved_autonomous_publication_temporary_name(
+                    name,
+                    AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
+                ) {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
                         "autonomous lifecycle generation audit found a bootstrap atomic temporary",
@@ -27652,6 +27203,10 @@ impl Kura {
                         record, &bootstrap,
                     )
                     .map_err(|message| Self::invalid_lane_artifact_error(path, message))?;
+                    continue;
+                }
+                if Self::autonomous_lifecycle_terminal_outcome_coordinates(name).is_some() {
+                    self.audit_autonomous_lifecycle_terminal_outcome_locked(&path, parent)?;
                     continue;
                 }
                 if Self::autonomous_lifecycle_cursor_coordinates(name).is_none() {
@@ -27781,6 +27336,11 @@ impl Kura {
             Some(_) => return Err(Error::KuraReplicaLocalPeerConflict),
             None => return Err(Error::KuraReplicaLocalPeerUnbound),
         }
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _generation_guard = self.autonomous_lifecycle_process_generation_lock.lock();
         self.audit_retained_autonomous_lifecycle_cursor_generations()?;
         if let Some(claim) = self.autonomous_lifecycle_process_generation_claim.get() {
@@ -27822,19 +27382,20 @@ impl Kura {
                 message,
             )
         })?;
+        self.validate_retained_initial_process_generation_claim(current.is_some(), &next)?;
         let previous_len = current
             .as_ref()
             .map_or(Ok(0), |(_, bytes)| u64::try_from(bytes.len()))?;
         let next_len = u64::try_from(next.encode_framed().map_err(Error::NoritoFrame)?.len())?;
-        let enforced_peak = self
-            .kura_disk_usage_bytes()?
-            .checked_add(next_len)
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "autonomous lifecycle process-generation peak disk accounting overflows",
-                )
-            })?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            next_len,
+            false,
+            false,
+            &Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+        )?;
         self.kura_total_disk_usage_bytes()?
             .checked_add(next_len)
             .ok_or_else(|| {
@@ -27843,12 +27404,6 @@ impl Kura {
                     "autonomous lifecycle process-generation peak total-disk accounting overflows",
                 )
             })?;
-        if self.max_disk_usage_bytes != 0 && enforced_peak > self.max_disk_usage_bytes {
-            return Err(Self::invalid_lane_artifact_error(
-                Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
-                "autonomous lifecycle process-generation temporary would exceed the Kura disk bound",
-            ));
-        }
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let written = self.write_autonomous_lifecycle_process_generation_record(
             current.as_ref().map(|(_, bytes)| bytes.as_slice()),
@@ -28798,7 +28353,7 @@ impl Kura {
         let current = self.read_current_autonomous_lane_block_record_self_context_locked(
             &entry,
             descriptor.lane_block_height,
-            false,
+            None,
         )?;
         let bootstrap_path = Self::autonomous_lifecycle_bootstrap_path_for_entry(
             &entry,
@@ -29011,7 +28566,6 @@ impl Kura {
         bootstrap: &AutonomousLifecycleBootstrapV1,
     ) -> Result<AutonomousLifecycleBootstrapRecoveryStage> {
         let payload = &bootstrap.body.executable_payload;
-        let binding = &bootstrap.body.binding;
         let descriptor = &payload.origin_proposal.descriptor;
         self.require_active_lane_artifact(entry, descriptor)?;
         let payload_record = self.read_autonomous_lane_block_attempt_record_locked(
@@ -29021,7 +28575,7 @@ impl Kura {
             descriptor.proposal_height,
             payload.chain_id_hash,
             payload.epoch,
-            false,
+            None,
         )?;
         let payload_record_matches = payload_record.as_ref().is_none_or(|record| {
             let durable = &record.artifact.executable_payload;
@@ -29166,6 +28720,10 @@ impl Kura {
             )
         })?;
         let _sidecar_guard = self.sidecar_lock.lock();
+        let _namespace_budget = self.autonomous_lane_attempt_inventory_counts_locked(
+            &entry,
+            descriptor.lane_block_height,
+        )?;
         let bytes = self
             .read_regular_sidecar_bytes(
                 &authority.path,
@@ -29208,7 +28766,8 @@ impl Kura {
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
     ) -> Result<Vec<AutonomousLifecycleBootstrapRecoveryAuthority>> {
-        self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        let process_record =
+            self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -29222,6 +28781,7 @@ impl Kura {
         }
         let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
         let _sidecar_guard = self.sidecar_lock.lock();
+        let _namespace_budget = self.autonomous_lane_attempt_inventory_counts_locked(&entry, 1)?;
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
@@ -29240,7 +28800,18 @@ impl Kura {
                     "autonomous lifecycle bootstrap inventory contains a non-UTF-8 artifact",
                 )
             })?;
-            if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+            if self.validate_autonomous_lifecycle_bootstrap_quarantine_for_active_entry(
+                &entry,
+                Some(&process_record),
+                &path,
+                "bootstrap recovery quarantine",
+            )? {
+                continue;
+            }
+            if Self::is_unresolved_autonomous_publication_temporary_name(
+                &name,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
+            ) {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
                     "autonomous lifecycle bootstrap inventory found an atomic temporary",
@@ -29532,6 +29103,9 @@ impl Kura {
         self.durable_mutation_authorized()?;
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let descriptor = &executable_payload.origin_proposal.descriptor;
         let entry = self.lane_storage_entry(descriptor.lane_id)?;
@@ -29596,19 +29170,33 @@ impl Kura {
                 "autonomous lifecycle bootstrap cannot be replayed around existing payload or cursor state",
             ));
         }
-        let (related_files, _, related_bytes) = self
-            .autonomous_lane_attempt_inventory_counts_locked(
-                &entry,
-                descriptor.lane_block_height,
-            )?;
+        let inventory = self.autonomous_lane_attempt_inventory_counts_locked(
+            &entry,
+            descriptor.lane_block_height,
+        )?;
         let next_len = u64::try_from(bytes.len())?;
-        if related_files
-            .checked_add(1)
+        let identity = (descriptor.lane_block_height, descriptor.proposal_height);
+        let reserves_terminal =
+            usize::from(inventory.needs_terminal_reservation_for_new_identity(identity));
+        let reserved_terminal_bytes = u64::try_from(reserves_terminal)?
+            .checked_mul(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES as u64)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "autonomous lifecycle bootstrap terminal reservation overflows",
+                )
+            })?;
+        if inventory
+            .conceptual_files
+            .checked_add(1_usize.saturating_add(reserves_terminal))
             .is_none_or(|files| files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES)
-            || related_bytes
+            || inventory
+                .conceptual_bytes
                 .checked_add(next_len)
+                .and_then(|bytes| bytes.checked_add(reserved_terminal_bytes))
                 .is_none_or(|total| total > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64)
-            || related_bytes
+            || inventory
+                .conceptual_bytes
                 .checked_add(next_len)
                 .is_none_or(|peak| peak > AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PEAK_BYTES as u64)
         {
@@ -29617,15 +29205,13 @@ impl Kura {
                 "autonomous lifecycle bootstrap would exceed its stable or atomic peak bounds",
             ));
         }
-        let enforced_peak = self
-            .kura_disk_usage_bytes()?
-            .checked_add(next_len)
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "autonomous lifecycle bootstrap peak disk accounting overflows",
-                )
-            })?;
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            next_len,
+            reserves_terminal != 0,
+            false,
+            &path,
+        )?;
         self.kura_total_disk_usage_bytes()?
             .checked_add(next_len)
             .ok_or_else(|| {
@@ -29634,12 +29220,6 @@ impl Kura {
                     "autonomous lifecycle bootstrap total-disk accounting overflows",
                 )
             })?;
-        if self.max_disk_usage_bytes != 0 && enforced_peak > self.max_disk_usage_bytes {
-            return Err(Self::invalid_lane_artifact_error(
-                path,
-                "autonomous lifecycle bootstrap temporary would exceed the Kura disk bound",
-            ));
-        }
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let wrote = self.write_atomic_synced_impl_with_prefix(
             &path,
@@ -29860,6 +29440,9 @@ impl Kura {
         self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let descriptor = &authority
             .bootstrap
@@ -29970,14 +29553,13 @@ impl Kura {
             .as_ref()
             .map_or(Ok(0), |bytes| u64::try_from(bytes.len()))?;
         let next_len = u64::try_from(next_bytes.len())?;
-        let (related_files, _, related_bytes) = self
-            .autonomous_lane_attempt_inventory_counts_locked(
-                &entry,
-                descriptor.lane_block_height,
-            )?;
+        let inventory = self.autonomous_lane_attempt_inventory_counts_locked(
+            &entry,
+            descriptor.lane_block_height,
+        )?;
         Self::validate_autonomous_lifecycle_cursor_cas_budget(
-            related_files,
-            related_bytes,
+            inventory.conceptual_files,
+            inventory.conceptual_bytes,
             previous_len,
             next_len,
             replacing_existing,
@@ -29987,15 +29569,18 @@ impl Kura {
         // cursor (for replace) or empty stable path (for create). Preflight that
         // exact transient exposure against both accounting domains before any
         // mutation; only the enforced domain has a configured capacity bound.
-        let enforced_peak = self
-            .kura_disk_usage_bytes()?
-            .checked_add(next_len)
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    cursor_path.clone(),
-                    "autonomous lifecycle bootstrap cursor atomic peak disk accounting overflows",
-                )
-            })?;
+        let creates_lifecycle_identity = !replacing_existing
+            && inventory.needs_terminal_reservation_for_new_identity((
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+            ));
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            next_len,
+            creates_lifecycle_identity,
+            false,
+            &cursor_path,
+        )?;
         self.kura_total_disk_usage_bytes()?
             .checked_add(next_len)
             .ok_or_else(|| {
@@ -30004,12 +29589,6 @@ impl Kura {
                     "autonomous lifecycle bootstrap cursor atomic peak total-disk accounting overflows",
                 )
             })?;
-        if self.max_disk_usage_bytes != 0 && enforced_peak > self.max_disk_usage_bytes {
-            return Err(Self::invalid_lane_artifact_error(
-                cursor_path,
-                "autonomous lifecycle bootstrap cursor atomic write would exceed the Kura disk bound",
-            ));
-        }
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         if replacing_existing {
             self.write_atomic_synced_replace(&cursor_path, &next_bytes)?;
@@ -30308,6 +29887,7 @@ impl Kura {
     /// and per-height proposal-retention limits. Entries do not invent a
     /// height context for cursorless payloads; the startup coordinator requires
     /// their signed bootstrap to supply and authenticate that context.
+    #[cfg(test)]
     pub(crate) fn active_autonomous_lifecycle_attempt_inventory(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -30317,315 +29897,150 @@ impl Kura {
     ) -> Result<Vec<AutonomousLifecycleAttemptInventoryEntry>> {
         let process_record =
             self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id)?;
-        let (active_incarnation, _) = self.active_lane_incarnation_marker(&entry)?;
-        if entry.dataspace_id != dataspace_id
-            || active_incarnation != lane_incarnation
-            || process_record.body.chain_id_hash != process_generation.chain_id_hash
+        self.active_autonomous_lifecycle_attempt_inventory_for_process_record(
+            &process_record,
+            process_generation.chain_id_hash(),
+            process_generation.local_peer_id(),
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            &[],
+        )
+    }
+
+    /// Return attempts while accepting exact Pending groups covered by the immutable startup planner.
+    ///
+    /// Sources are revalidated; stale, duplicate, unused, or unlisted groups fail.
+    /// Covered attempts are identity-only and must be excluded from Crash/Recover.
+    pub(crate) fn active_autonomous_lifecycle_attempt_inventory_with_planner_covered_pending_groups(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        planner_covered_pending_groups: &[LaneQueueReservationGroupBindingV1],
+    ) -> Result<Vec<AutonomousLifecycleAttemptInventoryEntry>> {
+        let process_record =
+            self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        self.active_autonomous_lifecycle_attempt_inventory_for_process_record(
+            &process_record,
+            process_generation.chain_id_hash(),
+            process_generation.local_peer_id(),
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            planner_covered_pending_groups,
+        )
+    }
+
+    /// Read retained local-committee lifecycle attempts without claiming a new process generation.
+    ///
+    /// This observer-safe path authenticates the existing durable process-generation record against
+    /// the exact chain and local peer, then reuses the same bounded active-route inventory as the
+    /// mutating startup coordinator. The returned entries contain only immutable payloads and signed
+    /// cursors: no cursor lease or process-generation claim is constructed, so this API cannot grant
+    /// compare-and-swap authority.
+    #[cfg(test)]
+    pub(crate) fn read_only_active_autonomous_lifecycle_attempt_inventory(
+        &self,
+        expected_chain_id_hash: Hash,
+        expected_local_peer_id: &PeerId,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<Vec<AutonomousLifecycleAttemptInventoryEntry>> {
+        match self.local_peer_id.get() {
+            Some(bound) if bound == expected_local_peer_id => {}
+            Some(_) => return Err(Error::KuraReplicaLocalPeerConflict),
+            None => return Err(Error::KuraReplicaLocalPeerUnbound),
+        }
+        let process_record = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                    "read-only autonomous lifecycle inventory lacks a durable process generation",
+                )
+            })?;
+        if process_record.body.chain_id_hash != expected_chain_id_hash
+            || &process_record.body.local_peer_id != expected_local_peer_id
         {
             return Err(Self::invalid_lane_artifact_error(
-                Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root)),
-                "autonomous lifecycle inventory targets a stale route or process identity",
+                Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                "read-only autonomous lifecycle inventory conflicts with the durable chain or local key identity",
             ));
         }
-        let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
-        let _sidecar_guard = self.sidecar_lock.lock();
-        let directory_entries = match std::fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(Error::IO(error, directory)),
-        };
-        let mut related_files = 0_usize;
-        let mut related_bytes = 0_u64;
-        let mut attempts = BTreeMap::<(u64, u64), LaneExecutablePayloadV1>::new();
-        let mut attempts_per_height = BTreeMap::<u64, usize>::new();
-        let mut cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV2>::new();
-        let mut bootstrap_stages =
-            BTreeMap::<(u64, u64), AutonomousLifecycleBootstrapRecoveryStage>::new();
-        for directory_entry in directory_entries {
-            let directory_entry =
-                directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
-            let path = directory_entry.path();
-            let name = directory_entry.file_name().into_string().map_err(|_| {
-                Self::invalid_lane_artifact_error(
-                    path.clone(),
-                    "autonomous lifecycle inventory contains a non-UTF-8 artifact",
-                )
-            })?;
-            if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous lifecycle inventory found a bootstrap atomic temporary",
-                ));
-            }
-            if !name.starts_with("autonomous_") && !name.starts_with(".kura-sidecar-") {
-                continue;
-            }
-            related_files = related_files.checked_add(1).ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    directory.clone(),
-                    "autonomous lifecycle inventory file count overflows",
-                )
-            })?;
-            if related_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
-                return Err(Self::invalid_lane_artifact_error(
-                    directory,
-                    "autonomous lifecycle inventory exceeds its hard file-count limit",
-                ));
-            }
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
-            if metadata.file_type().is_symlink()
-                || !metadata.file_type().is_file()
-                || !Self::sidecar_is_single_link(&metadata)
-            {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous lifecycle inventory contains a non-regular, linked, or symlinked artifact",
-                ));
-            }
-            related_bytes = related_bytes.checked_add(metadata.len()).ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    directory.clone(),
-                    "autonomous lifecycle inventory byte count overflows",
-                )
-            })?;
-            if related_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
-                return Err(Self::invalid_lane_artifact_error(
-                    directory,
-                    "autonomous lifecycle inventory exceeds the shared sidecar aggregate byte budget",
-                ));
-            }
-            if name.starts_with(".kura-sidecar-") {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous lifecycle inventory found an unresolved atomic temporary",
-                ));
-            }
-            if let Some((lane_block_height, proposal_height)) =
-                Self::autonomous_lane_block_attempt_coordinates(&name)
-            {
-                let bytes = self
-                    .read_regular_sidecar_bytes(
-                        &path,
-                        &directory,
-                        MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
-                    )?
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            path.clone(),
-                            "autonomous lifecycle payload disappeared during bounded inventory",
-                        )
-                    })?;
-                let artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(&bytes)
-                    .map_err(Error::NoritoFrame)?;
-                let pointer =
-                    AutonomousLaneBlockLatestAttemptV1::from_payload(&artifact.executable_payload);
-                let descriptor = &artifact.executable_payload.origin_proposal.descriptor;
-                if pointer.chain_id_hash != process_generation.chain_id_hash
-                    || pointer.lane_id != lane_id
-                    || pointer.dataspace_id != dataspace_id
-                    || pointer.lane_incarnation != lane_incarnation
-                    || pointer.lane_block_height != lane_block_height
-                    || pointer.proposal_height != proposal_height
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        path,
-                        "autonomous lifecycle payload has a stale or conflicting route identity",
-                    ));
-                }
-                let record = self
-                    .read_autonomous_lane_block_attempt_record_locked(
-                        &entry,
-                        lane_id,
-                        lane_block_height,
-                        proposal_height,
-                        pointer.chain_id_hash,
-                        pointer.epoch,
-                        false,
-                    )?
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            path.clone(),
-                            "autonomous lifecycle payload disappeared after validation",
-                        )
-                    })?;
-                if descriptor
-                    .validator_set
-                    .iter()
-                    .all(|peer| peer != process_generation.local_peer_id())
-                {
-                    continue;
-                }
-                let retained = attempts_per_height.entry(lane_block_height).or_default();
-                *retained = retained.checked_add(1).ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        path.clone(),
-                        "autonomous lifecycle per-height retention count overflows",
-                    )
-                })?;
-                if *retained > self.roster_sidecar_retention.get() {
-                    return Err(Self::invalid_lane_artifact_error(
-                        path,
-                        "autonomous lifecycle attempts exceed the per-height retention bound",
-                    ));
-                }
-                if attempts
-                    .insert(
-                        (lane_block_height, proposal_height),
-                        record.artifact.executable_payload,
-                    )
-                    .is_some()
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        directory,
-                        "autonomous lifecycle inventory contains duplicate payload identities",
-                    ));
-                }
-                continue;
-            }
-            if let Some(identity) = Self::autonomous_lifecycle_cursor_coordinates(&name) {
-                let bytes = self
-                    .read_regular_sidecar_bytes(
-                        &path,
-                        &directory,
-                        AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
-                    )?
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            path.clone(),
-                            "autonomous lifecycle cursor disappeared during bounded inventory",
-                        )
-                    })?;
-                let cursor = Self::decode_autonomous_lifecycle_cursor(&path, &bytes)?;
-                Self::validate_autonomous_lifecycle_cursor_process_generation(
-                    &process_record,
-                    &cursor,
-                )
-                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
-                if cursors.insert(identity, cursor).is_some() {
-                    return Err(Self::invalid_lane_artifact_error(
-                        path,
-                        "autonomous lifecycle inventory contains duplicate cursor identities",
-                    ));
-                }
-                continue;
-            }
-            if let Some(identity) = Self::autonomous_lifecycle_bootstrap_coordinates(&name) {
-                let bytes = self
-                    .read_regular_sidecar_bytes(
-                        &path,
-                        &directory,
-                        AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
-                    )?
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            path.clone(),
-                            "autonomous lifecycle bootstrap disappeared during active inventory",
-                        )
-                    })?;
-                let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &bytes)?;
-                Self::validate_autonomous_lifecycle_bootstrap_process_generation(
-                    &process_record,
-                    &bootstrap,
-                )
-                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
-                let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
-                if identity != (descriptor.lane_block_height, descriptor.proposal_height)
-                    || descriptor.lane_id != lane_id
-                    || descriptor.dataspace_id != dataspace_id
-                    || descriptor.lane_incarnation != lane_incarnation
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        path,
-                        "autonomous lifecycle bootstrap conflicts with active inventory route",
-                    ));
-                }
-                let stage =
-                    self.classify_autonomous_lifecycle_bootstrap_locked(&entry, &bootstrap)?;
-                if bootstrap_stages.insert(identity, stage).is_some() {
-                    return Err(Self::invalid_lane_artifact_error(
-                        path,
-                        "autonomous lifecycle inventory contains duplicate bootstrap identities",
-                    ));
-                }
-                continue;
-            }
-            if Self::autonomous_lane_block_attempt_view_temp_coordinates(&name).is_some() {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous lifecycle inventory found an unresolved named temporary",
-                ));
-            }
-            if Self::autonomous_two_height_coordinates(
-                &name,
-                AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
-            )
-            .is_some()
-                || Self::autonomous_one_height_coordinate(
-                    &name,
-                    AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
-                )
-                .is_some()
-                || name == AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE
-            {
-                continue;
-            }
-            return Err(Self::invalid_lane_artifact_error(
-                path,
-                "autonomous lifecycle inventory found an unexpected or obsolete artifact",
-            ));
+        self.active_autonomous_lifecycle_attempt_inventory_for_process_record(
+            &process_record,
+            expected_chain_id_hash,
+            expected_local_peer_id,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            &[],
+        )
+    }
+
+    /// Observer-safe counterpart of
+    /// [`Self::active_autonomous_lifecycle_attempt_inventory_with_planner_covered_pending_groups`].
+    /// Exact covered Pending attempts are source-validated only for signed identity pairing; callers must not Crash/Recover them.
+    pub(crate) fn read_only_active_autonomous_lifecycle_attempt_inventory_with_planner_covered_pending_groups(
+        &self,
+        expected_chain_id_hash: Hash,
+        expected_local_peer_id: &PeerId,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        planner_covered_pending_groups: &[LaneQueueReservationGroupBindingV1],
+    ) -> Result<Vec<AutonomousLifecycleAttemptInventoryEntry>> {
+        match self.local_peer_id.get() {
+            Some(bound) if bound == expected_local_peer_id => {}
+            Some(_) => return Err(Error::KuraReplicaLocalPeerConflict),
+            None => return Err(Error::KuraReplicaLocalPeerUnbound),
         }
-        if cursors
-            .keys()
-            .any(|identity| !attempts.contains_key(identity))
+        let process_record = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                    "read-only autonomous lifecycle inventory lacks a durable process generation",
+                )
+            })?;
+        if process_record.body.chain_id_hash != expected_chain_id_hash
+            || &process_record.body.local_peer_id != expected_local_peer_id
         {
             return Err(Self::invalid_lane_artifact_error(
-                directory,
-                "autonomous lifecycle inventory contains an orphan local cursor",
+                Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                "read-only autonomous lifecycle inventory conflicts with the durable chain or local key identity",
             ));
         }
-        if cursors.iter().any(|(identity, cursor)| {
-            cursor.sequence() == 1
-                && cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV2::Prepared
-                && !bootstrap_stages.contains_key(identity)
-        }) {
+        self.active_autonomous_lifecycle_attempt_inventory_for_process_record(
+            &process_record,
+            expected_chain_id_hash,
+            expected_local_peer_id,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            planner_covered_pending_groups,
+        )
+    }
+
+    fn ensure_autonomous_lifecycle_process_generation_record_unchanged(
+        &self,
+        expected: &AutonomousLifecycleProcessGenerationRecordV1,
+    ) -> Result<()> {
+        let current = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
+        if current.as_ref() != Some(expected) {
             return Err(Self::invalid_lane_artifact_error(
-                directory,
-                "initial Prepared lifecycle cursor is orphaned from its signed bootstrap",
+                Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                "autonomous lifecycle process generation changed during bounded inventory",
             ));
         }
-        if attempts.keys().any(|identity| {
-            !cursors.contains_key(identity)
-                && bootstrap_stages.get(identity)
-                    != Some(&AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable)
-        }) {
-            return Err(Self::invalid_lane_artifact_error(
-                directory,
-                "autonomous payload attempt lacks its exact lifecycle cursor or signed payload-durable bootstrap",
-            ));
-        }
-        let mut inventory = Vec::new();
-        inventory.try_reserve_exact(attempts.len())?;
-        for (identity, executable_payload) in attempts {
-            let cursor = cursors.remove(&identity);
-            if let Some(cursor) = cursor.as_ref() {
-                cursor
-                    .validate_for_payload(&executable_payload)
-                    .map_err(|message| {
-                        Self::invalid_lane_artifact_error(self.store_root.clone(), message)
-                    })?;
-            }
-            inventory.push(AutonomousLifecycleAttemptInventoryEntry {
-                executable_payload,
-                cursor,
-            });
-        }
-        self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
-        Ok(inventory)
+        Ok(())
     }
 
     /// Atomically compare and swap one exact lifecycle cursor.
@@ -30681,6 +30096,9 @@ impl Kura {
         }
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lease.binding.lane_id)?;
         let (active_incarnation, activation_height) =
@@ -30719,7 +30137,7 @@ impl Kura {
                 lease.binding.proposal_height,
                 lease.binding.chain_id_hash,
                 lease.binding.epoch,
-                false,
+                None,
             )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
@@ -30783,24 +30201,35 @@ impl Kura {
                 )
             })?;
         let next_bytes = next.encode_framed().map_err(Error::NoritoFrame)?;
-        let (related_files, _, related_bytes) = self
-            .autonomous_lane_attempt_inventory_counts_locked(
-                &entry,
-                lease.binding.lane_block_height,
-            )?;
+        let inventory = self.autonomous_lane_attempt_inventory_counts_locked(
+            &entry,
+            lease.binding.lane_block_height,
+        )?;
         let replacing_existing = current_bytes.is_some();
         let previous_len = current_bytes
             .as_ref()
             .map_or(Ok(0), |bytes| u64::try_from(bytes.len()))?;
         let next_len = u64::try_from(next_bytes.len())?;
         Self::validate_autonomous_lifecycle_cursor_cas_budget(
-            related_files,
-            related_bytes,
+            inventory.conceptual_files,
+            inventory.conceptual_bytes,
             previous_len,
             next_len,
             replacing_existing,
         )
         .map_err(|message| Self::invalid_lane_artifact_error(lease.path.clone(), message))?;
+        let creates_lifecycle_identity = !replacing_existing
+            && inventory.needs_terminal_reservation_for_new_identity((
+                lease.binding.lane_block_height,
+                lease.binding.proposal_height,
+            ));
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            next_len,
+            creates_lifecycle_identity,
+            false,
+            &lease.path,
+        )?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         if replacing_existing {
             self.write_atomic_synced_replace(&lease.path, &next_bytes)?;
@@ -30835,7 +30264,11 @@ impl Kura {
             },
         })
     }
+}
 
+include!("kura/autonomous_lifecycle_terminal_outcomes.rs");
+
+impl Kura {
     fn read_autonomous_lane_block_latest_attempt_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -30921,7 +30354,7 @@ impl Kura {
         pointer: &AutonomousLaneBlockLatestAttemptV1,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
-        recover: bool,
+        pending_canonical_bytes: Option<u64>,
     ) -> Result<AutonomousLaneBlockDurableRecord> {
         if pointer.chain_id_hash != expected_chain_id_hash || pointer.epoch != expected_epoch {
             return Err(Self::invalid_lane_artifact_error(
@@ -30982,7 +30415,7 @@ impl Kura {
         let retirement = match self.read_autonomous_lane_block_view_state_locked(
             &artifact.executable_payload,
             &view_state_path,
-            recover,
+            pending_canonical_bytes,
         )? {
             Some(state) => {
                 artifact.availability_certificate = state.availability_certificate;
@@ -31038,7 +30471,7 @@ impl Kura {
         &self,
         payload: &LaneExecutablePayloadV1,
         path: &Path,
-        recover: bool,
+        pending_canonical_bytes: Option<u64>,
     ) -> Result<Option<AutonomousLaneBlockViewState>> {
         enum Candidate {
             Absent,
@@ -31118,7 +30551,8 @@ impl Kura {
             )
         };
         let main = load_candidate(path)?;
-        let recover = recover && self.durable_mutation_authorized().is_ok();
+        let recover =
+            pending_canonical_bytes.is_some() && self.durable_mutation_authorized().is_ok();
         if !recover {
             return match main {
                 Candidate::Valid { state, .. } => Ok(Some(state)),
@@ -31128,7 +30562,53 @@ impl Kura {
         }
         let temp = load_candidate(&temp_path)?;
 
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let recovery_rank = |state: &AutonomousLaneBlockViewState,
+                             current: &LaneBlockProposalV1| {
+            (
+                current.descriptor.lane_block_view,
+                state.retirement.is_some(),
+                state.availability_certificate.is_some(),
+            )
+        };
+        let promoted_state = match (&main, &temp) {
+            (
+                Candidate::Valid {
+                    state: main_state,
+                    current: main_current,
+                },
+                Candidate::Valid {
+                    state: temp_state,
+                    current: temp_current,
+                },
+            ) if recovery_rank(temp_state, temp_current)
+                > recovery_rank(main_state, main_current) =>
+            {
+                Some(temp_state)
+            }
+            (Candidate::Invalid(_) | Candidate::Absent, Candidate::Valid { state, .. }) => {
+                Some(state)
+            }
+            _ => None,
+        };
+        if let Some(promoted_state) = promoted_state {
+            let replacement_len = u64::try_from(
+                norito::encode_canonical(promoted_state)
+                    .map_err(Error::NoritoFrame)?
+                    .len(),
+            )?;
+            let descriptor = &payload.origin_proposal.descriptor;
+            let entry = self.lane_storage_entry(descriptor.lane_id)?;
+            self.preflight_autonomous_view_state_recovery_promotion_locked(
+                pending_canonical_bytes
+                    .expect("enabled view-state recovery has a capacity snapshot"),
+                &entry,
+                descriptor.lane_block_height,
+                path,
+                &temp_path,
+                replacement_len,
+            )?;
+        }
+
         let tracked_before = self
             .regular_sidecar_metadata(path, parent)?
             .map_or(0, |metadata| metadata.file.len())
@@ -31149,14 +30629,11 @@ impl Kura {
             self.write_atomic_synced_replace(path, &bytes)?;
             remove_temp()
         };
-        let recovery_rank = |state: &AutonomousLaneBlockViewState,
-                             current: &LaneBlockProposalV1| {
-            (
-                current.descriptor.lane_block_view,
-                state.retirement.is_some(),
-                state.availability_certificate.is_some(),
-            )
-        };
+        let mutation_expected = matches!(
+            (&main, &temp),
+            (Candidate::Valid { .. }, Candidate::Invalid(_)) | (_, Candidate::Valid { .. })
+        );
+        let accounting_mutation = mutation_expected.then(|| self.begin_total_disk_usage_mutation());
         let result = match (main, temp) {
             (
                 Candidate::Valid {
@@ -31189,6 +30666,7 @@ impl Kura {
             | (Candidate::Absent, Candidate::Invalid(error)) => Err(error),
             (Candidate::Absent, Candidate::Absent) => Ok(None),
         };
+        let mut accounting_complete = false;
         if let Ok(main) = self.regular_sidecar_metadata(path, parent)
             && let Ok(temp) = self.regular_sidecar_metadata(&temp_path, parent)
         {
@@ -31196,13 +30674,19 @@ impl Kura {
                 .map_or(0, |metadata| metadata.file.len())
                 .saturating_add(temp.map_or(0, |metadata| metadata.file.len()));
             self.update_disk_usage_delta(tracked_before, tracked_after);
+            accounting_complete = mutation_expected && result.is_ok();
         }
-        accounting_mutation.finish();
+        if accounting_complete {
+            accounting_mutation
+                .expect("accounted view-state recovery has a mutation guard")
+                .finish();
+        }
         result
     }
 
     fn write_autonomous_lane_block_view_state_locked(
         &self,
+        pending_canonical_bytes: u64,
         artifact: &AutonomousLaneBlockArtifact,
         path: &Path,
         expected_chain_id_hash: Hash,
@@ -31217,6 +30701,7 @@ impl Kura {
         .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
         let state = AutonomousLaneBlockViewState::from_artifact(artifact);
         self.write_autonomous_lane_block_view_state_record_locked(
+            pending_canonical_bytes,
             &artifact.executable_payload,
             &state,
             path,
@@ -31227,6 +30712,7 @@ impl Kura {
 
     fn write_autonomous_lane_block_view_state_record_locked(
         &self,
+        pending_canonical_bytes: u64,
         payload: &LaneExecutablePayloadV1,
         state: &AutonomousLaneBlockViewState,
         path: &Path,
@@ -31271,10 +30757,41 @@ impl Kura {
                 "autonomous lane view state path has no parent",
             ));
         };
-        std::fs::create_dir_all(parent).map_err(|err| Error::MkDir(err, parent.to_path_buf()))?;
+        let descriptor = &payload.origin_proposal.descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        let expected_path = Self::autonomous_lane_block_attempt_view_state_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        if path != expected_path {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lane view state path changed its lifecycle identity",
+            ));
+        }
         let temp_path = Self::autonomous_lane_block_view_state_temp_path(path);
         let main_before = self.regular_sidecar_metadata(path, parent)?;
         let temp_before = self.regular_sidecar_metadata(&temp_path, parent)?;
+        let main_len = main_before
+            .as_ref()
+            .map_or(0, |metadata| metadata.file.len());
+        let temp_len = temp_before
+            .as_ref()
+            .map_or(0, |metadata| metadata.file.len());
+        self.preflight_autonomous_view_state_write_locked(
+            pending_canonical_bytes,
+            &entry,
+            (descriptor.lane_block_height, descriptor.proposal_height),
+            path,
+            &temp_path,
+            main_len,
+            temp_before.is_some(),
+            temp_len,
+            u64::try_from(bytes.len())?,
+            main_before.is_some(),
+        )?;
         let before_bytes = main_before
             .as_ref()
             .map_or(0, |metadata| metadata.file.len())
@@ -31297,14 +30814,18 @@ impl Kura {
                 self.regular_sidecar_metadata(&temp_path, parent)
                     .map(|temp| (main, temp))
             });
+        let mut accounting_complete = false;
         if let Ok((main, temp)) = &after {
             let after_bytes = main
                 .as_ref()
                 .map_or(0, |metadata| metadata.file.len())
                 .saturating_add(temp.as_ref().map_or(0, |metadata| metadata.file.len()));
             self.update_disk_usage_delta(before_bytes, after_bytes);
+            accounting_complete = operation.is_ok();
         }
-        accounting_mutation.finish();
+        if accounting_complete {
+            accounting_mutation.finish();
+        }
         operation?;
         after?;
         Ok(())
@@ -31312,6 +30833,7 @@ impl Kura {
 
     fn write_autonomous_lane_block_attempt_locked(
         &self,
+        pending_canonical_bytes: u64,
         entry: &LaneConfigEntry,
         artifact: &AutonomousLaneBlockArtifact,
         state: &AutonomousLaneBlockViewState,
@@ -31354,22 +30876,26 @@ impl Kura {
         std::fs::create_dir_all(parent)
             .map_err(|error| Error::MkDir(error, parent.to_path_buf()))?;
         let artifact_bytes = artifact.encode_framed()?;
-        if self
-            .regular_sidecar_metadata(&artifact_path, parent)?
-            .is_none()
-        {
-            let (related_files, attempts_at_height, related_bytes) = self
-                .autonomous_lane_attempt_inventory_counts_locked(
-                    entry,
-                    descriptor.lane_block_height,
-                )?;
-            if attempts_at_height >= self.roster_sidecar_retention.get() {
+        let artifact_metadata = self.regular_sidecar_metadata(&artifact_path, parent)?;
+        if artifact_metadata.is_none() {
+            let inventory = self.autonomous_lane_attempt_inventory_counts_locked(
+                entry,
+                descriptor.lane_block_height,
+            )?;
+            if inventory.attempts_at_height >= self.roster_sidecar_retention.get() {
                 return Err(Self::invalid_lane_artifact_error(
                     artifact_path,
                     "autonomous proposal-height attempts exceed the configured sidecar retention bound",
                 ));
             }
-            if related_files.saturating_add(4) > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+            let identity = (descriptor.lane_block_height, descriptor.proposal_height);
+            let reserves_terminal =
+                usize::from(inventory.needs_terminal_reservation_for_new_identity(identity));
+            if inventory
+                .conceptual_files
+                .checked_add(4_usize.saturating_add(reserves_terminal))
+                .is_none_or(|files| files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES)
+            {
                 return Err(Self::invalid_lane_artifact_error(
                     artifact_path,
                     "autonomous attempt publication would exceed the hard namespace file-count limit",
@@ -31387,14 +30913,49 @@ impl Kura {
                     .saturating_add(pointer_bytes.len().saturating_mul(2)),
             )
             .unwrap_or(u64::MAX);
-            if related_bytes.saturating_add(projected_bytes)
-                > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64
+            let reserved_terminal_bytes = u64::try_from(reserves_terminal)?
+                .checked_mul(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES as u64)
+                .unwrap_or(u64::MAX);
+            if inventory
+                .conceptual_bytes
+                .checked_add(projected_bytes)
+                .and_then(|bytes| bytes.checked_add(reserved_terminal_bytes))
+                .is_none_or(|bytes| bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64)
             {
                 return Err(Self::invalid_lane_artifact_error(
                     artifact_path,
                     "autonomous attempt publication would exceed the shared sidecar aggregate byte budget",
                 ));
             }
+            self.validate_configured_autonomous_mutation_disk_peak_locked(
+                pending_canonical_bytes,
+                projected_bytes,
+                reserves_terminal != 0,
+                false,
+                &artifact_path,
+            )?;
+        } else {
+            let inventory = self.autonomous_lane_attempt_inventory_counts_locked(
+                entry,
+                descriptor.lane_block_height,
+            )?;
+            Self::validate_autonomous_identity_artifact_cas_budget(
+                &inventory,
+                (descriptor.lane_block_height, descriptor.proposal_height),
+                artifact_metadata
+                    .as_ref()
+                    .map_or(0, |metadata| metadata.file.len()),
+                u64::try_from(artifact_bytes.len())?,
+                true,
+            )
+            .map_err(|message| Self::invalid_lane_artifact_error(artifact_path.clone(), message))?;
+            self.validate_configured_autonomous_mutation_disk_peak_locked(
+                pending_canonical_bytes,
+                u64::try_from(artifact_bytes.len())?,
+                false,
+                false,
+                &artifact_path,
+            )?;
         }
         let artifact_before = Self::file_len_or_zero(&artifact_path)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
@@ -31480,6 +31041,7 @@ impl Kura {
             descriptor.proposal_height,
         );
         self.write_autonomous_lane_block_view_state_record_locked(
+            pending_canonical_bytes,
             payload,
             state,
             &view_state_path,
@@ -31491,6 +31053,7 @@ impl Kura {
 
     fn publish_autonomous_lane_block_latest_attempt_locked(
         &self,
+        pending_canonical_bytes: u64,
         entry: &LaneConfigEntry,
         pointer: &AutonomousLaneBlockLatestAttemptV1,
     ) -> Result<()> {
@@ -31535,6 +31098,22 @@ impl Kura {
             ));
         }
         let before = Self::file_len_or_zero(&path)?;
+        let inventory =
+            self.autonomous_lane_attempt_inventory_counts_locked(entry, pointer.lane_block_height)?;
+        Self::validate_autonomous_namespace_artifact_cas_budget(
+            &inventory,
+            before,
+            u64::try_from(bytes.len())?,
+            before != 0,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            u64::try_from(bytes.len())?,
+            false,
+            false,
+            &path,
+        )?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         self.write_atomic_synced_replace(&path, &bytes)?;
         let after = Self::file_len_or_zero(&path)?;
@@ -31545,6 +31124,7 @@ impl Kura {
 
     fn publish_autonomous_lane_route_latest_attempt_locked(
         &self,
+        pending_canonical_bytes: u64,
         entry: &LaneConfigEntry,
         pointer: &AutonomousLaneBlockLatestAttemptV1,
     ) -> Result<()> {
@@ -31585,6 +31165,22 @@ impl Kura {
             ));
         }
         let before = Self::file_len_or_zero(&path)?;
+        let inventory =
+            self.autonomous_lane_attempt_inventory_counts_locked(entry, pointer.lane_block_height)?;
+        Self::validate_autonomous_namespace_artifact_cas_budget(
+            &inventory,
+            before,
+            u64::try_from(bytes.len())?,
+            before != 0,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            u64::try_from(bytes.len())?,
+            false,
+            false,
+            &path,
+        )?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         self.write_atomic_synced_replace(&path, &bytes)?;
         let after = Self::file_len_or_zero(&path)?;
@@ -31856,7 +31452,7 @@ impl Kura {
             claim.lane_block_height,
             claim.chain_id_hash,
             claim.epoch,
-            false,
+            None,
         ) {
             Ok(Some(record)) => claim.active_for_payload(&record.artifact.executable_payload),
             Ok(None) => false,
@@ -32059,158 +31655,13 @@ impl Kura {
         Ok(())
     }
 
-    /// Validate the complete live namespace and projected crash-staging peak
-    /// before claim preparation mutates any file.
-    fn preflight_autonomous_lane_entrypoint_claims_locked(
-        &self,
-        payload: &LaneExecutablePayloadV1,
-        max_files: usize,
-    ) -> Result<()> {
-        let mut projected_files =
-            self.inspect_autonomous_lane_entrypoint_claim_inventory(max_files)?;
-        let mut unique_paths = BTreeSet::new();
-        for entrypoint_hash in &payload.entrypoint_hashes {
-            let incoming = AutonomousLaneEntrypointClaimV3::new(payload, *entrypoint_hash);
-            let path = Self::autonomous_lane_entrypoint_claim_path(
-                &self.store_root,
-                &incoming.chain_id_hash,
-                &incoming.entrypoint_hash,
-            );
-            if !unique_paths.insert(path.clone()) {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous payload repeats an entrypoint claim path",
-                ));
-            }
-            let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
-            let existing = if Self::autonomous_lane_entrypoint_claim_file_exists(&path)? {
-                let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
-                    .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
-                if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path) {
-                    return Err(Self::invalid_lane_artifact_error(
-                        path,
-                        "autonomous entrypoint claim has a mismatched hash path",
-                    ));
-                }
-                Some(existing)
-            } else {
-                None
-            };
-            let pending = if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
-                let pending = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
-                    |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
-                )?;
-                if !self.autonomous_lane_entrypoint_claim_path_matches(&pending, &path)
-                    || !matches!(pending.state, AutonomousLaneEntrypointClaimStateV3::Active)
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        temp_path,
-                        "autonomous entrypoint temp claim has a mismatched or released identity",
-                    ));
-                }
-                Some(pending)
-            } else {
-                None
-            };
-
-            if existing
-                .as_ref()
-                .is_some_and(|claim| claim.active_for_payload(payload))
-            {
-                if let Some(pending) = pending {
-                    if self.autonomous_lane_claim_target_may_be_durable_locked(&pending)
-                        && !pending.active_for_payload(payload)
-                    {
-                        return Err(Self::invalid_lane_artifact_error(
-                            temp_path,
-                            "durable autonomous entrypoint temp conflicts with the exact main owner",
-                        ));
-                    }
-                    projected_files = projected_files.checked_sub(1).ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            path.clone(),
-                            "autonomous claim inventory projection underflows",
-                        )
-                    })?;
-                }
-                continue;
-            }
-            if existing
-                .as_ref()
-                .is_some_and(|claim| claim.owns_payload(payload))
-            {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous entrypoint belongs to a durably retired lane payload",
-                ));
-            }
-            if let Some(existing) = existing.as_ref()
-                && !matches!(
-                    existing.state,
-                    AutonomousLaneEntrypointClaimStateV3::Released(_)
-                )
-                && !self
-                    .autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(
-                        existing, &incoming,
-                    )?
-            {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous entrypoint is already claimed by another lane payload",
-                ));
-            }
-
-            if let Some(pending) = pending {
-                if self.autonomous_lane_claim_target_may_be_durable_locked(&pending) {
-                    if !pending.active_for_payload(payload) {
-                        return Err(Self::invalid_lane_artifact_error(
-                            path,
-                            "autonomous entrypoint is already claimed by another lane payload",
-                        ));
-                    }
-                    if existing.is_some() {
-                        projected_files = projected_files.checked_sub(1).ok_or_else(|| {
-                            Self::invalid_lane_artifact_error(
-                                path.clone(),
-                                "autonomous claim inventory projection underflows",
-                            )
-                        })?;
-                    }
-                    continue;
-                }
-                // The orphan temp is removed before the exact replacement is
-                // staged, so this path does not raise the inventory peak.
-            } else {
-                projected_files = projected_files.checked_add(1).ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        path.clone(),
-                        "autonomous claim inventory projection overflows",
-                    )
-                })?;
-                if projected_files > max_files {
-                    return Err(Self::invalid_lane_artifact_error(
-                        self.store_root.join("blocks"),
-                        "autonomous claim staging would exceed its hard file-count limit",
-                    ));
-                }
-            }
-
-            let bytes = norito::encode_canonical(&incoming).map_err(Error::NoritoFrame)?;
-            if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "autonomous entrypoint claim exceeds hard byte limit",
-                ));
-            }
-        }
-        Ok(())
-    }
-
     fn prepare_autonomous_lane_entrypoint_claims_locked(
         &self,
+        pending_canonical_bytes: u64,
         payload: &LaneExecutablePayloadV1,
     ) -> Result<Vec<(PathBuf, AutonomousLaneEntrypointClaimV3)>> {
         self.prepare_autonomous_lane_entrypoint_claims_with_limit_locked(
+            pending_canonical_bytes,
             payload,
             MAX_AUTONOMOUS_LANE_CLAIM_FILES,
         )
@@ -32218,10 +31669,15 @@ impl Kura {
 
     fn prepare_autonomous_lane_entrypoint_claims_with_limit_locked(
         &self,
+        pending_canonical_bytes: u64,
         payload: &LaneExecutablePayloadV1,
         max_files: usize,
     ) -> Result<Vec<(PathBuf, AutonomousLaneEntrypointClaimV3)>> {
-        self.preflight_autonomous_lane_entrypoint_claims_locked(payload, max_files)?;
+        self.preflight_autonomous_lane_entrypoint_claims_locked(
+            pending_canonical_bytes,
+            payload,
+            max_files,
+        )?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut staged = Vec::with_capacity(payload.entrypoint_hashes.len());
         let mut staged_dirs = BTreeSet::new();
@@ -32396,6 +31852,7 @@ impl Kura {
     /// prefix without accepting a different retirement identity.
     fn transition_autonomous_lane_entrypoint_claims_locked(
         &self,
+        pending_canonical_bytes: u64,
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
         finalize_release: bool,
@@ -32416,6 +31873,8 @@ impl Kura {
         struct ObservedClaim {
             path: PathBuf,
             temp_path: PathBuf,
+            main_bytes: u64,
+            temp_bytes: u64,
             promote_temp: bool,
             remove_temp: bool,
             stage: u8,
@@ -32426,6 +31885,8 @@ impl Kura {
         struct PlannedClaim {
             path: PathBuf,
             temp_path: PathBuf,
+            main_bytes: u64,
+            temp_bytes: u64,
             promote_temp: bool,
             remove_temp: bool,
             replacement: Option<(
@@ -32458,6 +31919,7 @@ impl Kura {
             let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
             let expected_active = AutonomousLaneEntrypointClaimV3::new(payload, *entrypoint_hash);
             let main_exists = Self::autonomous_lane_entrypoint_claim_file_exists(&path)?;
+            let temp_exists = Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)?;
             let (existing, promote_temp) = if main_exists {
                 (
                     Self::decode_autonomous_lane_entrypoint_claim(&path).map_err(|message| {
@@ -32471,7 +31933,7 @@ impl Kura {
                 // claim only at its staged path. Treat it as Active during
                 // group preflight, but do not promote it until every claim and
                 // the complete prefix ordering have passed validation.
-                if !Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                if !temp_exists {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
                         "autonomous entrypoint release is missing its durable or staged owner",
@@ -32498,8 +31960,7 @@ impl Kura {
                     "autonomous entrypoint release does not match its durable payload owner",
                 ));
             }
-            let remove_temp =
-                main_exists && Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)?;
+            let remove_temp = main_exists && temp_exists;
             if remove_temp {
                 let pending = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
                     |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
@@ -32536,9 +31997,21 @@ impl Kura {
                     "autonomous entrypoint claim has a conflicting retirement identity",
                 ));
             };
+            let main_bytes = if main_exists {
+                Self::file_len_or_zero(&path)?
+            } else {
+                0
+            };
+            let temp_bytes = if temp_exists {
+                Self::file_len_or_zero(&temp_path)?
+            } else {
+                0
+            };
             observed.push(ObservedClaim {
                 path,
                 temp_path,
+                main_bytes,
+                temp_bytes,
                 promote_temp,
                 remove_temp,
                 stage,
@@ -32643,6 +32116,8 @@ impl Kura {
             plan.push(PlannedClaim {
                 path: claim.path,
                 temp_path: claim.temp_path,
+                main_bytes: claim.main_bytes,
+                temp_bytes: claim.temp_bytes,
                 promote_temp: claim.promote_temp,
                 remove_temp: claim.remove_temp,
                 replacement,
@@ -32654,6 +32129,47 @@ impl Kura {
                 "autonomous release does not form one complete ordered durable prefix",
             ));
         }
+
+        // Model the entire ordered release group before touching the first
+        // named temp or stable claim. Atomic replacement writes overlap the
+        // current main; completed prefixes then change the baseline seen by
+        // the next replacement.
+        let capacity_path = self.store_root.join("blocks");
+        let mut capacity = AutonomousClaimMutationPeak::default();
+        for claim in &plan {
+            let mut main_bytes_after_named_temp = claim.main_bytes;
+            if claim.promote_temp {
+                capacity
+                    .promote_named_temp_over_main(claim.main_bytes)
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(capacity_path.clone(), message)
+                    })?;
+                main_bytes_after_named_temp = claim.temp_bytes;
+            } else if claim.remove_temp {
+                capacity
+                    .remove_physical(claim.temp_bytes)
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(capacity_path.clone(), message)
+                    })?;
+            }
+            if let Some((_, bytes, _)) = claim.replacement.as_ref() {
+                capacity
+                    .atomic_replace(main_bytes_after_named_temp, u64::try_from(bytes.len())?)
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(capacity_path.clone(), message)
+                    })?;
+            }
+        }
+        let additional_peak_bytes = capacity
+            .additional_peak_bytes()
+            .map_err(|message| Self::invalid_lane_artifact_error(capacity_path.clone(), message))?;
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            additional_peak_bytes,
+            false,
+            false,
+            &capacity_path,
+        )?;
 
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         for claim in plan {
@@ -32708,18 +32224,30 @@ impl Kura {
 
     fn prepare_autonomous_lane_entrypoint_claim_release_locked(
         &self,
+        pending_canonical_bytes: u64,
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
     ) -> Result<()> {
-        self.transition_autonomous_lane_entrypoint_claims_locked(payload, retirement, false)
+        self.transition_autonomous_lane_entrypoint_claims_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            false,
+        )
     }
 
     fn finalize_autonomous_lane_entrypoint_claim_release_locked(
         &self,
+        pending_canonical_bytes: u64,
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
     ) -> Result<()> {
-        self.transition_autonomous_lane_entrypoint_claims_locked(payload, retirement, true)
+        self.transition_autonomous_lane_entrypoint_claims_locked(
+            pending_canonical_bytes,
+            payload,
+            retirement,
+            true,
+        )
     }
 
     fn require_autonomous_lane_entrypoint_claims_released_locked(
@@ -32807,7 +32335,7 @@ impl Kura {
                     existing.proposal_height,
                     existing.chain_id_hash,
                     existing.epoch,
-                    false,
+                    None,
                 )?
                 .ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
@@ -32840,6 +32368,9 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         payload
             .validate(expected_chain_id_hash, expected_epoch)
@@ -32877,7 +32408,7 @@ impl Kura {
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
                 descriptor.lane_block_height,
-                true,
+                Some(pending_canonical_bytes),
             )?
         {
             let existing_payload = &existing_record.artifact.executable_payload;
@@ -32888,9 +32419,13 @@ impl Kura {
                         "autonomous lane height is durably retired",
                     ));
                 }
-                let staged = self.prepare_autonomous_lane_entrypoint_claims_locked(payload)?;
+                let staged = self.prepare_autonomous_lane_entrypoint_claims_locked(
+                    pending_canonical_bytes,
+                    payload,
+                )?;
                 self.finalize_autonomous_lane_entrypoint_claims_locked(&staged)?;
                 self.publish_autonomous_lane_route_latest_attempt_locked(
+                    pending_canonical_bytes,
                     &entry,
                     &AutonomousLaneBlockLatestAttemptV1::from_payload(payload),
                 )?;
@@ -32921,18 +32456,30 @@ impl Kura {
                     ));
                 }
                 let state = AutonomousLaneBlockViewState::from_artifact(&existing_record.artifact);
-                let staged = self.prepare_autonomous_lane_entrypoint_claims_locked(payload)?;
+                let staged = self.prepare_autonomous_lane_entrypoint_claims_locked(
+                    pending_canonical_bytes,
+                    payload,
+                )?;
                 let attempt = AutonomousLaneBlockArtifact::new(payload.clone());
                 let pointer = self.write_autonomous_lane_block_attempt_locked(
+                    pending_canonical_bytes,
                     &entry,
                     &attempt,
                     &state,
                     expected_chain_id_hash,
                     expected_epoch,
                 )?;
-                self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
+                self.publish_autonomous_lane_block_latest_attempt_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &pointer,
+                )?;
                 self.finalize_autonomous_lane_entrypoint_claims_locked(&staged)?;
-                self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
+                self.publish_autonomous_lane_route_latest_attempt_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &pointer,
+                )?;
                 return Ok(());
             }
 
@@ -32959,19 +32506,31 @@ impl Kura {
                     existing_payload,
                     retirement,
                 )?;
-                let staged = self.prepare_autonomous_lane_entrypoint_claims_locked(payload)?;
+                let staged = self.prepare_autonomous_lane_entrypoint_claims_locked(
+                    pending_canonical_bytes,
+                    payload,
+                )?;
                 let attempt = AutonomousLaneBlockArtifact::new(payload.clone());
                 let state = AutonomousLaneBlockViewState::from_artifact(&attempt);
                 let pointer = self.write_autonomous_lane_block_attempt_locked(
+                    pending_canonical_bytes,
                     &entry,
                     &attempt,
                     &state,
                     expected_chain_id_hash,
                     expected_epoch,
                 )?;
-                self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
+                self.publish_autonomous_lane_block_latest_attempt_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &pointer,
+                )?;
                 self.finalize_autonomous_lane_entrypoint_claims_locked(&staged)?;
-                self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
+                self.publish_autonomous_lane_route_latest_attempt_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &pointer,
+                )?;
                 return Ok(());
             }
             return Err(Self::invalid_lane_artifact_error(
@@ -32980,19 +32539,29 @@ impl Kura {
             ));
         }
 
-        let staged_claims = self.prepare_autonomous_lane_entrypoint_claims_locked(payload)?;
+        let staged_claims = self
+            .prepare_autonomous_lane_entrypoint_claims_locked(pending_canonical_bytes, payload)?;
         let attempt = AutonomousLaneBlockArtifact::new(payload.clone());
         let state = AutonomousLaneBlockViewState::from_artifact(&attempt);
         let pointer = self.write_autonomous_lane_block_attempt_locked(
+            pending_canonical_bytes,
             &entry,
             &attempt,
             &state,
             expected_chain_id_hash,
             expected_epoch,
         )?;
-        self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
+        self.publish_autonomous_lane_block_latest_attempt_locked(
+            pending_canonical_bytes,
+            &entry,
+            &pointer,
+        )?;
         self.finalize_autonomous_lane_entrypoint_claims_locked(&staged_claims)?;
-        self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
+        self.publish_autonomous_lane_route_latest_attempt_locked(
+            pending_canonical_bytes,
+            &entry,
+            &pointer,
+        )?;
         Ok(())
     }
 
@@ -33022,6 +32591,9 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
             || retirement.chain_id_hash != expected_chain_id_hash
@@ -33045,7 +32617,7 @@ impl Kura {
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
                 retirement.lane_block_height,
-                true,
+                Some(pending_canonical_bytes),
             )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
@@ -33061,7 +32633,7 @@ impl Kura {
                 retirement.proposal_height,
                 expected_chain_id_hash,
                 expected_epoch,
-                true,
+                Some(pending_canonical_bytes),
             )?
             else {
                 return Err(Self::invalid_lane_artifact_error(
@@ -33087,6 +32659,7 @@ impl Kura {
         if let Some(existing) = record.retirement.as_ref() {
             if existing == retirement {
                 self.prepare_autonomous_lane_entrypoint_claim_release_locked(
+                    pending_canonical_bytes,
                     &record.artifact.executable_payload,
                     retirement,
                 )?;
@@ -33156,6 +32729,7 @@ impl Kura {
             ));
         }
         self.write_autonomous_lane_block_view_state_record_locked(
+            pending_canonical_bytes,
             &record.artifact.executable_payload,
             &state,
             &record.view_state_path,
@@ -33163,6 +32737,7 @@ impl Kura {
             expected_epoch,
         )?;
         self.prepare_autonomous_lane_entrypoint_claim_release_locked(
+            pending_canonical_bytes,
             &record.artifact.executable_payload,
             retirement,
         )?;
@@ -33240,260 +32815,11 @@ impl Kura {
         })?;
         Ok((pending_prefix, released_prefix))
     }
+}
 
-    /// Authenticate Queue's exact prepared-release boundary from durable Kura evidence.
-    ///
-    /// This reopens the exact historical attempt, verifies its retirement,
-    /// repairs only a canonical `ReleasePending` crash prefix for the current
-    /// attempt, and then mints a move-only authority bound to the complete
-    /// ordered Queue barrier. A superseded attempt is accepted only through
-    /// the existing authenticated supersession proof.
-    pub(crate) fn authorize_autonomous_lane_queue_release_preparation(
-        &self,
-        retirement: &AutonomousLaneSlotRetirementV1,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> Result<AutonomousLaneQueueReleasePreparationAuthorization> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        self.durable_mutation_authorized()?;
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
-            || retirement.chain_id_hash != expected_chain_id_hash
-            || retirement.epoch != expected_epoch
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "autonomous Queue release authorization has an unsupported chain context",
-            ));
-        }
-        let barrier = retirement.queue_release_barrier()?;
-        let entry = self.lane_storage_entry(retirement.lane_id)?;
-        let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
-            &entry,
-            &self.store_root,
-            retirement.lane_block_height,
-        );
-        let _guard = self.sidecar_lock.lock();
-        let record = self
-            .read_autonomous_lane_block_attempt_record_locked(
-                &entry,
-                retirement.lane_id,
-                retirement.lane_block_height,
-                retirement.proposal_height,
-                expected_chain_id_hash,
-                expected_epoch,
-                true,
-            )?
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    slot_path,
-                    "missing autonomous executable payload for Queue release authorization",
-                )
-            })?;
-        let payload = &record.artifact.executable_payload;
-        if record.retirement.as_ref() != Some(retirement) || !retirement.matches_payload(payload) {
-            return Err(Self::invalid_lane_artifact_error(
-                record.view_state_path,
-                "Queue release authorization does not match its durable Kura retirement",
-            ));
-        }
-        let current = self
-            .read_current_autonomous_lane_block_record_self_context_locked(
-                &entry,
-                retirement.lane_block_height,
-                true,
-            )?
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "Queue release authorization has no current lane-height attempt",
-                )
-            })?;
-        let claims_fully_released = if current.artifact.executable_payload == *payload {
-            self.prepare_autonomous_lane_entrypoint_claim_release_locked(payload, retirement)?;
-            let (pending_prefix, released_prefix) =
-                self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?;
-            let selected_count = u64::try_from(payload.entrypoint_hashes.len()).map_err(|_| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "autonomous release group size exceeds u64",
-                )
-            })?;
-            if pending_prefix != selected_count {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "Queue release authorization lacks the full ReleasePending prefix",
-                ));
-            }
-            released_prefix == selected_count
-        } else {
-            self.require_autonomous_lane_release_completed_or_superseded_locked(
-                &entry, payload, retirement,
-            )?;
-            true
-        };
-        AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
-            .and_then(|context| {
-                context.queue_preparation_authorization(retirement, &barrier, claims_fully_released)
-            })
-            .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))
-    }
+include!("kura/autonomous_release_authority.rs");
 
-    /// Finish the claim half of an exact autonomous-slot release.
-    ///
-    /// Callers may invoke this only after Queue has durably prepared the
-    /// byte-identical ordered barrier. Active claims are rejected here rather
-    /// than skipping `ReleasePending`; exact `Released` retries are harmless.
-    pub(crate) fn finalize_autonomous_lane_slot_release_with_authorization(
-        &self,
-        retirement: &AutonomousLaneSlotRetirementV1,
-        queue_barrier: &LaneQueueReservationReleaseBarrierV3,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-        authorization: DurableLaneQueueReleaseBarrierAuthorization,
-    ) -> Result<AutonomousLaneQueueReleaseFinalizationAuthorization> {
-        self.finalize_autonomous_lane_slot_release_inner(
-            retirement,
-            queue_barrier,
-            expected_chain_id_hash,
-            expected_epoch,
-            AutonomousLaneQueueReleaseBarrierGate::Authorized(authorization),
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn finalize_autonomous_lane_slot_release(
-        &self,
-        retirement: &AutonomousLaneSlotRetirementV1,
-        queue_barrier: &LaneQueueReservationReleaseBarrierV3,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> Result<()> {
-        self.finalize_autonomous_lane_slot_release_inner(
-            retirement,
-            queue_barrier,
-            expected_chain_id_hash,
-            expected_epoch,
-            AutonomousLaneQueueReleaseBarrierGate::DirectTest,
-        )
-        .map(drop)
-    }
-
-    fn finalize_autonomous_lane_slot_release_inner(
-        &self,
-        retirement: &AutonomousLaneSlotRetirementV1,
-        queue_barrier: &LaneQueueReservationReleaseBarrierV3,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-        gate: AutonomousLaneQueueReleaseBarrierGate,
-    ) -> Result<AutonomousLaneQueueReleaseFinalizationAuthorization> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        self.durable_mutation_authorized()?;
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
-            || retirement.chain_id_hash != expected_chain_id_hash
-            || retirement.epoch != expected_epoch
-            || retirement.queue_release_barrier()? != *queue_barrier
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "autonomous lane slot release has an unsupported version or chain context",
-            ));
-        }
-        let entry = self.lane_storage_entry(retirement.lane_id)?;
-        let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
-            &entry,
-            &self.store_root,
-            retirement.lane_block_height,
-        );
-        let _guard = self.sidecar_lock.lock();
-        let record = self
-            .read_autonomous_lane_block_attempt_record_locked(
-                &entry,
-                retirement.lane_id,
-                retirement.lane_block_height,
-                retirement.proposal_height,
-                expected_chain_id_hash,
-                expected_epoch,
-                true,
-            )?
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    slot_path,
-                    "missing autonomous executable payload for claim release",
-                )
-            })?;
-        if record.retirement.as_ref() != Some(retirement)
-            || !retirement.matches_payload(&record.artifact.executable_payload)
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "autonomous lane claim release does not match its durable retirement",
-            ));
-        }
-        let payload = &record.artifact.executable_payload;
-        let finalization_authorization =
-            AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
-                .and_then(|context| {
-                    context.queue_finalization_authorization(retirement, queue_barrier)
-                })
-                .map_err(|message| {
-                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
-                })?;
-        let current = self
-            .read_current_autonomous_lane_block_record_self_context_locked(
-                &entry,
-                retirement.lane_block_height,
-                true,
-            )?
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "autonomous lane claim release has no current lane-height attempt",
-                )
-            })?;
-        if current.artifact.executable_payload == *payload {
-            let (pending_prefix, released_prefix) =
-                self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?;
-            let selected_count = u64::try_from(payload.entrypoint_hashes.len()).map_err(|_| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "autonomous release group size exceeds u64",
-                )
-            })?;
-            if pending_prefix != selected_count {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "autonomous claim release lacks the full ReleasePending prefix",
-                ));
-            }
-            let terminal_absence =
-                gate.consume_for_claim_transition(queue_barrier)
-                    .map_err(|message| {
-                        Self::invalid_lane_artifact_error(self.store_root.clone(), message)
-                    })?;
-            if terminal_absence && released_prefix != selected_count {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "forgotten Queue release cannot authorize pending Kura claims",
-                ));
-            }
-            self.finalize_autonomous_lane_entrypoint_claim_release_locked(payload, retirement)?;
-        } else {
-            let _terminal_absence =
-                gate.consume_for_claim_transition(queue_barrier)
-                    .map_err(|message| {
-                        Self::invalid_lane_artifact_error(self.store_root.clone(), message)
-                    })?;
-            self.require_autonomous_lane_release_completed_or_superseded_locked(
-                &entry, payload, retirement,
-            )?;
-        }
-        Ok(finalization_authorization)
-    }
-
+impl Kura {
     /// Read and fully revalidate the durable retirement for one active lane-height slot.
     ///
     /// A malformed, oversized, temporary-conflicted, or symlinked view record is returned as an
@@ -33507,6 +32833,9 @@ impl Kura {
     ) -> Result<Option<AutonomousLaneSlotRetirementV1>> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         let _guard = self.sidecar_lock.lock();
@@ -33516,7 +32845,7 @@ impl Kura {
             lane_block_height,
             expected_chain_id_hash,
             expected_epoch,
-            true,
+            Some(pending_canonical_bytes),
         )?;
         if record.is_none() {
             let pointer_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
@@ -33614,6 +32943,9 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
@@ -33629,7 +32961,7 @@ impl Kura {
                 lane_block_height,
                 expected_chain_id_hash,
                 expected_epoch,
-                true,
+                Some(pending_canonical_bytes),
             )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
@@ -33700,6 +33032,7 @@ impl Kura {
         }
         artifact.availability_certificate = Some(certificate);
         self.write_autonomous_lane_block_view_state_locked(
+            pending_canonical_bytes,
             &artifact,
             &record.view_state_path,
             expected_chain_id_hash,
@@ -33756,6 +33089,9 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
@@ -33771,7 +33107,7 @@ impl Kura {
                 lane_block_height,
                 expected_chain_id_hash,
                 expected_epoch,
-                true,
+                Some(pending_canonical_bytes),
             )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
@@ -33849,6 +33185,7 @@ impl Kura {
             artifact = appended;
         }
         self.write_autonomous_lane_block_view_state_locked(
+            pending_canonical_bytes,
             &artifact,
             &record.view_state_path,
             expected_chain_id_hash,
@@ -33883,6 +33220,22 @@ impl Kura {
         expected_epoch: u64,
         recover: bool,
     ) -> Option<AutonomousLaneBlockArtifact> {
+        if recover {
+            let _prune_guard = self.prune_lock.lock();
+            self.ensure_prune_recovery_not_required().ok()?;
+            let _canonical_chain_guard = self.canonical_chain_lock.lock();
+            let pending_canonical_bytes = self
+                .pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
+                .ok()?;
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            return self.read_autonomous_lane_block_artifact_geometry_locked(
+                lane_id,
+                lane_block_height,
+                expected_chain_id_hash,
+                expected_epoch,
+                Some(pending_canonical_bytes),
+            );
+        }
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -33892,7 +33245,7 @@ impl Kura {
             lane_block_height,
             expected_chain_id_hash,
             expected_epoch,
-            recover,
+            None,
         )
     }
 
@@ -33903,7 +33256,7 @@ impl Kura {
         lane_block_height: u64,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
-        recover: bool,
+        pending_canonical_bytes: Option<u64>,
     ) -> Option<AutonomousLaneBlockArtifact> {
         let entry = self.lane_storage_entry(lane_id).ok()?;
         let _guard = self.sidecar_lock.lock();
@@ -33916,7 +33269,7 @@ impl Kura {
             lane_block_height,
             expected_chain_id_hash,
             expected_epoch,
-            recover,
+            pending_canonical_bytes,
         )
     }
 
@@ -33987,6 +33340,9 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
             .lane_storage_entries
@@ -34024,14 +33380,24 @@ impl Kura {
                         "autonomous startup inventory contains a non-UTF-8 artifact",
                     )
                 })?;
-                if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                let bootstrap_quarantine = self
+                    .validate_autonomous_lifecycle_bootstrap_quarantine_for_active_entry(
+                        &entry,
+                        lifecycle_process_generation.as_ref(),
+                        &path,
+                        "autonomous startup bootstrap quarantine",
+                    )?;
+                if Self::is_unresolved_autonomous_publication_temporary_name(
+                    &name,
+                    AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
+                ) {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
                         "autonomous startup inventory found a bootstrap atomic temporary",
                     ));
                 }
                 let is_temporary = name.starts_with(".kura-sidecar-");
-                if !is_temporary && !name.starts_with("autonomous_") {
+                if !is_temporary && !name.starts_with("autonomous_") && !bootstrap_quarantine {
                     continue;
                 }
                 let metadata = std::fs::symlink_metadata(&path)
@@ -34077,6 +33443,9 @@ impl Kura {
                         "autonomous startup inventory exceeds the shared sidecar aggregate byte budget",
                     ));
                 }
+                if bootstrap_quarantine {
+                    continue;
+                }
                 if is_temporary {
                     temporary_paths.push((path, metadata));
                 }
@@ -34101,6 +33470,8 @@ impl Kura {
             let mut pointer_heights = BTreeSet::<u64>::new();
             let mut route_pointer_present = false;
             let mut lifecycle_cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV2>::new();
+            let mut lifecycle_terminal_outcomes =
+                BTreeMap::<(u64, u64), (PathBuf, AutonomousLifecycleTerminalOutcomeV1)>::new();
             let mut lifecycle_bootstraps =
                 BTreeMap::<(u64, u64), (PathBuf, AutonomousLifecycleBootstrapV1)>::new();
             let mut inventory_files = 0_usize;
@@ -34115,7 +33486,17 @@ impl Kura {
                         "autonomous startup inventory contains a non-UTF-8 artifact",
                     )
                 })?;
-                if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                let bootstrap_quarantine = self
+                    .validate_autonomous_lifecycle_bootstrap_quarantine_for_active_entry(
+                        &entry,
+                        lifecycle_process_generation.as_ref(),
+                        &path,
+                        "autonomous startup bootstrap quarantine",
+                    )?;
+                if Self::is_unresolved_autonomous_publication_temporary_name(
+                    &name,
+                    AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
+                ) {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
                         "autonomous startup inventory found a bootstrap atomic temporary",
@@ -34124,7 +33505,7 @@ impl Kura {
                 if name.starts_with(".kura-sidecar-") {
                     continue;
                 }
-                let related = name.starts_with("autonomous_");
+                let related = name.starts_with("autonomous_") || bootstrap_quarantine;
                 if !related {
                     continue;
                 }
@@ -34182,6 +33563,9 @@ impl Kura {
                         "autonomous startup inventory exceeds the shared sidecar aggregate byte budget",
                     ));
                 }
+                if bootstrap_quarantine {
+                    continue;
+                }
                 if let Some(identity) = view_temp_identity {
                     // The corresponding attempt read below authenticates and resolves this
                     // recovery file. Retain its identity now so an orphan temporary remains
@@ -34235,7 +33619,7 @@ impl Kura {
                             pointer.proposal_height,
                             pointer.chain_id_hash,
                             pointer.epoch,
-                            true,
+                            Some(pending_canonical_bytes),
                         )?
                         .ok_or_else(|| {
                             Self::invalid_lane_artifact_error(
@@ -34300,6 +33684,7 @@ impl Kura {
                         }
                         let state = AutonomousLaneBlockViewState::from_artifact(&record.artifact);
                         self.write_autonomous_lane_block_view_state_record_locked(
+                            pending_canonical_bytes,
                             &record.artifact.executable_payload,
                             &state,
                             &record.view_state_path,
@@ -34391,6 +33776,15 @@ impl Kura {
                             "autonomous lifecycle bootstrap has a stale, duplicate, or namespace-conflicting identity",
                         ));
                     }
+                    continue;
+                }
+                if self.collect_autonomous_lifecycle_terminal_outcome_for_startup_locked(
+                    &entry,
+                    &directory,
+                    &path,
+                    &name,
+                    &mut lifecycle_terminal_outcomes,
+                )? {
                     continue;
                 }
                 if let Some(identity) = Self::autonomous_two_height_coordinates(
@@ -34564,6 +33958,13 @@ impl Kura {
                     ));
                 }
             }
+            self.validate_autonomous_lifecycle_terminal_outcomes_on_startup_locked(
+                pending_canonical_bytes,
+                &entry,
+                &attempts,
+                &lifecycle_cursors,
+                &lifecycle_terminal_outcomes,
+            )?;
             // Bootstrap-only state is intentionally retained without mutating its
             // embedded payload. Recovery can advance it only after a coordinator
             // supplies a fresh exact Queue/height-context authorization.
@@ -34659,7 +34060,10 @@ impl Kura {
                     )
                 })?;
                 if name.starts_with(".kura-sidecar-")
-                    || name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX)
+                    || Self::is_unresolved_autonomous_publication_temporary_name(
+                        name,
+                        AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
+                    )
                     || Self::autonomous_lane_block_attempt_view_temp_coordinates(name).is_some()
                 {
                     return Err(Self::invalid_lane_artifact_error(
@@ -34668,6 +34072,8 @@ impl Kura {
                     ));
                 }
             }
+            let _namespace_budget =
+                self.autonomous_lane_attempt_inventory_counts_locked(&entry, 1)?;
             if attempts.is_empty() {
                 continue;
             }
@@ -34715,7 +34121,11 @@ impl Kura {
                     .last()
                     .map(|(pointer, _)| pointer.clone())
                     .expect("non-empty attempt group");
-                self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
+                self.publish_autonomous_lane_block_latest_attempt_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &pointer,
+                )?;
                 if let Some(current) = latest.as_ref()
                     && (pointer.chain_id_hash != current.chain_id_hash
                         || pointer.lane_id != current.lane_id
@@ -34752,7 +34162,11 @@ impl Kura {
             {
                 continue;
             }
-            self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &latest)?;
+            self.publish_autonomous_lane_route_latest_attempt_locked(
+                pending_canonical_bytes,
+                &entry,
+                &latest,
+            )?;
         }
         self.reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_locked()?;
         Ok(())
@@ -34765,6 +34179,8 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
             .lane_storage_entries
@@ -34830,12 +34246,25 @@ impl Kura {
                     // cursor after replaying its exact carrier.
                     continue;
                 };
-                self.publish_lane_merge_application_frontier_locked(&entry, &receipt)?
+                self.publish_lane_merge_application_frontier_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &receipt,
+                )?
             };
             if let Some(frontier) = frontier {
-                while !self
-                    .compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?
-                {
+                match self.compact_lane_histories_through_merge_frontier_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    &frontier,
+                )? {
+                    LaneHistoryCompactionOutcome::Complete => {}
+                    LaneHistoryCompactionOutcome::CapacityBlocked => {
+                        iroha_logger::debug!(
+                            lane = %entry.lane_id.as_u32(),
+                            "startup retained uncompacted lane history because configured temporary capacity is unavailable"
+                        );
+                    }
                 }
             }
         }
@@ -34900,7 +34329,7 @@ impl Kura {
                     pointer.proposal_height,
                     expected_chain_id_hash,
                     expected_epoch,
-                    false,
+                    None,
                 )
             };
             let Some(record) = record? else {
@@ -34958,7 +34387,7 @@ impl Kura {
         lane_block_height: u64,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
-        recover: bool,
+        pending_canonical_bytes: Option<u64>,
     ) -> Option<AutonomousLaneBlockArtifact> {
         match self.read_autonomous_lane_block_record_locked(
             entry,
@@ -34966,7 +34395,7 @@ impl Kura {
             lane_block_height,
             expected_chain_id_hash,
             expected_epoch,
-            recover,
+            pending_canonical_bytes,
         ) {
             Ok(Some(record)) if record.retirement.is_none() => Some(record.artifact),
             Ok(Some(_)) => {
@@ -34997,7 +34426,7 @@ impl Kura {
         lane_block_height: u64,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
-        recover: bool,
+        pending_canonical_bytes: Option<u64>,
     ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
         if let Some(pointer) =
             self.read_autonomous_lane_block_latest_attempt_locked(entry, lane_block_height)?
@@ -35018,7 +34447,7 @@ impl Kura {
                     &pointer,
                     expected_chain_id_hash,
                     expected_epoch,
-                    recover,
+                    pending_canonical_bytes,
                 )
                 .map(Some);
         }
@@ -35034,7 +34463,7 @@ impl Kura {
         proposal_height: u64,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
-        recover: bool,
+        pending_canonical_bytes: Option<u64>,
     ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
         let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
             entry,
@@ -35089,7 +34518,7 @@ impl Kura {
                     &pointer,
                     expected_chain_id_hash,
                     expected_epoch,
-                    recover,
+                    pending_canonical_bytes,
                 )
                 .map(Some);
         }
@@ -35100,7 +34529,7 @@ impl Kura {
         &self,
         entry: &LaneConfigEntry,
         lane_block_height: u64,
-        recover: bool,
+        pending_canonical_bytes: Option<u64>,
     ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
         if let Some(pointer) =
             self.read_autonomous_lane_block_latest_attempt_locked(entry, lane_block_height)?
@@ -35111,7 +34540,7 @@ impl Kura {
                     &pointer,
                     pointer.chain_id_hash,
                     pointer.epoch,
-                    recover,
+                    pending_canonical_bytes,
                 )
                 .map(Some);
         }
@@ -35142,320 +34571,6 @@ impl Kura {
                 .recover_lane_block_payload_with_sidecar_repair(proposal, repair_missing_sidecar),
             _ => Err(LaneBlockPayloadAvailability::DescriptorMismatch),
         }
-    }
-
-    /// Persist verified recovered payload input for a certified standalone lane block.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the recovered input is internally inconsistent, the
-    /// lane has no configured storage segment, or the sidecar write fails.
-    pub fn persist_lane_block_execution_input(
-        &self,
-        recovered: &RecoveredLaneBlockPayload,
-    ) -> Result<()> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let verified = self
-            .recover_lane_block_execution_input_source(
-                &recovered.proposal,
-                recovered.autonomous_chain_id_hash,
-                recovered.autonomous_epoch,
-                recovered.autonomous_payload_hash,
-                false,
-            )
-            .map_err(|availability| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    format!("lane execution input recovery failed: {availability:?}"),
-                )
-            })?;
-        if &verified != recovered {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "lane execution input does not match canonical recovered payload",
-            ));
-        }
-        let artifact = LaneBlockExecutionInputArtifact::new(verified);
-        let execution_input_authorization = match (
-            artifact.autonomous_chain_id_hash,
-            artifact.autonomous_epoch,
-            artifact.autonomous_payload_hash,
-        ) {
-            (Some(chain_id_hash), Some(epoch), Some(payload_hash)) => {
-                let descriptor = &artifact.proposal.descriptor;
-                let autonomous = self
-                    .read_autonomous_lane_block_artifact_with_recovery_policy(
-                        descriptor.lane_id,
-                        descriptor.lane_block_height,
-                        chain_id_hash,
-                        epoch,
-                        false,
-                    )
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            self.store_root.clone(),
-                            "autonomous execution-input authorization lacks its exact durable payload",
-                        )
-                    })?;
-                if autonomous.executable_payload.payload_hash != payload_hash {
-                    return Err(Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "autonomous execution-input authorization recovered another payload",
-                    ));
-                }
-                Some(
-                    self.authorize_autonomous_execution_input_persistence(
-                        &autonomous.executable_payload,
-                        &artifact,
-                    )
-                    .map_err(|message| {
-                        Self::invalid_lane_artifact_error(self.store_root.clone(), message)
-                    })?,
-                )
-            }
-            (None, None, None) => None,
-            _ => {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "lane execution input has a partial autonomous context",
-                ));
-            }
-        };
-        self.write_lane_block_execution_input_artifact(&artifact, execution_input_authorization)
-    }
-
-    fn write_lane_block_execution_input_artifact(
-        &self,
-        artifact: &LaneBlockExecutionInputArtifact,
-        mut execution_input_authorization: Option<
-            AutonomousLaneExecutionInputPersistenceAuthorization,
-        >,
-    ) -> Result<()> {
-        self.durable_mutation_authorized()?;
-        Self::validate_lane_block_execution_input_artifact(artifact).map_err(|message| {
-            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
-        })?;
-        let autonomous_input = matches!(
-            (
-                artifact.autonomous_chain_id_hash,
-                artifact.autonomous_epoch,
-                artifact.autonomous_payload_hash,
-            ),
-            (Some(_), Some(_), Some(_))
-        );
-        match (autonomous_input, execution_input_authorization.as_ref()) {
-            (true, Some(authorization)) if authorization.matches_input(artifact) => {}
-            (false, None) => {}
-            (true, Some(_)) => {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "autonomous execution-input authorization does not match the artifact",
-                ));
-            }
-            (true, None) => {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "autonomous execution-input persistence lacks its authorization",
-                ));
-            }
-            (false, Some(_)) => {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "ordinary execution-input persistence received autonomous authorization",
-                ));
-            }
-        }
-        let descriptor = &artifact.proposal.descriptor;
-        let lane_id = descriptor.lane_id;
-        let lane_block_height = descriptor.lane_block_height;
-        if lane_block_height == 0 {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "lane execution input height must be non-zero",
-            ));
-        }
-
-        let observed_existing =
-            self.read_lane_block_execution_input_for_write_observation(lane_id, lane_block_height);
-        let observed_existing_is_canonical = observed_existing.as_ref().is_some_and(|existing| {
-            self.lane_block_execution_input_matches_canonical_payload(existing, false)
-        });
-
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id)?;
-        self.require_active_lane_artifact(&entry, descriptor)?;
-        let (data_path, index_path) =
-            Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
-        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
-            return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                "lane execution input path has no parent directory",
-            ));
-        };
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
-
-        let _guard = self.sidecar_lock.lock();
-        if let Some(existing) = Self::read_indexed_sidecar_from_paths(
-            lane_block_height,
-            &data_path,
-            &index_path,
-            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
-            "lane block execution input",
-        ) {
-            if existing == *artifact {
-                if !Self::sync_indexed_sidecar_barriers(
-                    &data_path,
-                    &index_path,
-                    "lane block execution input",
-                ) {
-                    return Err(Error::IO(
-                        std::io::Error::other(
-                            "failed to make existing lane block execution input durable",
-                        ),
-                        data_path,
-                    ));
-                }
-                return Ok(());
-            }
-            if self
-                .require_active_lane_artifact(&entry, &existing.proposal.descriptor)
-                .is_ok()
-            {
-                if observed_existing.as_ref() != Some(&existing) {
-                    return Err(Self::invalid_lane_artifact_error(
-                        data_path,
-                        "active lane execution input changed while canonicality was validated",
-                    ));
-                }
-                if observed_existing_is_canonical {
-                    return Err(Self::invalid_lane_artifact_error(
-                        data_path,
-                        format!(
-                            "canonical lane execution input already exists for lane {} height {} with a different payload",
-                            lane_id.as_u32(),
-                            lane_block_height
-                        ),
-                    ));
-                }
-            }
-            iroha_logger::warn!(
-                lane = %lane_id.as_u32(),
-                lane_block_height,
-                "overwriting stale lane execution input sidecar with recovered canonical payload"
-            );
-        }
-
-        if autonomous_input {
-            let projection: ProductionInFlightFirstReleaseTransitionProjection =
-                execution_input_authorization
-                    .take()
-                    .and_then(|authorization| authorization.consume_for_persistence(artifact))
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            data_path.clone(),
-                            "autonomous execution-input authorization changed before persistence",
-                        )
-                    })?;
-            if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT {
-                return Err(Self::invalid_lane_artifact_error(
-                    data_path.clone(),
-                    "autonomous execution-input persistence received the wrong transition",
-                ));
-            }
-            let checked = check_production_in_flight_first_release_transition(projection)
-                .ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        data_path.clone(),
-                        "autonomous execution input failed the composed first-release transition gate",
-                    )
-                })?;
-            if checked.into_projection() != projection {
-                return Err(Self::invalid_lane_artifact_error(
-                    data_path.clone(),
-                    "checked autonomous execution-input projection changed before persistence",
-                ));
-            }
-        }
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-            Ok(bytes) => Some(bytes),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    lane = %lane_id.as_u32(),
-                    lane_block_height,
-                    "failed to measure lane execution input bytes before write"
-                );
-                None
-            }
-        };
-        let payload = artifact.encode_framed()?;
-        let wrote = Self::append_indexed_sidecar(
-            &data_path,
-            &index_path,
-            lane_block_height,
-            &payload,
-            "lane block execution input",
-            REQUIRED_LANE_SIDECAR_FSYNC_MODE,
-            None,
-            SidecarIndexOrigin::FirstWrite,
-        );
-        if !wrote {
-            return Err(Error::IO(
-                std::io::Error::other("failed to persist lane block execution input"),
-                data_path,
-            ));
-        }
-        let mut accounting_complete = before_bytes.is_some();
-        if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                Err(err) => {
-                    accounting_complete = false;
-                    iroha_logger::warn!(
-                        ?err,
-                        lane = %lane_id.as_u32(),
-                        lane_block_height,
-                        "failed to measure lane execution input bytes after write"
-                    );
-                }
-            }
-        }
-        if accounting_complete {
-            accounting_mutation.finish();
-        }
-        self.note_committed_lane_status_change();
-        Ok(())
-    }
-
-    /// Capture the exact decodable execution-input bytes for the writer's
-    /// optimistic concurrency check, including structurally stale payloads.
-    ///
-    /// Canonical validation happens separately. Retaining a malformed but
-    /// stable observation lets the writer replace it, while a sidecar that
-    /// appears or changes after this observation still fails closed.
-    fn read_lane_block_execution_input_for_write_observation(
-        &self,
-        lane_id: LaneId,
-        lane_block_height: u64,
-    ) -> Option<LaneBlockExecutionInputArtifact> {
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id).ok()?;
-        let (data_path, index_path) =
-            Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
-        let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        Self::read_indexed_sidecar_from_paths_with_recovery(
-            lane_block_height,
-            &data_path,
-            &index_path,
-            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
-            "lane block execution input",
-            true,
-        )
     }
 
     /// Read durable recovered payload input for a certified standalone lane block.
@@ -39132,6 +38247,14 @@ impl Kura {
             carrier.block_hash,
             authorizations,
         )?;
+        // The canonical block is the durable reconstruction source for this
+        // process-local envelope. Recreate it lazily on restart before the
+        // first post-WSV receipt/frontier mutation.
+        self.ensure_post_wsv_lane_artifact_budget_reservation(
+            entry,
+            carrier.block_height,
+            carrier.block_hash,
+        )?;
         self.persist_merge_lane_block_application_receipts_after_repair_authorization(
             entry,
             carrier.block_height,
@@ -39373,6 +38496,8 @@ impl Kura {
             });
 
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
@@ -39398,6 +38523,10 @@ impl Kura {
             ));
         }
         let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        self.reconcile_post_wsv_lane_artifact_budget_for_receipt_locked(
+            pending_canonical_bytes,
+            artifact,
+        )?;
         if let Ok(mut existing_bound) = self.open_bound_progress_sidecar(&data_path, &index_path)
             && let Some(existing) = self.read_lane_block_application_receipt_from_bound_locked(
                 lane_id,
@@ -39420,11 +38549,21 @@ impl Kura {
                         data_path,
                     ));
                 }
-                if let Some(frontier) =
-                    self.publish_lane_merge_application_frontier_locked(&entry, artifact)?
-                {
-                    self.compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?;
-                }
+                self.reconcile_post_wsv_lane_artifact_budget_for_receipt_locked(
+                    pending_canonical_bytes,
+                    artifact,
+                )?;
+                // Receipt/frontier publication is part of the post-WSV Queue
+                // hand-off and may consume only the bytes reserved before WSV.
+                // Six-pair history compaction creates two retained temporaries
+                // at once, so it runs only after the terminal outcome is
+                // durable (and during bounded startup/retirement maintenance),
+                // never on this authorization-critical path.
+                let _ = self.publish_lane_merge_application_frontier_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    artifact,
+                )?;
                 return Ok(());
             }
             if self
@@ -39468,6 +38607,30 @@ impl Kura {
             }
         };
         let payload = artifact.encode_framed()?;
+        let append_intent_bytes = u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES)?;
+        let additional_physical_peak =
+            if artifact.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution {
+                0
+            } else {
+                u64::try_from(payload.len())?
+                    .checked_add(Self::maximum_index_growth_for_unresolved_sidecar_write(
+                        lane_block_height,
+                    ))
+                    .and_then(|bytes| bytes.checked_add(append_intent_bytes))
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            data_path.clone(),
+                            "direct lane receipt configured peak accounting overflowed",
+                        )
+                    })?
+            };
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            additional_physical_peak,
+            false,
+            false,
+            &data_path,
+        )?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let wrote = Self::append_indexed_progress_sidecar(
             &data_path,
@@ -39521,12 +38684,18 @@ impl Kura {
         if accounting_complete {
             accounting_mutation.finish();
         }
+        self.reconcile_post_wsv_lane_artifact_budget_for_receipt_locked(
+            pending_canonical_bytes,
+            artifact,
+        )?;
         self.note_committed_lane_status_change();
-        if let Some(frontier) =
-            self.publish_lane_merge_application_frontier_locked(&entry, artifact)?
-        {
-            self.compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?;
-        }
+        // See the exact-retry branch above: terminal compaction is deferred
+        // until Queue ownership has an independently durable Complete record.
+        let _ = self.publish_lane_merge_application_frontier_locked(
+            pending_canonical_bytes,
+            &entry,
+            artifact,
+        )?;
         Ok(())
     }
 
@@ -40119,13 +39288,25 @@ impl Kura {
 
     fn publish_lane_merge_application_frontier_locked(
         &self,
+        pending_canonical_bytes: u64,
         entry: &LaneConfigEntry,
         receipt: &LaneBlockApplicationReceiptArtifact,
     ) -> Result<Option<LaneMergeApplicationFrontierV1>> {
         let Some(frontier) = LaneMergeApplicationFrontierV1::from_receipt(receipt) else {
             return Ok(None);
         };
+        self.reconcile_post_wsv_lane_artifact_budget_for_receipt_locked(
+            pending_canonical_bytes,
+            receipt,
+        )?;
         let path = Self::lane_merge_application_frontier_path_for_entry(entry, &self.store_root);
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            0,
+            false,
+            false,
+            &path,
+        )?;
         let current = self.decode_lane_merge_application_frontier(entry, &path)?;
         if let Some(current) = current {
             if current == frontier || current.lane_block_height > frontier.lane_block_height {
@@ -40155,6 +39336,10 @@ impl Kura {
         let after = Self::file_len_or_zero(&path)?;
         self.update_disk_usage_delta(before, after);
         accounting_mutation.finish();
+        self.reconcile_post_wsv_lane_artifact_budget_for_receipt_locked(
+            pending_canonical_bytes,
+            receipt,
+        )?;
         Ok(Some(frontier))
     }
 
@@ -40173,6 +39358,7 @@ impl Kura {
             })
     }
 
+    #[allow(dead_code)] // Reserved for a future durable whole-unit compaction intent.
     fn remove_terminal_autonomous_auxiliary_files_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -40263,71 +39449,6 @@ impl Kura {
         }
         accounting_mutation.finish();
         Ok(complete)
-    }
-
-    fn compact_lane_histories_through_merge_frontier_locked(
-        &self,
-        entry: &LaneConfigEntry,
-        frontier: &LaneMergeApplicationFrontierV1,
-    ) -> Result<bool> {
-        if self
-            .lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
-                frontier,
-            )
-            .is_none()
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                Self::lane_merge_application_frontier_path_for_entry(entry, &self.store_root),
-                "lane merge application frontier does not match its merge entry and carrier",
-            ));
-        }
-        let retention = self.roster_sidecar_retention;
-        let pairs = [
-            (
-                Self::lane_artifact_paths_for_entry(entry, &self.store_root),
-                LaneBlockArtifact::FORMAT_LABEL,
-            ),
-            (
-                Self::lane_block_execution_input_paths_for_entry(entry, &self.store_root),
-                LaneBlockExecutionInputArtifact::FORMAT_LABEL,
-            ),
-            (
-                Self::lane_block_execution_preflight_paths_for_entry(entry, &self.store_root),
-                LaneBlockExecutionPreflightArtifact::FORMAT_LABEL,
-            ),
-            (
-                Self::certified_lane_block_paths_for_entry(entry, &self.store_root),
-                CertifiedLaneBlockArtifact::FORMAT_LABEL,
-            ),
-            (
-                Self::autonomous_lane_merge_bundle_paths_for_entry(entry, &self.store_root),
-                AutonomousLaneMergeBundleV1::FORMAT_LABEL,
-            ),
-            (
-                Self::lane_block_application_receipt_paths_for_entry(entry, &self.store_root),
-                LaneBlockApplicationReceiptArtifact::FORMAT_LABEL,
-            ),
-        ];
-        for ((data_path, index_path), kind) in pairs {
-            let before = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
-            if !Self::prune_indexed_sidecars_through_terminal_frontier(
-                &data_path,
-                &index_path,
-                frontier.lane_block_height,
-                retention,
-                kind,
-            ) {
-                return Err(Self::invalid_lane_artifact_error(
-                    data_path,
-                    format!("{kind} terminal-frontier compaction failed"),
-                ));
-            }
-            let after = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
-            self.update_disk_usage_delta(before, after);
-            accounting_mutation.finish();
-        }
-        self.remove_terminal_autonomous_auxiliary_files_locked(entry, frontier.lane_block_height)
     }
 
     fn lane_block_application_receipt_matches_merge_log(
@@ -41446,871 +40567,12 @@ impl Kura {
         }
         Some(artifact)
     }
-
-    include!("kura/indexed_sidecar_io.rs");
 }
 
-impl Kura {
-    fn prune_indexed_sidecars(
-        data_path: &Path,
-        index_path: &Path,
-        retention: NonZeroUsize,
-        kind: &str,
-    ) -> bool {
-        Self::prune_indexed_sidecars_with_pinned_height(
-            data_path, index_path, retention, None, kind,
-        )
-    }
-
-    fn prune_indexed_sidecars_with_pinned_height(
-        data_path: &Path,
-        index_path: &Path,
-        retention: NonZeroUsize,
-        pinned_height: Option<u64>,
-        kind: &str,
-    ) -> bool {
-        Self::rewrite_indexed_sidecars(
-            data_path,
-            index_path,
-            IndexedSidecarRewrite::RetainNewest {
-                retention,
-                pinned_height,
-            },
-            kind,
-        )
-    }
-
-    #[cfg(test)]
-    fn prune_indexed_sidecars_to_retention_window(
-        data_path: &Path,
-        index_path: &Path,
-        retention: NonZeroUsize,
-        kind: &str,
-    ) -> bool {
-        if !data_path.exists() && !index_path.exists() {
-            return true;
-        }
-        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
-            return false;
-        }
-        Self::rewrite_indexed_sidecars(
-            data_path,
-            index_path,
-            IndexedSidecarRewrite::RetainNewestWindow { retention },
-            kind,
-        )
-    }
-
-    fn prune_indexed_sidecars_through_terminal_frontier(
-        data_path: &Path,
-        index_path: &Path,
-        terminal_height: u64,
-        retention: NonZeroUsize,
-        kind: &str,
-    ) -> bool {
-        if !data_path.exists() && !index_path.exists() {
-            return true;
-        }
-        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
-            return false;
-        }
-        Self::rewrite_indexed_sidecars(
-            data_path,
-            index_path,
-            IndexedSidecarRewrite::RetainAfterTerminalFrontier {
-                terminal_height,
-                retention,
-            },
-            kind,
-        )
-    }
-
-    fn truncate_indexed_sidecars_to_height(
-        data_path: &Path,
-        index_path: &Path,
-        height: u64,
-        kind: &str,
-    ) -> bool {
-        if !data_path.exists() && !index_path.exists() {
-            return true;
-        }
-        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
-            return false;
-        }
-        Self::rewrite_indexed_sidecars(
-            data_path,
-            index_path,
-            IndexedSidecarRewrite::TruncateToHeight {
-                height,
-                strict_retained: false,
-            },
-            kind,
-        )
-    }
-
-    #[allow(clippy::too_many_lines)] // Rewriting covers many edge cases in one pass; keep consolidated.
-    fn rewrite_indexed_sidecars(
-        data_path: &Path,
-        index_path: &Path,
-        rewrite: IndexedSidecarRewrite,
-        kind: &str,
-    ) -> bool {
-        let mut index = match std::fs::File::open(index_path) {
-            Ok(file) => file,
-            Err(err) => {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to open sidecar index");
-                return false;
-            }
-        };
-        let index_meta = match index.metadata() {
-            Ok(meta) => meta,
-            Err(err) => {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to stat sidecar index");
-                return false;
-            }
-        };
-        let index_len = index_meta.len();
-        let layout = match SidecarIndexLayout::read_from(&mut index, index_len) {
-            Ok(layout) => layout,
-            Err(reason) => {
-                iroha_logger::warn!(
-                    reason,
-                    len = index_len,
-                    ?index_path,
-                    kind,
-                    "refusing malformed sidecar index during prune"
-                );
-                return false;
-            }
-        };
-        let strict_retained_rewrite = matches!(
-            rewrite,
-            IndexedSidecarRewrite::RetainAfterTerminalFrontier { .. }
-                | IndexedSidecarRewrite::TruncateToHeight {
-                    strict_retained: true,
-                    ..
-                }
-        );
-        if index_len != layout.aligned_len {
-            iroha_logger::warn!(
-                len = index_len,
-                aligned_len = layout.aligned_len,
-                ?index_path,
-                kind,
-                "sidecar index length misaligned; ignoring trailing bytes"
-            );
-            if strict_retained_rewrite {
-                return false;
-            }
-        }
-        let total_entries = layout.entry_count;
-        let compacted_prefix_rewrite = matches!(
-            rewrite,
-            IndexedSidecarRewrite::RetainAfterTerminalFrontier { .. }
-                | IndexedSidecarRewrite::TruncateToHeight {
-                    strict_retained: true,
-                    ..
-                }
-        );
-        let (
-            mut keep_from,
-            mut source_start,
-            mut output_entries,
-            mut output_base_height,
-            pinned_height,
-            operation,
-            window_data_byte_limit,
-        ) = match rewrite {
-            IndexedSidecarRewrite::RetainNewest {
-                retention,
-                pinned_height,
-            } => {
-                let retention_u64 = retention.get() as u64;
-                if total_entries <= retention_u64 {
-                    return true;
-                }
-                (
-                    total_entries.saturating_sub(retention_u64),
-                    0,
-                    total_entries,
-                    layout.base_height,
-                    pinned_height,
-                    "retention prune",
-                    None,
-                )
-            }
-            #[cfg(test)]
-            IndexedSidecarRewrite::RetainNewestWindow { retention } => {
-                let retention_u64 = retention.get() as u64;
-                let source_start = total_entries.saturating_sub(retention_u64);
-                let Some(output_base_height) = layout.base_height.checked_add(source_start) else {
-                    iroha_logger::warn!(
-                        base_height = layout.base_height,
-                        source_start,
-                        ?index_path,
-                        kind,
-                        "sidecar retention-window base height overflows"
-                    );
-                    return false;
-                };
-                (
-                    source_start,
-                    source_start,
-                    retention_u64,
-                    output_base_height,
-                    None,
-                    "retention-window prune",
-                    Some(DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES),
-                )
-            }
-            IndexedSidecarRewrite::RetainAfterTerminalFrontier {
-                terminal_height,
-                retention,
-            } => {
-                let first_retained_height = terminal_height
-                    .saturating_sub(retention.get() as u64)
-                    .saturating_add(1);
-                if layout.base_height >= first_retained_height {
-                    return true;
-                }
-                let source_start = first_retained_height
-                    .saturating_sub(layout.base_height)
-                    .min(total_entries);
-                let Some(output_base_height) = layout.base_height.checked_add(source_start) else {
-                    iroha_logger::warn!(
-                        base_height = layout.base_height,
-                        source_start,
-                        ?index_path,
-                        kind,
-                        "terminal sidecar retention base height overflows"
-                    );
-                    return false;
-                };
-                (
-                    source_start,
-                    source_start,
-                    total_entries.saturating_sub(source_start),
-                    output_base_height,
-                    None,
-                    "terminal-frontier prune",
-                    None,
-                )
-            }
-            IndexedSidecarRewrite::TruncateToHeight {
-                height,
-                strict_retained,
-            } => {
-                let output_entries = height
-                    .checked_sub(layout.base_height)
-                    .and_then(|relative| relative.checked_add(1))
-                    .unwrap_or(0)
-                    .min(total_entries);
-                if output_entries == total_entries {
-                    return true;
-                }
-                (
-                    0,
-                    0,
-                    output_entries,
-                    layout.base_height,
-                    None,
-                    if strict_retained {
-                        "strict rollback truncation"
-                    } else {
-                        "rollback truncation"
-                    },
-                    None,
-                )
-            }
-        };
-
-        let entries_to_read = if compacted_prefix_rewrite {
-            output_entries
-        } else {
-            total_entries
-        };
-        let entries_capacity = match usize::try_from(entries_to_read) {
-            Ok(capacity) => capacity,
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    entries_to_read,
-                    ?index_path,
-                    kind,
-                    "sidecar retained entry count exceeds usize during prune"
-                );
-                return false;
-            }
-        };
-        let vector_base = if compacted_prefix_rewrite {
-            source_start
-        } else {
-            0
-        };
-        let Some(entries_offset) = vector_base
-            .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-            .and_then(|offset| layout.entries_offset.checked_add(offset))
-        else {
-            iroha_logger::warn!(
-                vector_base,
-                ?index_path,
-                kind,
-                "sidecar retained index offset overflows during prune"
-            );
-            return false;
-        };
-        if let Err(err) = index.seek(SeekFrom::Start(entries_offset)) {
-            iroha_logger::warn!(
-                ?err,
-                ?index_path,
-                kind,
-                "failed to seek to sidecar index entries during prune"
-            );
-            return false;
-        }
-        let mut entries = Vec::with_capacity(entries_capacity);
-        let mut entry_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-        for _ in 0..entries_to_read {
-            if let Err(err) = index.read_exact(&mut entry_buf) {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to read sidecar index");
-                return false;
-            }
-            entries.push(SidecarIndexEntry::from_bytes(entry_buf));
-        }
-        if let Some(byte_limit) = window_data_byte_limit {
-            let Ok(count_start) = usize::try_from(source_start.saturating_sub(vector_base)) else {
-                return false;
-            };
-            let mut byte_start = entries.len();
-            let mut retained_bytes = 0_u64;
-            for idx in (count_start..entries.len()).rev() {
-                let Some(next_bytes) = retained_bytes.checked_add(entries[idx].len) else {
-                    return false;
-                };
-                if next_bytes > byte_limit {
-                    break;
-                }
-                retained_bytes = next_bytes;
-                byte_start = idx;
-            }
-            if entries
-                .get(byte_start..)
-                .is_none_or(|retained| retained.iter().all(|entry| entry.len == 0))
-                && entries
-                    .get(count_start..)
-                    .is_some_and(|window| window.iter().any(|entry| entry.len > 0))
-            {
-                iroha_logger::warn!(
-                    byte_limit,
-                    ?index_path,
-                    kind,
-                    "newest Native AMX evidence payload does not fit its aggregate retention budget"
-                );
-                return false;
-            }
-            let Ok(byte_start) = u64::try_from(byte_start) else {
-                iroha_logger::warn!(
-                    ?index_path,
-                    kind,
-                    "Native AMX evidence retention-window start exceeds u64"
-                );
-                return false;
-            };
-            source_start = vector_base.saturating_add(byte_start);
-            keep_from = source_start;
-            output_entries = total_entries.saturating_sub(source_start);
-            let Some(window_base_height) = layout.base_height.checked_add(source_start) else {
-                return false;
-            };
-            output_base_height = window_base_height;
-            if source_start == 0 {
-                return true;
-            }
-        }
-
-        let mut data = match std::fs::File::open(data_path) {
-            Ok(file) => file,
-            Err(err) => {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
-                return false;
-            }
-        };
-        let data_len = match data.metadata() {
-            Ok(meta) => meta.len(),
-            Err(err) => {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to stat sidecar store");
-                return false;
-            }
-        };
-        if strict_retained_rewrite {
-            let skip =
-                usize::try_from(source_start.saturating_sub(vector_base)).unwrap_or(usize::MAX);
-            let take = usize::try_from(output_entries).unwrap_or(usize::MAX);
-            let mut prior_payload_end = None;
-            for entry in entries.iter().skip(skip).take(take) {
-                if entry.len == 0 {
-                    continue;
-                }
-                if entry.len > STRICT_INIT_MAX_BLOCK_BYTES
-                    || usize::try_from(entry.len).is_err()
-                    || entry
-                        .offset
-                        .checked_add(entry.len)
-                        .is_none_or(|end| end > data_len)
-                {
-                    iroha_logger::warn!(
-                        offset = entry.offset,
-                        len = entry.len,
-                        data_len,
-                        ?index_path,
-                        kind,
-                        "refusing terminal compaction with a malformed retained sidecar entry"
-                    );
-                    return false;
-                }
-                if prior_payload_end.is_some_and(|prior_end| entry.offset < prior_end) {
-                    iroha_logger::warn!(
-                        offset = entry.offset,
-                        ?prior_payload_end,
-                        ?index_path,
-                        kind,
-                        "refusing strict compaction with overlapping or out-of-order retained sidecar entries"
-                    );
-                    return false;
-                }
-                prior_payload_end = entry.offset.checked_add(entry.len);
-            }
-        }
-
-        // Keep temp paths distinct: `.with_extension("tmp")` would collapse
-        // `*.norito` and `*.index` into the same `*.tmp` filename.
-        let temp_data_path = data_path.with_extension("norito.tmp");
-        let temp_index_path = index_path.with_extension("index.tmp");
-        let mut new_data = match std::fs::File::create(&temp_data_path) {
-            Ok(file) => BufWriter::new(file),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    ?temp_data_path,
-                    kind,
-                    "failed to create temp sidecar store"
-                );
-                return false;
-            }
-        };
-        let mut new_index = match std::fs::File::create(&temp_index_path) {
-            Ok(file) => BufWriter::new(file),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    ?temp_index_path,
-                    kind,
-                    "failed to create temp sidecar index"
-                );
-                return false;
-            }
-        };
-        if output_base_height > SidecarIndexLayout::LEGACY_BASE_HEIGHT
-            && let Err(err) =
-                new_index.write_all(&SidecarIndexLayout::base_header(output_base_height))
-        {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_index_path,
-                kind,
-                "failed to persist sidecar base-height header during prune"
-            );
-            return false;
-        }
-
-        let mut new_offset = 0u64;
-        let empty_entry = SidecarIndexEntry { offset: 0, len: 0 }.to_bytes();
-        for (vector_idx, entry) in entries
-            .iter()
-            .enumerate()
-            .skip(usize::try_from(source_start.saturating_sub(vector_base)).unwrap_or(usize::MAX))
-            .take(usize::try_from(output_entries).unwrap_or(usize::MAX))
-        {
-            let absolute_idx =
-                vector_base.saturating_add(u64::try_from(vector_idx).unwrap_or(u64::MAX));
-            let entry_height = layout.base_height.saturating_add(absolute_idx);
-            let retained_by_policy = absolute_idx >= keep_from
-                || pinned_height.is_some_and(|height| height == entry_height);
-            if !retained_by_policy || entry.len == 0 {
-                if let Err(err) = new_index.write_all(&empty_entry) {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?temp_index_path,
-                        kind,
-                        "failed to write pruned sidecar index entry"
-                    );
-                    return false;
-                }
-                continue;
-            }
-
-            if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
-                iroha_logger::warn!(
-                    len = entry.len,
-                    limit = STRICT_INIT_MAX_BLOCK_BYTES,
-                    kind,
-                    "sidecar payload length exceeds limit during prune; dropping entry"
-                );
-                if strict_retained_rewrite {
-                    iroha_logger::warn!(
-                        ?index_path,
-                        kind,
-                        "refusing terminal compaction that would drop a retained sidecar entry"
-                    );
-                    return false;
-                }
-                if let Err(err) = new_index.write_all(&empty_entry) {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?temp_index_path,
-                        kind,
-                        "failed to write pruned sidecar index entry"
-                    );
-                    return false;
-                }
-                continue;
-            }
-            let len = if let Ok(len) = usize::try_from(entry.len) {
-                len
-            } else {
-                iroha_logger::warn!(
-                    len = entry.len,
-                    kind,
-                    "sidecar payload length exceeds usize during prune; dropping entry"
-                );
-                if strict_retained_rewrite {
-                    iroha_logger::warn!(
-                        ?index_path,
-                        kind,
-                        "refusing terminal compaction that would drop a retained sidecar entry"
-                    );
-                    return false;
-                }
-                if let Err(err) = new_index.write_all(&empty_entry) {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?temp_index_path,
-                        kind,
-                        "failed to write pruned sidecar index entry"
-                    );
-                    return false;
-                }
-                continue;
-            };
-            let entry_end = if let Some(end) = entry.offset.checked_add(entry.len) {
-                end
-            } else {
-                iroha_logger::warn!(
-                    offset = entry.offset,
-                    len = entry.len,
-                    kind,
-                    "sidecar payload range overflow during prune; dropping entry"
-                );
-                if strict_retained_rewrite {
-                    iroha_logger::warn!(
-                        ?index_path,
-                        kind,
-                        "refusing terminal compaction that would drop a retained sidecar entry"
-                    );
-                    return false;
-                }
-                if let Err(err) = new_index.write_all(&empty_entry) {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?temp_index_path,
-                        kind,
-                        "failed to write pruned sidecar index entry"
-                    );
-                    return false;
-                }
-                continue;
-            };
-            if entry_end > data_len {
-                iroha_logger::warn!(
-                    offset = entry.offset,
-                    len = entry.len,
-                    data_len,
-                    kind,
-                    "sidecar payload past data file during prune; dropping entry"
-                );
-                if strict_retained_rewrite {
-                    iroha_logger::warn!(
-                        ?index_path,
-                        kind,
-                        "refusing terminal compaction that would drop a retained sidecar entry"
-                    );
-                    return false;
-                }
-                if let Err(err) = new_index.write_all(&empty_entry) {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?temp_index_path,
-                        kind,
-                        "failed to write pruned sidecar index entry"
-                    );
-                    return false;
-                }
-                continue;
-            }
-            if let Err(err) = data.seek(SeekFrom::Start(entry.offset)) {
-                iroha_logger::warn!(
-                    ?err,
-                    offset = entry.offset,
-                    ?data_path,
-                    kind,
-                    "failed to seek to pruned sidecar payload"
-                );
-                return false;
-            }
-            let mut buf = vec![0u8; len];
-            if let Err(err) = data.read_exact(&mut buf) {
-                iroha_logger::warn!(
-                    ?err,
-                    offset = entry.offset,
-                    len = entry.len,
-                    ?data_path,
-                    kind,
-                    "failed to read pruned sidecar payload"
-                );
-                return false;
-            }
-            if let Err(err) = new_data.write_all(&buf) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?temp_data_path,
-                    len = entry.len,
-                    kind,
-                    "failed to persist pruned sidecar payload"
-                );
-                return false;
-            }
-
-            let new_entry = SidecarIndexEntry {
-                offset: new_offset,
-                len: entry.len,
-            };
-            if let Err(err) = new_index.write_all(&new_entry.to_bytes()) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?temp_index_path,
-                    kind,
-                    "failed to persist pruned sidecar index entry"
-                );
-                return false;
-            }
-            new_offset = new_offset.saturating_add(entry.len);
-        }
-
-        if let Err(err) = new_data.flush() {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_data_path,
-                kind,
-                "failed to flush pruned sidecar store"
-            );
-            return false;
-        }
-        if let Err(err) = new_index.flush() {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_index_path,
-                kind,
-                "failed to flush pruned sidecar index"
-            );
-            return false;
-        }
-        if let Err(err) = new_data.get_ref().sync_data() {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_data_path,
-                kind,
-                "failed to sync pruned sidecar store"
-            );
-            return false;
-        }
-        if let Err(err) = new_index.get_ref().sync_data() {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_index_path,
-                kind,
-                "failed to sync pruned sidecar index"
-            );
-            return false;
-        }
-
-        drop(new_data);
-        drop(new_index);
-        drop(data);
-        drop(index);
-
-        // Make both temp directory entries durable before the first promotion. The temp index is
-        // the recovery marker if the process crashes after publishing the new data file but before
-        // publishing its matching index.
-        let Some(data_parent) = temp_data_path.parent() else {
-            iroha_logger::warn!(?temp_data_path, kind, "sidecar temp data has no parent");
-            return false;
-        };
-        if let Err(err) = sync_sidecar_temp_marker_dir(data_parent) {
-            iroha_logger::warn!(
-                ?err,
-                ?data_parent,
-                kind,
-                "failed to sync sidecar temp recovery marker before prune promotion"
-            );
-            return false;
-        }
-        if let Some(index_parent) = temp_index_path.parent()
-            && index_parent != data_parent
-            && let Err(err) = sync_sidecar_temp_marker_dir(index_parent)
-        {
-            iroha_logger::warn!(
-                ?err,
-                ?index_parent,
-                kind,
-                "failed to sync sidecar temp index recovery marker before prune promotion"
-            );
-            return false;
-        }
-
-        if let Err(err) = std::fs::rename(&temp_data_path, data_path) {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                if let Err(remove_err) = std::fs::remove_file(data_path) {
-                    iroha_logger::warn!(
-                        ?remove_err,
-                        ?data_path,
-                        kind,
-                        "failed to remove sidecar store before pruned replace"
-                    );
-                    return false;
-                }
-                if let Err(rename_err) = std::fs::rename(&temp_data_path, data_path) {
-                    iroha_logger::warn!(
-                        ?rename_err,
-                        ?temp_data_path,
-                        ?data_path,
-                        kind,
-                        "failed to replace sidecar store after removal"
-                    );
-                    return false;
-                }
-            } else {
-                iroha_logger::warn!(
-                    ?err,
-                    ?temp_data_path,
-                    ?data_path,
-                    kind,
-                    "failed to replace sidecar store with pruned data"
-                );
-                let _ = std::fs::remove_file(&temp_data_path);
-                let _ = std::fs::remove_file(&temp_index_path);
-                return false;
-            }
-        }
-        // The data rename must be stable before the index rename can become visible. This barrier
-        // rules out a recovered state with a new index pointing into the old data file.
-        if let Err(err) = sync_sidecar_promotion_dir(data_parent) {
-            iroha_logger::warn!(
-                ?err,
-                ?data_parent,
-                kind,
-                "failed to sync pruned sidecar data before index promotion"
-            );
-            return false;
-        }
-        if let Err(err) = std::fs::rename(&temp_index_path, index_path) {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                if let Err(remove_err) = std::fs::remove_file(index_path) {
-                    iroha_logger::warn!(
-                        ?remove_err,
-                        ?index_path,
-                        kind,
-                        "failed to remove sidecar index before pruned replace"
-                    );
-                    return false;
-                }
-                if let Err(rename_err) = std::fs::rename(&temp_index_path, index_path) {
-                    iroha_logger::warn!(
-                        ?rename_err,
-                        ?temp_index_path,
-                        ?index_path,
-                        kind,
-                        "failed to replace sidecar index after removal"
-                    );
-                    iroha_logger::warn!(
-                        ?temp_index_path,
-                        kind,
-                        "leaving temp index for sidecar recovery"
-                    );
-                    return false;
-                }
-            } else {
-                iroha_logger::warn!(
-                    ?err,
-                    ?temp_index_path,
-                    ?index_path,
-                    kind,
-                    "failed to replace sidecar index with pruned entries"
-                );
-                let _ = std::fs::remove_file(&temp_data_path);
-                iroha_logger::warn!(
-                    ?temp_index_path,
-                    kind,
-                    "leaving temp index for sidecar recovery"
-                );
-                return false;
-            }
-        }
-        if let Some(parent) = data_path.parent() {
-            if let Err(err) = sync_dir(parent) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?parent,
-                    kind,
-                    "failed to sync sidecar parent directory after prune"
-                );
-                return false;
-            }
-        }
-        if let Some(parent) = index_path.parent() {
-            if let Err(err) = sync_dir(parent) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?parent,
-                    kind,
-                    "failed to sync sidecar parent directory after prune"
-                );
-                return false;
-            }
-        }
-
-        let retained = match rewrite {
-            #[cfg(test)]
-            IndexedSidecarRewrite::RetainNewestWindow { .. } => output_entries,
-            _ => output_entries
-                .saturating_sub(keep_from)
-                .saturating_add(u64::from(pinned_height.is_some_and(|height| {
-                    height
-                        .checked_sub(layout.base_height)
-                        .is_some_and(|relative| relative < output_entries && relative < keep_from)
-                }))),
-        };
-        let pruned = total_entries.saturating_sub(retained);
-        iroha_logger::debug!(
-            kind,
-            operation,
-            total_entries,
-            retained,
-            pruned,
-            "rewrote indexed sidecars"
-        );
-        true
-    }
-}
+include!("kura/autonomous_application_evidence.rs");
+include!("kura/indexed_sidecar_io.rs");
+include!("kura/indexed_sidecar_rewrite.rs");
+include!("kura/lane_history_compaction.rs");
 
 impl BlockStore {
     fn retarget_existing_path(&mut self, path: PathBuf) {
@@ -42777,18 +41039,7 @@ impl BlockStore {
         else {
             return Err(Error::MissingRetainedBlockRecord { height });
         };
-        let mut cursor = bytes.as_slice();
-        let record =
-            KuraRetainedBlockRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
-        if record.encode() != bytes {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "evicted canonical block retained record is not canonically encoded",
-                ),
-                path,
-            ));
-        }
+        let record = Kura::decode_canonical_retained_block_record(&path, &bytes)?;
         let _ = Kura::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
         Ok((
             record.proposal_wire_hash,
@@ -44242,26 +42493,29 @@ impl BlockStore {
         }
         let tmp_path = path.with_extension("norito.tmp");
         let mut main_invalid = false;
+        let mut stable_marker = None;
         match std::fs::read(&path) {
             Ok(bytes) => match norito::decode_canonical::<BlockStoreCommitMarker>(&bytes) {
                 Ok(marker) => {
                     if marker.version == BlockStoreCommitMarker::VERSION {
                         if (marker.count == 0) == marker.tip_hash.is_none() {
-                            return Ok(Some(marker));
+                            stable_marker = Some(marker);
+                        } else {
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "block commit marker has an invalid empty/tip invariant",
+                                ),
+                                path,
+                            ));
                         }
-                        return Err(Error::IO(
-                            std::io::Error::new(
-                                ErrorKind::InvalidData,
-                                "block commit marker has an invalid empty/tip invariant",
-                            ),
-                            path,
-                        ));
+                    } else {
+                        warn!(
+                            version = marker.version,
+                            "unsupported block store marker version; ignoring"
+                        );
+                        main_invalid = true;
                     }
-                    warn!(
-                        version = marker.version,
-                        "unsupported block store marker version; ignoring"
-                    );
-                    main_invalid = true;
                 }
                 Err(err) => {
                     warn!(
@@ -44293,22 +42547,18 @@ impl BlockStore {
                             version = marker.version,
                             "unsupported block store temp marker version; ignoring"
                         );
-                        return Ok(None);
+                        remove_commit_marker_temp_and_sync(&tmp_path)?;
+                        return Ok(stable_marker);
                     }
                     if (marker.count == 0) != marker.tip_hash.is_none() {
-                        return Err(Error::IO(
-                            std::io::Error::new(
-                                ErrorKind::InvalidData,
-                                "temporary block commit marker has an invalid empty/tip invariant",
-                            ),
-                            tmp_path,
-                        ));
+                        remove_commit_marker_temp_and_sync(&tmp_path)?;
+                        return Ok(stable_marker);
                     }
                     warn!(
                         path = %tmp_path.display(),
                         "recovered block store marker from temp file"
                     );
-                    self.write_commit_marker_value(&marker)?;
+                    promote_commit_marker_temp_and_sync(&tmp_path, &path)?;
                     Ok(Some(marker))
                 }
                 Err(err) => {
@@ -44317,11 +42567,11 @@ impl BlockStore {
                         path = %tmp_path.display(),
                         "failed to decode temp block store marker"
                     );
-                    let _ = std::fs::remove_file(&tmp_path);
-                    Ok(None)
+                    remove_commit_marker_temp_and_sync(&tmp_path)?;
+                    Ok(stable_marker)
                 }
             },
-            Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(stable_marker),
             Err(err) => Err(Error::IO(err, tmp_path)),
         }
     }
@@ -44393,19 +42643,64 @@ impl BlockStore {
             )
         })?;
         std::fs::create_dir_all(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".kura-count-")
-            .tempfile_in(parent)
-            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        temporary
-            .as_file_mut()
-            .write_all(&bytes)
-            .and_then(|()| temporary.as_file_mut().flush())
-            .and_then(|()| temporary.as_file().sync_all())
+        if bytes.is_empty() || bytes.len() > MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "encoded block commit marker exceeds its hard bound",
+                ),
+                path,
+            ));
+        }
+        let temporary_path = path.with_extension("norito.tmp");
+        match std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)
+        {
+            Ok(mut temporary) => {
+                temporary
+                    .write_all(&bytes)
+                    .and_then(|()| temporary.flush())
+                    .and_then(|()| temporary.sync_all())
+                    .map_err(|error| Error::IO(error, temporary_path.clone()))?;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                let metadata = std::fs::symlink_metadata(&temporary_path)
+                    .map_err(|error| Error::IO(error, temporary_path.clone()))?;
+                if metadata.file_type().is_symlink()
+                    || !metadata.is_file()
+                    || !Kura::sidecar_is_single_link(&metadata)
+                    || metadata.len()
+                        > u64::try_from(MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES).unwrap_or(u64::MAX)
+                {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "block commit marker temp is not a single-link regular file",
+                        ),
+                        temporary_path,
+                    ));
+                }
+                let existing = std::fs::read(&temporary_path)
+                    .map_err(|error| Error::IO(error, temporary_path.clone()))?;
+                if existing != bytes {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::AlreadyExists,
+                            "block commit marker temp conflicts with the intended marker",
+                        ),
+                        temporary_path,
+                    ));
+                }
+            }
+            Err(error) => return Err(Error::IO(error, temporary_path)),
+        }
+        std::fs::rename(&temporary_path, &path).map_err(|error| Error::IO(error, path.clone()))?;
+        let persisted = std::fs::OpenOptions::new()
+            .read(true)
+            .open(&path)
             .map_err(|error| Error::IO(error, path.clone()))?;
-        let persisted = temporary
-            .persist(&path)
-            .map_err(|error| Error::IO(error.error, path.clone()))?;
         persisted
             .sync_all()
             .map_err(|error| Error::IO(error, path.clone()))?;
@@ -46301,561 +44596,46 @@ impl BlockStore {
     }
 }
 
-fn create_dir_all_with_context(path: &Path) -> Result<()> {
-    std::fs::create_dir_all(path).map_err(|err| Error::MkDir(err, path.to_path_buf()))
-}
-
-fn sync_dir(path: &Path) -> std::io::Result<()> {
-    let file = std::fs::File::open(path)?;
-    file.sync_all()
-}
-
 #[cfg(test)]
 include!("kura/test_fault_injection_state.rs");
 
-fn rollback_fault_point(point: RollbackFaultPoint) -> Result<()> {
-    #[cfg(test)]
-    if FAIL_ROLLBACK_AT.with(|fault| {
-        if fault.get() == Some(point) {
-            fault.set(None);
-            true
-        } else {
-            false
-        }
-    }) {
-        return Err(Error::IO(
-            std::io::Error::other(format!("injected rollback interruption at {point:?}")),
-            PathBuf::from("rollback_intent_test_fail"),
-        ));
-    }
-    #[cfg(not(test))]
-    let _ = point;
-    Ok(())
-}
-
-fn sync_bound_progress_intent_file(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_BOUND_PROGRESS_INTENT_FILE_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected bound progress append-intent sync failure",
-        ));
-    }
-    file.sync_data()
-}
-
-fn sync_bound_progress_append_data(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected journaled progress payload sync failure",
-        ));
-    }
-    file.sync_data()
-}
-
-fn sync_bound_progress_append_index(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_BOUND_PROGRESS_APPEND_INDEX_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected journaled progress index sync failure",
-        ));
-    }
-    file.sync_data()
-}
-
-fn sync_native_amx_latest_index_recovery_temp(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected Native AMX latest-index recovery temporary sync failure",
-        ));
-    }
-    file.sync_all()
-}
-
-fn sync_indexed_sidecar_data(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected indexed sidecar data sync failure",
-        ));
-    }
-    file.sync_data()
-}
-
-fn sync_indexed_sidecar_initial_data(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_INDEXED_SIDECAR_INITIAL_DATA_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected initial indexed sidecar data sync failure",
-        ));
-    }
-    file.sync_data()
-}
-
-fn rollback_unindexed_sidecar_payload(
-    file: &std::fs::File,
-    offset: u64,
-    data_path: &Path,
-    kind: &str,
-) -> bool {
-    if let Err(err) = file.set_len(offset) {
-        iroha_logger::warn!(
-            ?err,
-            ?data_path,
-            offset,
-            kind,
-            "failed to truncate unpublished sidecar payload"
-        );
-        return false;
-    }
-    if let Err(err) = file.sync_data() {
-        iroha_logger::warn!(
-            ?err,
-            ?data_path,
-            offset,
-            kind,
-            "failed to synchronize unpublished sidecar payload rollback"
-        );
-        return false;
-    }
-    true
-}
-
-fn sync_indexed_sidecar_index(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected indexed sidecar index sync failure",
-        ));
-    }
-    file.sync_data()
-}
-
-fn sync_indexed_sidecar_dir(path: &Path) -> std::io::Result<()> {
-    let file = std::fs::File::open(path)?;
-    sync_indexed_sidecar_dir_handle(&file)
-}
-
-fn sync_indexed_sidecar_dir_handle(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected indexed sidecar directory sync failure",
-        ));
-    }
-    file.sync_all()
-}
-
-fn sync_progress_sidecar_ancestor_dir_handle(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT.with(|slot| {
-        let Some(mut fault) = slot.get() else {
-            return false;
-        };
-        if fault.remaining_to_target > 0 {
-            fault.remaining_to_target -= 1;
-            slot.set(Some(fault));
-            return false;
-        }
-        fault.failures_remaining -= 1;
-        if fault.failures_remaining == 0 {
-            slot.set(None);
-        } else {
-            fault.remaining_to_target = fault.target_index;
-            slot.set(Some(fault));
-        }
-        true
-    }) {
-        return Err(std::io::Error::other(
-            "injected progress sidecar ancestor directory sync failure",
-        ));
-    }
-    file.sync_all()
-}
-
-fn sync_sidecar_promotion_dir(path: &Path) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected sidecar promotion directory sync failure",
-        ));
-    }
-    sync_dir(path)
-}
-
-fn sync_sidecar_temp_marker_dir(path: &Path) -> std::io::Result<()> {
-    #[cfg(test)]
-    if FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other(
-            "injected sidecar temp marker directory sync failure",
-        ));
-    }
-    sync_dir(path)
-}
-
 #[cfg(test)]
 include!("kura/test_fault_injection_controls.rs");
-
-/// Helper to reduce boilerplate of file operations while preserving path context.
-struct FileWrap {
-    path: PathBuf,
-    file: std::fs::File,
-}
-
-impl std::fmt::Debug for FileWrap {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FileWrap")
-            .field("path", &self.path)
-            .field("file", &self.file)
-            .finish()
-    }
-}
-
-impl FileWrap {
-    fn open_with(path: PathBuf, configure: impl FnOnce(&mut std::fs::OpenOptions)) -> Result<Self> {
-        let mut options = std::fs::OpenOptions::new();
-        configure(&mut options);
-        let file = options.open(path.clone()).add_err_context(&path)?;
-        Ok(Self { path, file })
-    }
-
-    fn open_read_write(path: PathBuf) -> Result<Self> {
-        Self::open_with(path, |opts| {
-            opts.write(true).read(true).create(true).truncate(false);
-        })
-    }
-
-    fn try_io<F, T>(&mut self, f: F) -> Result<T>
-    where
-        F: FnOnce(&mut std::fs::File) -> std::io::Result<T>,
-    {
-        let value = f(&mut self.file).add_err_context(&self.path)?;
-        Ok(value)
-    }
-}
-
-pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
-/// Error variants for persistent storage logic
-#[derive(thiserror::Error, Debug, displaydoc::Display)]
-pub enum Error {
-    /// Production Kura store root resolved to an empty path
-    EmptyStoreRoot,
-    /// Invalid or unrecoverable Kura rollback intent at `{path:?}`: {reason}
-    RollbackIntentInvalid {
-        /// Durable intent path whose transaction cannot be trusted or completed.
-        path: PathBuf,
-        /// Stable diagnostic describing the violated rollback invariant.
-        reason: String,
-    },
-    /// Failed reading/writing {1:?} from disk: {0}
-    IO(#[source] std::io::Error, PathBuf),
-    /// Lane-geometry publication failed and exact prior-journal restoration was not proven: publication={publication}; restoration={restoration}
-    LaneGeometryPublicationRestoreFailed {
-        /// Original catalog-publication error.
-        publication: String,
-        /// Exact prior-journal restoration error.
-        restoration: String,
-    },
-    /// Failed to create the directory {1:?}
-    MkDir(#[source] std::io::Error, PathBuf),
-    /// Failed to serialize/deserialize versioned payloads
-    VersionedCodec(#[from] iroha_version::error::Error),
-    /// Failed to frame or deframe Norito payload
-    NoritoFrame(#[from] norito::core::Error),
-    /// Invalid Sumeragi v2 finality artifact: {0}
-    V2FinalityArtifact(#[from] V2FinalityValidationError),
-    /// Invalid Sumeragi v2 finality cryptography: {0}
-    V2FinalityCryptography(#[from] V2QuorumCertificateVerificationError),
-    /// Encoded Sumeragi v2 finality artifact is {actual} bytes; hard maximum is {max}
-    V2FinalityArtifactTooLarge {
-        /// Encoded artifact size.
-        actual: usize,
-        /// Hard persistence/read limit.
-        max: usize,
-    },
-    /// Encoded Kura Sumeragi v2 finality record is {actual} bytes; hard maximum is {max}
-    V2FinalityRecordTooLarge {
-        /// Encoded private record size.
-        actual: usize,
-        /// Hard persistence/read limit.
-        max: usize,
-    },
-    /// Encoded Kura retained block record is {actual} bytes; hard maximum is {max}
-    RetainedBlockRecordTooLarge {
-        /// Encoded retained block-record size.
-        actual: usize,
-        /// Hard persistence/read limit.
-        max: usize,
-    },
-    /// Immutable retained block record at height `{height}` conflicts with canonical data
-    ConflictingRetainedBlockRecord {
-        /// Height whose retained-block path contains different canonical data.
-        height: u64,
-    },
-    /// Sumeragi-v2 finality at height `{height}` authenticates a different canonical proposal wire image
-    V2FinalityPayloadHashMismatch {
-        /// Height whose signed subject differs from the retained resultless proposal hash.
-        height: u64,
-    },
-    /// Sumeragi-v2 finality at height `{height}` authenticates a different executed block wire length
-    V2FinalityExecutedBlockWireLengthMismatch {
-        /// Height whose execution commitment differs from the retained result-bearing block length.
-        height: u64,
-    },
-    /// Sumeragi-v2 finality at height `{height}` authenticates a different executed block wire image
-    V2FinalityExecutedBlockWireHashMismatch {
-        /// Height whose execution commitment differs from the retained result-bearing block hash.
-        height: u64,
-    },
-    /// Submitted block wire at existing canonical height `{height}` differs from durable canonical bytes
-    CanonicalBlockWireMismatch {
-        /// Existing height whose header matched but complete block bytes differed.
-        height: u64,
-    },
-    /// DA block rewrite commit state is unknown after an I/O failure: {detail}
-    DaBlockRewriteCommitStateUnknown {
-        /// Failure details retained for fail-stop diagnostics.
-        detail: String,
-    },
-    /// Canonical block publication is committed but requires restart recovery: {detail}
-    CanonicalBlockCommittedRecoveryRequired {
-        /// Failure details retained for fail-stop diagnostics.
-        detail: String,
-    },
-    /// Canonical Kura storage is fail-stop poisoned after an ambiguous rewrite publication
-    CanonicalStoragePoisoned,
-    /// Invalid provisional snapshot bootstrap marker at `{path:?}`: {reason}
-    InvalidSnapshotBootstrapMarker {
-        /// Marker path whose bytes or bounds are invalid.
-        path: PathBuf,
-        /// Stable validation diagnostic.
-        reason: String,
-    },
-    /// Kura hash-only history is provisional until a signed snapshot authenticates its lineage
-    SnapshotBootstrapAuthenticationPending,
-    /// Authenticated snapshot bootstrap finalization failed: {reason}
-    SnapshotBootstrapFinalization {
-        /// Exact deferred recovery or immutable context-publication failure.
-        reason: String,
-    },
-    /// Kura is already bound to a different authoritative consensus output guard
-    ConsensusOutputGuardAlreadyBound,
-    /// Kura is already bound to a different local peer identity
-    KuraReplicaLocalPeerConflict,
-    /// Kura cannot start its writer before the immutable local peer identity is bound
-    KuraReplicaLocalPeerUnbound,
-    /// Invalid authenticated Kura replica advert: {0}
-    InvalidKuraReplicaAdvert(String),
-    /// Invalid Kura replica-advert runtime configuration: {0}
-    InvalidKuraReplicaAdvertConfiguration(String),
-    /// Canonical block at height `{height}` is missing its required durable retained record
-    MissingRetainedBlockRecord {
-        /// Height whose eviction/finality evidence lacks the required record.
-        height: u64,
-    },
-    /// Evicted canonical block at height `{height}` is missing signed complete-wire finality
-    MissingV2FinalityArtifact {
-        /// Height whose durable eviction marker has no finality artifact.
-        height: u64,
-    },
-    /// Highest retained-block height `{retained_height}` exceeds the canonical durable block height `{durable_height}`
-    RetainedBlockBeyondDurableChain {
-        /// Highest canonical retained-block file discovered in the immutable inventory.
-        retained_height: u64,
-        /// Height published by the durable block-store marker.
-        durable_height: u64,
-    },
-    /// Invalid retained SCCP archive at height `{height}`: {reason}
-    InvalidRetainedSccpArchive {
-        /// Canonical block height whose bounded archive is invalid.
-        height: u64,
-        /// Bounded structural or commitment diagnostic.
-        reason: String,
-    },
-    /// Canonical block header for Sumeragi v2 finality height `{height}` is unavailable
-    V2FinalityCanonicalHeaderUnavailable {
-        /// Height whose complete canonical header could not be loaded.
-        height: u64,
-    },
-    /// Invalid or conflicting Kagemusha top-up finality sidecar: {0}
-    KagemushaTopUpFinalitySidecar(String),
-    /// Encoded Kagemusha top-up finality sidecar is {actual} bytes; hard maximum is {max}
-    KagemushaTopUpFinalitySidecarTooLarge {
-        /// Encoded sidecar size.
-        actual: usize,
-        /// Hard persistence/read limit.
-        max: usize,
-    },
-    /// Invalid or conflicting Kagemusha active-receiver finality sidecar: {0}
-    KagemushaActiveReceiverFinalitySidecar(String),
-    /// Encoded Kagemusha active-receiver sidecar is {actual} bytes; hard maximum is {max}
-    KagemushaActiveReceiverFinalitySidecarTooLarge {
-        /// Encoded sidecar size.
-        actual: usize,
-        /// Hard persistence/read limit.
-        max: usize,
-    },
-    /// Conflicting immutable Sumeragi v2 finality artifact at height `{height}`
-    ConflictingV2FinalityArtifact {
-        /// Height whose finality path already contains a different artifact.
-        height: u64,
-    },
-    /// Failed to load or persist the structurally validated legacy commit-roster archive.
-    CommitRosterJournal(#[from] CommitRosterJournalError),
-    /// Canonical-chain mutation from height `{rewrite_from_height}` would rewrite durable Sumeragi-v2 finality at height `{finalized_height}`
-    FinalizedV2BlockMutation {
-        /// First canonical height the requested mutation could replace or remove.
-        rewrite_from_height: u64,
-        /// Highest durable finality artifact that makes the mutation invalid.
-        finalized_height: u64,
-    },
-    /// Canonical block at height `{height}` has committed WSV replay metadata and cannot be replaced
-    CommittedBlockReplacementForbidden {
-        /// State-committed canonical height protected by its checkpoint or commit manifest.
-        height: u64,
-    },
-    /// Highest durable Sumeragi-v2 finality height `{finalized_height}` exceeds the canonical durable block height `{durable_height}`
-    V2FinalityBeyondDurableChain {
-        /// Highest canonical finality sidecar file discovered at startup.
-        finalized_height: u64,
-        /// Height published by the durable block-store marker.
-        durable_height: u64,
-    },
-    /// Failed to allocate buffer
-    Alloc(#[from] std::collections::TryReserveError),
-    /// Tried reading block data out of bounds: start `{start_block_height}`, count `{block_count}`
-    OutOfBoundsBlockRead {
-        /// The block height from which the read was supposed to start
-        start_block_height: u64,
-        /// The actual block count
-        block_count: usize,
-    },
-    /// Another live Kura instance owns the store-root lock at {0}
-    Locked(PathBuf),
-    /// Block writer thread unavailable; persistence notifications cannot be delivered
-    BlockWriterUnavailable,
-    /// Block writer thread faulted and stopped processing new blocks: {0}
-    BlockWriterFaulted(String),
-    /// Conversion of wide integer into narrow integer failed. This error cannot be caught at compile time at present
-    IntConversion(#[from] std::num::TryFromIntError),
-    /// Blocks count differs hashes file and index file
-    HashesFileHeightMismatch,
-    /// Invalid canonical suffix above provisional snapshot prefix at height `{height}`: {reason}
-    InvalidProvisionalSnapshotSuffix {
-        /// One-based suffix height which failed validation.
-        height: u64,
-        /// Stable validation diagnostic.
-        reason: String,
-    },
-    /// Hard-fork snapshot bootstrap requires Kura hashes height `{hashes_count}` to match index height `{index_count}`
-    HardForkSnapshotBootstrapHashHeightMismatch {
-        /// Number of durable block index entries.
-        index_count: usize,
-        /// Number of block hashes recorded in the hashes journal.
-        hashes_count: usize,
-    },
-    /// Block index length {length} exceeds strict-init guard {limit} bytes
-    CorruptedBlockLength {
-        /// Length of the corrupted block index entry in bytes.
-        length: u64,
-        /// Configured upper bound for permissible block index entries.
-        limit: u64,
-    },
-    /// Block range start {start} + length {length} exceeds data file length `{data_len}` bytes
-    CorruptedBlockRange {
-        /// Offset in the data file where the range begins.
-        start: u64,
-        /// Number of bytes that were requested to be read starting at `start`.
-        length: u64,
-        /// Total number of bytes available in the data file.
-        data_len: u64,
-    },
-    /// Kura storage budget exceeded: limit {limit} bytes, used {used} bytes, required {required} bytes
-    StorageBudgetExceeded {
-        /// Configured storage cap in bytes.
-        limit: u64,
-        /// Bytes currently occupied by the block store.
-        used: u64,
-        /// Bytes required after accepting the next block.
-        required: u64,
-    },
-    /// Block height gap: expected next canonical height `{expected_next_height}`, got `{actual_height}`
-    BlockHeightGap {
-        /// Next height Kura can append without leaving a gap.
-        expected_next_height: u64,
-        /// Height declared by the block being stored.
-        actual_height: u64,
-    },
-    /// Block height conflict at `{height}`: stored hash `{expected:?}`, incoming hash `{actual:?}`
-    BlockHeightConflict {
-        /// Conflicting block height.
-        height: u64,
-        /// Hash already stored at that height.
-        expected: HashOf<BlockHeader>,
-        /// Hash of the incoming block.
-        actual: HashOf<BlockHeader>,
-    },
-    /// Certified merge sidecar `{entry_hash:?}` is unavailable
-    MissingCertifiedMergeSidecar {
-        /// Hash requested by the compact block reference.
-        entry_hash: HashOf<MergeLedgerEntry>,
-    },
-    /// Certified merge compact reference is inconsistent: {0}
-    MergeReferenceMismatch(String),
-    /// Durable sparse merge carrier is inconsistent: {0}
-    MergeCarrierConflict(String),
-    /// Kura requires restart to complete an interrupted durable prune transaction
-    PruneRecoveryRequired,
-    /// Durable Kura prune intent is inconsistent: {0}
-    PruneIntentConflict(String),
-}
-
-impl Error {
-    /// Return whether this error proves that the canonical publication boundary cannot be
-    /// retried safely by the live consensus process.
-    #[must_use]
-    pub(crate) const fn requires_restart_recovery(&self) -> bool {
-        matches!(
-            self,
-            Self::DaBlockRewriteCommitStateUnknown { .. }
-                | Self::CanonicalBlockCommittedRecoveryRequired { .. }
-                | Self::CanonicalStoragePoisoned
-                | Self::PruneRecoveryRequired
-        )
-    }
-}
-
-trait AddErrContextExt<T> {
-    type Context;
-
-    fn add_err_context(self, context: &Self::Context) -> Result<T, Error>;
-}
-
-impl<T> AddErrContextExt<T> for Result<T, std::io::Error> {
-    type Context = PathBuf;
-
-    fn add_err_context(self, path: &Self::Context) -> Result<T, Error> {
-        self.map_err(|e| Error::IO(e, path.clone()))
-    }
-}
+include!("kura/file_error_support.rs");
 
 #[cfg(test)]
 mod tests {
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
     include!("kura/tests/01a_retained_eviction_and_rewrite_tail.rs");
     include!("kura/tests/02_replacement_and_preflight.rs");
+    include!("kura/tests/02a_unauthenticated_preflight.rs");
     include!("kura/tests/03_preflight_and_merge_entry.rs");
     include!("kura/tests/03a_preflight_and_merge_entry_tail.rs");
     include!("kura/tests/04_merge_log_and_associations.rs");
+    include!("kura/tests/04b_merge_artifact_budget.rs");
+    include!("kura/tests/04c_canonical_association_capacity.rs");
+    include!("kura/tests/04d_prune_intent_capacity.rs");
     include!("kura/tests/05_merge_resolution_and_eviction.rs");
     include!("kura/tests/05a_replica_advert_and_body_eviction.rs");
     include!("kura/tests/06_eviction_and_autonomous_lanes.rs");
     include!("kura/tests/07a_autonomous_reservation_reconciliation_support.rs");
     include!("kura/tests/07_autonomous_lanes_and_sidecars.rs");
     include!("kura/tests/07b_autonomous_reservation_reconciliation_tests.rs");
+    include!("kura/tests/07c_lane_execution_sidecar_tests.rs");
+    include!("kura/tests/07d_strict_lane_ownership_barrier_tests.rs");
     include!("kura/tests/07e_autonomous_lifecycle_and_canonical_artifact_tests.rs");
+    include!("kura/tests/07e_autonomous_publication_temp_recovery_tests.rs");
+    include!("kura/tests/07e_terminal_capacity_hardening_tests.rs");
+    include!("kura/tests/07f_canonical_carrier_terminal_recovery_tests.rs");
+    include!("kura/tests/07g_claim_capacity_preflight_tests.rs");
+    include!("kura/tests/07h_autonomous_execution_view_capacity_tests.rs");
+    include!("kura/tests/07i_historical_autonomous_batch_capacity_tests.rs");
+    include!("kura/tests/07j_certified_bundle_capacity_tests.rs");
+    include!("kura/tests/07k_historical_atomic_temp_recovery_tests.rs");
+    include!("kura/tests/07l_pending_canonical_capacity_tests.rs");
     include!("kura/tests/08_lane_receipts_and_artifacts.rs");
+    include!("kura/tests/08a_certified_lane_block_read_tests.rs");
+    include!("kura/tests/08b_lane_history_compaction_capacity_tests.rs");
     include!("kura/tests/09_lane_artifacts_and_fastpq.rs");
     include!("kura/tests/10_native_amx_and_roster.rs");
     include!("kura/tests/10b_native_amx_prepublication_transition.rs");

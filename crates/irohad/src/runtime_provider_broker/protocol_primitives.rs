@@ -106,6 +106,10 @@ pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1: u
 pub(super) const OPERATION_POP_RUNTIME_OPEN_V1: u16 = 118;
 pub(super) const OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1: u16 = 119;
 pub(super) const OPERATION_POP_WALLET_RECIPIENT_OPEN_V1: u16 = 120;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1: u16 = 121;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1: u16 = 122;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1: u16 = 123;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1: u16 = 124;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
@@ -594,6 +598,7 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) handle: String,
     pub(super) revision: Option<u64>,
     pub(super) policy_digest: Option<[u8; 32]>,
+    pub(super) bootle_lantern_issuance_bindings: Option<BootleLanternIssuanceBindingsWireV1>,
     pub(super) stream_token_signer_public_key: Option<[u8; 32]>,
     pub(super) stream_token_gateway_admission_qualification:
         Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>,
@@ -638,6 +643,13 @@ pub(super) struct ModerationPanelNotificationArchiveBindingWireV1 {
     pub(super) public_key: [u8; 32],
     pub(super) max_bytes: u64,
     pub(super) max_records: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct BootleLanternIssuanceBindingsWireV1 {
+    pub(super) issuer_id: [u8; 32],
+    pub(super) policy_id: [u8; 32],
+    pub(super) authorization_lifetime_blocks: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]

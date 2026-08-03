@@ -823,11 +823,8 @@ fn bind_alias_rejects_expiry_after_retention_epoch() {
 fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
-    let default_domain = DomainId::try_new(
-        iroha_data_model::account::address::default_domain_name().as_ref(),
-        "universal",
-    )
-    .expect("default account domain label");
+    let default_domain =
+        DomainId::try_new("default", "universal").expect("explicit fixture domain");
     let alice = alice();
     let bob = iroha_test_samples::BOB_ID.clone();
     let domain = Domain::new(default_domain.clone()).build(&alice);
@@ -873,10 +870,10 @@ fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV
 
 fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     let fee_asset_id = tx.gov.sorafs_pin_fee_asset_id.clone();
-    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
-        && tx.world().domains().get(&domain_id).is_none()
-    {
-        Register::domain(Domain::new(domain_id))
+    let domain_id =
+        DomainId::try_new("universal", "universal").expect("SoraFS fee asset owning domain");
+    if tx.world().domains().get(&domain_id).is_none() {
+        Register::domain(Domain::new(domain_id.clone()))
             .execute(&alice(), tx)
             .expect("register SoraFS fee asset domain");
     }
@@ -887,11 +884,11 @@ fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '
             .expect("register SoraFS fee treasury account");
     }
     if tx.world().asset_definitions().get(&fee_asset_id).is_none() {
-        let definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(
-            fee_asset_id
-                .try_name()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "xor".to_owned()),
+        let definition = AssetDefinition::numeric(
+            fee_asset_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id),
         );
         Register::asset_definition(definition)
             .execute(&alice(), tx)
@@ -1070,11 +1067,8 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     }
 
     let alice = alice();
-    let default_domain = DomainId::try_new(
-        iroha_data_model::account::address::default_domain_name().as_ref(),
-        "universal",
-    )
-    .expect("default account domain label");
+    let default_domain =
+        DomainId::try_new("default", "universal").expect("explicit fixture domain");
     if tx.world().domains().get(&default_domain).is_none() {
         Register::domain(Domain::new(default_domain.clone()))
             .execute(&alice, tx)

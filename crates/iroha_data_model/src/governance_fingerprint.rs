@@ -12,6 +12,8 @@ pub const SCCP_ROUTE_GOVERNANCE_V1: &[u8] = b"iroha.governance.proposal.sccp_rou
 pub const VALIDATION_FEE_POLICY_V1: &[u8] = b"iroha.governance.proposal.validation_fee_policy.v1";
 pub const VALIDATION_FEE_PAYOUT_LIFECYCLE_V1: &[u8] =
     b"iroha.governance.proposal.validation_fee_payout_lifecycle.v1";
+pub(crate) const MUSUBI_REGISTRY_GOVERNANCE_V1: &[u8] =
+    b"iroha.governance.proposal.musubi_registry_governance.v1";
 
 pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
     let encoded = proposal.encode();
@@ -43,6 +45,7 @@ mod tests {
             SCCP_ROUTE_GOVERNANCE_V1,
             VALIDATION_FEE_POLICY_V1,
             VALIDATION_FEE_PAYOUT_LIFECYCLE_V1,
+            MUSUBI_REGISTRY_GOVERNANCE_V1,
         ];
         assert_eq!(
             domains.into_iter().collect::<BTreeSet<_>>().len(),

@@ -709,6 +709,43 @@ trailing tapes, over-depth schemas, noncanonical Norito hash literals,
 inconsistent convenience hashes, and drifted interface schemas before returning
 the record.
 
+## Musubi V1 registry reads
+
+`MusubiToriiClientV1` is the signer-free, read-only client for the eleven typed
+`/v1/musubi/queries/*` POST routes. The `sdk.musubi` models preserve structural
+package IDs, immutable namespace bindings, canonical structured SemVer
+requirements, exact unsigned integers, finalized cursors, archive commitments,
+and chain/genesis identity without legacy aliases or compatibility decoding.
+Unknown fields, unsupported ABI/edition versions, and noncanonical names or
+requirements are rejected.
+
+The canonical cross-SDK JSON contract is
+[`fixtures/musubi/sdk_v1.json`](../fixtures/musubi/sdk_v1.json), owned by the Rust
+`iroha_data_model::musubi` surface. Registry mutation credentials remain an
+explicit transport/configuration concern; these local read models never load a
+signer or accept secret material.
+
+The `/v1/musubi/queries/search` route exposes bounded exact-token
+description and keyword discovery with a search-specific finalized projection
+cursor. It is intentionally independent of dependency resolution.
+
+`findArchiveRetention` submits a sorted, bounded exact archive batch and binds
+the response to the requested identities and optional finalized snapshot before
+returning any prune classification.
+
+`MusubiInstructionsV1` supplies typed field-to-Norito constructors for immutable
+namespace registration; package-maintainer invitation, acceptance, revocation,
+role replacement, and removal; archive registration, location addition or
+renewal, and location retirement; release publication, yank, and unyank;
+permanent alias registration; exact release-digest assertion; package metadata
+replacement; and Parliament-enacted package ownership recovery,
+permanent-alias retargeting, artifact takedown, and registry-policy replacement.
+Each builder exposes `barePayload()`, `concreteFrame()`, and
+`toInstructionBox()`; transaction encoding preserves the dynamic pair inline,
+while standalone boxes use Rust's exact tuple schema. All eighteen cases and
+their four wire layers are checked against
+[`fixtures/musubi/instructions_v1.json`](../fixtures/musubi/instructions_v1.json).
+
 ## Motivation
 
 `core-jvm` now ships typed builders for the first dedicated RWA instruction

@@ -75,7 +75,7 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
     });
     let roster = keys
         .iter()
-        .zip([40_u64, 30, 20, 10])
+        .zip([1_u64; 4])
         .map(|(key, power)| ValidatorPower {
             validator: PeerId::new(key.public_key().clone()),
             power,
@@ -110,12 +110,12 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
         nexus_amx_context_hash: Hash::new(b"Torii exact-v2 bridge context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::Plain,
+            encoding: PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 1024,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 4096,
-            max_chunk_count: 4,
+            max_chunk_count: 8,
         },
         leader_seed: [0x42; 32],
     };

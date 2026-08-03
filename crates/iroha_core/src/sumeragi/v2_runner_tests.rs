@@ -40,3 +40,5 @@ use crate::{
 include!("tests/v2_runner_unsealed_00.rs");
 include!("tests/v2_runner_unsealed_01.rs");
 include!("tests/v2_runner_unsealed_02.rs");
+include!("tests/v2_runner_upstream_recovery.rs");
+include!("tests/v2_runner_lifecycle_startup_order.rs");

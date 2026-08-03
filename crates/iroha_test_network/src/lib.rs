@@ -8,6 +8,7 @@ pub mod fslock_ports;
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
     ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlRule,
+    NativeAmxFaultAck, NativeAmxFaultPhase,
 };
 
 use core::{fmt, future::Future, time::Duration};
@@ -7203,10 +7204,11 @@ impl NetworkBuilder {
             let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
             let universal_domain =
                 DomainId::try_new("universal", "universal").expect("universal domain");
-            let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("nexus", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
+            let stake_asset_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("nexus", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
             let fee_asset_id: AssetDefinitionId =
                 iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
                     .parse()
@@ -7237,12 +7239,22 @@ impl NetworkBuilder {
                 );
             config_layers.push(bootstrap_layer);
 
-            let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-                .with_name("NPOS Stake".to_owned())
-                .with_metadata(Metadata::default());
-            let fee_definition = AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
-                .with_name("Nexus Fee".to_owned())
-                .with_metadata(Metadata::default());
+            let definition = AssetDefinition::new(
+                stake_asset_id.clone(),
+                "NPOS Stake".to_owned(),
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default());
+            let fee_definition = AssetDefinition::new(
+                fee_asset_id.clone(),
+                "Nexus Fee".to_owned(),
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default());
             let fee_seed_amount = 1_000_000_u32;
 
             let mut bootstrap_tx = vec![
@@ -9022,12 +9034,10 @@ impl NetworkPeer {
         let status_timeout = client_status_timeout_env();
         let request_timeout = client_request_timeout_env();
         let ttl = client_ttl_env(status_timeout);
-        let default_account_domain = iroha_data_model::domain::DomainId::try_new(
-            iroha::account_address::default_domain_name().as_ref(),
-            "universal",
-        )
-        .expect("default account domain should be fully qualified")
-        .to_string();
+        let default_account_domain =
+            iroha_data_model::domain::DomainId::try_new("default", "universal")
+                .expect("explicit client convenience domain")
+                .to_string();
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(
                 Table::new()
@@ -15827,7 +15837,7 @@ exit 0
                         .clone();
                     let nexus_domain =
                         DomainId::try_new("nexus", "universal").expect("nexus domain");
-                    let stake_asset_id = AssetDefinitionId::new(
+                    let stake_asset_id = AssetDefinitionId::derive_from_components(
                         nexus_domain.clone(),
                         "xor".parse().expect("stake asset name"),
                     );
@@ -15835,9 +15845,14 @@ exit 0
                     let bootstrap = vec![
                         Register::domain(Domain::new(nexus_domain)).into(),
                         Register::asset_definition(
-                            AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-                                .with_name("Custom Genesis Stake".to_owned())
-                                .with_metadata(Metadata::default()),
+                            AssetDefinition::new(
+                                stake_asset_id.clone(),
+                                "Custom Genesis Stake".to_owned(),
+                                NumericSpec::default(),
+                                iroha_data_model::asset::AssetBalancePolicy::Global,
+                                None,
+                            )
+                            .with_metadata(Metadata::default()),
                         )
                         .into(),
                         Mint::asset_quantity(
@@ -15900,63 +15915,5 @@ exit 0
 
     include!("lib/kura_restart_storage_test.rs");
 
-    #[test]
-    fn restart_genesis_file_reuses_latest_run_genesis_when_available() -> Result<()> {
-        let root = tempdir()?;
-        let env = Environment {
-            dir: root.path().to_path_buf(),
-        };
-        let peer = NetworkPeer::builder().build(&env);
-
-        assert_eq!(peer.restart_genesis_file(false), None);
-
-        let genesis_path = peer.dir.join("run-1-genesis.nrt");
-        fs::write(&genesis_path, b"genesis")?;
-
-        assert_eq!(peer.restart_genesis_file(false), Some(genesis_path));
-        assert_eq!(peer.restart_genesis_file(true), None);
-
-        Ok(())
-    }
-
-    #[test]
-    fn restart_genesis_file_skips_failed_early_run_when_later_genesis_exists() -> Result<()> {
-        let root = tempdir()?;
-        let env = Environment {
-            dir: root.path().to_path_buf(),
-        };
-        let peer = NetworkPeer::builder().build(&env);
-        let first_genesis_path = peer.dir.join("run-1-genesis.nrt");
-        let later_genesis_path = peer.dir.join("run-3-genesis.nrt");
-        fs::write(&first_genesis_path, b"stale genesis")?;
-        fs::write(&later_genesis_path, b"latest genesis")?;
-
-        assert_eq!(peer.restart_genesis_file(false), Some(later_genesis_path));
-
-        Ok(())
-    }
-
-    #[test]
-    fn kura_storage_dir_is_cleared_for_bootstrap_when_reset_for_bootstrap_is_true() -> Result<()> {
-        let root = tempdir()?;
-        let env = Environment {
-            dir: root.path().to_path_buf(),
-        };
-        let peer = NetworkPeer::builder().build(&env);
-        let storage_dir = peer.dir.join("storage");
-        fs::create_dir_all(&storage_dir)?;
-        fs::write(storage_dir.join("keep.marker"), b"remove")?;
-
-        peer.prepare_kura_storage_dir(&storage_dir, true)?;
-
-        assert!(
-            !storage_dir.join("keep.marker").exists(),
-            "bootstrap reset must clear stale files"
-        );
-        assert!(
-            storage_dir.exists(),
-            "storage directory must exist after preparation"
-        );
-        Ok(())
-    }
+    include!("lib/restart_storage_tail_tests.rs");
 }

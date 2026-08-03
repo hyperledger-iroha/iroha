@@ -8,6 +8,7 @@ import base64
 import csv
 from dataclasses import dataclass
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -24,19 +25,31 @@ import tempfile
 import time
 from typing import Any
 
+
+_LOCALNET_MANIFEST_MODULE_PATH = Path(__file__).resolve(strict=True).with_name(
+    "sumeragi_v2_localnet_manifest.py"
+)
+_LOCALNET_MANIFEST_SPEC = importlib.util.spec_from_file_location(
+    "_sumeragi_v2_release_localnet_manifest",
+    _LOCALNET_MANIFEST_MODULE_PATH,
+)
+if _LOCALNET_MANIFEST_SPEC is None or _LOCALNET_MANIFEST_SPEC.loader is None:
+    raise RuntimeError("could not load the adjacent localnet manifest validator")
+_LOCALNET_MANIFEST_MODULE = importlib.util.module_from_spec(
+    _LOCALNET_MANIFEST_SPEC
+)
+_PREVIOUS_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
 try:
-    from sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
-except ModuleNotFoundError:
-    from scripts.sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
+    _LOCALNET_MANIFEST_SPEC.loader.exec_module(_LOCALNET_MANIFEST_MODULE)
+finally:
+    sys.dont_write_bytecode = _PREVIOUS_DONT_WRITE_BYTECODE
+LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
+canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
 
 _RELEASE_RECEIPT_COMPONENT_FILES = (
     "write_sumeragi_v2_release_receipt_formal_artifacts.py",
+    "write_sumeragi_v2_release_receipt_corridor_log.py",
 )
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
@@ -131,7 +144,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
+    "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -143,6 +156,10 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
     "manifest_helper": ("compute-manifest.py", _SIGNATURE_DATA_MODE),
     "python": ("python3", _SIGNATURE_TOOL_MODE),
     "receipt_validator": ("validate-receipt.py", _SIGNATURE_DATA_MODE),
+    "receipt_validator_support": (
+        "sumeragi_v2_localnet_manifest.py",
+        _SIGNATURE_DATA_MODE,
+    ),
     "revocation": ("bootstrap-revocation", _SIGNATURE_DATA_MODE),
     "runner_tool_manifest": ("runner-tool-manifest.json", _SIGNATURE_DATA_MODE),
     "ssh_keygen": ("ssh-keygen", _SIGNATURE_TOOL_MODE),
@@ -363,14 +380,14 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 813
-_G_UNIT_TEST_COUNT = 472
+_PRODUCTION_TEST_COUNT = 834
+_G_UNIT_TEST_COUNT = 474
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        266,
+        268,
         "lib",
     ),
     (
@@ -434,7 +451,7 @@ _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
         "kura::tests",
-        13,
+        14,
     ),
     (
         "production-kura-lane-geometry",
@@ -478,13 +495,18 @@ _PRODUCTION_MODULES = (
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 57),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 129),
+    (
+        "production-v2-lifecycle-recovery",
+        "sumeragi::v2_lifecycle_recovery::tests",
+        4,
+    ),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 131),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -556,11 +578,6 @@ _PRODUCTION_MODULES = (
         7,
     ),
     (
-        "production-irohad-genesis-reply-geometry",
-        "genesis_bootstrap::tests",
-        5,
-    ),
-    (
         "production-config-v2-exact-output-geometry",
         "parameters::actual::tests",
         2,
@@ -613,12 +630,12 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 54
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 55
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 60),
-    ("javascript", 58),
-    ("swift", 3),
+    ("python", 62),
+    ("javascript", 59),
+    ("swift", 4),
     ("kotlin", 6),
     ("java", 5),
 )
@@ -680,7 +697,10 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "python/iroha_torii_client/native_amx.py",
     "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
     "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/src/norito.js",
+    "javascript/iroha_js/src/native.js",
     "javascript/iroha_js/scripts/build-dist.mjs",
+    "javascript/iroha_js/scripts/native-build-provenance.mjs",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
@@ -700,6 +720,10 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "NativeAmxV2.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
     "SumeragiDiagnosticsModels.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/util/"
+    "HashLiteral.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/"
+    "IrohaHash.kt",
     "kotlin/core-jvm/build.gradle.kts",
     "kotlin/settings.gradle.kts",
     "kotlin/gradlew",
@@ -711,6 +735,10 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "NativeAmxV2Models.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
     "SumeragiDiagnosticsModels.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/"
+    "IrohaHash.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/util/"
+    "HashLiteral.java",
     "java/iroha_android/core/build.gradle.kts",
     "java/iroha_android/settings.gradle.kts",
     "java/iroha_android/gradlew",
@@ -781,7 +809,6 @@ def _canonical_production_tests(
                     "consensus_message_control::tests::",
                     "network_relay_tests::",
                     "tests::relay_fairness::",
-                    "genesis_bootstrap::tests::",
                     "parameters::",
                 )
             )
@@ -887,7 +914,6 @@ def _production_module_command(module: str) -> str:
         "consensus_message_control::tests",
         "network_relay_tests",
         "tests::relay_fairness",
-        "genesis_bootstrap::tests",
     }:
         return (
             "cargo test --locked --offline -p irohad --bin irohad "
@@ -1148,7 +1174,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                1737,
+                4249,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
@@ -1162,9 +1188,9 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
                 "test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
                 "test_inflight_composed_contract_rejects_missing_direct_release_action "
-                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
                 "test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping "
-                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
                 "test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
                 "test_inflight_layout_contract_rejects_membership_only_lane_authorship",
@@ -4179,124 +4205,13 @@ for _release_receipt_symbol in (
     "_validate_multilane_apalache_evidence",
     "_validate_formal_snapshot_replays",
     "_formal_artifacts",
+    "_test_count_from_log",
 ):
     if not callable(globals().get(_release_receipt_symbol)):
         raise RuntimeError(
             "release receipt component lacks required symbol "
             f"{_release_receipt_symbol}"
         )
-
-
-def _test_count_from_log(lines: list[str], kind: str, name: str) -> int:
-    if kind == "cargo-focus":
-        running = [line for line in lines if line == "running 1 test"]
-        results = [
-            line
-            for line in lines
-            if re.fullmatch(
-                r"test result: ok\. 1 passed; 0 failed; 0 ignored; "
-                r"0 measured; [0-9]+ filtered out; finished in .+",
-                line,
-            )
-            is not None
-        ]
-        if not running or len(running) != len(results):
-            raise ReceiptError(
-                f"{name} has an ambiguous Cargo transcript for focused tests"
-            )
-        return len(results)
-    if kind.startswith("cargo-"):
-        running = [
-            match
-            for line in lines
-            if (match := re.fullmatch(r"running ([0-9]+) tests?", line))
-        ]
-        results = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"test result: ok\. ([0-9]+) passed; 0 failed; 0 ignored; "
-                    r"0 measured; [0-9]+ filtered out; finished in .+",
-                    line,
-                )
-            )
-        ]
-        if (
-            len(running) != 1
-            or len(results) != 1
-            or running[0].group(1) != results[0].group(1)
-        ):
-            raise ReceiptError(f"{name} has an ambiguous Cargo transcript")
-        return int(results[0].group(1))
-    if kind == "pytest":
-        matches = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"([0-9]+) passed in [0-9]+(?:\.[0-9]+)?s", line
-                )
-            )
-        ]
-        if len(matches) != 1:
-            raise ReceiptError(f"{name} has an ambiguous pytest transcript")
-        return int(matches[0].group(1))
-    if kind == "node":
-        matches = [
-            match
-            for line in lines
-            if (match := re.fullmatch(r"# pass ([0-9]+)", line))
-        ]
-        if (
-            len(matches) != 1
-            or lines.count(f"# tests {matches[0].group(1)}") != 1
-            or lines.count("# fail 0") != 1
-            or lines.count("# cancelled 0") != 1
-            or lines.count("# skipped 0") != 1
-            or lines.count("# todo 0") != 1
-        ):
-            raise ReceiptError(f"{name} has an ambiguous Node transcript")
-        return int(matches[0].group(1))
-    if kind == "native-amx-sdk":
-        matches = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"native-amx-v2-grouped-parity surface=[a-z]+ "
-                    r"tests=([0-9]+) fixture_sha256=[0-9a-f]{64} "
-                    r"suite_source_manifest_sha256=[0-9a-f]{64}",
-                    line,
-                )
-            )
-        ]
-        if len(matches) != 1:
-            raise ReceiptError(
-                f"{name} has an ambiguous grouped Native AMX V2 SDK transcript"
-            )
-        return int(matches[0].group(1))
-    if kind == "sdk-diagnostics":
-        matches = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"sumeragi-v2-sdk-diagnostics surface=[a-z]+ "
-                    r"tests=([0-9]+) "
-                    r"suite_source_manifest_sha256=[0-9a-f]{64}",
-                    line,
-                )
-            )
-        ]
-        if len(matches) != 1:
-            raise ReceiptError(
-                f"{name} has an ambiguous Sumeragi v2 SDK diagnostics transcript"
-            )
-        return int(matches[0].group(1))
-    if kind == "command":
-        return 0
-    raise ReceiptError(f"{name} has unknown leg kind {kind}")
 
 
 def _prebuilt_directory(path: Path, name: str) -> Path:

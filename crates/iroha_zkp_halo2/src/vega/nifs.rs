@@ -144,6 +144,24 @@ impl NovaNifs {
         relaxed_instance: &RelaxedInstance,
         regular_instance: &Instance,
     ) -> Result<RelaxedInstance, NifsError> {
+        self.verify_with_challenge(key, shape, transcript, relaxed_instance, regular_instance)
+            .map(|(instance, _)| instance)
+    }
+
+    /// Replay one exact public fold and return both the resulting accumulator
+    /// and the canonical Fiat--Shamir challenge used by encrypted producers.
+    ///
+    /// Exposing the already-validated challenge here prevents Phase-II/III
+    /// implementations from inventing a parallel transcript that a Nova
+    /// settlement verifier cannot reproduce.
+    pub(super) fn verify_with_challenge(
+        &self,
+        key: &CommitmentKey,
+        shape: &Shape,
+        transcript: &mut VegaTranscriptV1,
+        relaxed_instance: &RelaxedInstance,
+        regular_instance: &Instance,
+    ) -> Result<(RelaxedInstance, Scalar), NifsError> {
         validate_public_inputs(
             key,
             shape,
@@ -165,12 +183,13 @@ impl NovaNifs {
         )?;
         transcript.absorb_commitment(b"comm_T", &self.cross_term_commitment)?;
         let challenge = transcript.squeeze(b"r")?;
-        fold_public_instances(
+        let folded = fold_public_instances(
             relaxed_instance,
             regular_instance,
             &self.cross_term_commitment,
             challenge,
-        )
+        )?;
+        Ok((folded, challenge))
     }
 }
 

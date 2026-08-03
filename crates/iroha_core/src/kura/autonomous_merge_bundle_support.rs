@@ -210,6 +210,184 @@ impl AutonomousLaneSlotRetirementPersistenceAuthorization {
     }
 }
 
+/// Exact durable Queue release phase observed by startup reconciliation.
+///
+/// This is deliberately process-local rather than a persistence layout. Queue
+/// owns the durable phase journal; Kura uses the typed observation only to
+/// select the one complete formal state compatible with its independently
+/// authenticated retirement and entrypoint-claim prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AutonomousLaneRetirementQueueSnapshotPhaseV1 {
+    /// Queue durably owns the ordered release barrier while the matching
+    /// reservations remain excluded from ordinary FIFO ownership.
+    Prepared,
+    /// Queue durably owns the release completion while FIFO restoration and
+    /// completion forgetting remain pending after restart.
+    Completed,
+}
+
+/// Immutable payload/committee identity paired with a signed lifecycle cursor.
+///
+/// The anchor is non-authorizing data extracted from Kura's exact durable
+/// payload. Startup Queue recovery must compare every field with the
+/// independently signature-validated lifecycle projection for the same
+/// reservation group; the retirement evidence alone does not replace that
+/// signed identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
+    origin_proposal_hash: Hash,
+    executable_payload_hash: Hash,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_count: u8,
+    producer_index: u16,
+    local_actor_index: u16,
+}
+
+impl AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
+    /// Construct exact immutable anchor facts for Queue adversarial tests.
+    ///
+    /// Production code can obtain this type only from Kura's authenticated
+    /// retirement snapshot. Keeping the test seam here preserves that opacity
+    /// while rejecting indices which would make actor projection shift outside
+    /// the bounded refinement width.
+    #[cfg(test)]
+    pub(crate) fn from_exact_parts_for_test(
+        origin_proposal_hash: Hash,
+        executable_payload_hash: Hash,
+        validator_set_hash_version: u16,
+        validator_set_hash: HashOf<Vec<PeerId>>,
+        validator_count: u8,
+        producer_index: u16,
+        local_actor_index: u16,
+    ) -> Result<Self, &'static str> {
+        if validator_count == 0
+            || validator_count > 128
+            || producer_index >= u16::from(validator_count)
+            || local_actor_index >= u16::from(validator_count)
+        {
+            return Err("retirement snapshot test anchor has out-of-bounds actor geometry");
+        }
+        Ok(Self {
+            origin_proposal_hash,
+            executable_payload_hash,
+            validator_set_hash_version,
+            validator_set_hash,
+            validator_count,
+            producer_index,
+            local_actor_index,
+        })
+    }
+
+    /// Hash of the immutable origin proposal authenticated by the payload.
+    #[must_use]
+    pub(crate) const fn origin_proposal_hash(&self) -> Hash {
+        self.origin_proposal_hash
+    }
+
+    /// Hash of the exact producer-authenticated executable payload.
+    #[must_use]
+    pub(crate) const fn executable_payload_hash(&self) -> Hash {
+        self.executable_payload_hash
+    }
+
+    /// Versioned ordered validator-set identity and bounded member count.
+    #[must_use]
+    pub(crate) const fn validator_set_identity(&self) -> (u16, HashOf<Vec<PeerId>>, u8) {
+        (
+            self.validator_set_hash_version,
+            self.validator_set_hash,
+            self.validator_count,
+        )
+    }
+
+    /// Producer and local Kura release actor indices in the ordered validator set.
+    #[must_use]
+    pub(crate) const fn actor_indices(&self) -> (u16, u16) {
+        (self.producer_index, self.local_actor_index)
+    }
+
+    /// One-hot producer and local Kura release actors used by the formal state.
+    #[must_use]
+    pub(crate) fn actor_projections(&self) -> (u128, u128) {
+        (
+            1_u128 << u32::from(self.producer_index),
+            1_u128 << u32::from(self.local_actor_index),
+        )
+    }
+}
+
+/// Opaque, move-only Kura proof for one release-barrier Queue snapshot group.
+///
+/// Only Kura's bounded, repair-disabled authenticated read can construct this
+/// value. It binds the exact payload, retirement, FIFO-ordered reservation
+/// group, Queue phase, committee anchor, and complete on-disk claim prefix to
+/// one valid composed first-release state. The startup planner may lend these
+/// immutable facts to Queue, but Queue must still pair them with the matching
+/// signed lifecycle cursor before action-25 recovery.
+#[must_use = "authenticated retirement snapshot evidence must be consumed by startup recovery"]
+pub(crate) struct AutonomousLaneRetirementSnapshotEvidenceV1 {
+    phase: AutonomousLaneRetirementQueueSnapshotPhaseV1,
+    reservation_group: LaneQueueReservationGroupBindingV1,
+    retirement_hash: Hash,
+    attempt_anchor: AutonomousLaneRetirementSnapshotAttemptAnchorV1,
+    recovered_state: ProductionInFlightFirstReleaseStateProjection,
+}
+
+impl AutonomousLaneRetirementSnapshotEvidenceV1 {
+    /// Construct exact opaque evidence parts for Queue adversarial tests.
+    ///
+    /// This does not emulate Kura authentication and is deliberately absent
+    /// from production builds. Tests use it only with an attempt anchor from
+    /// the bounded test constructor above.
+    #[cfg(test)]
+    pub(crate) fn from_exact_parts_for_test(
+        phase: AutonomousLaneRetirementQueueSnapshotPhaseV1,
+        reservation_group: LaneQueueReservationGroupBindingV1,
+        retirement_hash: Hash,
+        attempt_anchor: AutonomousLaneRetirementSnapshotAttemptAnchorV1,
+        recovered_state: ProductionInFlightFirstReleaseStateProjection,
+    ) -> Self {
+        Self {
+            phase,
+            reservation_group,
+            retirement_hash,
+            attempt_anchor,
+            recovered_state,
+        }
+    }
+
+    /// Durable Queue release phase against which this Kura proof was minted.
+    #[must_use]
+    pub(crate) const fn phase(&self) -> AutonomousLaneRetirementQueueSnapshotPhaseV1 {
+        self.phase
+    }
+
+    /// Complete FIFO-ordered reservation-group binding authenticated by Kura.
+    #[must_use]
+    pub(crate) const fn reservation_group(&self) -> LaneQueueReservationGroupBindingV1 {
+        self.reservation_group
+    }
+
+    /// Digest of the exact durable slot retirement.
+    #[must_use]
+    pub(crate) const fn retirement_hash(&self) -> Hash {
+        self.retirement_hash
+    }
+
+    /// Payload and committee facts which must match the signed lifecycle cursor.
+    #[must_use]
+    pub(crate) const fn attempt_anchor(&self) -> AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
+        self.attempt_anchor
+    }
+
+    /// Complete current formal state selected from Queue phase and Kura claims.
+    #[must_use]
+    pub(crate) const fn recovered_state(&self) -> ProductionInFlightFirstReleaseStateProjection {
+        self.recovered_state
+    }
+}
+
 /// Move-only authority for one exact ordered claim-prefix replacement.
 ///
 /// Claim recovery validates the whole on-disk group before constructing these
@@ -312,6 +490,10 @@ impl AutonomousLaneEntrypointClaimTransitionAuthorization {
 struct AutonomousLaneReleaseProjectionContext {
     validator_count: u8,
     validator_mask: u128,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    producer_index: u16,
+    actor_index: u16,
     producer: u128,
     actor: u128,
     payload_owners: u128,
@@ -350,6 +532,9 @@ impl AutonomousLaneReleaseProjectionContext {
             .iter()
             .position(|peer| peer == &payload.producer)
             .ok_or_else(|| "autonomous release producer is absent from its committee".to_owned())?;
+        let producer_index_u16 = u16::try_from(producer_index).map_err(|_| {
+            "autonomous release producer index exceeds the lifecycle width".to_owned()
+        })?;
         let producer = 1_u128
             .checked_shl(u32::try_from(producer_index).map_err(|_| {
                 "autonomous release producer index exceeds the refinement width".to_owned()
@@ -372,6 +557,8 @@ impl AutonomousLaneReleaseProjectionContext {
             .iter()
             .position(|peer| peer == actor_peer)
             .ok_or_else(|| "autonomous release actor is absent from its committee".to_owned())?;
+        let actor_index_u16 = u16::try_from(actor_index)
+            .map_err(|_| "autonomous release actor index exceeds the lifecycle width".to_owned())?;
         let actor = 1_u128
             .checked_shl(u32::try_from(actor_index).map_err(|_| {
                 "autonomous release actor index exceeds the refinement width".to_owned()
@@ -405,11 +592,75 @@ impl AutonomousLaneReleaseProjectionContext {
         Ok(Self {
             validator_count,
             validator_mask,
+            validator_set_hash_version: descriptor.validator_set_hash_version,
+            validator_set_hash: descriptor.validator_set_hash,
+            producer_index: producer_index_u16,
+            actor_index: actor_index_u16,
             producer,
             actor,
             payload_owners,
             reservation_group,
             retirement_hash,
+        })
+    }
+
+    fn retirement_snapshot_evidence(
+        self,
+        payload: &LaneExecutablePayloadV1,
+        phase: AutonomousLaneRetirementQueueSnapshotPhaseV1,
+        pending_prefix: u64,
+        released_prefix: u64,
+    ) -> std::result::Result<AutonomousLaneRetirementSnapshotEvidenceV1, String> {
+        let selected_count = self.reservation_group.reservation_count;
+        if pending_prefix != selected_count || released_prefix > pending_prefix {
+            return Err(
+                "autonomous retirement snapshot has a noncanonical claim prefix".to_owned(),
+            );
+        }
+        let reservation_state = match phase {
+            AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared => {
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED
+            }
+            AutonomousLaneRetirementQueueSnapshotPhaseV1::Completed => {
+                if released_prefix != selected_count {
+                    return Err(
+                        "completed Queue release requires every exact claim to be Released"
+                            .to_owned(),
+                    );
+                }
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED
+            }
+        };
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(self.reservation_group);
+        let recovered_state = self.state_with_fifo(
+            binding_a,
+            reservation_state,
+            true,
+            pending_prefix,
+            released_prefix,
+            false,
+        );
+        if !production_in_flight_first_release_state_kernel(recovered_state) {
+            return Err(
+                "autonomous retirement snapshot failed the composed first-release state gate"
+                    .to_owned(),
+            );
+        }
+        Ok(AutonomousLaneRetirementSnapshotEvidenceV1 {
+            phase,
+            reservation_group: self.reservation_group,
+            retirement_hash: self.retirement_hash,
+            attempt_anchor: AutonomousLaneRetirementSnapshotAttemptAnchorV1 {
+                origin_proposal_hash: payload.origin_proposal.proposal_hash,
+                executable_payload_hash: payload.payload_hash,
+                validator_set_hash_version: self.validator_set_hash_version,
+                validator_set_hash: self.validator_set_hash,
+                validator_count: self.validator_count,
+                producer_index: self.producer_index,
+                local_actor_index: self.actor_index,
+            },
+            recovered_state,
         })
     }
 
@@ -1826,7 +2077,7 @@ impl Kura {
                 lane_block_height,
                 expected_chain_id_hash,
                 expected_epoch,
-                false,
+                None,
             )
             .map_err(|_| "autonomous merge payload failed repair-disabled readback")?
             .ok_or("autonomous lane merge payload is unavailable")?;
@@ -2324,6 +2575,7 @@ impl Kura {
                     data_path,
                 ));
             }
+            self.consume_autonomous_bundle_pair_capacity(source)?;
             return Ok(());
         }
         drop(existing_pair);
@@ -2387,6 +2639,12 @@ impl Kura {
 
         let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
+        #[cfg(test)]
+        if FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_APPEND_DATA_SYNC
+            .with(|flag| flag.replace(false))
+        {
+            FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC.with(|flag| flag.set(true));
+        }
         if !Self::append_indexed_progress_sidecar(
             &data_path,
             &index_path,
@@ -2430,6 +2688,14 @@ impl Kura {
         let after_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
         self.update_disk_usage_delta(before_bytes, after_bytes);
         accounting_mutation.finish();
+        #[cfg(test)]
+        if FAIL_AFTER_NEXT_AUTONOMOUS_MERGE_BUNDLE_PAIR.with(|flag| flag.replace(false)) {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "injected failure after autonomous merge bundle pair durability",
+            ));
+        }
+        self.consume_autonomous_bundle_pair_capacity(source)?;
         self.note_committed_lane_status_change();
         Ok(())
     }
@@ -2680,6 +2946,28 @@ impl Kura {
                             "persisted autonomous merge bundle differs from its certified slot or execution input",
                         ));
                     }
+                    let published = self
+                        .durable_autonomous_lane_merge_source_under_prune_guard(
+                            entry.lane_id,
+                            lane_block_height,
+                            availability.body.chain_id_hash,
+                            availability.body.epoch,
+                            None,
+                            true,
+                        )
+                        .map_err(|message| {
+                            Self::invalid_lane_artifact_error(
+                                self.store_root.clone(),
+                                format!(
+                                    "persisted autonomous merge bundle startup readback failed: {message}"
+                                ),
+                            )
+                        })?;
+                    self.ensure_certified_bundle_capacity_reservation_under_prune_guard(
+                        &artifact,
+                        &published,
+                        None,
+                    )?;
                     continue;
                 }
                 let source = self
@@ -2727,7 +3015,18 @@ impl Kura {
                         "startup autonomous merge bundle changed during durable publication",
                     ));
                 }
+                self.ensure_certified_bundle_capacity_reservation_under_prune_guard(
+                    &artifact,
+                    &published,
+                    None,
+                )?;
             }
+        }
+        if self.certified_bundle_capacity_reserved_bytes()? != 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous merge bundle startup repair left an outstanding certified/bundle reservation",
+            ));
         }
         Ok(())
     }

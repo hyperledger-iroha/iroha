@@ -18,12 +18,11 @@ mod kagemusha_v4_topup_provenance_tests {
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
         let ordinary_writes_root = Hash::new([seed, 3]);
         let topup_anchor_root = Hash::new([seed, 4]);
-        ExecutionCommitment::new_without_merge_carrier(
+        ExecutionCommitment::new(
             Hash::new([seed, 1]),
             ExecutionCommitment::topup_post_state_root(1, ordinary_writes_root, topup_anchor_root),
             ordinary_writes_root,
             Some(topup_anchor_root),
-            1,
             1,
             Hash::new([seed, 5]),
         )
@@ -104,12 +103,12 @@ mod kagemusha_v4_topup_provenance_tests {
                     nexus_amx_context_hash: Hash::new([seed, 11]),
                     execution_policy_hash: Hash::new([seed, 12]),
                     da_layout: DataAvailabilityLayout {
-                        encoding: crate::block::consensus_v2::PayloadEncoding::Plain,
+                        encoding: crate::block::consensus_v2::PayloadEncoding::ReedSolomon16,
                         chunk_size_bytes: 1024,
-                        data_shards: 0,
-                        parity_shards: 0,
+                        data_shards: 1,
+                        parity_shards: 1,
                         max_payload_size_bytes: 4096,
-                        max_chunk_count: 4,
+                        max_chunk_count: 8,
                     },
                     leader_seed: [seed.wrapping_add(12); 32],
                 },
@@ -129,7 +128,7 @@ mod kagemusha_v4_topup_provenance_tests {
 
     fn fixture_with_seeds(seeds: &[u8]) -> Fixture {
         let chain_id = ChainId::from("kagemusha-provenance-test-chain");
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("test domain"),
             "rose".parse().expect("test asset name"),
         );
@@ -275,7 +274,7 @@ mod kagemusha_v4_topup_provenance_tests {
         );
 
         let mut wrong_asset = fixture.statement.clone();
-        wrong_asset.asset = AssetDefinitionId::new(
+        wrong_asset.asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("test domain"),
             "wrong".parse().expect("test asset name"),
         );
@@ -585,6 +584,7 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV4 {
         }
     }
 }
+
 
 impl KagemushaRecursiveSpendRedeemChangeBranchV4 {
     /// Validate the sole continuing child of a partial redemption.

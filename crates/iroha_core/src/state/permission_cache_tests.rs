@@ -424,7 +424,8 @@ fn permission_cache_rebuilds_after_restart_impl() {
                 iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(owner.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         )))
         .append_instruction(Grant::account_permission(CanManageRoles, owner.clone()));
     let genesis_block = genesis_builder

@@ -303,7 +303,7 @@ pub struct NposGenesisParams {
     pub vrf_commit_window_blocks: u64,
     /// VRF reveal window length in blocks.
     pub vrf_reveal_window_blocks: u64,
-    /// Maximum validators to elect for the next epoch (0 = unlimited).
+    /// Exact bounded `3f + 1` ceiling for the next epoch committee.
     pub max_validators: u32,
     /// Minimum self-bond required for validator eligibility.
     pub min_self_bond: Quantity,
@@ -338,12 +338,18 @@ impl NposGenesisParams {
         if self.vrf_commit_window_blocks == 0 || self.vrf_reveal_window_blocks == 0 {
             return Err("VRF commit and reveal windows must be greater than zero");
         }
+        if usize::try_from(self.max_validators)
+            .ok()
+            .is_none_or(|count| !super::consensus_v2::is_valid_committee_size(count))
+        {
+            return Err("max_validators must be a bounded 3f + 1 committee size (4..=31)");
+        }
         if self
             .vrf_commit_window_blocks
             .checked_add(self.vrf_reveal_window_blocks)
-            .is_none_or(|total| total > self.epoch_length_blocks.get())
+            .is_none_or(|total| total >= self.epoch_length_blocks.get())
         {
-            return Err("VRF commit and reveal windows must fit within the epoch");
+            return Err("VRF reveal window must close before the epoch boundary");
         }
         if self.min_self_bond.is_zero() || self.min_nomination_bond.is_zero() {
             return Err("NPoS minimum bond values must be greater than zero");
@@ -5456,7 +5462,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, KeyPair, MerkleProof, MerkleTree, SignatureOf};
+    use iroha_crypto::{
+        Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommitment, SignatureOf,
+    };
     use iroha_primitives::{
         bigint::BigInt,
         numeric::{Numeric, Quantity},
@@ -5830,6 +5838,36 @@ mod tests {
             NposGenesisParams::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as an NPoS minimum bond"
         );
+    }
+
+    #[test]
+    fn npos_genesis_reveal_window_must_close_before_boundary() {
+        let params = NposGenesisParams {
+            epoch_length_blocks: NonZeroU64::new(4).expect("non-zero epoch"),
+            epoch_seed: [1; 32],
+            vrf_commit_window_blocks: 2,
+            vrf_reveal_window_blocks: 2,
+            max_validators: 4,
+            min_self_bond: Quantity::one(),
+            min_nomination_bond: Quantity::one(),
+            max_nominator_concentration_pct: 100,
+            seat_band_pct: 10,
+            max_entity_correlation_pct: 100,
+            finality_margin_blocks: 1,
+            evidence_horizon_blocks: 10,
+            activation_lag_blocks: 1,
+            slashing_delay_blocks: 1,
+        };
+        assert_eq!(
+            params.validate(),
+            Err("VRF reveal window must close before the epoch boundary")
+        );
+
+        let mut valid = params;
+        valid.epoch_length_blocks = NonZeroU64::new(5).expect("non-zero epoch");
+        valid
+            .validate()
+            .expect("one finalized pre-boundary block is sufficient");
     }
 
     #[test]
@@ -6238,10 +6276,14 @@ mod tests {
             HashOf::<MerkleTree<NativeAmxApplicationManifestLeafV1>>::from_untyped_unchecked(
                 manifest_root,
             );
+        let manifest_leaf_count =
+            NonZeroU64::new(u64::from(execution.native_amx_application_manifest_count))
+                .ok_or("manifest commitment leaf count is zero")?;
+        let manifest_commitment = MerkleTreeCommitment::new(typed_root, manifest_leaf_count);
         if Hash::from(leaf_hash) != advertised_leaf_hash
             || manifest_root != execution.native_amx_application_manifest_root
             || leaf.executed_block_wire_hash != execution.executed_block_wire_hash
-            || !proof.clone().verify(&leaf_hash, &typed_root, 32)
+            || !proof.verify(&leaf_hash, &manifest_commitment)
         {
             return Err("manifest proof does not authenticate the leaf");
         }
@@ -6606,11 +6648,16 @@ mod tests {
 
     #[test]
     fn native_amx_application_evidence_negative_corpus_fails_closed() {
+        const EXPECTED_APPLICATION_EVIDENCE_CONTROLS: usize = 8;
+
         let canonical = grouped_native_amx_fixture_document();
+        validate_grouped_native_amx_application_evidence(&canonical)
+            .expect("the canonical application evidence must be valid before mutation");
         let controls = canonical
             .get("negative_controls")
             .and_then(norito::json::Value::as_array)
             .expect("fixture contains negative controls");
+        let mut evaluated = 0_usize;
         for control in controls {
             if control
                 .get("validator")
@@ -6619,6 +6666,7 @@ mod tests {
             {
                 continue;
             }
+            evaluated = evaluated.saturating_add(1);
             let id = control
                 .get("id")
                 .and_then(norito::json::Value::as_str)
@@ -6636,6 +6684,29 @@ mod tests {
                 "application evidence negative control `{id}` must fail closed"
             );
         }
+        assert_eq!(
+            evaluated, EXPECTED_APPLICATION_EVIDENCE_CONTROLS,
+            "Rust must execute every declared application-evidence negative control"
+        );
+    }
+
+    #[test]
+    fn native_amx_application_evidence_rejects_coherently_wrong_manifest_count() {
+        let mut document = grouped_native_amx_fixture_document();
+        *document
+            .pointer_mut(
+                "/golden/application_evidence/execution_commitment/native_amx_application_manifest_count",
+            )
+            .expect("execution manifest count exists") = norito::json::Value::from(2_u64);
+        *document
+            .pointer_mut("/golden/application_evidence/manifest_artifacts/0/manifest_leaf_count")
+            .expect("artifact manifest count exists") = norito::json::Value::from(2_u64);
+
+        assert_eq!(
+            validate_grouped_native_amx_application_evidence(&document),
+            Err("fixture must contain one separate-participant manifest"),
+            "the same singleton root and proof must not be rebound to a coherent wrong count"
+        );
     }
 
     #[test]
@@ -8194,115 +8265,7 @@ mod tests {
         assert_eq!(used, encoded.len());
     }
 
-    #[test]
-    fn quorum_policy_enforces_strict_supermajority_boundaries() {
-        assert_eq!(QuorumPolicy::permissioned_threshold(1), Some(1));
-        assert_eq!(QuorumPolicy::permissioned_threshold(2), Some(2));
-        assert_eq!(QuorumPolicy::permissioned_threshold(3), Some(3));
-        assert_eq!(QuorumPolicy::permissioned_threshold(4), Some(3));
-        assert_eq!(QuorumPolicy::permissioned_threshold(5), Some(4));
-        assert_eq!(QuorumPolicy::permissioned_threshold(6), Some(5));
-        assert_eq!(QuorumPolicy::permissioned_threshold(7), Some(5));
-        assert_eq!(QuorumPolicy::permissioned_threshold(8), Some(6));
-        assert_eq!(QuorumPolicy::permissioned_threshold(9), Some(7));
-        assert_eq!(
-            QuorumPolicy::permissioned_threshold(u32::MAX),
-            Some(2_863_311_531)
-        );
-        assert_eq!(QuorumPolicy::permissioned_threshold(0), None);
-        assert!(!QuorumPolicy::PermissionedCount(0).is_satisfied_by_count(u32::MAX));
-
-        let count = QuorumPolicy::PermissionedCount(5);
-        assert!(!count.is_satisfied_by_count(3));
-        assert!(count.is_satisfied_by_count(4));
-        assert!(!count.is_satisfied_by_count(6));
-        assert!(!count.is_satisfied_by_stake(Some(Quantity::from(4_u64))));
-        for validators in 1..=3 {
-            let policy = QuorumPolicy::PermissionedCount(validators);
-            assert!(!policy.is_satisfied_by_count(validators - 1));
-            assert!(policy.is_satisfied_by_count(validators));
-            assert!(!policy.is_satisfied_by_count(validators + 1));
-        }
-        let max_count = QuorumPolicy::PermissionedCount(u32::MAX);
-        assert!(!max_count.is_satisfied_by_count(2_863_311_530));
-        assert!(max_count.is_satisfied_by_count(2_863_311_531));
-
-        let stake = QuorumPolicy::NposStake(Quantity::from(3_u64));
-        assert!(!stake.is_satisfied_by_count(3));
-        assert!(!stake.is_satisfied_by_stake(None));
-        assert!(!stake.is_satisfied_by_stake(Some(Quantity::from(2_u64))));
-        assert!(!stake.is_satisfied_by_stake(Some(Quantity::from(4_u64))));
-        assert!(stake.is_satisfied_by_stake(Some("2.01".parse().expect("quantity"))));
-
-        let fractional_stake = QuorumPolicy::NposStake("1.5".parse().expect("quantity"));
-        assert!(!fractional_stake.is_satisfied_by_stake(Some("1.0".parse().expect("quantity"))));
-        assert!(fractional_stake.is_satisfied_by_stake(Some("1.01".parse().expect("quantity"))));
-
-        let tiny_fractional_stake = QuorumPolicy::NposStake("0.03".parse().expect("quantity"));
-        assert!(
-            !tiny_fractional_stake.is_satisfied_by_stake(Some("0.02".parse().expect("quantity")))
-        );
-        assert!(tiny_fractional_stake.is_satisfied_by_stake(Some(
-            "0.0200000000000000000000000001".parse().expect("quantity")
-        )));
-
-        let zero_total = QuorumPolicy::NposStake(Quantity::zero());
-        assert!(!zero_total.is_satisfied_by_stake(Some(Quantity::from(1_u64))));
-
-        let max_total = max_positive_quantity();
-        let boundary_stake = QuorumPolicy::NposStake(max_total.clone());
-        assert!(boundary_stake.is_satisfied_by_stake(Some(max_total)));
-    }
-
-    #[test]
-    fn qc_vote_roundtrip_codec_and_decode_from_slice() {
-        let vote = QcVote {
-            phase: CertPhase::Commit,
-            block_hash: dummy_hash(),
-            parent_state_root: Hash::new(b"parent_root"),
-            post_state_root: Hash::new(b"post_root"),
-            height: 7,
-            view: 2,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer: 3,
-            bls_sig: vec![0x01, 0x02],
-        };
-        let bytes = vote.encode();
-        let dec = QcVote::decode(&mut &bytes[..]).expect("decode qc vote");
-        assert_eq!(vote, dec);
-        let (slice_dec, used) =
-            QcVote::decode_from_slice(&bytes).expect("decode_from_slice qc vote");
-        assert_eq!(vote, slice_dec);
-        assert_eq!(used, bytes.len());
-    }
-
-    #[test]
-    fn vrf_commit_roundtrip_codec() {
-        let commit = sample_vrf_commit();
-        let bytes = commit.encode();
-        let dec = VrfCommit::decode(&mut &bytes[..]).expect("decode vrf commit");
-        assert_eq!(commit, dec);
-    }
-
-    #[test]
-    fn vrf_reveal_roundtrip_codec() {
-        let reveal = sample_vrf_reveal();
-        let bytes = reveal.encode();
-        let dec = VrfReveal::decode(&mut &bytes[..]).expect("decode vrf reveal");
-        assert_eq!(reveal, dec);
-    }
-
-    #[test]
-    fn reconfig_roundtrip_codec() {
-        let reconfig = sample_reconfig();
-        let bytes = reconfig.encode();
-        let dec = Reconfig::decode(&mut &bytes[..]).expect("decode reconfig");
-        assert_eq!(reconfig, dec);
-    }
-
+    include!("consensus/quorum_policy_tests.rs");
     include!("consensus/rbc_roundtrip_tail_tests.rs");
     include!("consensus/runtime_diagnostics_tests.rs");
     include!("consensus/npos_diagnostics_tests.rs");

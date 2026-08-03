@@ -22,7 +22,8 @@ AsyncCandidateProducerContinuationExactOwner(
     /\ record.phase \in AsyncCandidateServiceTrackedKinds
     /\ (record.phase \in {"BeginDecision", "PersistDecision"}
           => record.node = target)
-    /\ record.identity.payload.causalOrigin = record.causalOrigin
+    /\ record.identity = AsyncCandidateServiceIdentity(record.candidate)
+    /\ record.causalOrigin = record.candidate.causalOrigin
 
 THEOREM AsyncCandidateProducerContinuationConstructorIsTyped ==
   \A candidate \in AsyncCandidateSet,
@@ -346,16 +347,16 @@ BY AsyncCandidateLifecycleDeparturesThisStepIsSingleton,
        AsyncCandidateServiceLifecycleInvariant
 
 THEOREM AsyncCandidateProducerContinuationTerminalRecordIsFixed ==
-  \A state,
-     record \in AsyncCandidateProducerContinuationRecordSet:
+  \A state:
+    \A record \in AsyncCandidateProducerContinuationRecordSet:
     record.status = "Terminal"
       => AsyncCandidateProducerContinuationRecordAfterStep(
            state, record) = record
 BY SMT DEF AsyncCandidateProducerContinuationRecordAfterStep
 
 THEOREM AsyncCandidateProducerContinuationStatusIsMonotone ==
-  \A state,
-     record \in AsyncCandidateProducerContinuationRecordSet:
+  \A state:
+    \A record \in AsyncCandidateProducerContinuationRecordSet:
     AsyncCandidateProducerContinuationStatusRank(
       (AsyncCandidateProducerContinuationRecordAfterStep(
          state, record)).status)
@@ -365,8 +366,8 @@ BY SMT
        AsyncCandidateProducerContinuationStatusRank
 
 THEOREM AsyncCandidateProducerContinuationResolvedReservedRankStrictlyDrops ==
-  \A state,
-     record \in AsyncCandidateProducerContinuationRecordSet:
+  \A state:
+    \A record \in AsyncCandidateProducerContinuationRecordSet:
     /\ AsyncCandidateProducerContinuationSelectedForResolution(record)
     /\ record.status = "Reserved"
     /\ \/ AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn(
@@ -386,8 +387,8 @@ BY AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor,
        AsyncCandidateProducerContinuationStatusRank
 
 THEOREM AsyncCandidateProducerContinuationMaterializedIsOneStep ==
-  \A state,
-     record \in AsyncCandidateProducerContinuationRecordSet:
+  \A state:
+    \A record \in AsyncCandidateProducerContinuationRecordSet:
     /\ AsyncCandidateProducerContinuationSelectedForResolution(record)
     /\ record.status = "Materialized"
       => (AsyncCandidateProducerContinuationRecordAfterStep(
@@ -395,8 +396,8 @@ THEOREM AsyncCandidateProducerContinuationMaterializedIsOneStep ==
 BY SMT DEF AsyncCandidateProducerContinuationRecordAfterStep
 
 THEOREM AsyncCandidateProducerContinuationUnselectedActiveRecordIsFixed ==
-  \A state,
-     record \in AsyncCandidateProducerContinuationRecordSet:
+  \A state:
+    \A record \in AsyncCandidateProducerContinuationRecordSet:
     /\ record.status \in {"Reserved", "Materialized"}
     /\ ~AsyncCandidateProducerContinuationTerminalAfter(record)
     /\ ~AsyncCandidateProducerContinuationSelectedForResolution(record)
@@ -481,7 +482,7 @@ THEOREM AsyncCandidateProducerContinuationGstExcludesResetReplay ==
 BY DEF PreGstResponsiveRestart, PreGstResponsiveReplay
 
 THEOREM ConditionalTransportContinuationReadyEnablesFairService ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in AsyncVotersAt(initialContext):
     /\ gst
     /\ AsyncCandidateProducerContinuationResolutionReady(node)
@@ -501,7 +502,7 @@ BY ExpandENABLED, IsaT(300)
        AsyncDeferredVars, vars
 
 THEOREM VolatileBodyContinuationReadyEnablesFairService ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in AsyncVotersAt(initialContext):
     /\ gst
     /\ AsyncCandidateProducerContinuationResolutionReady(node)
@@ -521,7 +522,7 @@ BY ExpandENABLED, IsaT(300)
        AsyncDeferredVars, vars
 
 THEOREM LocalContinuationReadyEnablesFairResolution ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in AsyncVotersAt(initialContext):
     /\ gst
     /\ AsyncCandidateProducerContinuationResolutionReady(node)
@@ -691,10 +692,11 @@ AsyncCandidateProducerContinuationFrozenPredecessorOrigins(
         AsyncCandidateProducerContinuationTargetPhysicalCut(
           node, targetOrdinal)
   IN {record.origin:
-        record \in AsyncCandidateLifecycleAdmissions,
-        /\ record.node = node
-        /\ record.ordinal <= targetOrdinal
-        /\ record.sourcePhysicalOrdinal < targetPhysicalCut}
+        record \in
+          {admission \in AsyncCandidateLifecycleAdmissions:
+             /\ admission.node = node
+             /\ admission.ordinal <= targetOrdinal
+             /\ admission.sourcePhysicalOrdinal < targetPhysicalCut}}
 
 AsyncCandidateProducerContinuationFrozenCausalCandidates(
     node, targetOrdinal) ==
@@ -810,11 +812,12 @@ AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates(
 AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
     node, targetOrdinal, physicalCut) ==
   {AsyncLeaderWireRuntimeCandidate(record.item):
-     record \in asyncLeaderWireLifecycles,
-     /\ record.recipient = node
-     /\ record.schedulerOrdinal < targetOrdinal
-     /\ AsyncLeaderWireLifecycleActive(record)
-     /\ record.physicalAdmissionOrdinal < physicalCut}
+     record \in
+       {owned \in asyncLeaderWireLifecycles:
+          /\ owned.recipient = node
+          /\ owned.schedulerOrdinal < targetOrdinal
+          /\ AsyncLeaderWireLifecycleActive(owned)
+          /\ owned.physicalAdmissionOrdinal < physicalCut}}
 
 AsyncCandidateProducerContinuationFrozenOrdinaryIngressCandidates(
     node, targetOrdinal) ==
@@ -823,11 +826,12 @@ AsyncCandidateProducerContinuationFrozenOrdinaryIngressCandidates(
           node, targetOrdinal)
   IN {DeliveryCandidate(carrier.item):
         carrier \in
-          asyncControlServiceState.ordinaryIngressCarrierEvidence,
-        /\ carrier.node = node
-        /\ carrier.status = "Ingress"
-        /\ carrier.schedulerOrdinal < targetOrdinal
-        /\ carrier.physicalOrdinal < targetPhysicalCut}
+          {owned \in
+             asyncControlServiceState.ordinaryIngressCarrierEvidence:
+             /\ owned.node = node
+             /\ owned.status = "Ingress"
+             /\ owned.schedulerOrdinal < targetOrdinal
+             /\ owned.physicalOrdinal < targetPhysicalCut}}
 
 AsyncCandidateProducerContinuationFrozenCandidateOwners(
     node, targetOrdinal) ==
@@ -976,7 +980,7 @@ AsyncCandidateProducerContinuationFrozenPrefixRank(
     <<AsyncCandidateProducerContinuationFrozenServeWorkBudget(
         node, targetOrdinal),
       AsyncCandidateProducerContinuationFrozenServeReachDebt(
-        node, targetOrdinal)>>>
+        node, targetOrdinal)>>>>
 
 AsyncCandidateProducerContinuationFrozenPrefixRankCarrier ==
   AsyncCausalEpisodeStructuralRankCarrier
@@ -1193,7 +1197,7 @@ AsyncCandidateProducerContinuationFrozenSourcePrefixRank(
   <<AsyncCandidateProducerContinuationFrozenSourceProducerBudget(
        node, frozenCandidateOrigins, frozenContinuationSources),
     <<AsyncFrozenServeWorkBudget(node, frozenServeSources),
-      AsyncFrozenServeReachDebt(node, frozenServeSources)>>>
+      AsyncFrozenServeReachDebt(node, frozenServeSources)>>>>
 
 (***************************************************************************
 Frozen shared ingress barrier (leader-wire plus ordinary aggregate carriers).
@@ -2648,7 +2652,7 @@ AsyncCandidateProducerContinuationTargetStatusExit(identity, status) ==
 
 THEOREM CandidateProducerContinuationTargetPhysicalCutIsStableUntilStatusExit ==
   \A node \in ValidatorIds,
-     identity,
+     identity \in AsyncCandidateServiceIdentities,
      targetOrdinal \in Nat \ {0},
      targetStage \in AsyncCandidateServiceStageClasses,
      status \in {"Reserved", "Materialized"}:
@@ -2755,8 +2759,8 @@ BY HistoricalCandidateProducerContinuationNonreadyTurnUsesLocalReplay,
        AsyncControlServiceSlotTransition
 
 THEOREM HistoricalCandidateProducerContinuationReadyTurnConsumesExactStage ==
-  \A state,
-     record \in AsyncCandidateProducerContinuationRecordSet:
+  \A state:
+    \A record \in AsyncCandidateProducerContinuationRecordSet:
     /\ record.status \in {"Reserved", "Materialized"}
     /\ AsyncCandidateProducerContinuationSelectedForRunnerResolution(
          record)
@@ -2826,12 +2830,12 @@ AsyncCandidateProducerContinuationPrefixDescentGoal(
          node, identity, targetOrdinal, targetStage, status, lower)
 
 THEOREM CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive ==
-  \A node \in ValidatorIds,
-     identity,
-     targetOrdinal \in Nat \ {0},
-     targetStage \in AsyncCandidateServiceStageClasses,
-     status \in {"Reserved", "Materialized"},
-     budget:
+  \A budget:
+    \A node \in ValidatorIds,
+       identity \in AsyncCandidateServiceIdentities,
+       targetOrdinal \in Nat \ {0},
+       targetStage \in AsyncCandidateServiceStageClasses,
+       status \in {"Reserved", "Materialized"}:
     /\ AsyncControlServiceStateTypeInvariant
     /\ AsyncCandidateProducerContinuationFrozenPrefixAtBudget(
          node, identity, targetOrdinal, targetStage, status, budget)
@@ -2875,12 +2879,12 @@ BY AsyncCausalRemainingWorkWeightIsPositive,
        AsyncCandidateProducerContinuations
 
 THEOREM CandidateProducerContinuationFrozenOriginsCannotReplenish ==
-  \A node \in ValidatorIds,
-     identity,
-     targetOrdinal \in Nat \ {0},
-     targetStage \in AsyncCandidateServiceStageClasses,
-     status \in {"Reserved", "Materialized"},
-     budget:
+  \A budget:
+    \A node \in ValidatorIds,
+       identity \in AsyncCandidateServiceIdentities,
+       targetOrdinal \in Nat \ {0},
+       targetStage \in AsyncCandidateServiceStageClasses,
+       status \in {"Reserved", "Materialized"}:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
@@ -2913,7 +2917,7 @@ BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
 
 THEOREM CandidateProducerContinuationFrozenPrefixStepCannotReplenish ==
   \A node \in ValidatorIds,
-     identity,
+     identity \in AsyncCandidateServiceIdentities,
      targetOrdinal \in Nat \ {0},
      targetStage \in AsyncCandidateServiceStageClasses,
      status \in {"Reserved", "Materialized"},
@@ -3202,7 +3206,7 @@ BY ExternalContinuationFairServiceStrictlyDropsStatusRank,
 
 THEOREM CandidateProducerContinuationFairResolutionStrictlyDescendsFrozenPrefix ==
   \A node \in ValidatorIds,
-     identity,
+     identity \in AsyncCandidateServiceIdentities,
      targetOrdinal \in Nat \ {0},
      targetStage \in AsyncCandidateServiceStageClasses,
      status \in {"Reserved", "Materialized"},
@@ -3271,7 +3275,7 @@ AsyncCandidateProducerContinuationFrozenPrefixDescentProperty(
     specification, initialContext) ==
   specification
     => \A node \in AsyncVotersAt(initialContext),
-          identity,
+          identity \in AsyncCandidateServiceIdentities,
           targetOrdinal \in Nat \ {0},
           targetStage \in AsyncCandidateServiceStageClasses,
           status \in {"Reserved", "Materialized"},
@@ -3287,7 +3291,7 @@ AsyncCandidateProducerContinuationFrozenPrefixClosureProperty(
     specification, initialContext) ==
   specification
     => \A node \in AsyncVotersAt(initialContext),
-          identity,
+          identity \in AsyncCandidateServiceIdentities,
           targetOrdinal \in Nat \ {0},
           targetStage \in AsyncCandidateServiceStageClasses,
           status \in {"Reserved", "Materialized"},
@@ -3351,8 +3355,8 @@ BY Isa
        AsyncCandidateProducerContinuationRecordsForIdentityIn
 
 THEOREM AsyncCandidateProducerContinuationReclamationPreservesIdentity ==
-  \A state,
-     record \in state.producerContinuations:
+  \A state:
+    \A record \in state.producerContinuations:
     ~AsyncNodeHasDecisionAfter(record.node)
       => AsyncCandidateProducerContinuationRecordAfterStep(state, record)
            \in (AsyncCandidateServiceStateAfterReclamation(state))
@@ -3447,8 +3451,8 @@ BY AsyncCandidateProducerContinuationResetPreservesExactReservation,
    DEF AsyncCandidateProducerSemanticHandoffReservationToken
 
 THEOREM AsyncCandidateProducerContinuationReplacementRetiresOnlyTerminal ==
-  \A state, candidate,
-     record \in state.producerContinuations:
+  \A state, candidate:
+    \A record \in state.producerContinuations:
     /\ AsyncCandidateProducerContinuationSourceAfter(candidate)
     /\ AsyncCandidateLifecycleRecordedIn(
          state, candidate.node, candidate.causalOrigin)
@@ -3504,21 +3508,21 @@ THEOREM AsyncCandidateProducerContinuationRolloverOnlyStartsEmpty ==
 BY DEF AsyncTransportInit, AsyncCandidateProducerContinuations
 
 THEOREM LocalCandidateProducerContinuationResolutionUsesReviewedFairAction ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in AsyncVotersAt(initialContext):
     PostGstResolveLocalCandidateProducerContinuation(node)
       => AsyncFairActionAt(initialContext)
 BY DEF AsyncFairActionAt
 
 THEOREM ConditionalTransportProducerContinuationServiceUsesReviewedFairAction ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in AsyncVotersAt(initialContext):
     PostGstServiceConditionalTransportProducerContinuation(node)
       => AsyncFairActionAt(initialContext)
 BY DEF AsyncFairActionAt
 
 THEOREM VolatileBodyProducerContinuationServiceUsesReviewedFairAction ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in AsyncVotersAt(initialContext):
     PostGstServiceVolatileBodyProducerContinuation(node)
       => AsyncFairActionAt(initialContext)

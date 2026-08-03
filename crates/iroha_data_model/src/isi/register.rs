@@ -593,7 +593,7 @@ mod tests {
     }
 
     fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(domain_id(), "rose".parse().expect("asset name"))
+        AssetDefinitionId::derive_from_components(domain_id(), "rose".parse().expect("asset name"))
     }
 
     fn nft_id() -> NftId {
@@ -662,6 +662,9 @@ mod tests {
         assert_slice_roundtrip(Register::account(Account::new(account.clone())));
         assert_slice_roundtrip(Register::asset_definition(AssetDefinition::numeric(
             asset_definition_id(),
+            "rose".to_owned(),
+            crate::asset::AssetBalancePolicy::Global,
+            None,
         )));
         assert_slice_roundtrip(Register::nft(Nft::new(nft_id(), Metadata::default())));
         assert_slice_roundtrip(Register::role(Role::new(role_id(), account.clone())));
@@ -688,6 +691,9 @@ mod tests {
             RegisterBox::Account(Register::account(Account::new(account.clone()))),
             RegisterBox::AssetDefinition(Register::asset_definition(AssetDefinition::numeric(
                 asset_definition_id(),
+                "rose".to_owned(),
+                crate::asset::AssetBalancePolicy::Global,
+                None,
             ))),
             RegisterBox::Nft(Register::nft(Nft::new(nft_id(), Metadata::default()))),
             RegisterBox::Role(Register::role(Role::new(role_id(), account.clone()))),

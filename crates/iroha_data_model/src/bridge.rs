@@ -996,8 +996,8 @@ pub enum BridgeFinalityBundleVerifyError {
 ///
 /// The first proof must match an explicitly trusted Sumeragi-v2 height-context
 /// id. Every later proof must be the immediate, cryptographically linked
-/// successor of the last accepted artifact. This preserves count-and-power
-/// quorum, epoch transitions, and parent finality without trusting a
+/// successor of the last accepted artifact. This preserves the exact
+/// equal-vote quorum, epoch transitions, and parent finality without trusting a
 /// proof-controlled roster.
 #[derive(Debug, Clone)]
 pub struct BridgeFinalityVerifier {
@@ -1273,7 +1273,7 @@ mod tests {
     }
 
     fn make_v2_fixture(chain_id: &str) -> V2Fixture {
-        make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], false)
+        make_v2_fixture_config(chain_id, &[1, 1, 1, 1], &[0, 1, 2], false)
     }
 
     fn make_v2_fixture_with_quorum(
@@ -1285,7 +1285,7 @@ mod tests {
     }
 
     fn make_boundary_v2_fixture(chain_id: &str) -> V2Fixture {
-        make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], true)
+        make_v2_fixture_config(chain_id, &[1, 1, 1, 1], &[0, 1, 2], true)
     }
 
     fn attestation_for_fixture(fixture: &V2Fixture) -> BridgeFinalityAttestationV1 {
@@ -1463,17 +1463,17 @@ mod tests {
             mode: ConsensusMode::Npos,
             parent_commit_qc: None,
             snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("valid powered roster"),
+            quorum: DualQuorum::from_roster(&roster).expect("valid roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"bridge v2 test nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x5A; 32],
         };
@@ -2750,7 +2750,7 @@ mod tests {
     }
 
     #[test]
-    fn verifier_accepts_weighted_npos_quorum_with_context_anchor() {
+    fn verifier_accepts_equal_vote_npos_quorum_with_context_anchor() {
         let fixture = make_v2_fixture("chain-a");
         let proof = fixture.proof;
         let mut verifier = BridgeFinalityVerifier::with_context(
@@ -3210,18 +3210,18 @@ mod tests {
     }
 
     #[test]
-    fn verifier_enforces_both_npos_signer_count_and_voting_power() {
+    fn verifier_enforces_equal_vote_npos_quorum_and_context() {
         use crate::block::consensus_v2::{
             ValidationError,
             finality::{V2FinalityValidationError, V2QuorumCertificateVerificationError},
         };
 
-        let too_few = make_v2_fixture_with_quorum("chain-a", &[70, 10, 10, 10], &[0]);
+        let too_few = make_v2_fixture_with_quorum("chain-a", &[1, 1, 1, 1], &[0, 1]);
         let err = too_few
             .proof
             .finality_artifact
             .verify()
-            .expect_err("power alone cannot satisfy signer-count quorum");
+            .expect_err("two validators cannot satisfy a three-vote quorum");
         assert!(matches!(
             err,
             V2QuorumCertificateVerificationError::InvalidArtifact(
@@ -3231,19 +3231,16 @@ mod tests {
             )
         ));
 
-        let too_little_power =
-            make_v2_fixture_with_quorum("chain-a", &[70, 10, 10, 10], &[1, 2, 3]);
-        let err = too_little_power
+        let weighted = make_v2_fixture_with_quorum("chain-a", &[70, 10, 10, 10], &[0, 1, 2]);
+        let err = weighted
             .proof
             .finality_artifact
             .verify()
-            .expect_err("signer count alone cannot satisfy powered quorum");
+            .expect_err("protocol v4 rejects weighted consensus votes");
         assert!(matches!(
             err,
             V2QuorumCertificateVerificationError::InvalidArtifact(
-                V2FinalityValidationError::InvalidCommitCertificate(
-                    ValidationError::InsufficientVotingPower
-                )
+                V2FinalityValidationError::InvalidHeightContext(ValidationError::VotingPowerNotOne)
             )
         ));
     }

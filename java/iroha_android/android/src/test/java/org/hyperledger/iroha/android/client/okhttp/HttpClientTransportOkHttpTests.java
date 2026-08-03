@@ -7,7 +7,6 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
-import static org.hyperledger.iroha.android.client.TransactionCompatibilityMockResponses.compatibleCapabilities;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -23,6 +22,7 @@ import org.hyperledger.iroha.android.client.AccountAliasResolution;
 import org.hyperledger.iroha.android.client.ClientConfig;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
+import org.hyperledger.iroha.android.client.TransactionCompatibilityTestSupport;
 import org.hyperledger.iroha.android.client.WireFormatPreference;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -40,7 +40,7 @@ public final class HttpClientTransportOkHttpTests {
   @Test
   public void submitsTransactionWithOkHttpExecutorAndNotifiesObservers() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(compatibleCapabilities());
+      server.enqueue(TransactionCompatibilityTestSupport.compatibleCapabilitiesResponse());
       server.enqueue(new MockResponse().setResponseCode(202).setBody("{\"status\":\"accepted\"}"));
       server.start();
 
@@ -96,10 +96,8 @@ public final class HttpClientTransportOkHttpTests {
       assertEquals(2, observer.requestsCount());
       assertEquals(2, observer.responsesCount());
 
-      final RecordedRequest compatibility = server.takeRequest(1, TimeUnit.SECONDS);
-      assertNotNull(compatibility);
-      assertEquals("/v1/node/capabilities", compatibility.getPath());
-      assertEquals("GET", compatibility.getMethod());
+      final RecordedRequest capabilities = server.takeRequest(1, TimeUnit.SECONDS);
+      TransactionCompatibilityTestSupport.assertCompatibleCapabilitiesRequest(capabilities);
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
       assertNotNull(recorded);
       assertEquals("/v1/pipeline/transactions", recorded.getPath());

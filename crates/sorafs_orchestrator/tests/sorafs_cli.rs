@@ -9,7 +9,7 @@ use std::{
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer as _, SigningKey};
 use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
 #[cfg(feature = "local-quic-proxy")]
@@ -18,7 +18,9 @@ use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_data_model::account::AccountId;
 use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
 use norito::{
+    codec::Encode as _,
     decode_from_bytes,
+    derive::NoritoSerialize,
     json::{Map, Value, from_slice, to_vec},
     to_bytes,
 };
@@ -27,16 +29,24 @@ use sorafs_car::{
     CarBuildPlan, CarWriter, chunker_registry, compute_chunk_plan_digest_sha3, compute_por_root,
     fetch_plan::{chunk_fetch_plan_from_json, chunk_fetch_plan_to_string},
 };
+use sorafs_manifest::por::{
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+    POR_STATUS_CURSOR_VERSION_V1, PorStatusCursorV1,
+};
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceDagBlockV1,
-    GovernanceDagHeadV1, GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder,
+    BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GOVERNANCE_LOG_VERSION_V1,
+    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceDagSubmissionOriginV1,
+    GovernanceDagSubmissionProvenanceV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
+    GovernanceLogSignatureV1, GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder,
     ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
     PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
     PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
     REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
-    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1, StorageClass,
-    StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
-    validate_governance_dag_head_against_chain_v1,
+    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1,
+    SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SoraFsAppealFinanceAccountFlowV1,
+    SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
+    governance_dag_submission_account_digest_v1, validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
 
@@ -69,6 +79,102 @@ impl CanonicalTempDir {
     fn path(&self) -> &Path {
         &self.path
     }
+}
+
+#[derive(NoritoSerialize)]
+struct TestPorStatusPageV1 {
+    version: u8,
+    snapshot_generation: u64,
+    record_limit: u32,
+    canonical_byte_limit: u64,
+    canonical_bytes: u64,
+    inspected_candidates: u32,
+    has_more: bool,
+    #[norito(default)]
+    next_cursor: Option<String>,
+    statuses: Vec<PorChallengeStatusV1>,
+}
+
+#[derive(NoritoSerialize)]
+struct TestPorStatusExportPageV1 {
+    version: u8,
+    #[norito(default)]
+    start_epoch: Option<u64>,
+    #[norito(default)]
+    end_epoch: Option<u64>,
+    page: TestPorStatusPageV1,
+}
+
+fn test_por_status_page(
+    statuses: Vec<PorChallengeStatusV1>,
+    next_cursor: Option<String>,
+) -> TestPorStatusPageV1 {
+    let canonical_bytes = statuses
+        .iter()
+        .map(|status| to_bytes(status).expect("encode PoR status fixture").len())
+        .sum::<usize>();
+    TestPorStatusPageV1 {
+        version: 1,
+        snapshot_generation: u64::try_from(statuses.len())
+            .expect("fixture status count fits u64")
+            .checked_add(1)
+            .expect("fixture generation does not overflow"),
+        record_limit: u32::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1)
+            .expect("PoR page limit fits u32"),
+        canonical_byte_limit: u64::try_from(POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1)
+            .expect("PoR byte limit fits u64"),
+        canonical_bytes: u64::try_from(canonical_bytes).expect("fixture byte total fits u64"),
+        inspected_candidates: u32::try_from(statuses.len()).expect("fixture status count fits u32"),
+        has_more: next_cursor.is_some(),
+        next_cursor,
+        statuses,
+    }
+}
+
+fn test_por_cursor(
+    snapshot_generation: u64,
+    epoch_id: u64,
+    issued_at: u64,
+    challenge_id: [u8; 32],
+) -> String {
+    PorStatusCursorV1 {
+        version: POR_STATUS_CURSOR_VERSION_V1,
+        snapshot_generation,
+        selection_digest: [0xA5; 32],
+        last_epoch_id: epoch_id,
+        last_issued_at: issued_at,
+        last_challenge_id: challenge_id,
+    }
+    .encode_opaque()
+    .expect("encode canonical PoR cursor fixture")
+}
+
+fn large_por_status_page() -> TestPorStatusPageV1 {
+    let statuses = (0..512)
+        .map(|index| {
+            let ordinal = u64::try_from(index + 1).expect("fixture ordinal fits u64");
+            let mut challenge_id = [0x11; 32];
+            challenge_id[..8].copy_from_slice(&ordinal.to_be_bytes());
+            PorChallengeStatusV1 {
+                version: POR_CHALLENGE_STATUS_VERSION_V1,
+                challenge_id,
+                manifest_digest: [0x22; 32],
+                provider_id: [0x33; 32],
+                epoch_id: 42,
+                drand_round: 100 + ordinal,
+                status: PorChallengeOutcome::AwaitingProof,
+                sample_count: 64,
+                forced: false,
+                issued_at: 1_700_000_000 + ordinal,
+                responded_at: None,
+                proof_digest: None,
+                repair_task_id: None,
+                failure_reason: None,
+                verifier_latency_ms: None,
+            }
+        })
+        .collect();
+    test_por_status_page(statuses, None)
 }
 
 fn tempdir() -> std::io::Result<CanonicalTempDir> {
@@ -347,7 +453,7 @@ fn por_status_outputs_table() {
         provider_id: [0x33; 32],
         epoch_id: 42,
         drand_round: 100,
-        status: PorChallengeOutcome::Pending,
+        status: PorChallengeOutcome::AwaitingProof,
         sample_count: 64,
         forced: false,
         issued_at: 1_700_000_000,
@@ -357,7 +463,7 @@ fn por_status_outputs_table() {
         failure_reason: None,
         verifier_latency_ms: None,
     };
-    let body = to_bytes(&vec![status]).expect("encode status list");
+    let body = to_bytes(&test_por_status_page(vec![status], None)).expect("encode status page");
     let manifest_hex = hex_encode([0x22; 32]);
     server.mock(|when, then| {
         when.method(GET)
@@ -380,8 +486,8 @@ fn por_status_outputs_table() {
         .clone();
     let stdout = String::from_utf8(output).expect("stdout utf8");
     assert!(
-        stdout.contains("pending"),
-        "expected status output to mention pending status:\n{stdout}"
+        stdout.contains("awaiting_proof"),
+        "expected status output to mention awaiting-proof status:\n{stdout}"
     );
 }
 
@@ -405,7 +511,7 @@ fn por_status_outputs_json() {
         failure_reason: None,
         verifier_latency_ms: Some(1200),
     };
-    let body = to_bytes(&vec![status]).expect("encode status list");
+    let body = to_bytes(&test_por_status_page(vec![status], None)).expect("encode status page");
     server.mock(|when, then| {
         when.method(GET).path("/v1/sorafs/por/status");
         then.status(200)
@@ -427,6 +533,201 @@ fn por_status_outputs_json() {
     assert!(
         stdout.contains("\"forced\": true"),
         "expected JSON output to include forced=true flag:\n{stdout}"
+    );
+}
+
+#[test]
+fn por_status_accepts_empty_sparse_page_with_advancing_cursor() {
+    let server = MockServer::start();
+    let cursor = test_por_cursor(1, 42, 1_700_000_000, [0x11; 32]);
+    let mut page = test_por_status_page(Vec::new(), Some(cursor.clone()));
+    page.inspected_candidates = 512;
+    let body = to_bytes(&page).expect("encode empty sparse status page");
+    server.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/por/status");
+        then.status(200)
+            .header("content-type", "application/x-norito")
+            .body(body);
+    });
+
+    let stderr = sorafs_cli_cmd()
+        .arg("por")
+        .arg("status")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains(&format!("next_cursor={cursor}")),
+        "empty sparse page must expose its advancing cursor:\n{stderr}"
+    );
+}
+
+#[test]
+fn por_status_and_export_accept_fields_above_legacy_64k_limit() {
+    let server = MockServer::start();
+    let page = large_por_status_page();
+    let status_body = to_bytes(&page).expect("encode large bounded status page");
+    assert!(
+        status_body.len() > 64 * 1024,
+        "fixture must exceed the retired decoder field ceiling"
+    );
+    assert!(
+        status_body.len() <= POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 + 64 * 1024,
+        "fixture must remain within the Torii response envelope"
+    );
+    server.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/por/status");
+        then.status(200)
+            .header("content-type", "application/x-norito")
+            .body(status_body);
+    });
+
+    sorafs_cli_cmd()
+        .arg("por")
+        .arg("status")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .assert()
+        .success();
+
+    let export_body = to_bytes(&TestPorStatusExportPageV1 {
+        version: 1,
+        start_epoch: None,
+        end_epoch: None,
+        page,
+    })
+    .expect("encode large bounded status export");
+    assert!(
+        export_body.len() > 64 * 1024,
+        "nested export page must exceed the retired field ceiling"
+    );
+    assert!(
+        export_body.len() <= POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 + 64 * 1024,
+        "export fixture must remain within the Torii response envelope"
+    );
+    server.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/por/export");
+        then.status(200)
+            .header("content-type", "application/octet-stream")
+            .body(export_body);
+    });
+
+    let tempdir = tempdir().expect("tempdir");
+    let out_path = tempdir.path().join("large-por-export.norito");
+    sorafs_cli_cmd()
+        .arg("por")
+        .arg("export")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--out={}", out_path.display()))
+        .assert()
+        .success();
+    assert!(out_path.exists());
+}
+
+#[test]
+fn por_status_and_export_reject_record_byte_limit_above_torii_contract() {
+    let server = MockServer::start();
+    let above = POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1 + 1;
+    let expected =
+        format!("`--max-bytes` must be in 1..={POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1}");
+
+    let status_stderr = sorafs_cli_cmd()
+        .arg("por")
+        .arg("status")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--max-bytes={above}"))
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(
+        String::from_utf8(status_stderr)
+            .expect("status stderr utf8")
+            .contains(&expected)
+    );
+
+    let tempdir = tempdir().expect("tempdir");
+    let export_stderr = sorafs_cli_cmd()
+        .arg("por")
+        .arg("export")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!(
+            "--out={}",
+            tempdir.path().join("unused.to").display()
+        ))
+        .arg(format!("--max-bytes={above}"))
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(
+        String::from_utf8(export_stderr)
+            .expect("export stderr utf8")
+            .contains(&expected)
+    );
+}
+
+#[test]
+fn por_status_rejects_record_outside_requested_filters_before_output() {
+    let server = MockServer::start();
+    let status = PorChallengeStatusV1 {
+        version: POR_CHALLENGE_STATUS_VERSION_V1,
+        challenge_id: [0x31; 32],
+        manifest_digest: [0x99; 32],
+        provider_id: [0x33; 32],
+        epoch_id: 42,
+        drand_round: 100,
+        status: PorChallengeOutcome::AwaitingProof,
+        sample_count: 64,
+        forced: false,
+        issued_at: 1_700_000_000,
+        responded_at: None,
+        proof_digest: None,
+        repair_task_id: None,
+        failure_reason: None,
+        verifier_latency_ms: None,
+    };
+    let body = to_bytes(&test_por_status_page(vec![status], None))
+        .expect("encode substituted-filter status page");
+    let manifest_hex = hex_encode([0x22; 32]);
+    let provider_hex = hex_encode([0x33; 32]);
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/v1/sorafs/por/status")
+            .query_param("manifest", manifest_hex.as_str())
+            .query_param("provider", provider_hex.as_str())
+            .query_param("epoch", "42")
+            .query_param("status", "awaiting_proof");
+        then.status(200)
+            .header("content-type", "application/x-norito")
+            .body(body);
+    });
+
+    let output = sorafs_cli_cmd()
+        .arg("por")
+        .arg("status")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--manifest={manifest_hex}"))
+        .arg(format!("--provider={provider_hex}"))
+        .arg("--epoch=42")
+        .arg("--status=awaiting_proof")
+        .output()
+        .expect("command executes");
+
+    assert!(!output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "untrusted status must not be output"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("does not match the requested manifest filter"),
+        "unexpected stderr: {stderr}"
     );
 }
 
@@ -465,23 +766,49 @@ fn retired_por_trigger_command_is_absent_and_never_sends_a_request() {
 #[test]
 fn por_export_writes_file() {
     let server = MockServer::start();
-    let payload = b"PARQUET".to_vec();
+    let status = PorChallengeStatusV1 {
+        version: POR_CHALLENGE_STATUS_VERSION_V1,
+        challenge_id: [0x41; 32],
+        manifest_digest: [0x42; 32],
+        provider_id: [0x43; 32],
+        epoch_id: 10,
+        drand_round: 101,
+        status: PorChallengeOutcome::AwaitingProof,
+        sample_count: 32,
+        forced: false,
+        issued_at: 1_700_000_200,
+        responded_at: None,
+        proof_digest: None,
+        repair_task_id: None,
+        failure_reason: None,
+        verifier_latency_ms: None,
+    };
+    let next_cursor = test_por_cursor(2, status.epoch_id, status.issued_at, status.challenge_id);
+    let payload = to_bytes(&TestPorStatusExportPageV1 {
+        version: 1,
+        start_epoch: Some(10),
+        end_epoch: Some(10),
+        page: test_por_status_page(vec![status], Some(next_cursor.clone())),
+    })
+    .expect("encode bounded PoR export page");
     server.mock(|when, then| {
         when.method(GET)
             .path("/v1/sorafs/por/export")
-            .query_param("start_epoch", "10");
+            .query_param("start_epoch", "10")
+            .query_param("end_epoch", "10");
         then.status(200)
             .header("content-type", "application/octet-stream")
             .body(payload.clone());
     });
 
     let tempdir = tempdir().expect("tempdir");
-    let out_path = tempdir.path().join("report.parquet");
+    let out_path = tempdir.path().join("por-export.norito");
     let output = sorafs_cli_cmd()
         .arg("por")
         .arg("export")
         .arg(format!("--torii-url={}", server.base_url()))
         .arg("--start-epoch=10")
+        .arg("--end-epoch=10")
         .arg(format!("--out={}", out_path.display()))
         .assert()
         .success()
@@ -493,8 +820,71 @@ fn por_export_writes_file() {
         stdout.contains("exported"),
         "expected export command to report success:\n{stdout}"
     );
+    assert!(stdout.contains(&format!("next_cursor={next_cursor}")));
     let written = fs::read(&out_path).expect("read export file");
     assert_eq!(written, payload);
+}
+
+#[test]
+fn por_export_rejects_noncanonical_response_cursor_without_writing() {
+    let server = MockServer::start();
+    let status = PorChallengeStatusV1 {
+        version: POR_CHALLENGE_STATUS_VERSION_V1,
+        challenge_id: [0x51; 32],
+        manifest_digest: [0x52; 32],
+        provider_id: [0x53; 32],
+        epoch_id: 10,
+        drand_round: 102,
+        status: PorChallengeOutcome::AwaitingProof,
+        sample_count: 32,
+        forced: false,
+        issued_at: 1_700_000_300,
+        responded_at: None,
+        proof_digest: None,
+        repair_task_id: None,
+        failure_reason: None,
+        verifier_latency_ms: None,
+    };
+    let payload = to_bytes(&TestPorStatusExportPageV1 {
+        version: 1,
+        start_epoch: Some(10),
+        end_epoch: Some(10),
+        page: test_por_status_page(
+            vec![status],
+            Some("AB".to_owned()), // Decodes like `AA`, but has non-zero trailing bits.
+        ),
+    })
+    .expect("encode malformed-cursor export page");
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/v1/sorafs/por/export")
+            .query_param("start_epoch", "10")
+            .query_param("end_epoch", "10");
+        then.status(200)
+            .header("content-type", "application/octet-stream")
+            .body(payload);
+    });
+
+    let tempdir = tempdir().expect("tempdir");
+    let out_path = tempdir.path().join("malformed-export.norito");
+    let stderr = sorafs_cli_cmd()
+        .arg("por")
+        .arg("export")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--start-epoch=10")
+        .arg("--end-epoch=10")
+        .arg(format!("--out={}", out_path.display()))
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(
+        String::from_utf8(stderr)
+            .expect("stderr utf8")
+            .contains("bounded canonical PoR cursor")
+    );
+    assert!(!out_path.exists());
 }
 
 #[test]
@@ -2702,12 +3092,140 @@ fn governance_fixture_root() -> PathBuf {
         .join("fixtures/sorafs_manifest/governance")
 }
 
+fn governance_fixture_node_cid_display() -> String {
+    let bytes = fs::read(governance_fixture_root().join("node_v1.to"))
+        .expect("read governance node fixture");
+    let node: GovernanceLogNodeV1 =
+        decode_from_bytes(&bytes).expect("decode governance node fixture");
+    match std::str::from_utf8(&node.node_cid) {
+        Ok(value)
+            if !value.is_empty() && value.chars().all(|character| !character.is_control()) =>
+        {
+            value.to_owned()
+        }
+        _ => format!("hex:{}", hex_encode(node.node_cid)),
+    }
+}
+
 fn parse_cli_json_stdout(output: &[u8]) -> Value {
     from_slice(output).expect("CLI stdout should be JSON")
 }
 
 fn governance_dag_build_key_hex() -> String {
     "cd".repeat(32)
+}
+
+fn write_governance_dag_provenance_node(root: &Path) -> (PathBuf, String) {
+    let account_keypair = KeyPair::try_from_seed(
+        b"sorafs-cli-governance-provenance-account".to_vec(),
+        Algorithm::Ed25519,
+    )
+    .expect("fixture governance provenance account key");
+    let publisher_account = AccountId::new(account_keypair.public_key().clone());
+    let publisher_account_digest_hex = hex_encode(governance_dag_submission_account_digest_v1(
+        &publisher_account.encode(),
+    ));
+    let report = SoraFsAppealFinanceReportV1 {
+        version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        report_id: [0x42; 16],
+        case_id: "case-42".to_string(),
+        round_id: Some("round-1".to_string()),
+        generated_at_unix_ms: 1_700_000_031_000,
+        appeal_finance_config_version: "baseline-v1".to_string(),
+        evidence_bundle_digest: Some([0xA7; 32]),
+        outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
+        deposit_xor: "420".parse().expect("canonical XOR quantity"),
+        refund: SoraFsAppealFinanceAccountFlowV1 {
+            account_id: "refund-account".to_string(),
+            amount_xor: "420".parse().expect("canonical XOR quantity"),
+        },
+        treasury: SoraFsAppealFinanceAccountFlowV1 {
+            account_id: "treasury-account".to_string(),
+            amount_xor: "50".parse().expect("canonical XOR quantity"),
+        },
+        held: SoraFsAppealFinanceAccountFlowV1 {
+            account_id: "escrow-account".to_string(),
+            amount_xor: "0".parse().expect("canonical XOR quantity"),
+        },
+        panel_size: 3,
+        panel_reward_total_xor: "85".parse().expect("canonical XOR quantity"),
+        rewards_paid_total_xor: "60".parse().expect("canonical XOR quantity"),
+        rewards_forfeited_treasury_xor: "25".parse().expect("canonical XOR quantity"),
+        juror_payouts: vec![
+            SoraFsAppealFinanceJurorPayoutV1 {
+                juror_id: "juror-a".to_string(),
+                stipend_xor: "25".parse().expect("canonical XOR quantity"),
+                bonus_xor: "5".parse().expect("canonical XOR quantity"),
+                total_xor: "30".parse().expect("canonical XOR quantity"),
+            },
+            SoraFsAppealFinanceJurorPayoutV1 {
+                juror_id: "juror-b".to_string(),
+                stipend_xor: "25".parse().expect("canonical XOR quantity"),
+                bonus_xor: "5".parse().expect("canonical XOR quantity"),
+                total_xor: "30".parse().expect("canonical XOR quantity"),
+            },
+        ],
+        no_show_juror_ids: vec!["juror-c".to_string()],
+    };
+    let signer = SigningKey::from_bytes(&[0xA5; 32]);
+    let mut node = GovernanceLogNodeV1 {
+        version: GOVERNANCE_LOG_VERSION_V1,
+        node_cid: Vec::new(),
+        prev_cid: None,
+        timestamp: 1_700_000_031,
+        publisher_peer_id: b"12D3KooWGovernanceProvenance".to_vec(),
+        submission_provenance: Some(GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: governance_dag_submission_account_digest_v1(
+                &publisher_account.encode(),
+            ),
+            origin: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+        }),
+        payload: GovernanceLogPayloadV1::AppealFinanceReport(report),
+        publisher_signature: GovernanceLogSignatureV1 {
+            algorithm: GovernanceSignatureAlgorithm::Ed25519,
+            public_key: Vec::new(),
+            signature: Vec::new(),
+        },
+    };
+    node.node_cid = node
+        .recompute_node_cid()
+        .expect("derive governance node CID");
+    let signature = signer.sign(
+        &node
+            .signature_payload_bytes()
+            .expect("encode governance node signature payload"),
+    );
+    node.publisher_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: signer.verifying_key().to_bytes().to_vec(),
+        signature: signature.to_bytes().to_vec(),
+    };
+    node.validate().expect("validate provenance-bearing node");
+    node.verify_publisher_signature()
+        .expect("verify provenance-bearing node signature");
+
+    let path = root.join("finance-report.to");
+    fs::write(
+        &path,
+        to_bytes(&node).expect("encode provenance-bearing node"),
+    )
+    .expect("write provenance-bearing node");
+    (path, publisher_account_digest_hex)
+}
+
+fn assert_governance_submission_summary(value: &Value, publisher_account_digest_hex: &str) {
+    assert_eq!(
+        value
+            .get("submission_publisher_account_digest_hex")
+            .and_then(Value::as_str),
+        Some(publisher_account_digest_hex),
+        "signed submission account digest should be preserved in {value:?}"
+    );
+    assert_eq!(
+        value.get("submission_origin").and_then(Value::as_str),
+        Some("appeal_finance_report"),
+        "signed submission origin should be preserved in {value:?}"
+    );
 }
 
 fn build_governance_dag_fixture_archive(build_dir: &Path, summary_path: Option<&Path>) -> Value {
@@ -2734,6 +3252,7 @@ fn build_governance_dag_fixture_archive(build_dir: &Path, summary_path: Option<&
 fn governance_dag_list_and_show_validate_fixture() {
     let root = governance_fixture_root();
     let node = root.join("node_v1.to");
+    let node_cid = governance_fixture_node_cid_display();
 
     let list_assert = sorafs_cli_cmd()
         .arg("governance")
@@ -2770,6 +3289,19 @@ fn governance_dag_list_and_show_validate_fixture() {
             .and_then(Value::as_str),
         Some("por_proof")
     );
+    let listed_node = artifacts[0].get("node").expect("listed node summary");
+    assert!(
+        listed_node
+            .get("submission_publisher_account_digest_hex")
+            .is_some_and(Value::is_null),
+        "internally produced node must expose an explicit null submission account digest: {listed_node:?}"
+    );
+    assert!(
+        listed_node
+            .get("submission_origin")
+            .is_some_and(Value::is_null),
+        "internally produced node must expose an explicit null submission origin: {listed_node:?}"
+    );
 
     let show_assert = sorafs_cli_cmd()
         .arg("governance")
@@ -2789,8 +3321,97 @@ fn governance_dag_list_and_show_validate_fixture() {
             .get("node")
             .and_then(|node| node.get("node_cid"))
             .and_then(Value::as_str),
-        Some("bafygovernancelognode")
+        Some(node_cid.as_str())
     );
+    let shown_node = show_json.get("node").expect("shown node summary");
+    assert!(
+        shown_node
+            .get("submission_publisher_account_digest_hex")
+            .is_some_and(Value::is_null),
+        "internally produced node must expose an explicit null submission account digest: {shown_node:?}"
+    );
+    assert!(
+        shown_node
+            .get("submission_origin")
+            .is_some_and(Value::is_null),
+        "internally produced node must expose an explicit null submission origin: {shown_node:?}"
+    );
+}
+
+#[test]
+fn governance_dag_cli_preserves_signed_submission_provenance() {
+    let tempdir = tempdir().expect("tempdir");
+    let source_root = tempdir.path().join("source");
+    fs::create_dir(&source_root).expect("create source root");
+    let (node_path, publisher_account_digest_hex) =
+        write_governance_dag_provenance_node(&source_root);
+
+    let list_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("list")
+        .arg(format!("--root={}", source_root.display()))
+        .arg("--format=json")
+        .assert()
+        .success();
+    let list_json = parse_cli_json_stdout(&list_assert.get_output().stdout);
+    let listed_node = list_json
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .and_then(|artifacts| artifacts.first())
+        .and_then(|artifact| artifact.get("node"))
+        .expect("listed provenance-bearing node");
+    assert_governance_submission_summary(listed_node, &publisher_account_digest_hex);
+
+    let show_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("show")
+        .arg(format!("--node={}", node_path.display()))
+        .arg("--format=json")
+        .assert()
+        .success();
+    let show_json = parse_cli_json_stdout(&show_assert.get_output().stdout);
+    let shown_node = show_json
+        .get("node")
+        .expect("shown provenance-bearing node");
+    assert_governance_submission_summary(shown_node, &publisher_account_digest_hex);
+
+    let build_root = tempdir.path().join("build");
+    let build_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("build")
+        .arg(format!("--root={}", source_root.display()))
+        .arg(format!("--out={}", build_root.display()))
+        .arg("--publisher-peer-id=12D3KooWGovernanceDagBuilder")
+        .arg(format!("--key-hex={}", governance_dag_build_key_hex()))
+        .arg("--generated-at=1700000999")
+        .assert()
+        .success();
+    let build_json = parse_cli_json_stdout(&build_assert.get_output().stdout);
+    let built_block = build_json
+        .get("blocks")
+        .and_then(Value::as_array)
+        .and_then(|blocks| blocks.first())
+        .expect("built provenance-bearing block summary");
+    assert_governance_submission_summary(built_block, &publisher_account_digest_hex);
+
+    let verify_assert = sorafs_cli_cmd()
+        .arg("governance")
+        .arg("dag")
+        .arg("verify-build")
+        .arg(format!("--root={}", build_root.display()))
+        .arg("--require-sidecars")
+        .assert()
+        .success();
+    let verify_json = parse_cli_json_stdout(&verify_assert.get_output().stdout);
+    let verified_block = verify_json
+        .get("blocks")
+        .and_then(Value::as_array)
+        .and_then(|blocks| blocks.first())
+        .expect("verified provenance-bearing block summary");
+    assert_governance_submission_summary(verified_block, &publisher_account_digest_hex);
 }
 
 #[test]
@@ -2822,12 +3443,13 @@ fn governance_dag_verify_rejects_unexpected_head() {
 #[test]
 fn governance_dag_verify_and_export_fixture_archive() {
     let root = governance_fixture_root();
+    let head_cid = governance_fixture_node_cid_display();
     let verify_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
         .arg("verify")
         .arg(format!("--root={}", root.display()))
-        .arg("--head-cid=bafygovernancelognode")
+        .arg(format!("--head-cid={head_cid}"))
         .assert()
         .success();
     let verify_json = parse_cli_json_stdout(&verify_assert.get_output().stdout);
@@ -2838,7 +3460,7 @@ fn governance_dag_verify_and_export_fixture_archive() {
             .and_then(Value::as_array)
             .and_then(|heads| heads.first())
             .and_then(Value::as_str),
-        Some("bafygovernancelognode")
+        Some(head_cid.as_str())
     );
 
     let tempdir = tempdir().expect("tempdir");
@@ -2849,7 +3471,7 @@ fn governance_dag_verify_and_export_fixture_archive() {
         .arg("export")
         .arg(format!("--root={}", root.display()))
         .arg(format!("--out={}", export_dir.display()))
-        .arg("--head-cid=bafygovernancelognode")
+        .arg(format!("--head-cid={head_cid}"))
         .assert()
         .success();
     let export_json = parse_cli_json_stdout(&export_assert.get_output().stdout);
@@ -4777,778 +5399,4 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
     );
 }
 
-#[test]
-fn fetch_command_config_does_not_bypass_gateway_url_security() {
-    let tempdir = tempdir().expect("tempdir");
-    let payload: Vec<u8> = (0..1024).map(|idx| (idx % 151) as u8).collect();
-    let plan = CarBuildPlan::single_file(&payload).expect("plan");
-    let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
-    let writer = CarWriter::new(&plan, &payload).expect("writer");
-    let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
-
-    let manifest = ManifestBuilder::new()
-        .root_cid(car_stats.root_cids[0].clone())
-        .dag_codec(DagCodecId(car_stats.dag_codec))
-        .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
-        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-        .por_root(compute_por_root(&payload, &plan).expect("derive canonical fixture PoR root"))
-        .content_length(plan.content_length)
-        .car_digest(car_stats.car_archive_digest.into())
-        .car_size(car_stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 1,
-            storage_class: StorageClass::Hot,
-            retention_epoch: 10,
-        })
-        .governance(council_signed_governance_proofs())
-        .build()
-        .expect("manifest");
-    let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
-    let manifest_digest_hex = hex_encode(manifest.digest().expect("manifest digest").as_bytes());
-    let manifest_id_hex = manifest_digest_hex.clone();
-    let payload_digest_hex = hex_encode(plan.payload_digest.as_bytes());
-    let chunk_profile_handle = "sorafs.sf1@1.0.0";
-
-    let manifest_report_path = tempdir.path().join("direct_manifest_report.json");
-    let manifest_response = format!(
-        "{{\"manifest_id_hex\":\"{}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
-        manifest_id_hex,
-        BASE64_STANDARD.encode(&manifest_bytes),
-        manifest_digest_hex,
-        payload_digest_hex,
-        plan.content_length,
-        plan.chunks.len(),
-        chunk_profile_handle
-    );
-    fs::write(
-        &manifest_report_path,
-        format!("{}\n", manifest_response).as_bytes(),
-    )
-    .expect("write manifest report");
-
-    let server = MockServer::start();
-    let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
-    server.mock(|when, then| {
-        when.method(GET).path(manifest_path.as_str());
-        then.status(200).body(manifest_response.clone());
-    });
-    for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
-        let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
-            manifest_id_hex,
-            hex_encode(spec.digest)
-        );
-        let start = spec.offset as usize;
-        let end = start + spec.length as usize;
-        let body = payload[start..end].to_vec();
-        server.mock(move |when, then| {
-            when.method(GET).path(path.as_str());
-            then.status(200).body(body.clone());
-        });
-    }
-    let provider_id_hex = "34".repeat(32);
-    let (stream_token_b64, gateway_public_key_hex) =
-        make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 3);
-    let summary_path = tempdir.path().join("policy_fetch_summary.json");
-    let output_path = tempdir.path().join("policy_payload.bin");
-    let scoreboard_path = tempdir
-        .path()
-        .join("scoreboards/direct_policy_scoreboard.json");
-    let policy_path = tempdir.path().join("direct_policy.json");
-
-    let mut scoreboard = Map::new();
-    scoreboard.insert("latency_cap_ms".into(), Value::from(3500u64));
-    scoreboard.insert("weight_scale".into(), Value::from(200u64));
-    scoreboard.insert("telemetry_grace_secs".into(), Value::from(45u64));
-    scoreboard.insert(
-        "persist_path".into(),
-        Value::from(scoreboard_path.display().to_string()),
-    );
-    scoreboard.insert("now_unix_secs".into(), Value::from(1_700_000_000u64));
-
-    let mut fetch = Map::new();
-    fetch.insert("retry_budget".into(), Value::from(4u64));
-    fetch.insert("provider_failure_threshold".into(), Value::from(2u64));
-    fetch.insert("global_parallel_limit".into(), Value::from(1u64));
-    fetch.insert("verify_lengths".into(), Value::from(true));
-    fetch.insert("verify_digests".into(), Value::from(true));
-
-    let mut root = Map::new();
-    root.insert("scoreboard".into(), Value::Object(scoreboard));
-    root.insert("fetch".into(), Value::Object(fetch));
-    root.insert("telemetry_region".into(), Value::from("regulated-eu"));
-    root.insert("max_providers".into(), Value::from(1u64));
-    root.insert("transport_policy".into(), Value::from("direct-only"));
-
-    let rendered = norito::json::to_string_pretty(&Value::Object(root))
-        .expect("render orchestrator config json");
-    fs::write(&policy_path, rendered.as_bytes()).expect("write orchestrator config json");
-    let base_url = server.url("/");
-
-    let assert = sorafs_cli_cmd()
-        .arg("fetch")
-        .arg(format!("--plan={}", plan_path.display()))
-        .arg(format!("--manifest-id={manifest_id_hex}"))
-        .arg(format!("--manifest-report={}", manifest_report_path.display()))
-        .arg(format!(
-            "--provider=name=policy-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={base_url},stream-token={stream_token_b64}",
-        ))
-        .arg(format!("--orchestrator-config={}", policy_path.display()))
-        .arg(format!("--json-out={}", summary_path.display()))
-        .arg(format!("--output={}", output_path.display()))
-        .assert();
-    if base_url.starts_with("http://") {
-        assert_insecure_gateway_rejected(assert, &[&output_path, &summary_path, &scoreboard_path]);
-        return;
-    }
-    let assert = assert.success();
-
-    let summary_value: Value =
-        norito::json::from_slice(assert.get_output().stdout.as_slice()).expect("stdout summary");
-    assert_eq!(
-        summary_value
-            .get("telemetry_region")
-            .and_then(Value::as_str),
-        Some("regulated-eu")
-    );
-
-    let summary_bytes = fs::read(&summary_path).expect("read summary file");
-    let summary_file: Value =
-        norito::json::from_slice(&summary_bytes).expect("parse summary file json");
-    assert_eq!(
-        summary_file.get("telemetry_region").and_then(Value::as_str),
-        Some("regulated-eu")
-    );
-
-    let assembled = fs::read(&output_path).expect("read assembled payload");
-    assert_eq!(assembled, payload);
-
-    let scoreboard_bytes = fs::read(&scoreboard_path).expect("persisted scoreboard json");
-    let persisted_scoreboard: Value =
-        norito::json::from_slice(&scoreboard_bytes).expect("parse scoreboard json");
-    let providers = persisted_scoreboard
-        .get("entries")
-        .and_then(Value::as_array)
-        .expect("persisted scoreboard entries array");
-    assert_eq!(providers.len(), 1);
-    assert_eq!(
-        providers[0]
-            .as_object()
-            .and_then(|obj| obj.get("provider_id"))
-            .and_then(Value::as_str),
-        Some("policy-gw")
-    );
-}
-
-#[test]
-fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
-    let tempdir = tempdir().expect("tempdir");
-    let payload: Vec<u8> = (0..2048).map(|idx| (idx % 179) as u8).collect();
-    let plan = CarBuildPlan::single_file(&payload).expect("plan");
-    let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
-    let writer = CarWriter::new(&plan, &payload).expect("writer");
-    let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
-
-    let manifest = ManifestBuilder::new()
-        .root_cid(car_stats.root_cids[0].clone())
-        .dag_codec(DagCodecId(car_stats.dag_codec))
-        .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
-        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-        .por_root(compute_por_root(&payload, &plan).expect("derive canonical fixture PoR root"))
-        .content_length(plan.content_length)
-        .car_digest(car_stats.car_archive_digest.into())
-        .car_size(car_stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 1,
-            storage_class: StorageClass::Hot,
-            retention_epoch: 10,
-        })
-        .governance(council_signed_governance_proofs())
-        .build()
-        .expect("manifest");
-    let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
-    let manifest_digest_hex = hex_encode(manifest.digest().expect("manifest digest").as_bytes());
-    let manifest_id_hex = manifest_digest_hex.clone();
-    let chunk_profile_handle = "sorafs.sf1@1.0.0";
-
-    let manifest_report_path = tempdir.path().join("flag_manifest_report.json");
-    let manifest_response = format!(
-        "{{\"manifest_id_hex\":\"{manifest_id_hex}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{manifest_digest_hex}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
-        BASE64_STANDARD.encode(&manifest_bytes),
-        hex_encode(plan.payload_digest.as_bytes()),
-        plan.content_length,
-        plan.chunks.len(),
-        chunk_profile_handle
-    );
-    fs::write(
-        &manifest_report_path,
-        format!("{manifest_response}\n").as_bytes(),
-    )
-    .expect("write manifest report");
-
-    let server = MockServer::start();
-    let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
-    server.mock(|when, then| {
-        when.method(GET).path(manifest_path.as_str());
-        then.status(200).body(manifest_response.clone());
-    });
-    for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
-        let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
-            manifest_id_hex,
-            hex_encode(spec.digest)
-        );
-        let start = spec.offset as usize;
-        let end = start + spec.length as usize;
-        let body = payload[start..end].to_vec();
-        server.mock(move |when, then| {
-            when.method(GET).path(path.as_str());
-            then.status(200).body(body.clone());
-        });
-    }
-    let provider_id_hex = "56".repeat(32);
-    let (stream_token_b64, gateway_public_key_hex) =
-        make_stream_token_b64(&manifest_id_hex, &provider_id_hex, chunk_profile_handle, 2);
-
-    let summary_path = tempdir.path().join("flag_summary.json");
-    let output_path = tempdir.path().join("flag_payload.bin");
-    let scoreboard_path = tempdir
-        .path()
-        .join("scoreboards/flag_fetch_scoreboard.json");
-    let base_url = server.url("/");
-
-    let assert = sorafs_cli_cmd()
-        .arg("fetch")
-        .arg(format!("--plan={}", plan_path.display()))
-        .arg(format!("--manifest-id={manifest_id_hex}"))
-        .arg(format!(
-            "--provider=name=flag-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={base_url},stream-token={stream_token_b64}",
-        ))
-        .arg(format!(
-            "--manifest-report={}",
-            manifest_report_path.display()
-        ))
-        .arg(format!("--json-out={}", summary_path.display()))
-        .arg(format!("--output={}", output_path.display()))
-        .arg(format!("--scoreboard-out={}", scoreboard_path.display()))
-        .arg("--scoreboard-now=1700000000")
-        .assert();
-    if base_url.starts_with("http://") {
-        assert_insecure_gateway_rejected(assert, &[&output_path, &summary_path, &scoreboard_path]);
-        return;
-    }
-    assert.success();
-
-    let scoreboard_bytes = fs::read(&scoreboard_path).expect("read scoreboard file");
-    let scoreboard_value: Value =
-        norito::json::from_slice(&scoreboard_bytes).expect("parse scoreboard json");
-    let entries = scoreboard_value
-        .get("entries")
-        .and_then(Value::as_array)
-        .expect("entries array");
-    assert!(
-        !entries.is_empty(),
-        "scoreboard entries should not be empty"
-    );
-    let first = entries[0]
-        .get("provider_id")
-        .and_then(Value::as_str)
-        .expect("provider id");
-    assert!(
-        !first.is_empty(),
-        "provider id should be recorded in scoreboard"
-    );
-}
-
-#[cfg(not(feature = "local-quic-proxy"))]
-#[test]
-fn fetch_command_rejects_insecure_gateway_before_proxy_startup_without_runtime_feature() {
-    let tempdir = tempdir().expect("tempdir");
-    let payload: Vec<u8> = (0..64).map(|idx| idx as u8).collect();
-    let plan = CarBuildPlan::single_file(&payload).expect("plan");
-    let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
-    let manifest_id_hex = hex_encode(blake3_hash(&payload).as_bytes());
-    let provider_id_hex = "cd".repeat(32);
-    let (stream_token_b64, gateway_public_key_hex) =
-        make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
-    let policy_path = tempdir.path().join("proxy_config.json");
-    let manifest_out_path = tempdir.path().join("proxy_manifest.json");
-
-    let mut local_proxy = Map::new();
-    local_proxy.insert("bind_addr".into(), Value::from("127.0.0.1:0"));
-    local_proxy.insert("telemetry_label".into(), Value::from("test-proxy"));
-    local_proxy.insert("proxy_mode".into(), Value::from("bridge"));
-    local_proxy.insert("emit_browser_manifest".into(), Value::from(true));
-
-    let mut root = Map::new();
-    root.insert("local_proxy".into(), Value::Object(local_proxy));
-
-    let rendered =
-        norito::json::to_string_pretty(&Value::Object(root)).expect("render orchestrator config");
-    fs::write(&policy_path, rendered.as_bytes()).expect("write orchestrator config");
-
-    let output = sorafs_cli_cmd()
-        .arg("fetch")
-        .arg(format!("--plan={}", plan_path.display()))
-        .arg(format!("--manifest-id={manifest_id_hex}"))
-        .arg(format!(
-            "--provider=name=proxy-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url=http://127.0.0.1:9/,stream-token={stream_token_b64}",
-        ))
-        .arg(format!("--orchestrator-config={}", policy_path.display()))
-        .arg(format!(
-            "--local-proxy-manifest-out={}",
-            manifest_out_path.display()
-        ))
-        .output()
-        .expect("command executes");
-
-    assert!(
-        !output.status.success(),
-        "command should fail before starting the proxy"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("URL must use HTTPS") || stderr.contains("globally routable"),
-        "stderr should report the unsafe gateway boundary: {stderr}"
-    );
-    assert!(
-        !manifest_out_path.exists(),
-        "no proxy manifest should be written when runtime support is unavailable"
-    );
-}
-
-#[cfg(feature = "local-quic-proxy")]
-#[test]
-fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
-    let tempdir = tempdir().expect("tempdir");
-    let payload: Vec<u8> = (0..512).map(|idx| (idx % 97) as u8).collect();
-    let plan = CarBuildPlan::single_file(&payload).expect("plan");
-    let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
-    let writer = CarWriter::new(&plan, &payload).expect("writer");
-    let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
-
-    let manifest = ManifestBuilder::new()
-        .root_cid(car_stats.root_cids[0].clone())
-        .dag_codec(DagCodecId(car_stats.dag_codec))
-        .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
-        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-        .por_root(compute_por_root(&payload, &plan).expect("derive canonical fixture PoR root"))
-        .content_length(plan.content_length)
-        .car_digest(car_stats.car_archive_digest.into())
-        .car_size(car_stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 1,
-            storage_class: StorageClass::Hot,
-            retention_epoch: 10,
-        })
-        .governance(council_signed_governance_proofs())
-        .build()
-        .expect("manifest");
-    let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
-    let manifest_digest_hex = hex_encode(manifest.digest().expect("manifest digest").as_bytes());
-    let manifest_id_hex = manifest_digest_hex.clone();
-    let payload_digest_hex = hex_encode(plan.payload_digest.as_bytes());
-    let chunk_profile_handle = "sorafs.sf1@1.0.0";
-
-    let manifest_report_path = tempdir.path().join("proxy_manifest_report.json");
-    let manifest_response = format!(
-        "{{\"manifest_id_hex\":\"{}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
-        manifest_id_hex,
-        BASE64_STANDARD.encode(&manifest_bytes),
-        manifest_digest_hex,
-        payload_digest_hex,
-        plan.content_length,
-        plan.chunks.len(),
-        chunk_profile_handle
-    );
-    fs::write(
-        &manifest_report_path,
-        format!("{}\n", manifest_response).as_bytes(),
-    )
-    .expect("write manifest report");
-
-    let server = MockServer::start();
-    for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
-        let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
-            manifest_id_hex,
-            hex_encode(spec.digest)
-        );
-        let start = spec.offset as usize;
-        let end = start + spec.length as usize;
-        let body = payload[start..end].to_vec();
-        server.mock(move |when, then| {
-            when.method(GET).path(path.as_str());
-            then.status(200).body(body.clone());
-        });
-    }
-
-    let provider_id_hex = "ab".repeat(32);
-    let (stream_token_b64, gateway_public_key_hex) =
-        make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
-    let summary_path = tempdir.path().join("proxy_fetch_summary.json");
-    let manifest_out_path = tempdir.path().join("proxy_manifest.json");
-    let policy_path = tempdir.path().join("proxy_config.json");
-
-    let mut scoreboard = Map::new();
-    scoreboard.insert("latency_cap_ms".into(), Value::from(3000u64));
-    scoreboard.insert("weight_scale".into(), Value::from(100u64));
-    scoreboard.insert("telemetry_grace_secs".into(), Value::from(30u64));
-    scoreboard.insert("now_unix_secs".into(), Value::from(1_701_000_000u64));
-
-    let mut fetch = Map::new();
-    fetch.insert("retry_budget".into(), Value::from(3u64));
-    fetch.insert("provider_failure_threshold".into(), Value::from(2u64));
-    fetch.insert("global_parallel_limit".into(), Value::from(2u64));
-    fetch.insert("verify_lengths".into(), Value::from(true));
-    fetch.insert("verify_digests".into(), Value::from(true));
-
-    let mut local_proxy = Map::new();
-    local_proxy.insert("bind_addr".into(), Value::from("127.0.0.1:0"));
-    local_proxy.insert("telemetry_label".into(), Value::from("test-proxy"));
-    local_proxy.insert("proxy_mode".into(), Value::from("bridge"));
-    local_proxy.insert("emit_browser_manifest".into(), Value::from(true));
-
-    let mut root = Map::new();
-    root.insert("scoreboard".into(), Value::Object(scoreboard));
-    root.insert("fetch".into(), Value::Object(fetch));
-    root.insert("local_proxy".into(), Value::Object(local_proxy));
-
-    let rendered =
-        norito::json::to_string_pretty(&Value::Object(root)).expect("render orchestrator config");
-    fs::write(&policy_path, rendered.as_bytes()).expect("write orchestrator config");
-    let base_url = server.url("/");
-
-    let assert = sorafs_cli_cmd()
-        .arg("fetch")
-        .arg(format!("--plan={}", plan_path.display()))
-        .arg(format!("--manifest-id={manifest_id_hex}"))
-        .arg(format!("--manifest-report={}", manifest_report_path.display()))
-        .arg(format!(
-            "--provider=name=proxy-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={base_url},stream-token={stream_token_b64}",
-        ))
-        .arg(format!("--orchestrator-config={}", policy_path.display()))
-        .arg(format!("--json-out={}", summary_path.display()))
-        .arg(format!(
-            "--local-proxy-manifest-out={}",
-            manifest_out_path.display()
-        ))
-        .assert();
-    if base_url.starts_with("http://") {
-        assert_insecure_gateway_rejected(assert, &[&summary_path, &manifest_out_path]);
-        return;
-    }
-    assert.success();
-
-    let summary_bytes = fs::read(&summary_path).expect("read summary json");
-    let summary_value: Value =
-        from_slice(&summary_bytes).expect("summary json must parse into Value");
-    let manifest_from_summary = summary_value
-        .get("local_proxy_manifest")
-        .expect("summary should include proxy manifest")
-        .clone();
-    let summary_mode = summary_value
-        .get("local_proxy_mode")
-        .and_then(Value::as_str)
-        .expect("summary.local_proxy_mode");
-    assert_eq!(summary_mode, "bridge");
-    let summary_spool = summary_value
-        .get("local_proxy_norito_spool")
-        .and_then(Value::as_str)
-        .expect("summary.local_proxy_norito_spool");
-    assert_eq!(summary_spool, PROVISION_SPOOL_DIR);
-    let summary_kaigi_spool = summary_value
-        .get("local_proxy_kaigi_spool")
-        .and_then(Value::as_str)
-        .expect("summary.local_proxy_kaigi_spool");
-    assert_eq!(summary_kaigi_spool, PROVISION_SPOOL_DIR);
-    let summary_kaigi_policy = summary_value
-        .get("local_proxy_kaigi_policy")
-        .and_then(Value::as_str)
-        .expect("summary.local_proxy_kaigi_policy");
-    assert_eq!(summary_kaigi_policy, "public");
-
-    let manifest_bytes = fs::read(&manifest_out_path).expect("read manifest json");
-    let manifest_value: Value =
-        from_slice(&manifest_bytes).expect("manifest json should parse into Value");
-    assert_eq!(
-        manifest_value, manifest_from_summary,
-        "manifest exported to disk should match summary"
-    );
-
-    let authority = manifest_value
-        .get("authority")
-        .and_then(Value::as_str)
-        .expect("manifest authority");
-    assert!(
-        authority.starts_with("127.0.0.1:"),
-        "authority `{authority}` should bind to loopback"
-    );
-    let proxy_mode = manifest_value
-        .get("proxy_mode")
-        .and_then(Value::as_str)
-        .expect("proxy_mode");
-    assert_eq!(proxy_mode, "bridge");
-    let cert_pem = manifest_value
-        .get("certificate_pem")
-        .and_then(Value::as_str)
-        .expect("certificate_pem");
-    assert!(
-        cert_pem.contains("BEGIN CERTIFICATE"),
-        "manifest should contain embedded PEM certificate"
-    );
-    let salt_hex = manifest_value
-        .get("cache_tagging")
-        .and_then(Value::as_object)
-        .and_then(|obj| obj.get("salt_hex"))
-        .and_then(Value::as_str)
-        .expect("cache_tagging.salt_hex");
-    assert_eq!(salt_hex.len(), 32, "salt_hex must be 16 bytes encoded");
-
-    let summary_override_path = tempdir.path().join("proxy_fetch_summary_override.json");
-    let manifest_override_path = tempdir.path().join("proxy_manifest_override.json");
-    sorafs_cli_cmd()
-        .arg("fetch")
-        .arg(format!("--plan={}", plan_path.display()))
-        .arg(format!("--manifest-id={manifest_id_hex}"))
-        .arg(format!(
-            "--provider=name=proxy-gw,provider-id={provider_id_hex},gateway-key={gateway_public_key_hex},base-url={},stream-token={stream_token_b64}",
-            server.url("/")
-        ))
-        .arg(format!("--orchestrator-config={}", policy_path.display()))
-        .arg(format!("--json-out={}", summary_override_path.display()))
-        .arg(format!(
-            "--local-proxy-manifest-out={}",
-            manifest_override_path.display()
-        ))
-        .arg("--local-proxy-mode=metadata-only")
-        .assert()
-        .success();
-
-    let summary_override_bytes =
-        fs::read(&summary_override_path).expect("read override summary json");
-    let summary_override: Value =
-        from_slice(&summary_override_bytes).expect("override summary json must parse");
-    assert_eq!(
-        summary_override
-            .get("local_proxy_mode")
-            .and_then(Value::as_str),
-        Some("metadata-only")
-    );
-    assert!(
-        summary_override.get("local_proxy_norito_spool").is_none(),
-        "metadata-only overrides should not advertise a spool directory"
-    );
-    let manifest_override_bytes =
-        fs::read(&manifest_override_path).expect("read override manifest json");
-    let manifest_override: Value =
-        from_slice(&manifest_override_bytes).expect("override manifest json should parse");
-    assert_eq!(
-        manifest_override.get("proxy_mode").and_then(Value::as_str),
-        Some("metadata-only")
-    );
-}
-
-#[test]
-fn sorafs_cli_taikai_bundle_generates_artifacts() {
-    let dir = tempdir().expect("tempdir");
-    let payload_path = dir.path().join("segment_bundle.bin");
-    fs::write(&payload_path, b"bundle-me").expect("write payload");
-    let car_path = dir.path().join("segment_bundle.car");
-    let envelope_path = dir.path().join("segment_bundle.to");
-    let indexes_path = dir.path().join("segment_bundle.index.json");
-    let ingest_path = dir.path().join("segment_bundle.ingest.json");
-    let summary_path = dir.path().join("segment_bundle.summary.json");
-
-    let mut cmd = sorafs_cli_cmd();
-    cmd.arg("taikai")
-        .arg("bundle")
-        .arg(format!("--payload={}", payload_path.display()))
-        .arg(format!("--car-out={}", car_path.display()))
-        .arg(format!("--envelope-out={}", envelope_path.display()))
-        .arg(format!("--indexes-out={}", indexes_path.display()))
-        .arg(format!("--ingest-metadata-out={}", ingest_path.display()))
-        .arg(format!("--summary-out={}", summary_path.display()))
-        .arg("--event-id=demo-event")
-        .arg("--stream-id=stage-b")
-        .arg("--rendition-id=720p")
-        .arg("--track-kind=video")
-        .arg("--codec=avc-high")
-        .arg("--bitrate-kbps=4500")
-        .arg("--resolution=1280x720")
-        .arg("--segment-sequence=7")
-        .arg("--segment-start-pts=700000")
-        .arg("--segment-duration=1000000")
-        .arg("--wallclock-unix-ms=1702561000000")
-        .arg(format!("--manifest-hash={}", "33".repeat(32)))
-        .arg(format!("--storage-ticket={}", "44".repeat(32)))
-        .arg("--ingest-latency-ms=42")
-        .arg("--live-edge-drift-ms=-17")
-        .arg("--ingest-node-id=node-a");
-    cmd.assert().success();
-
-    assert!(car_path.exists(), "car output should exist");
-    assert!(envelope_path.exists(), "envelope output should exist");
-    assert!(indexes_path.exists(), "indexes output should exist");
-    assert!(ingest_path.exists(), "ingest metadata output should exist");
-    assert!(summary_path.exists(), "summary output should exist");
-
-    let envelope_bytes = fs::read(&envelope_path).expect("read envelope");
-    let envelope: TaikaiSegmentEnvelopeV1 =
-        norito::decode_from_bytes(&envelope_bytes).expect("decode envelope");
-    assert_eq!(envelope.segment_sequence, 7);
-    assert_eq!(
-        envelope.instrumentation.encoder_to_ingest_latency_ms,
-        Some(42)
-    );
-    assert_eq!(envelope.instrumentation.live_edge_drift_ms, Some(-17));
-
-    let summary_bytes = fs::read(&summary_path).expect("read summary");
-    let summary_json: Value = from_slice(&summary_bytes).expect("summary json");
-    assert_eq!(
-        summary_json
-            .get("ingest")
-            .and_then(|ingest| ingest.get("event_id"))
-            .and_then(Value::as_str),
-        Some("demo-event")
-    );
-    assert_eq!(
-        summary_json
-            .get("car")
-            .and_then(|car| car.get("cid_multibase"))
-            .and_then(Value::as_str)
-            .map(|s| s.starts_with('b')),
-        Some(true)
-    );
-}
-
-#[test]
-fn sorafs_cli_taikai_bundle_rejects_noncanonical_operator_inputs() {
-    let cases = vec![
-        (
-            "--segment-sequence",
-            "07".to_string(),
-            "canonical unsigned decimal integer",
-        ),
-        (
-            "--segment-start-pts",
-            "700000 ".to_string(),
-            "canonical unsigned decimal integer",
-        ),
-        (
-            "--wallclock-unix-ms",
-            "+1702561000000".to_string(),
-            "canonical unsigned decimal integer",
-        ),
-        (
-            "--live-edge-drift-ms",
-            "+17".to_string(),
-            "canonical signed decimal integer",
-        ),
-        (
-            "--live-edge-drift-ms",
-            "-017".to_string(),
-            "canonical signed decimal integer",
-        ),
-        ("--track-kind", "Video".to_string(), "canonical lowercase"),
-        (
-            "--manifest-hash",
-            format!("0x{}", "33".repeat(32)),
-            "hex prefix",
-        ),
-        ("--manifest-hash", "00".repeat(32), "all zero"),
-        (
-            "--storage-ticket",
-            format!("{}4A", "44".repeat(31)),
-            "lowercase hex",
-        ),
-        ("--bitrate-kbps", "0".to_string(), "greater than zero"),
-        ("--segment-duration", "0".to_string(), "greater than zero"),
-    ];
-
-    for (flag, value, expected) in cases {
-        let dir = tempdir().expect("tempdir");
-        let payload_path = dir.path().join("segment_bundle.bin");
-        fs::write(&payload_path, b"bundle-me").expect("write payload");
-        let car_path = dir.path().join("segment_bundle.car");
-        let envelope_path = dir.path().join("segment_bundle.to");
-        let indexes_path = dir.path().join("segment_bundle.index.json");
-        let ingest_path = dir.path().join("segment_bundle.ingest.json");
-        let summary_path = dir.path().join("segment_bundle.summary.json");
-
-        let mut args = vec![
-            "taikai".to_string(),
-            "bundle".to_string(),
-            format!("--payload={}", payload_path.display()),
-            format!("--car-out={}", car_path.display()),
-            format!("--envelope-out={}", envelope_path.display()),
-            format!("--indexes-out={}", indexes_path.display()),
-            format!("--ingest-metadata-out={}", ingest_path.display()),
-            format!("--summary-out={}", summary_path.display()),
-            "--event-id=demo-event".to_string(),
-            "--stream-id=stage-b".to_string(),
-            "--rendition-id=720p".to_string(),
-            "--track-kind=video".to_string(),
-            "--codec=avc-high".to_string(),
-            "--bitrate-kbps=4500".to_string(),
-            "--resolution=1280x720".to_string(),
-            "--segment-sequence=7".to_string(),
-            "--segment-start-pts=700000".to_string(),
-            "--segment-duration=1000000".to_string(),
-            "--wallclock-unix-ms=1702561000000".to_string(),
-            format!("--manifest-hash={}", "33".repeat(32)),
-            format!("--storage-ticket={}", "44".repeat(32)),
-            "--ingest-latency-ms=42".to_string(),
-            "--live-edge-drift-ms=-17".to_string(),
-            "--ingest-node-id=node-a".to_string(),
-        ];
-        let replacement = format!("{flag}={value}");
-        let mut replaced = false;
-        for arg in &mut args {
-            if arg.starts_with(&format!("{flag}=")) {
-                *arg = replacement.clone();
-                replaced = true;
-            }
-        }
-        assert!(replaced, "test case flag {flag} must replace a base arg");
-
-        let output = sorafs_cli_cmd()
-            .args(args)
-            .output()
-            .expect("run taikai bundle");
-        assert!(
-            !output.status.success(),
-            "{flag}={value:?} unexpectedly succeeded"
-        );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains(expected),
-            "{flag}={value:?} stderr should contain {expected:?}, got: {stderr}"
-        );
-        for path in [
-            &car_path,
-            &envelope_path,
-            &indexes_path,
-            &ingest_path,
-            &summary_path,
-        ] {
-            assert!(
-                !path.exists(),
-                "{flag}={value:?} must fail before writing {}",
-                path.display()
-            );
-        }
-    }
-}
+include!("sorafs_cli/fetch_and_taikai_security.rs");

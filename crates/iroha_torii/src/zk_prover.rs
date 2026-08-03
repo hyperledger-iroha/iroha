@@ -1927,6 +1927,18 @@ mod tests {
 
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
 
+    #[test]
+    fn report_summary_lock_remains_serialized_and_usable_after_writer_panic() {
+        let panic = std::thread::spawn(|| {
+            let _guard = super::report_summary_lock().lock();
+            panic!("intentional report-summary writer panic");
+        })
+        .join();
+
+        assert!(panic.is_err());
+        let _guard = super::report_summary_lock().lock();
+    }
+
     fn configure_test_cfg(allowed_circuits: Vec<String>) {
         let fixture_len = fixture_attachment_bytes().len() as u64;
         let max_scan_bytes = fixture_len.saturating_add(TEST_SCAN_BUDGET_MARGIN_BYTES);
@@ -4596,6 +4608,5 @@ mod tests {
         assert!(!ids.contains(&reports[1000].id));
     }
 
-    #[test]
     include!("zk_prover/scanner_tests.rs");
 }

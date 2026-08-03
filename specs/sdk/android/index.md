@@ -176,8 +176,8 @@ String meteringKeyHex = "<32-byte-ed25519-metering-public-key-hex>";
 VpnQuote quote = transport.createVpnQuote(
     new VpnQuoteCreateRequest("standard", meteringKeyHex), auth).join();
 
-// Submit quote.openLeaseInstruction() / quote.txInstructions() as a normal
-// signed transaction, then pass the committed transaction hash back to Torii.
+// Submit quote.openLeaseInstruction() as a normal signed transaction, then
+// pass the committed transaction hash back to Torii.
 VpnSession session = transport.createVpnSession(
     new VpnSessionCreateRequest(
         quote.exitClass(),

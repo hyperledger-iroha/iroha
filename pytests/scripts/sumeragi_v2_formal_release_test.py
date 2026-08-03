@@ -165,7 +165,7 @@ case "${{1:-}}" in
         fi
         output="${{@: -1}}"
         printf '%s\n' \
-          '{{"backend_verification":true,"canonical_encoding":"utf8-json-sort-keys-compact-lf-v1","certificate_type":"production_trace_extraction_theorem","schema_version":1,"theorem":"sumeragi-v2-production-in-flight-first-release-trace-extraction"}}' \
+          '{{"backend_verification":true,"canonical_encoding":"utf8-json-sort-keys-compact-lf-v1","certificate_type":"production_trace_extraction_theorem","schema_version":2,"theorem":"sumeragi-v2-production-in-flight-first-release-trace-extraction"}}' \
           >"$output"
         exit 0
         ;;

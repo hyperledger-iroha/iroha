@@ -15,8 +15,9 @@
 //! - and a BFV-backed secret programmed evaluator with an instruction-driven
 //!   RAM-style encrypted state machine.
 
-use std::{string::String, vec::Vec};
+use std::{fmt, ops::Deref, str::FromStr, string::String, sync::Arc, vec::Vec};
 
+use hex::FromHex as _;
 use hkdf::Hkdf;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -72,7 +73,122 @@ const RAM_LFE_PROOF_BACKEND_MAX_BYTES: usize = 128;
 const RAM_LFE_PROOF_CIRCUIT_ID_MAX_BYTES: usize = 256;
 const RAM_LFE_PROOF_VERIFYING_KEY_MAX_BYTES: usize = 1_048_576;
 const MAX_INPUT_BYTES: usize = 1_048_576;
-const MAX_SECRET_BYTES: usize = 4096;
+/// Maximum hidden RAM-LFE secret size accepted by evaluators and runtime configuration.
+pub const RAM_LFE_SECRET_MAX_BYTES: usize = 4096;
+
+const RAM_LFE_SECRET_REDACTED: &str = "[REDACTED RAM-LFE secret]";
+
+/// Validated, zeroizing hidden RAM-LFE secret material.
+///
+/// Clones share one allocation so passing configuration into a runtime does not leave additional
+/// secret copies in memory. The allocation is zeroized when its final owner is dropped, and debug
+/// formatting never exposes its contents.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RamLfeSecret(Arc<Zeroizing<Vec<u8>>>);
+
+impl RamLfeSecret {
+    /// Borrow the validated secret bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+
+    /// Return the secret length without exposing its contents.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Return whether this secret is empty.
+    ///
+    /// Constructed values are always non-empty; this method is provided for slice-like ergonomics.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Debug for RamLfeSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(RAM_LFE_SECRET_REDACTED)
+    }
+}
+
+impl AsRef<[u8]> for RamLfeSecret {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl Deref for RamLfeSecret {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_bytes()
+    }
+}
+
+impl TryFrom<Vec<u8>> for RamLfeSecret {
+    type Error = RamLfeSecretError;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        let bytes = Zeroizing::new(bytes);
+        if bytes.is_empty() {
+            return Err(RamLfeSecretError::Empty);
+        }
+        if bytes.len() > RAM_LFE_SECRET_MAX_BYTES {
+            return Err(RamLfeSecretError::TooLarge {
+                actual: bytes.len(),
+                maximum: RAM_LFE_SECRET_MAX_BYTES,
+            });
+        }
+        Ok(Self(Arc::new(bytes)))
+    }
+}
+
+impl FromStr for RamLfeSecret {
+    type Err = RamLfeSecretError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value.trim();
+        let value = value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+            .unwrap_or(value);
+        let bytes = Vec::from_hex(value).map_err(RamLfeSecretError::InvalidHex)?;
+        Self::try_from(bytes)
+    }
+}
+
+#[cfg(feature = "json")]
+impl json::JsonDeserialize for RamLfeSecret {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value: String = json::JsonDeserialize::json_deserialize(parser)?;
+        let value = Zeroizing::new(value);
+        value
+            .parse()
+            .map_err(|error: RamLfeSecretError| json::Error::Message(error.to_string()))
+    }
+}
+
+/// Errors raised while constructing hidden RAM-LFE secret material.
+#[derive(Debug, Clone, Copy, Error)]
+pub enum RamLfeSecretError {
+    /// The secret is empty.
+    #[error("RAM-LFE secret must not be empty")]
+    Empty,
+    /// The secret exceeds the evaluator limit.
+    #[error("RAM-LFE secret is {actual} bytes; maximum is {maximum} bytes")]
+    TooLarge {
+        /// Supplied secret length.
+        actual: usize,
+        /// Maximum accepted secret length.
+        maximum: usize,
+    },
+    /// The configured secret is not valid hexadecimal.
+    #[error("RAM-LFE secret is not valid hexadecimal: {0}")]
+    InvalidHex(#[source] hex::FromHexError),
+}
 
 struct ProgramExecutionContext<'a> {
     params: &'a BfvParameters,
@@ -814,7 +930,7 @@ fn validate_secret(secret: &[u8]) -> Result<(), RamLfeError> {
     if secret.is_empty() {
         return Err(RamLfeError::EmptySecret);
     }
-    if secret.len() > MAX_SECRET_BYTES {
+    if secret.len() > RAM_LFE_SECRET_MAX_BYTES {
         return Err(RamLfeError::SecretTooLarge);
     }
     Ok(())
@@ -1600,6 +1716,32 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn ram_lfe_secret_is_validated_shared_and_redacted() {
+        let secret: RamLfeSecret = "0X01020304".parse().expect("valid RAM-LFE secret");
+        let clone = secret.clone();
+
+        assert_eq!(secret.as_bytes(), &[1, 2, 3, 4]);
+        assert_eq!(secret.len(), 4);
+        assert!(Arc::ptr_eq(&secret.0, &clone.0));
+        let debug = format!("{secret:?}");
+        assert!(debug.contains("REDACTED"));
+        assert!(!debug.contains("01020304"));
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn ram_lfe_secret_json_parsing_validates_bounds() {
+        let secret: RamLfeSecret =
+            norito::json::from_str("\"0x01020304\"").expect("valid RAM-LFE secret JSON");
+        assert_eq!(secret.as_bytes(), &[1, 2, 3, 4]);
+
+        assert!("".parse::<RamLfeSecret>().is_err());
+        let oversized = vec![0_u8; RAM_LFE_SECRET_MAX_BYTES + 1];
+        assert!(RamLfeSecret::try_from(oversized).is_err());
+        assert!(norito::json::from_str::<RamLfeSecret>("\"not-hex\"").is_err());
+    }
 
     #[test]
     fn policy_commitment_roundtrip_evaluates() {

@@ -52,10 +52,11 @@ fn grant_revoke_permission_with_tlv() {
         "wonderland",
         "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
     );
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap(),
-        "asset".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
 
     let mut wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),

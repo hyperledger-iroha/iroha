@@ -106,7 +106,10 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             '--manifest "${PRIVACY_CSHARP_NATIVE_MANIFEST}"',
             '--source-root "${ROOT_DIR}"',
             '"${LD_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}"',
-            "FullyQualifiedName~PrivacyNativeTests",
+            "Hyperledger.Iroha.Sdk.Tests.PrivacyNativeTests",
+            "Hyperledger.Iroha.Sdk.Tests.PrivacyExact12FixtureCodecV1Tests",
+            "Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests",
+            '--filter-class "${test_class}"',
         ):
             self.assertIn(marker, source)
 

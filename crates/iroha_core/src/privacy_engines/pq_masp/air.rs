@@ -70,6 +70,12 @@ pub(super) const SCRATCH_VM_DIFFERENCE: usize = SCRATCH_VM_CARRY_AFTER + 1;
 pub(super) const SCRATCH_VM_RESULT: usize = SCRATCH_VM_DIFFERENCE + 1;
 pub(super) const SCRATCH_VM_RESULT_BITS_OFFSET: usize = SCRATCH_VM_RESULT + 1;
 pub(super) const SCRATCH_VM_DIFFERENCE_BITS_OFFSET: usize = SCRATCH_VM_RESULT_BITS_OFFSET + 8;
+// Distinctness rows share the right-hand byte-bit cells with the reserved VM
+// difference decomposition. The row selectors are disjoint, so the alias
+// preserves the committed V0 layout while naming both consumers explicitly.
+pub(super) const SCRATCH_DISTINCT_RIGHT_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
+
+const _: () = assert!(SCRATCH_DISTINCT_RIGHT_BITS_OFFSET == SCRATCH_OFFSET + 81);
 
 pub(super) const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x6a09_e667,
@@ -784,7 +790,7 @@ impl<'a> TraceBuilderV1<'a> {
                 row[SCRATCH_NONZERO_BIT_SELECT_OFFSET + selected_bit] = F::ONE;
                 for bit in 0..8 {
                     row[SCRATCH_BYTE_BITS_OFFSET + bit] = F(u64::from((left_byte >> bit) & 1));
-                    row[SCRATCH_VM_DIFFERENCE_BITS_OFFSET + bit] =
+                    row[SCRATCH_DISTINCT_RIGHT_BITS_OFFSET + bit] =
                         F(u64::from((right_byte >> bit) & 1));
                 }
                 running = 1;

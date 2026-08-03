@@ -6,14 +6,17 @@
 //! unavailable crate graph.  Arithmetic uses the constant-modulus bigint
 //! implementation already re-exported by the pinned `p256` dependency.
 
-use std::sync::OnceLock;
+use std::{
+    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+    sync::OnceLock,
+};
 
 use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},
     traits::Identity,
 };
 use p256::elliptic_curve::bigint::{
-    Encoding, U256, impl_modulus,
+    CtChoice, Encoding, U256, impl_modulus,
     modular::constant_mod::{Residue, ResidueParams},
 };
 use sha3::{Digest as _, Keccak256};
@@ -32,8 +35,106 @@ impl_modulus!(
     "7fffffffffffffffffffffffffffffffbf7f782cb7656b586eb6d2727927c79f"
 );
 
-pub(super) type Field25519 = Residue<Field25519Modulus, { Field25519Modulus::LIMBS }>;
-pub(super) type HelioseleneField = Residue<HelioseleneModulus, { HelioseleneModulus::LIMBS }>;
+type Field25519Residue = Residue<Field25519Modulus, { Field25519Modulus::LIMBS }>;
+type HelioseleneResidue = Residue<HelioseleneModulus, { HelioseleneModulus::LIMBS }>;
+
+macro_rules! define_local_field {
+    ($name:ident, $residue:ty) => {
+        /// Local transparent field boundary used by the reusable proof backend.
+        ///
+        /// Keeping the newtype local makes its cryptographic trait
+        /// implementations coherent while every operation continues to
+        /// delegate to the same constant-modulus residue arithmetic.
+        #[repr(transparent)]
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+        pub(super) struct $name($residue);
+
+        impl $name {
+            pub(super) const ZERO: Self = Self(<$residue>::ZERO);
+            pub(super) const ONE: Self = Self(<$residue>::ONE);
+
+            pub(super) const fn new(value: &U256) -> Self {
+                Self(<$residue>::new(value))
+            }
+
+            pub(super) const fn retrieve(&self) -> U256 {
+                self.0.retrieve()
+            }
+
+            pub(super) const fn square(&self) -> Self {
+                Self(self.0.square())
+            }
+
+            pub(super) const fn pow(&self, exponent: &U256) -> Self {
+                Self(self.0.pow(exponent))
+            }
+
+            pub(super) const fn invert(&self) -> (Self, CtChoice) {
+                let (inverse, is_some) = self.0.invert();
+                (Self(inverse), is_some)
+            }
+        }
+
+        impl Add for $name {
+            type Output = Self;
+
+            fn add(self, rhs: Self) -> Self::Output {
+                Self(self.0 + rhs.0)
+            }
+        }
+
+        impl AddAssign for $name {
+            fn add_assign(&mut self, rhs: Self) {
+                self.0 += rhs.0;
+            }
+        }
+
+        impl Sub for $name {
+            type Output = Self;
+
+            fn sub(self, rhs: Self) -> Self::Output {
+                Self(self.0 - rhs.0)
+            }
+        }
+
+        impl SubAssign for $name {
+            fn sub_assign(&mut self, rhs: Self) {
+                self.0 -= rhs.0;
+            }
+        }
+
+        impl Mul for $name {
+            type Output = Self;
+
+            fn mul(self, rhs: Self) -> Self::Output {
+                Self(self.0 * rhs.0)
+            }
+        }
+
+        impl MulAssign for $name {
+            fn mul_assign(&mut self, rhs: Self) {
+                self.0 *= rhs.0;
+            }
+        }
+
+        impl Neg for $name {
+            type Output = Self;
+
+            fn neg(self) -> Self::Output {
+                Self(-self.0)
+            }
+        }
+
+        impl Zeroize for $name {
+            fn zeroize(&mut self) {
+                *self = Self::ZERO;
+            }
+        }
+    };
+}
+
+define_local_field!(Field25519, Field25519Residue);
+define_local_field!(HelioseleneField, HelioseleneResidue);
 
 const FIELD25519_MODULUS: U256 =
     U256::from_be_hex("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");

@@ -613,8 +613,7 @@ impl AutonomousLaneBlockLatestAttemptV1 {
             lane_incarnation: descriptor.lane_incarnation,
             proposal_height: descriptor.proposal_height,
             previous_lane_block_height: descriptor.previous_lane_block_height,
-            previous_lane_block_descriptor_hash: descriptor
-                .previous_lane_block_descriptor_hash,
+            previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
             lane_block_height: descriptor.lane_block_height,
             origin_proposal_hash: payload.origin_proposal.proposal_hash,
             executable_payload_hash: payload.payload_hash,
@@ -639,7 +638,11 @@ struct AutonomousLifecycleProcessGenerationBodyV1 {
 impl AutonomousLifecycleProcessGenerationBodyV1 {
     const VERSION: u16 = 1;
 
-    fn new(chain_id_hash: Hash, local_peer_id: PeerId, generation: u64) -> Result<Self, &'static str> {
+    fn new(
+        chain_id_hash: Hash,
+        local_peer_id: PeerId,
+        generation: u64,
+    ) -> Result<Self, &'static str> {
         let body = Self {
             version: Self::VERSION,
             chain_id_hash,
@@ -652,18 +655,17 @@ impl AutonomousLifecycleProcessGenerationBodyV1 {
 
     fn validate_structure(&self) -> Result<(), &'static str> {
         if self.version != Self::VERSION || self.generation == 0 {
-            return Err("autonomous lifecycle process generation has an unsupported version or zero generation");
+            return Err(
+                "autonomous lifecycle process generation has an unsupported version or zero generation",
+            );
         }
-        if self
-            .chain_id_hash
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
-        {
+        if self.chain_id_hash.as_ref().iter().all(|byte| *byte == 0) {
             return Err("autonomous lifecycle process generation has a zero chain identity");
         }
         if self.local_peer_id.public_key().try_algorithm().is_err() {
-            return Err("autonomous lifecycle process generation has an invalid local key identity");
+            return Err(
+                "autonomous lifecycle process generation has an invalid local key identity",
+            );
         }
         Ok(())
     }
@@ -686,24 +688,27 @@ struct AutonomousLifecycleProcessGenerationRecordV1 {
 }
 
 impl AutonomousLifecycleProcessGenerationRecordV1 {
-    fn new(chain_id_hash: Hash, local_peer_id: PeerId, generation: u64) -> Result<Self, &'static str> {
+    fn new(
+        chain_id_hash: Hash,
+        local_peer_id: PeerId,
+        generation: u64,
+    ) -> Result<Self, &'static str> {
         let body = AutonomousLifecycleProcessGenerationBodyV1::new(
             chain_id_hash,
             local_peer_id,
             generation,
         )?;
-        let record_hash = body
-            .canonical_hash()
-            .map_err(|_| "autonomous lifecycle process-generation body is not canonically encodable")?;
+        let record_hash = body.canonical_hash().map_err(
+            |_| "autonomous lifecycle process-generation body is not canonically encodable",
+        )?;
         Ok(Self { body, record_hash })
     }
 
     fn validate_structure(&self) -> Result<(), &'static str> {
         self.body.validate_structure()?;
-        let expected_hash = self
-            .body
-            .canonical_hash()
-            .map_err(|_| "autonomous lifecycle process-generation body is not canonically encodable")?;
+        let expected_hash = self.body.canonical_hash().map_err(
+            |_| "autonomous lifecycle process-generation body is not canonically encodable",
+        )?;
         if self.record_hash != expected_hash {
             return Err("autonomous lifecycle process-generation record hash is invalid");
         }
@@ -881,6 +886,78 @@ pub(crate) struct AutonomousLifecycleStableStateV1 {
 
 impl AutonomousLifecycleStableStateV1 {
     const VERSION: u16 = 1;
+
+    /// Reserve the exact fixed-width terminal-state payload for Pending outcomes.
+    /// This deliberately unsupported production projection gives Pending and
+    /// Complete identical framed lengths in the first-release persistence layout.
+    const fn terminal_outcome_pending_reservation() -> Self {
+        const ZERO_IDENTITY: AutonomousLifecycleCanonicalIdentityV1 =
+            AutonomousLifecycleCanonicalIdentityV1 {
+                domain: 0,
+                kind: 0,
+                word0: 0,
+                word1: 0,
+                word2: 0,
+                word3: 0,
+            };
+        Self {
+            version: 0,
+            validator_count: 0,
+            producer: 0,
+            producer_selected_owner: 0,
+            replicated_carrier_owners: 0,
+            payload_binding_a: 0,
+            binding_a: ZERO_IDENTITY,
+            queue: AutonomousLifecycleQueueProjectionV1 {
+                plan_state: 0,
+                selected_count: 0,
+                reservation_state: 0,
+            },
+            carrier: AutonomousLifecycleCarrierProjectionV1 {
+                kura_active: 0,
+                execution_input_durable: 0,
+                ready_qc_durable: false,
+            },
+            session: AutonomousLifecycleSessionProjectionV1 {
+                bodies: 0,
+                ready_authorized: 0,
+                crashed: 0,
+                producer_alive: false,
+            },
+            history: AutonomousLifecycleHistoryProjectionV1 {
+                ever_queue_plan_v4: false,
+                ever_reservation_v5: false,
+                ever_execution_input_durable: 0,
+                ever_ready_authorized: 0,
+                ready_signed: 0,
+                ever_ready_qc_durable: false,
+                reservation_committed_prefix: 0,
+                queue_plan_tombstoned_prefix: 0,
+                reservation_commit_forgotten_prefix: 0,
+                pending_high_water: 0,
+                released_high_water: 0,
+            },
+            decision: AutonomousLifecycleDecisionProjectionV1 {
+                lane_commit_scope: ZERO_IDENTITY,
+                release_scope: ZERO_IDENTITY,
+                lane_commit_owner: 0,
+                release_owner: 0,
+                wsv_committed: false,
+                application_count: 0,
+                applied_by: 0,
+            },
+            release: AutonomousLifecycleReleaseProjectionV1 {
+                kura_retired: false,
+                pending_prefix: 0,
+                released_prefix: 0,
+                fifo_restored: false,
+            },
+        }
+    }
+
+    fn is_terminal_outcome_pending_reservation(self) -> bool {
+        self == Self::terminal_outcome_pending_reservation()
+    }
 
     /// Convert one complete checked production projection into its durable
     /// first-release layout.
@@ -1162,23 +1239,6 @@ impl AutonomousLifecycleCursorPhaseV2 {
         })
     }
 
-    /// Build a terminal phase only from a complete state with exactly one
-    /// terminal economic owner.
-    pub(crate) fn terminal(
-        owner_generation: u64,
-        projection: ProductionInFlightFirstReleaseStateProjection,
-    ) -> Result<Self, &'static str> {
-        if owner_generation == 0 {
-            return Err("autonomous lifecycle terminal generation must be non-zero");
-        }
-        production_in_flight_first_release_terminal_owner(projection)
-            .ok_or("autonomous lifecycle terminal projection has no terminal owner")?;
-        Ok(Self::Terminal {
-            owner_generation,
-            projection: AutonomousLifecycleStableStateV1::from_production(projection),
-        })
-    }
-
     /// Return the process generation that owns this phase.
     #[must_use]
     pub(crate) const fn owner_generation(&self) -> u64 {
@@ -1378,10 +1438,9 @@ impl AutonomousLifecycleAttemptBindingV1 {
         {
             return Err("autonomous lifecycle planned lane height is not exact");
         }
-        let expected_group = lane_queue_reservation_group_binding_from_ordered_keys(
-            payload.reservation_keys.iter(),
-        )
-        .map_err(|_| "autonomous lifecycle reservation group is invalid")?;
+        let expected_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .map_err(|_| "autonomous lifecycle reservation group is invalid")?;
         if reservation_group != expected_group
             || reservation_group.identity.lane_id != descriptor.lane_id
             || reservation_group.identity.dataspace_id != descriptor.dataspace_id
@@ -1401,10 +1460,8 @@ impl AutonomousLifecycleAttemptBindingV1 {
                 &payload.producer,
             )
             .map_err(|_| "autonomous lifecycle proposal identity cannot be derived")?;
-        if reservation_group.identity.reservation_owner_hash
-            != expected_reservation_owner_hash
-            || reservation_group.identity.proposal_identity_hash
-                != expected_proposal_identity_hash
+        if reservation_group.identity.reservation_owner_hash != expected_reservation_owner_hash
+            || reservation_group.identity.proposal_identity_hash != expected_proposal_identity_hash
         {
             return Err(
                 "autonomous lifecycle reservation group has the wrong height-context identity",
@@ -1518,10 +1575,9 @@ impl AutonomousLifecycleAttemptBindingV1 {
             .validate(self.chain_id_hash, self.epoch)
             .map_err(|_| "autonomous lifecycle payload validation failed")?;
         let descriptor = &payload.origin_proposal.descriptor;
-        let group = lane_queue_reservation_group_binding_from_ordered_keys(
-            payload.reservation_keys.iter(),
-        )
-        .map_err(|_| "autonomous lifecycle payload reservation group is invalid")?;
+        let group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .map_err(|_| "autonomous lifecycle payload reservation group is invalid")?;
         let (expected_reservation_owner_hash, expected_proposal_identity_hash) =
             autonomous_lane_reservation_identity_hashes_for_proposal(
                 payload.chain_id_hash,
@@ -1548,13 +1604,13 @@ impl AutonomousLifecycleAttemptBindingV1 {
             || usize::from(self.validator_count) != descriptor.validator_set.len()
             || descriptor.validator_count != u32::from(self.validator_count)
             || descriptor.validator_set_hash != HashOf::new(&descriptor.validator_set)
-            || descriptor.validator_set.get(usize::from(self.producer_index))
+            || descriptor
+                .validator_set
+                .get(usize::from(self.producer_index))
                 != Some(&payload.producer)
             || !self.reservation_group.matches_binding(group)
-            || self.reservation_group.reservation_owner_hash
-                != expected_reservation_owner_hash
-            || self.reservation_group.proposal_identity_hash
-                != expected_proposal_identity_hash
+            || self.reservation_group.reservation_owner_hash != expected_reservation_owner_hash
+            || self.reservation_group.proposal_identity_hash != expected_proposal_identity_hash
         {
             return Err("autonomous lifecycle binding conflicts with its executable payload");
         }
@@ -1591,10 +1647,10 @@ impl AutonomousLifecycleAttemptBindingV1 {
         self.height_context_id
     }
 
-    /// Return the immutable executable-payload hash.
+    /// Return the immutable origin-proposal hash bound into the signed cursor.
     #[must_use]
-    pub(crate) const fn executable_payload_hash(&self) -> Hash {
-        self.executable_payload_hash
+    pub(crate) const fn origin_proposal_hash(&self) -> Hash {
+        self.origin_proposal_hash
     }
 
     /// Return the ordered reservation-group hash.
@@ -1845,9 +1901,8 @@ impl AutonomousLifecycleCursorUnsignedV2 {
     /// Return the exact domain-separated bytes the adapter must sign.
     pub(crate) fn signing_preimage(&self) -> Result<Vec<u8>, norito::Error> {
         let cursor_hash = self.cursor_hash()?;
-        let mut preimage = Vec::with_capacity(
-            AUTONOMOUS_LIFECYCLE_CURSOR_SIGNATURE_DOMAIN.len() + Hash::LENGTH,
-        );
+        let mut preimage =
+            Vec::with_capacity(AUTONOMOUS_LIFECYCLE_CURSOR_SIGNATURE_DOMAIN.len() + Hash::LENGTH);
         preimage.extend_from_slice(AUTONOMOUS_LIFECYCLE_CURSOR_SIGNATURE_DOMAIN);
         preimage.extend_from_slice(cursor_hash.as_ref());
         Ok(preimage)
@@ -1893,16 +1948,12 @@ impl AutonomousLifecycleCursorV2 {
         Ok(bytes)
     }
 
-    fn validate_against_validator_set(
-        &self,
-        validator_set: &[PeerId],
-    ) -> Result<(), &'static str> {
+    fn validate_against_validator_set(&self, validator_set: &[PeerId]) -> Result<(), &'static str> {
         self.validate_signature()?;
         if validator_set.is_empty()
             || validator_set.len() != usize::from(self.body.binding.validator_count)
             || HashOf::new(&validator_set.to_vec()) != self.body.binding.validator_set_hash
-            || validator_set
-                .get(usize::from(self.body.binding.local_validator_index))
+            || validator_set.get(usize::from(self.body.binding.local_validator_index))
                 != Some(&self.body.signer)
         {
             return Err("autonomous lifecycle cursor signer is outside the exact validator set");
@@ -2001,6 +2052,462 @@ impl AutonomousLifecycleCursorV2 {
 
     fn signer_actor(&self) -> u128 {
         self.body.binding.local_actor()
+    }
+}
+
+/// Source-authenticated economic outcome for one exact autonomous attempt.
+///
+/// The compact source coordinates are never sufficient on their own. Kura
+/// reopens the referenced merge entry/carrier or the exact durable retirement
+/// and released claims before either publishing or consuming this record.
+#[allow(variant_size_differences)] // Fixed V1 Norito fields preserve canonical source hashes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub(crate) enum AutonomousLifecycleTerminalOutcomeSourceV1 {
+    /// Canonical WSV application through a globally committed merge carrier.
+    #[codec(index = 1)]
+    CanonicalCarrier {
+        merge_epoch_id: u64,
+        merge_entry_hash: HashOf<MergeLedgerEntry>,
+        carrier_block_height: u64,
+        carrier_block_hash: HashOf<BlockHeader>,
+        application_receipt_hash: HashOf<LaneBlockApplicationReceiptArtifact>,
+    },
+    /// Ordered FIFO restoration after an exact durable losing-slot retirement.
+    #[codec(index = 2)]
+    RetiredRelease { retirement_hash: Hash },
+}
+
+impl AutonomousLifecycleTerminalOutcomeSourceV1 {
+    fn validate_structure(&self) -> Result<(), &'static str> {
+        match self {
+            Self::CanonicalCarrier {
+                merge_epoch_id: _,
+                merge_entry_hash,
+                carrier_block_height,
+                carrier_block_hash,
+                application_receipt_hash,
+            } => {
+                if *carrier_block_height == 0
+                    || merge_entry_hash.as_ref().iter().all(|byte| *byte == 0)
+                    || carrier_block_hash.as_ref().iter().all(|byte| *byte == 0)
+                    || application_receipt_hash
+                        .as_ref()
+                        .iter()
+                        .all(|byte| *byte == 0)
+                {
+                    return Err(
+                        "autonomous lifecycle canonical terminal source has a zero identity",
+                    );
+                }
+            }
+            Self::RetiredRelease { retirement_hash }
+                if retirement_hash.as_ref().iter().all(|byte| *byte == 0) =>
+            {
+                return Err("autonomous lifecycle release terminal source has a zero identity");
+            }
+            Self::RetiredRelease { .. } => {}
+        }
+        Ok(())
+    }
+
+    const fn is_canonical_carrier(&self) -> bool {
+        matches!(self, Self::CanonicalCarrier { .. })
+    }
+
+    const fn is_retired_release(&self) -> bool {
+        matches!(self, Self::RetiredRelease { .. })
+    }
+}
+
+/// Crash-safe publication stage for one exact terminal outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub(crate) enum AutonomousLifecycleTerminalOutcomeStageV1 {
+    /// Source evidence is durable and revalidated before Queue ownership moves.
+    /// The exact reserved value keeps the on-disk stage width equal to Complete.
+    #[codec(index = 1)]
+    Pending {
+        reserved_terminal: AutonomousLifecycleStableStateV1,
+    },
+    /// Queue supplied a move-only, exact terminal-owner authorization.
+    #[codec(index = 2)]
+    Complete {
+        terminal: AutonomousLifecycleStableStateV1,
+    },
+}
+
+/// Hash-protected body of one autonomous lifecycle terminal outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct AutonomousLifecycleTerminalOutcomeBodyV1 {
+    version: u16,
+    binding: AutonomousLifecycleAttemptBindingV1,
+    source: AutonomousLifecycleTerminalOutcomeSourceV1,
+    stage: AutonomousLifecycleTerminalOutcomeStageV1,
+}
+
+/// Durable source/Queue join for terminal ownership of one exact attempt.
+///
+/// A `Pending` file is intentionally a drain blocker. `Complete` is accepted
+/// only after Kura consumes a move-only Queue proof and independently
+/// revalidates this file's source. Canonical archive validation may use a
+/// revalidated complete carrier outcome when a removed validator cannot sign a
+/// new local lifecycle cursor. A local release outcome never substitutes for
+/// globally authenticated retirement/drain evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub(crate) struct AutonomousLifecycleTerminalOutcomeV1 {
+    body: AutonomousLifecycleTerminalOutcomeBodyV1,
+    outcome_hash: Hash,
+}
+
+impl AutonomousLifecycleTerminalOutcomeV1 {
+    const VERSION: u16 = 1;
+
+    fn pending(
+        binding: AutonomousLifecycleAttemptBindingV1,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+    ) -> Result<Self, &'static str> {
+        let body = AutonomousLifecycleTerminalOutcomeBodyV1 {
+            version: Self::VERSION,
+            binding,
+            source,
+            stage: AutonomousLifecycleTerminalOutcomeStageV1::Pending {
+                reserved_terminal:
+                    AutonomousLifecycleStableStateV1::terminal_outcome_pending_reservation(),
+            },
+        };
+        Self::from_body(body)
+    }
+
+    fn complete(
+        &self,
+        terminal: ProductionInFlightFirstReleaseStateProjection,
+    ) -> Result<Self, &'static str> {
+        if !matches!(
+            self.body.stage,
+            AutonomousLifecycleTerminalOutcomeStageV1::Pending { .. }
+        ) {
+            return Err("autonomous lifecycle terminal outcome is not pending");
+        }
+        let body = AutonomousLifecycleTerminalOutcomeBodyV1 {
+            version: Self::VERSION,
+            binding: self.body.binding.clone(),
+            source: self.body.source.clone(),
+            stage: AutonomousLifecycleTerminalOutcomeStageV1::Complete {
+                terminal: AutonomousLifecycleStableStateV1::from_production(terminal),
+            },
+        };
+        Self::from_body(body)
+    }
+
+    fn from_body(body: AutonomousLifecycleTerminalOutcomeBodyV1) -> Result<Self, &'static str> {
+        Self::validate_body(&body)?;
+        let encoded = norito::encode_canonical(&body)
+            .map_err(|_| "autonomous lifecycle terminal outcome body failed encoding")?;
+        let outcome_hash =
+            Hash::new_from_chunks(&[AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN, &encoded]);
+        Ok(Self { body, outcome_hash })
+    }
+
+    fn validate_body(body: &AutonomousLifecycleTerminalOutcomeBodyV1) -> Result<(), &'static str> {
+        if body.version != Self::VERSION {
+            return Err("unsupported autonomous lifecycle terminal outcome version");
+        }
+        body.binding.validate_structure()?;
+        body.source.validate_structure()?;
+        match body.stage {
+            AutonomousLifecycleTerminalOutcomeStageV1::Pending { reserved_terminal } => {
+                if !reserved_terminal.is_terminal_outcome_pending_reservation() {
+                    return Err(
+                        "autonomous lifecycle pending terminal outcome changed its reserved terminal payload",
+                    );
+                }
+            }
+            AutonomousLifecycleTerminalOutcomeStageV1::Complete { terminal } => {
+                body.binding.validate_state(terminal)?;
+                let projection = terminal
+                    .to_production()
+                    .ok_or("unsupported autonomous lifecycle terminal outcome state version")?;
+                let owner = production_in_flight_first_release_terminal_owner(projection)
+                    .ok_or("autonomous lifecycle terminal outcome has no terminal owner")?;
+                if body.source.is_canonical_carrier()
+                    && (!owner.canonical_wsv_owner
+                        || owner.ordinary_fifo_owner
+                        || !owner.commit_terminal
+                        || owner.release_terminal)
+                {
+                    return Err(
+                        "canonical autonomous lifecycle outcome has the wrong terminal owner",
+                    );
+                }
+                if body.source.is_retired_release()
+                    && (!owner.ordinary_fifo_owner
+                        || owner.canonical_wsv_owner
+                        || owner.commit_terminal
+                        || !owner.release_terminal)
+                {
+                    return Err("release autonomous lifecycle outcome has the wrong terminal owner");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_structure(&self) -> Result<(), &'static str> {
+        Self::validate_body(&self.body)?;
+        let encoded = norito::encode_canonical(&self.body)
+            .map_err(|_| "autonomous lifecycle terminal outcome body failed encoding")?;
+        let expected =
+            Hash::new_from_chunks(&[AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN, &encoded]);
+        if self.outcome_hash != expected {
+            return Err("autonomous lifecycle terminal outcome hash does not match its body");
+        }
+        Ok(())
+    }
+
+    fn validate_for_payload(&self, payload: &LaneExecutablePayloadV1) -> Result<(), &'static str> {
+        self.validate_structure()?;
+        self.body.binding.validate_for_payload(payload)
+    }
+
+    fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
+        let bytes = norito::encode_canonical(self)?;
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES {
+            return Err(norito::Error::Message(
+                "autonomous lifecycle terminal outcome exceeds its hard byte limit".to_owned(),
+            ));
+        }
+        Ok(bytes)
+    }
+
+    const fn binding(&self) -> &AutonomousLifecycleAttemptBindingV1 {
+        &self.body.binding
+    }
+
+    fn source(&self) -> AutonomousLifecycleTerminalOutcomeSourceV1 {
+        self.body.source.clone()
+    }
+
+    const fn stage(&self) -> AutonomousLifecycleTerminalOutcomeStageV1 {
+        self.body.stage
+    }
+
+    fn is_complete(&self) -> bool {
+        matches!(
+            self.body.stage,
+            AutonomousLifecycleTerminalOutcomeStageV1::Complete { .. }
+        )
+    }
+
+    fn terminal_projection(
+        &self,
+    ) -> Result<Option<ProductionInFlightFirstReleaseStateProjection>, &'static str> {
+        match self.body.stage {
+            AutonomousLifecycleTerminalOutcomeStageV1::Pending { .. } => Ok(None),
+            AutonomousLifecycleTerminalOutcomeStageV1::Complete { terminal } => terminal
+                .to_production()
+                .ok_or("unsupported autonomous lifecycle terminal outcome state version")
+                .map(Some),
+        }
+    }
+}
+
+/// Move-only Kura proof that one exact canonical source-outcome record is
+/// durable for an ordered reservation group.
+///
+/// The bound record is Pending before first cleanup and may be the identical
+/// source-equivalent Complete record on an idempotent live retry. Queue must
+/// pair it with independently authenticated ApplyCarrier authority; this proof
+/// alone never authorizes canonical ownership or reservation deletion.
+#[must_use = "a canonical lifecycle source-outcome authorization must be consumed by Queue"]
+pub(crate) struct AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization {
+    reservation_group: LaneQueueReservationGroupBindingV1,
+    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    source_outcome_hash: Hash,
+}
+
+impl AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization {
+    /// Consume only when the exact FIFO-ordered key bytes still derive the
+    /// bound group. This deliberately exposes no source selector or terminal
+    /// projection to callers.
+    pub(crate) fn consume_for_queue(
+        self,
+    ) -> Option<(
+        LaneQueueReservationGroupBindingV1,
+        Vec<LaneQueueReservationKeyV2>,
+        Hash,
+    )> {
+        let derived =
+            lane_queue_reservation_group_binding_from_ordered_keys(self.ordered_keys.iter())
+                .ok()?;
+        (derived == self.reservation_group
+            && self
+                .source_outcome_hash
+                .as_ref()
+                .iter()
+                .any(|byte| *byte != 0))
+        .then_some((
+            self.reservation_group,
+            self.ordered_keys,
+            self.source_outcome_hash,
+        ))
+    }
+}
+
+/// Complete canonical carrier source-outcome set published before live Queue
+/// cleanup. Members remain in canonical merge-lane order and cover the whole
+/// execution set. Before first cleanup every member is Pending; a retry after
+/// Queue completion may contain source-equivalent Complete members.
+#[must_use = "the full canonical carrier source-outcome set must reach v2_apply"]
+pub(crate) struct AutonomousLifecycleCanonicalCarrierSourceOutcomePublication {
+    entry_hash: HashOf<MergeLedgerEntry>,
+    queue_authorizations: Vec<(
+        LaneQueueReservationGroupBindingV1,
+        AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization,
+    )>,
+}
+
+impl AutonomousLifecycleCanonicalCarrierSourceOutcomePublication {
+    /// Return the non-authorizing committed-entry identity used to deduplicate
+    /// whole-carrier startup reconstruction requests.
+    #[must_use]
+    pub(crate) const fn entry_hash(&self) -> HashOf<MergeLedgerEntry> {
+        self.entry_hash
+    }
+
+    /// Consume only for the exact committed entry whose complete execution
+    /// set produced these source-outcome records.
+    pub(crate) fn consume_for_v2_apply(
+        self,
+        entry: &MergeLedgerEntry,
+    ) -> Option<
+        Vec<(
+            LaneQueueReservationGroupBindingV1,
+            AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization,
+        )>,
+    > {
+        let expected_count = entry.execution_batch.as_ref()?.lanes.len();
+        let mut seen = BTreeSet::new();
+        (crate::merge::merge_ledger_entry_hash(entry) == self.entry_hash
+            && expected_count != 0
+            && self.queue_authorizations.len() == expected_count
+            && self
+                .queue_authorizations
+                .iter()
+                .all(|(group, authorization)| {
+                    authorization.reservation_group == *group
+                        && seen.insert(group.reservation_group_hash)
+                }))
+        .then_some(self.queue_authorizations)
+    }
+}
+
+/// Move-only proof that one exact retired-release source-outcome record is durable.
+/// Queue must pair this token with the byte-identical release barrier before
+/// it can bind terminal evidence to the record hash.
+#[must_use = "the release source-outcome authorization must be consumed by Queue"]
+pub(crate) struct AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization {
+    barrier: LaneQueueReservationReleaseBarrierV3,
+    source_outcome_hash: Hash,
+}
+
+impl AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization {
+    /// Consume only for the exact durable barrier bound into this token.
+    pub(crate) fn consume_for_queue(
+        self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+    ) -> Option<Hash> {
+        (self.barrier == *barrier
+            && self
+                .source_outcome_hash
+                .as_ref()
+                .iter()
+                .any(|byte| *byte != 0))
+        .then_some(self.source_outcome_hash)
+    }
+}
+
+/// Opaque source-bound input for reconstructing the independent ApplyCarrier
+/// authority associated with a canonical Pending outcome.
+///
+/// `v2_apply` consumes this value, reruns its merge-QC/source-bundle/chain and
+/// State-membership checks, selects exactly `reservation_group`, and only then
+/// may pass a cleanup authority to Queue alongside the separate Pending token.
+#[must_use = "canonical carrier recovery input must be independently authenticated"]
+pub(crate) struct AutonomousLifecyclePendingCanonicalCarrierRecovery {
+    pending_queue_authorizations: Vec<(
+        LaneQueueReservationGroupBindingV1,
+        AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization,
+    )>,
+    complete_reservation_groups: Vec<LaneQueueReservationGroupBindingV1>,
+    reference: CertifiedMergeLedgerReference,
+    entry: MergeLedgerEntry,
+    carrier_block_height: u64,
+    carrier_block_hash: HashOf<BlockHeader>,
+    expected_chain_id_hash: Hash,
+}
+
+impl AutonomousLifecyclePendingCanonicalCarrierRecovery {
+    /// Consume the source coordinates only after their compact reference still
+    /// exactly identifies the complete entry. This method never returns a
+    /// first-release projection or Queue mutation authority.
+    pub(crate) fn consume_for_v2_apply(
+        self,
+    ) -> Option<(
+        Vec<(
+            LaneQueueReservationGroupBindingV1,
+            AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization,
+        )>,
+        Vec<LaneQueueReservationGroupBindingV1>,
+        CertifiedMergeLedgerReference,
+        MergeLedgerEntry,
+        u64,
+        HashOf<BlockHeader>,
+        Hash,
+    )> {
+        let mut seen = BTreeSet::new();
+        let pending_is_exact = !self.pending_queue_authorizations.is_empty()
+            && self
+                .pending_queue_authorizations
+                .iter()
+                .all(|(group, authorization)| {
+                    authorization.reservation_group == *group
+                        && seen.insert(group.reservation_group_hash)
+                });
+        let complete_is_disjoint = self
+            .complete_reservation_groups
+            .iter()
+            .all(|group| seen.insert(group.reservation_group_hash));
+        let expected_group_count = self
+            .entry
+            .execution_batch
+            .as_ref()
+            .map(|batch| batch.lanes.len());
+        (pending_is_exact
+            && complete_is_disjoint
+            && expected_group_count
+                == Some(
+                    self.pending_queue_authorizations.len()
+                        + self.complete_reservation_groups.len(),
+                )
+            && self.reference.matches_entry(&self.entry)
+            && self.carrier_block_height != 0
+            && self
+                .expected_chain_id_hash
+                .as_ref()
+                .iter()
+                .any(|byte| *byte != 0))
+        .then_some((
+            self.pending_queue_authorizations,
+            self.complete_reservation_groups,
+            self.reference,
+            self.entry,
+            self.carrier_block_height,
+            self.carrier_block_hash,
+            self.expected_chain_id_hash,
+        ))
     }
 }
 
@@ -2170,9 +2677,7 @@ struct AutonomousLifecyclePayloadCustodyBindingV1 {
 impl AutonomousLifecyclePayloadCustodyBindingV1 {
     const VERSION: u16 = 1;
 
-    fn producer_queue(
-        binding: &AutonomousLifecycleAttemptBindingV1,
-    ) -> Result<Self, &'static str> {
+    fn producer_queue(binding: &AutonomousLifecycleAttemptBindingV1) -> Result<Self, &'static str> {
         let encoded = norito::encode_canonical(binding)
             .map_err(|_| "producer Queue custody binding is not canonically encodable")?;
         Ok(Self {
@@ -2211,9 +2716,8 @@ impl AutonomousLifecyclePayloadCustodyBindingV1 {
             return Err("autonomous lifecycle custody evidence is malformed");
         }
         if self.source == AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue {
-            let attempt = attempt.ok_or(
-                "producer Queue custody requires its exact autonomous attempt binding",
-            )?;
+            let attempt = attempt
+                .ok_or("producer Queue custody requires its exact autonomous attempt binding")?;
             if attempt.local_actor() != attempt.producer_actor()
                 || *self != Self::producer_queue(attempt)?
             {
@@ -2243,6 +2747,7 @@ impl AutonomousLifecyclePayloadCustodyAuthorization {
     }
 }
 
+#[allow(variant_size_differences)] // Ephemeral checked Queue facts stay inline and allocation-free.
 enum AutonomousLifecycleBootstrapPersistenceAuthentication<'authorization> {
     ProducerQueue {
         height_context_id: HeightContextId,
@@ -2301,9 +2806,7 @@ impl AutonomousLifecycleBootstrapBodyV1 {
                 .iter()
                 .all(|byte| *byte == 0)
         {
-            return Err(
-                "autonomous lifecycle bootstrap has an unsupported version or generation",
-            );
+            return Err("autonomous lifecycle bootstrap has an unsupported version or generation");
         }
         if self
             .executable_payload
@@ -2483,25 +2986,10 @@ impl AutonomousLifecycleBootstrapRecoveryAuthority {
         &self.bootstrap.body.binding
     }
 
-    /// Return the exact executable-payload hash authenticated by the signed bootstrap body.
-    #[must_use]
-    pub(crate) fn executable_payload_hash(&self) -> Hash {
-        self.bootstrap.body.binding.executable_payload_hash()
-    }
-
-    /// Borrow the signature-validated Prepared cursor retained by this bootstrap observation.
-    ///
-    /// This is read-only lifecycle evidence. It carries no file lease and cannot publish or
-    /// advance a cursor.
-    #[must_use]
-    pub(crate) fn prepared_cursor(&self) -> &AutonomousLifecycleCursorV2 {
-        &self.bootstrap.body.prepared_activate
-    }
-
     /// Borrow the signature-validated Live successor retained by this bootstrap observation.
     ///
-    /// The bootstrap body validation proves that this cursor is the contiguous successor of
-    /// [`Self::prepared_cursor`] and names the same immutable attempt.
+    /// The bootstrap body validation proves that this cursor is the contiguous successor of the
+    /// signed Prepared cursor in the same body and names the same immutable attempt.
     #[must_use]
     pub(crate) fn live_cursor(&self) -> &AutonomousLifecycleCursorV2 {
         &self.bootstrap.body.live_activate
@@ -2558,6 +3046,199 @@ impl AutonomousLifecycleBootstrapCompletion {
 }
 
 include!("autonomous_merge_bundle_support.rs");
+
+/// One source-revalidated Pending terminal outcome ready for startup Queue
+/// reconciliation. Every variant is move-only; inventory never exposes raw
+/// lifecycle projections or a constructor from caller-selected identities.
+#[must_use = "Pending lifecycle recovery authority must be consumed during startup"]
+pub(crate) enum AutonomousLifecyclePendingTerminalOutcomeRecovery {
+    /// Canonical source plus exact reservation bytes; Queue still requires its
+    /// independently authenticated ApplyCarrier cleanup authority.
+    Canonical(AutonomousLifecyclePendingCanonicalCarrierRecovery),
+    /// Exact retired release plus Kura's existing action-20..23 authority.
+    RetiredRelease {
+        barrier: LaneQueueReservationReleaseBarrierV3,
+        finalization: AutonomousLaneQueueReleaseFinalizationAuthorization,
+        source_outcome_authorization: AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
+    },
+}
+
+/// Read-only exact Queue-group coordinates for partitioning Pending startup work.
+///
+/// This observation carries no terminal source hash, merge entry, release
+/// finalization, or Queue mutation authority. The ordered keys let startup
+/// distinguish an exact surviving owner prefix from a same-slot,
+/// byte-different Queue group before it chooses whether recovery may run ahead
+/// of the immutable replay receipt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AutonomousLifecyclePendingReservationGroupObservation {
+    binding: LaneQueueReservationGroupBindingV1,
+    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+}
+
+impl AutonomousLifecyclePendingReservationGroupObservation {
+    /// Return the complete order-sensitive reservation-group binding.
+    #[must_use]
+    pub(crate) const fn binding(&self) -> LaneQueueReservationGroupBindingV1 {
+        self.binding
+    }
+
+    /// Borrow the exact source-authenticated FIFO-ordered reservation keys.
+    #[must_use]
+    pub(crate) fn ordered_keys(&self) -> &[LaneQueueReservationKeyV2] {
+        &self.ordered_keys
+    }
+}
+
+/// Source role independently revalidated while proving one expected terminal
+/// outcome file still exists at its exact durable coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AutonomousLifecycleTerminalOutcomeSourceKind {
+    /// Economic effects reached WSV through one committed global carrier.
+    CanonicalCarrier,
+    /// A losing lane slot durably returned its exact reservations to FIFO.
+    RetiredRelease,
+}
+
+/// Durable stage independently revalidated for one expected terminal outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AutonomousLifecycleTerminalOutcomeDurableStage {
+    /// The source is durable but its exact Queue terminal owner is not joined.
+    Pending,
+    /// The source and exact Queue terminal owner are durably joined.
+    Complete,
+}
+
+/// Non-authorizing proof that one caller-expected terminal outcome still
+/// exists, source-revalidates, and has one exact durable stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AutonomousLifecycleTerminalOutcomeStageObservation {
+    binding: LaneQueueReservationGroupBindingV1,
+    source_kind: AutonomousLifecycleTerminalOutcomeSourceKind,
+    stage: AutonomousLifecycleTerminalOutcomeDurableStage,
+}
+
+impl AutonomousLifecycleTerminalOutcomeStageObservation {
+    /// Return the exact order-sensitive reservation-group identity.
+    #[must_use]
+    pub(crate) const fn binding(&self) -> LaneQueueReservationGroupBindingV1 {
+        self.binding
+    }
+
+    /// Return the independently revalidated terminal source role.
+    #[must_use]
+    pub(crate) const fn source_kind(&self) -> AutonomousLifecycleTerminalOutcomeSourceKind {
+        self.source_kind
+    }
+
+    /// Return the exact durable publication stage.
+    #[must_use]
+    pub(crate) const fn stage(&self) -> AutonomousLifecycleTerminalOutcomeDurableStage {
+        self.stage
+    }
+}
+
+impl AutonomousLifecyclePendingTerminalOutcomeRecovery {
+    /// Return the exact non-authorizing reservation groups whose outcome stage
+    /// is still Pending and may therefore require Queue mutation.
+    ///
+    /// Complete canonical members are deliberately excluded. The result is
+    /// fallible so callers cannot partition startup work from malformed or
+    /// duplicate recovery coordinates.
+    #[must_use]
+    pub(crate) fn pending_reservation_groups(
+        &self,
+    ) -> Option<Vec<AutonomousLifecyclePendingReservationGroupObservation>> {
+        match self {
+            Self::Canonical(recovery) => {
+                if recovery.pending_queue_authorizations.is_empty() {
+                    return None;
+                }
+                let mut groups = Vec::new();
+                groups
+                    .try_reserve_exact(recovery.pending_queue_authorizations.len())
+                    .ok()?;
+                let mut seen = BTreeSet::new();
+                for (group, authorization) in &recovery.pending_queue_authorizations {
+                    if authorization.reservation_group != *group
+                        || lane_queue_reservation_group_binding_from_ordered_keys(
+                            authorization.ordered_keys.iter(),
+                        )
+                        .ok()
+                            != Some(*group)
+                        || !seen.insert(group.reservation_group_hash)
+                    {
+                        return None;
+                    }
+                    groups.push(AutonomousLifecyclePendingReservationGroupObservation {
+                        binding: *group,
+                        ordered_keys: authorization.ordered_keys.clone(),
+                    });
+                }
+                Some(groups)
+            }
+            Self::RetiredRelease { barrier, .. } => {
+                let group = lane_queue_reservation_group_binding_from_ordered_keys(
+                    barrier.ordered_keys.iter(),
+                )
+                .ok()?;
+                Some(vec![
+                    AutonomousLifecyclePendingReservationGroupObservation {
+                        binding: group,
+                        ordered_keys: barrier.ordered_keys.clone(),
+                    },
+                ])
+            }
+        }
+    }
+
+    /// Return every already source-validated route/incarnation for independent
+    /// comparison with authoritative startup State. Canonical carrier recovery
+    /// is all-group and may therefore span multiple routes. This accessor is
+    /// deliberately non-authorizing.
+    #[must_use]
+    pub(crate) fn route_identities(&self) -> Vec<(LaneId, DataSpaceId, Hash)> {
+        match self {
+            Self::Canonical(recovery) => recovery
+                .pending_queue_authorizations
+                .iter()
+                .map(|(group, _)| group)
+                .chain(recovery.complete_reservation_groups.iter())
+                .map(|group| {
+                    (
+                        group.identity.lane_id,
+                        group.identity.dataspace_id,
+                        group.identity.lane_incarnation,
+                    )
+                })
+                .collect(),
+            Self::RetiredRelease { barrier, .. } => vec![(
+                barrier.lane_id,
+                barrier.dataspace_id,
+                barrier.lane_incarnation,
+            )],
+        }
+    }
+
+    /// Count exact Pending outcome files represented by this recovery unit.
+    #[must_use]
+    pub(crate) fn pending_outcome_count(&self) -> usize {
+        match self {
+            Self::Canonical(recovery) => recovery.pending_queue_authorizations.len(),
+            Self::RetiredRelease { .. } => 1,
+        }
+    }
+
+    /// Return the source-validated chain binding for comparison with the
+    /// active height context before Queue mutation.
+    #[must_use]
+    pub(crate) const fn chain_id_hash(&self) -> Hash {
+        match self {
+            Self::Canonical(recovery) => recovery.expected_chain_id_hash,
+            Self::RetiredRelease { barrier, .. } => barrier.chain_id_hash,
+        }
+    }
+}
 
 /// Durable state of one autonomous executable-entrypoint owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]

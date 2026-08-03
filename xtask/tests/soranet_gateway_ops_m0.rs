@@ -36,9 +36,9 @@ receivers:\n\
   otlp:\n\
     protocols:\n\
       grpc:\n\
-        endpoint: 0.0.0.0:4317\n\
+        endpoint: 127.0.0.1:4317\n\
       http:\n\
-        endpoint: 0.0.0.0:4318\n\
+        endpoint: 127.0.0.1:4318\n\
   prometheus:\n\
     config:\n\
       scrape_configs:\n\

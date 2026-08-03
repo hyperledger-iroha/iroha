@@ -427,7 +427,7 @@ internal object CandidateLabHarness {
                 .put("candidate_lab_marker", BuildConfig.CANDIDATE_LAB_MARKER)
                 .put("candidate_record_sha256", identity.candidateRecordSha256)
                 .put("candidate_manifest_sha256", identity.candidateManifestSha256)
-                .put("candidate_stage_manifest_path", "candidate-stage-manifest-v1.json")
+                .put("candidate_stage_manifest_path", "candidate-stage-manifest-v2.json")
                 .put(
                     "candidate_stage_manifest_sha256",
                     BuildConfig.CANDIDATE_STAGE_MANIFEST_SHA256,
@@ -849,7 +849,7 @@ internal object CandidateLabHarness {
                 .put("slot_id", BuildConfig.SLOT_ID)
                 .put("candidate_record_sha256", identity.candidateRecordSha256)
                 .put("candidate_manifest_sha256", identity.candidateManifestSha256)
-                .put("candidate_stage_manifest_path", "candidate-stage-manifest-v1.json")
+                .put("candidate_stage_manifest_path", "candidate-stage-manifest-v2.json")
                 .put(
                     "candidate_stage_manifest_sha256",
                     BuildConfig.CANDIDATE_STAGE_MANIFEST_SHA256,
@@ -955,7 +955,7 @@ internal object CandidateLabHarness {
             .put("candidate_record_sha256", identity.candidateRecordSha256)
             .put("candidate_manifest_path", "evidence/candidate/manifest-v4.norito")
             .put("candidate_manifest_sha256", identity.candidateManifestSha256)
-            .put("candidate_stage_manifest_path", "candidate-stage-manifest-v1.json")
+            .put("candidate_stage_manifest_path", "candidate-stage-manifest-v2.json")
             .put(
                 "candidate_stage_manifest_sha256",
                 BuildConfig.CANDIDATE_STAGE_MANIFEST_SHA256,
@@ -1003,7 +1003,7 @@ internal object CandidateLabHarness {
         }
         val stageManifest = readAsset(
             context,
-            "stage/candidate-stage-manifest-v1.json",
+            "stage/candidate-stage-manifest-v2.json",
             MAX_STAGE_MANIFEST_BYTES,
         )
         check(sha256(stageManifest) == BuildConfig.CANDIDATE_STAGE_MANIFEST_SHA256) {
@@ -1088,7 +1088,7 @@ internal object CandidateLabHarness {
             val actual = mutableSetOf<String>()
             val iterator = value.keys()
             while (iterator.hasNext()) actual += iterator.next()
-            check(actual == fields) { "$label fields are not the exact V1 contract" }
+            check(actual == fields) { "$label fields are not the exact contract" }
         }
         fun nonzeroSha256(value: String, label: String): String = value.also {
             check(it.matches(Regex("^[0-9a-f]{64}$")) && it != "0".repeat(64)) {
@@ -1103,6 +1103,7 @@ internal object CandidateLabHarness {
                 "schema", "version", "stage_manifest_path", "stage_manifest_mode",
                 "stage_manifest_size_bytes", "candidate_record_sha256",
                 "candidate_manifest_sha256", "candidate_validation_report_sha256",
+                "qualification_receipt_sha256", "qualified_candidate_sha256",
                 "scenario_inventory_sha256", "source_commit", "source_tree_sha256",
                 "source_repo_dirty", "validator", "entry_count", "scenario_entry_count",
                 "entries",
@@ -1111,10 +1112,10 @@ internal object CandidateLabHarness {
         )
         check(
             manifest.getString("schema") ==
-                "iroha.kagemusha.android_candidate_stage_manifest.v1" &&
-                manifest.getInt("version") == 1 &&
+                "iroha.kagemusha.android_candidate_stage_manifest.v2" &&
+                manifest.getInt("version") == 2 &&
                 manifest.getString("stage_manifest_path") ==
-                "candidate-stage-manifest-v1.json" &&
+                "candidate-stage-manifest-v2.json" &&
                 manifest.getString("stage_manifest_mode") == "0600" &&
                 manifest.getLong("stage_manifest_size_bytes") == manifestBytes.size.toLong() &&
                 manifest.getString("candidate_record_sha256") ==
@@ -1124,7 +1125,7 @@ internal object CandidateLabHarness {
                 manifest.getString("source_commit") == BuildConfig.SOURCE_COMMIT &&
                 manifest.getString("source_tree_sha256") == BuildConfig.SOURCE_TREE_SHA256 &&
                 !manifest.getBoolean("source_repo_dirty") &&
-                manifest.getInt("entry_count") == 44 &&
+                manifest.getInt("entry_count") == 45 &&
                 manifest.getInt("scenario_entry_count") == 33,
         ) { "candidate stage manifest identity is not exact" }
 
@@ -1174,7 +1175,8 @@ internal object CandidateLabHarness {
             listOf(
                 "evidence/candidate/candidate-v4.norito",
                 "evidence/candidate/manifest-v4.norito",
-                "evidence/candidate/candidate-validation-v1.json",
+                "evidence/candidate/candidate-validation-v2.json",
+                "evidence/candidate/recursive-step-two-qualification-v4.norito",
             ) +
                 artifacts.map { "evidence/candidate/artifacts/${it.fileName}" } +
                 stageScenarioFiles.map { "scenario/$it" }
@@ -1222,9 +1224,96 @@ internal object CandidateLabHarness {
                 BuildConfig.CANDIDATE_MANIFEST_SHA256,
         )
         check(
-            measured.getValue("evidence/candidate/candidate-validation-v1.json").sha256 ==
+            measured.getValue("evidence/candidate/candidate-validation-v2.json").sha256 ==
                 manifest.getString("candidate_validation_report_sha256"),
         )
+        val receiptSha256 =
+            measured.getValue(
+                "evidence/candidate/recursive-step-two-qualification-v4.norito",
+            ).sha256
+        val qualifiedCandidateSha256 = qualifiedCandidateSha256(
+            BuildConfig.CANDIDATE_RECORD_SHA256,
+            receiptSha256,
+        )
+        check(
+            receiptSha256 == manifest.getString("qualification_receipt_sha256") &&
+                qualifiedCandidateSha256 == manifest.getString("qualified_candidate_sha256"),
+        ) { "candidate stage does not bind its qualification receipt" }
+        val validationBytes = readAsset(
+            context,
+            "candidate/candidate-validation-v2.json",
+            MAX_STAGE_MANIFEST_BYTES,
+        )
+        val validation = JSONObject(validationBytes.toString(Charsets.UTF_8))
+        requireFields(
+            validation,
+            setOf(
+                "schema", "candidate_record_sha256", "candidate_manifest_sha256",
+                "qualification_receipt_file_name", "qualification_receipt_sha256",
+                "qualified_candidate_sha256", "source_commit", "source_tree_sha256",
+                "source_repo_dirty", "generation", "generation_memory_limit_bytes",
+                "generation_memory_enforcement_profile", "bridge_abi_version",
+                "artifact_count", "artifacts", "topup_finality_roster_file_name",
+                "topup_finality_roster_size_bytes", "topup_finality_roster_sha256",
+            ),
+            "candidate validation report",
+        )
+        check(
+            validation.getString("schema") ==
+                "iroha.kagemusha.recursive_spend.candidate_validation.v2" &&
+                validation.getString("candidate_record_sha256") ==
+                BuildConfig.CANDIDATE_RECORD_SHA256 &&
+                validation.getString("candidate_manifest_sha256") ==
+                BuildConfig.CANDIDATE_MANIFEST_SHA256 &&
+                validation.getString("qualification_receipt_file_name") ==
+                "recursive-step-two-qualification-v4.norito" &&
+                validation.getString("qualification_receipt_sha256") == receiptSha256 &&
+                validation.getString("qualified_candidate_sha256") == qualifiedCandidateSha256 &&
+                validation.getString("source_commit") == BuildConfig.SOURCE_COMMIT &&
+                validation.getString("source_tree_sha256") == BuildConfig.SOURCE_TREE_SHA256 &&
+                !validation.getBoolean("source_repo_dirty") &&
+                validation.getString("generation") == BuildConfig.GENERATION &&
+                validation.getLong("generation_memory_limit_bytes") in
+                1L..(64L * 1024 * 1024 * 1024) &&
+                validation.getString("generation_memory_enforcement_profile") ==
+                "self-physical-footprint-v1" &&
+                validation.getInt("bridge_abi_version") == 21 &&
+                validation.getInt("artifact_count") == artifacts.size &&
+                validation.getString("topup_finality_roster_file_name") ==
+                "topup-finality-roster-v4.norito" &&
+                validation.getLong("topup_finality_roster_size_bytes") > 0 &&
+                nonzeroSha256(
+                    validation.getString("topup_finality_roster_sha256"),
+                    "candidate validation roster",
+                ).isNotEmpty(),
+        ) { "candidate validation report identity is not exact V2" }
+        val validationArtifacts = validation.getJSONArray("artifacts")
+        check(validationArtifacts.length() == artifacts.size)
+        artifacts.forEachIndexed { index, expectedArtifact ->
+            val artifact = validationArtifacts.getJSONObject(index)
+            requireFields(
+                artifact,
+                setOf(
+                    "role", "file_name", "framed_size_bytes", "framed_sha256",
+                    "payload_size_bytes", "payload_sha256",
+                ),
+                "candidate validation artifact $index",
+            )
+            val stageDigest = measured.getValue(
+                "evidence/candidate/artifacts/${expectedArtifact.fileName}",
+            )
+            check(
+                artifact.getString("role") == expectedArtifact.role &&
+                    artifact.getString("file_name") == expectedArtifact.fileName &&
+                    artifact.getLong("framed_size_bytes") == stageDigest.size &&
+                    artifact.getString("framed_sha256") == stageDigest.sha256 &&
+                    artifact.getLong("payload_size_bytes") in 1L until stageDigest.size &&
+                    nonzeroSha256(
+                        artifact.getString("payload_sha256"),
+                        "candidate validation artifact payload $index",
+                    ) != stageDigest.sha256,
+            ) { "candidate validation artifact $index measurement is not exact" }
+        }
         val scenarioInventory = MessageDigest.getInstance("SHA-256")
         scenarioInventory.update(
             "iroha.kagemusha.android-candidate-scenario-inventory.v1\u0000"
@@ -2047,6 +2136,21 @@ internal object CandidateLabHarness {
 
     private fun sha256(bytes: ByteArray): String =
         hex(MessageDigest.getInstance("SHA-256").digest(bytes))
+
+    private fun qualifiedCandidateSha256(
+        candidateRecordSha256: String,
+        qualificationReceiptSha256: String,
+    ): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(
+            "iroha:kagemusha:recursive-spend-qualified-candidate:v4"
+                .toByteArray(Charsets.US_ASCII),
+        )
+        digest.update(byteArrayOf(0))
+        digest.update(decodeHex(candidateRecordSha256))
+        digest.update(decodeHex(qualificationReceiptSha256))
+        return hex(digest.digest())
+    }
 
     private fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")

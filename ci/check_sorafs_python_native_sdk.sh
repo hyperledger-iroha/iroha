@@ -74,6 +74,7 @@ JUNIT_REPORT="${SDK_SESSION}/pytest.xml"
   --junitxml "${JUNIT_REPORT}" \
   tests/cancel_asset_lock_v1_test.py \
   tests/cancel_asset_lock_client_helpers_test.py \
+  tests/client_hard_cut_contract_test.py \
   tests/client_ledger_helpers_test.py \
   tests/sorafs_reference_validation_test.py \
   tests/sorafs_replication_instruction_test.py

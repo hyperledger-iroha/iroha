@@ -75,7 +75,10 @@ use sorafs_manifest::{
     REPLICATION_ORDER_VERSION_V1, RendezvousTopic, ReplicationAssignmentV1, ReplicationOrderSlaV1,
     ReplicationOrderV1, SignatureAlgorithm, StakePointer, StreamBudgetV1, TransportHintV1,
     TransportProtocol,
-    alias_cache::{AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof},
+    alias_cache::{
+        AliasCachePolicy, AliasProofEvaluation, AliasProofState,
+        decode_alias_proof_untrusted_signers,
+    },
     compute_advert_body_digest, compute_envelope_authorization_digest, compute_envelope_digest,
     compute_proposal_digest,
     deal::{MICRO_XOR_PER_XOR, XorQuantity},
@@ -2595,7 +2598,7 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
     let mut proof_bundle: Option<AliasProofBundleV1> = None;
     if let Some(proof_b64) = sora_proof_header {
         match BASE64_STD.decode(proof_b64.as_bytes()) {
-            Ok(bytes) => match decode_alias_proof(&bytes) {
+            Ok(bytes) => match decode_alias_proof_untrusted_signers(&bytes) {
                 Ok(bundle) => {
                     proof_bundle = Some(bundle);
                 }
@@ -4451,11 +4454,7 @@ fn pin_fixture_make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
     let alice = pin_fixture_alice();
-    let domain_id = DomainId::try_new(
-        iroha_data_model::account::address::default_domain_name().as_ref(),
-        "universal",
-    )
-    .expect("default account domain label");
+    let domain_id = DomainId::try_new("default", "universal").expect("explicit fixture domain");
     let world = World::with(
         [Domain::new(domain_id).build(&alice)],
         [Account::new(alice.clone()).build(&alice)],
@@ -4552,24 +4551,17 @@ fn pin_fixture_seed_public_pin_fee_assets(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
 ) -> Result<(), Box<dyn Error>> {
     let fee_asset_id = tx.gov.sorafs_pin_fee_asset_id.clone();
-    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
-        && tx.world().domains().get(&domain_id).is_none()
-    {
-        Register::domain(Domain::new(domain_id)).execute(&pin_fixture_alice(), tx)?;
-    }
     let treasury = tx.gov.sorafs_pin_fee_treasury_account.clone();
     if tx.world().account(&treasury).is_err() {
         Register::account(NewAccount::new(treasury)).execute(&pin_fixture_alice(), tx)?;
     }
     if tx.world().asset_definitions().get(&fee_asset_id).is_none() {
-        Register::asset_definition(
-            AssetDefinition::numeric(fee_asset_id.clone()).with_name(
-                fee_asset_id
-                    .try_name()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "xor".to_owned()),
-            ),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            fee_asset_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .execute(&pin_fixture_alice(), tx)?;
     }
     Mint::asset_quantity(
@@ -6913,7 +6905,7 @@ impl BurnInAccumulator {
 mod tests {
     use std::{collections::HashSet, fs, path::Path, time::Duration};
 
-    use sorafs_manifest::pin_registry::verify_alias_proof_bundle;
+    use sorafs_manifest::pin_registry::verify_alias_proof_bundle_untrusted_signers;
     use tempfile::tempdir;
 
     use super::*;
@@ -7159,8 +7151,10 @@ mod tests {
         let alias_binding =
             pin_fixture_alias_binding_for(&record.root_cid, "sora", "docs", 12, 36, &council_keys)
                 .expect("build alias proof");
-        let alias_bundle = decode_alias_proof(&alias_binding.proof).expect("decode alias proof");
-        verify_alias_proof_bundle(&alias_bundle).expect("alias proof signature verifies");
+        let alias_bundle = decode_alias_proof_untrusted_signers(&alias_binding.proof)
+            .expect("decode alias proof integrity");
+        verify_alias_proof_bundle_untrusted_signers(&alias_bundle)
+            .expect("alias proof signature integrity verifies");
     }
 
     #[test]

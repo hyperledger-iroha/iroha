@@ -18,11 +18,50 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertEqual(PrivacyNativeBridge.requiredBridgeABIVersion, 21)
         XCTAssertEqual(PrivacyNativeBridge.protocolsV1.map(\.rawValue), expected)
         XCTAssertEqual(PrivacyNativeBridge.protocolsV1.count, 12)
+        XCTAssertEqual(
+            PrivacyNativeBridge.protocolsV1.map(\.noritoDiscriminant),
+            (0..<12).map(UInt32.init)
+        )
+        XCTAssertEqual(
+            PrivacyNativeBridge.protocolsV1.map(\.canonicalTypedVariantLabel),
+            protocolRows.map { $0[3] }
+        )
         for (index, label) in expected.enumerated() {
             XCTAssertEqual(
                 try PrivacyProtocolIdV1(canonicalLabel: label),
                 PrivacyNativeBridge.protocolsV1[index]
             )
+            XCTAssertEqual(
+                try PrivacyProtocolIdV1(noritoDiscriminant: UInt32(index)),
+                PrivacyNativeBridge.protocolsV1[index]
+            )
+            XCTAssertEqual(
+                try PrivacyProtocolIdV1(canonicalTypedVariantLabel: protocolRows[index][3]),
+                PrivacyNativeBridge.protocolsV1[index]
+            )
+        }
+    }
+
+    func testCanonicalProofSystemAndNativeEngineTagsMatchRustRegistry() {
+        XCTAssertEqual(
+            PrivacyProofSystemIdV1.allCases.map(\.rawValue),
+            (0..<9).map(UInt32.init)
+        )
+        XCTAssertEqual(
+            PrivacyEngineIdV1.allCases.map(\.rawValue),
+            (0..<9).map(UInt32.init)
+        )
+        XCTAssertEqual(
+            PrivacyNativeBridge.protocolsV1.map { $0.expectedProofSystem.rawValue },
+            [0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0]
+        )
+        XCTAssertEqual(
+            PrivacyNativeBridge.protocolsV1.map { $0.expectedEngine.rawValue },
+            [0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0]
+        )
+        for rejectedTag in [UInt32(9), UInt32.max] {
+            XCTAssertNil(PrivacyProofSystemIdV1(rawValue: rejectedTag))
+            XCTAssertNil(PrivacyEngineIdV1(rawValue: rejectedTag))
         }
     }
 
@@ -70,8 +109,36 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         ] {
             XCTAssertThrowsError(try PrivacyProtocolIdV1(canonicalLabel: rejected)) {
                 XCTAssertEqual(
-                    $0 as? PrivacyCompiledProfileCatalogBridgeError,
-                    .unknownProtocol
+                    $0 as? PrivacyProtocolIdParseErrorV1,
+                    .unknownCanonicalLabel
+                )
+            }
+        }
+
+        for rejectedTag in [UInt32(12), UInt32.max] {
+            XCTAssertThrowsError(
+                try PrivacyProtocolIdV1(noritoDiscriminant: rejectedTag)
+            ) {
+                XCTAssertEqual(
+                    $0 as? PrivacyProtocolIdParseErrorV1,
+                    .unknownNoritoDiscriminant(rejectedTag)
+                )
+            }
+        }
+
+        for rejectedVariant in [
+            "SisWithHints",
+            "IrohaZkAmsV1 ",
+            "irohaZkAmsV1",
+            "ZkAmsRecursiveAdmissionV0",
+            "",
+        ] {
+            XCTAssertThrowsError(
+                try PrivacyProtocolIdV1(canonicalTypedVariantLabel: rejectedVariant)
+            ) {
+                XCTAssertEqual(
+                    $0 as? PrivacyProtocolIdParseErrorV1,
+                    .unknownCanonicalTypedVariantLabel
                 )
             }
         }

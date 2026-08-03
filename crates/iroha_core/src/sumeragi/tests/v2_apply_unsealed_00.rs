@@ -83,109 +83,7 @@ use std::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     sync::{Arc, Mutex},
 };
-#[derive(Debug)]
-struct ReputationRetentionAuthorityForTest {
-    qualification: ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
-    latest: Mutex<Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>>,
-    armed_load_failure_after_cas: Mutex<Option<usize>>,
-    load_failure_countdown: Mutex<Option<usize>>,
-}
-
-impl ReputationRetentionAuthorityForTest {
-    fn new() -> Self {
-        Self {
-            qualification: ReputationFinalizedArchiveRetentionAuthorityQualificationV1::new(
-                7, [0xA7; 32],
-            ),
-            latest: Mutex::new(None),
-            armed_load_failure_after_cas: Mutex::new(None),
-            load_failure_countdown: Mutex::new(None),
-        }
-    }
-
-    fn binding(&self) -> ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
-        ReputationFinalizedArchiveRetentionAuthorityBindingV1::try_new(
-            self.handle().to_owned(),
-            self.qualification.revision(),
-            self.qualification.policy_digest(),
-        )
-        .expect("valid reputation retention authority binding")
-    }
-
-    fn fail_nth_load_after_next_cas(&self, load_number: usize) {
-        assert!(load_number != 0);
-        *self
-            .armed_load_failure_after_cas
-            .lock()
-            .expect("lock armed retention failure") = Some(load_number);
-    }
-}
-
-impl ReputationFinalizedArchiveRetentionAuthorityV1 for ReputationRetentionAuthorityForTest {
-    fn handle(&self) -> &str {
-        "sealed.reputation.archive.v2-apply"
-    }
-
-    fn qualification(
-        &self,
-    ) -> Result<
-        ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
-        ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
-    > {
-        Ok(self.qualification)
-    }
-
-    fn load_latest(
-        &self,
-        _chain_id: &ChainId,
-    ) -> Result<
-        Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>,
-        ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
-    > {
-        let mut countdown = self
-            .load_failure_countdown
-            .lock()
-            .expect("lock retention load failure");
-        if let Some(remaining) = *countdown {
-            if remaining == 1 {
-                *countdown = None;
-                return Err(
-                    ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::Unavailable,
-                );
-            }
-            *countdown = Some(remaining - 1);
-        }
-        drop(countdown);
-        Ok(self.latest.lock().expect("lock retention approval").clone())
-    }
-
-    fn compare_and_swap_latest(
-        &self,
-        _chain_id: &ChainId,
-        expected_revision: Option<[u8; 32]>,
-        next: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
-    ) -> Result<(), ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1> {
-        let mut latest = self.latest.lock().expect("lock retention approval");
-        if latest
-            .as_ref()
-            .map(ReputationFinalizedArchiveRetentionApprovalRecordV1::revision)
-            != expected_revision
-        {
-            return Err(ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::Rejected);
-        }
-        *latest = Some(next.clone());
-        let armed = self
-            .armed_load_failure_after_cas
-            .lock()
-            .expect("lock armed retention failure")
-            .take();
-        *self
-            .load_failure_countdown
-            .lock()
-            .expect("lock retention load failure") = armed;
-        Ok(())
-    }
-}
+include!("v2_apply_unsealed_00_reputation_retention_authority.rs");
 
 #[test]
 fn restart_recovery_classification_distinguishes_commit_boundaries() {
@@ -277,7 +175,7 @@ fn provider_ingest_archive_bounds(
 }
 
 fn fixture_reserve_asset_definition() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("sorafs", "universal").expect("valid fixture settlement domain"),
         "xor".parse().expect("valid fixture settlement asset name"),
     )
@@ -336,11 +234,16 @@ fn fixture_world(
     include_projection_policies: bool,
 ) -> World {
     let reserve_asset_definition = fixture_reserve_asset_definition();
-    let reserve_domain =
-        Domain::new(reserve_asset_definition.domain().clone()).build(transaction_authority);
-    let reserve_asset = AssetDefinition::numeric(reserve_asset_definition)
-        .with_name("XOR".to_owned())
-        .build(transaction_authority);
+    let reserve_domain_id =
+        DomainId::try_new("sorafs", "universal").expect("valid fixture settlement domain");
+    let reserve_domain = Domain::new(reserve_domain_id.clone()).build(transaction_authority);
+    let reserve_asset = AssetDefinition::numeric(
+        reserve_asset_definition,
+        "XOR".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(reserve_domain_id),
+    )
+    .build(transaction_authority);
     let mut world = World::with_assets(
         [reserve_domain],
         [
@@ -2782,4 +2685,305 @@ fn body_with_exact_merge_execution_header(entry: &MergeLedgerEntry) -> SignedBlo
         "signed carrier must preserve the certified application header"
     );
     carrier
+}
+
+struct DeferredCanonicalCarrierStartupFixture {
+    fixture: ApplyFixture,
+    queue: Arc<Queue>,
+    plan: LaneReservationReconciliationPlan,
+    expected_groups: Vec<crate::kura::AutonomousLifecyclePendingReservationGroupObservation>,
+    outcome_paths: Vec<std::path::PathBuf>,
+    _queue_root: tempfile::TempDir,
+}
+
+fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStartupFixture {
+    let fixture = ApplyFixture::new_with_lane_lifecycle();
+    let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+    let queue_root = tempfile::tempdir().expect("deferred carrier Queue journal directory");
+    let plan_path = queue_root.path().join("queue-plans.norito");
+    let reservation_path = queue_root.path().join("lane-reservations.norito");
+    let queue = Arc::new(Queue::from_config(
+        QueueConfig::default(),
+        events_sender.clone(),
+    ));
+    queue
+        .install_plan_journal(&plan_path, 1024 * 1024, true)
+        .expect("install deferred carrier QueuePlan journal");
+    queue
+        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+        .expect("install deferred carrier reservation journal");
+    let first_transaction = fixture
+        .body
+        .external_transactions()
+        .next()
+        .expect("fixture transaction")
+        .clone();
+    let (first_key, first_entrypoint) = reserve_transaction_for_test_with_identity(
+        fixture.state.as_ref(),
+        queue.as_ref(),
+        first_transaction,
+        Hash::new(b"deferred carrier owned group"),
+        Hash::new(b"deferred carrier owned proposal"),
+    );
+
+    let second_lane = install_recreatable_reservation_lane(&fixture);
+    let (absent_events, _absent_receiver) = tokio::sync::broadcast::channel(8);
+    let absent_root = tempfile::tempdir().expect("absent sibling Queue journal directory");
+    let absent_queue = Queue::from_config(QueueConfig::default(), absent_events);
+    absent_queue
+        .install_plan_journal(
+            absent_root.path().join("queue-plans.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("install absent sibling QueuePlan journal");
+    absent_queue
+        .install_lane_reservation_journal(
+            absent_root.path().join("lane-reservations.norito"),
+            1024 * 1024,
+        )
+        .expect("install absent sibling reservation journal");
+    let second_transaction = TransactionBuilder::new(
+        fixture.context.chain_id.clone(),
+        fixture.service.genesis_account.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(
+        Level::INFO,
+        "deferred carrier absent sibling".to_owned(),
+    )])
+    .sign(fixture.genesis_key.private_key());
+    let (second_key, second_entrypoint) = reserve_transaction_for_lane_test_with_identity(
+        fixture.state.as_ref(),
+        &absent_queue,
+        second_transaction,
+        second_lane.id,
+        second_lane.dataspace_id,
+        Hash::new(b"deferred carrier absent group"),
+        Hash::new(b"deferred carrier absent proposal"),
+    );
+
+    let (parent, mut entry) =
+        merge_entry_with_reservation(&fixture.context, first_entrypoint, first_key);
+    let (second_parent, mut second_entry) =
+        merge_entry_with_reservation(&fixture.context, second_entrypoint, second_key);
+    assert_eq!(second_parent.hash(), parent.hash());
+    let mut second_batch = second_entry
+        .execution_batch
+        .take()
+        .expect("absent sibling execution batch");
+    let batch = entry
+        .execution_batch
+        .as_mut()
+        .expect("owned execution batch");
+    assert_eq!(
+        batch.application_block_header,
+        second_batch.application_block_header,
+    );
+    batch.lanes.append(&mut second_batch.lanes);
+    batch.entrypoint_count = batch
+        .lanes
+        .iter()
+        .try_fold(0_u64, |count, lane| {
+            count.checked_add(u64::try_from(lane.entrypoints.len()).ok()?)
+        })
+        .expect("deferred carrier entrypoint count fits u64");
+    batch.entrypoint_merkle_root =
+        crate::merge::merge_execution_entrypoint_merkle_root(&batch.lanes)
+            .expect("deferred carrier entrypoint root");
+    batch.result_merkle_root = crate::merge::merge_execution_result_merkle_root(&batch.lanes)
+        .expect("deferred carrier result root");
+    batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
+    batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+    let payloads = batch
+        .lanes
+        .iter()
+        .map(|execution| {
+            Kura::decode_autonomous_lane_merge_bundle(
+                &execution.source_bundle,
+                execution.autonomous_chain_id_hash,
+                execution.autonomous_epoch,
+            )
+            .expect("decode deferred carrier autonomous source")
+            .autonomous
+            .executable_payload
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(payloads.len(), 2);
+    assert_eq!(payloads[0].reservation_keys.as_slice(), &[first_key]);
+    assert_eq!(payloads[1].reservation_keys.as_slice(), &[second_key]);
+
+    let local_signer = fixture.validator_keys[0].clone();
+    let local_peer = PeerId::new(local_signer.public_key().clone());
+    fixture
+        .kura
+        .bind_local_peer_id(local_peer.clone())
+        .expect("bind deferred carrier local peer");
+    let chain_hash = Hash::new(fixture.context.chain_id.clone().into_inner().as_bytes());
+    let generation = fixture
+        .kura
+        .claim_autonomous_lifecycle_process_generation(chain_hash, &local_peer)
+        .expect("claim deferred carrier process generation");
+    let runtime_lanes = RuntimeLaneConfig::from_catalog(
+        &fixture.state.nexus_snapshot().lane_catalog,
+    );
+    let mut groups = Vec::new();
+    let mut outcome_paths = Vec::new();
+    for payload in &payloads {
+        let descriptor = &payload.origin_proposal.descriptor;
+        fixture
+            .kura
+            .install_lane_incarnation_marker_for_test(
+                runtime_lanes
+                    .entry(descriptor.lane_id)
+                    .expect("deferred carrier runtime lane"),
+                descriptor.lane_incarnation,
+                0,
+            )
+            .expect("install deferred carrier lane marker");
+        fixture
+            .kura
+            .persist_lane_executable_payload(payload, payload.chain_id_hash, payload.epoch)
+            .expect("persist deferred carrier executable payload");
+        groups.push(install_live_lifecycle_cursor_for_apply_test(
+            fixture.kura.as_ref(),
+            &generation,
+            payload,
+            fixture.context.id(),
+            &local_peer,
+            &local_signer,
+        ));
+        outcome_paths.push(
+            fixture
+                .kura
+                .autonomous_lifecycle_terminal_outcome_path_for_test(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    descriptor.proposal_height,
+                )
+                .expect("resolve deferred carrier terminal outcome path"),
+        );
+    }
+
+    let carrier = body_with_exact_merge_execution_header(&entry);
+    fixture
+        .kura
+        .store_block(Arc::new(parent.clone()))
+        .expect("persist deferred carrier parent");
+    fixture
+        .kura
+        .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
+        .expect("persist deferred carrier and merge entry");
+    fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
+    fixture
+        .kura
+        .persist_merge_lane_block_application_receipts(&entry, 2, carrier.hash())
+        .expect("persist deferred carrier application receipts");
+    commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
+    fixture.state.record_direct_committed_transactions(
+        [
+            first_key.signed_transaction_hash,
+            second_key.signed_transaction_hash,
+        ],
+        NonZeroUsize::new(2).expect("deferred carrier State height"),
+    );
+    drop(absent_queue);
+    drop(queue);
+
+    let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+    let replay = queue
+        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+        .expect("replay only the owned deferred carrier group");
+    assert_eq!(replay.restored, 1);
+    queue
+        .install_plan_journal(&plan_path, 1024 * 1024, true)
+        .expect("install replayed deferred carrier QueuePlan journal");
+    queue
+        .replay_plan_journal(fixture.state.as_ref())
+        .expect("replay deferred carrier QueuePlan owner");
+    assert!(queue.lane_reservation_startup_reconciliation_pending());
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture deferred carrier startup snapshot")
+            .ordered_groups
+            .len(),
+        1,
+        "only carrier group A is locally Queue-owned",
+    );
+
+    let _publication = fixture
+        .kura
+        .reconstruct_autonomous_lifecycle_canonical_carrier_source_outcomes_for_group(&groups[0])
+        .expect("materialize complete A+B Pending carrier publication");
+    assert!(outcome_paths.iter().all(|path| path.is_file()));
+    let recoveries = fixture
+        .kura
+        .pending_autonomous_lifecycle_terminal_outcome_inventory()
+        .expect("inventory deferred A+B carrier");
+    assert_eq!(recoveries.len(), 1);
+    let expected_groups = recoveries[0]
+        .pending_reservation_groups()
+        .expect("deferred carrier exposes both Pending groups");
+    assert_eq!(expected_groups.len(), 2);
+
+    let verified_context = verified_successor_context_after_fixture_tip(&fixture);
+    let active_context = verified_context.context().clone();
+    let terminal = crate::sumeragi::v2_lifecycle_recovery::reconcile_pending_autonomous_lifecycle_terminal_outcomes(
+        fixture.state.as_ref(),
+        queue.as_ref(),
+        fixture.kura.as_ref(),
+        &active_context,
+    )
+    .expect("defer whole A+B carrier before Queue planning");
+    assert_eq!(terminal.completed_outcomes(), 0);
+    assert_eq!(terminal.deferred_pending_groups(), 2);
+    let deferred = terminal.into_deferred_terminal_recovery();
+    let initial = plan_lane_reservation_ownership(
+        fixture.state.as_ref(),
+        queue.as_ref(),
+        fixture.kura.as_ref(),
+        &verified_context,
+        None,
+    )
+    .expect("plan the sole Queue-owned carrier anchor");
+    let LaneReservationReconciliationPlanning::Ready(initial) = initial else {
+        panic!("deferred carrier anchor must be immediately plannable");
+    };
+    let planner_evidence = initial
+        .startup_snapshot_recovery_evidence()
+        .expect("extract exact deferred carrier planner evidence");
+    let lifecycle = crate::sumeragi::v2_lifecycle_recovery::reconcile_autonomous_lifecycle_startup(
+        fixture.state.as_ref(),
+        queue.as_ref(),
+        fixture.kura.as_ref(),
+        &active_context,
+        planner_evidence,
+        deferred,
+        Some(&generation),
+        &local_peer,
+        &local_signer,
+    )
+    .expect("pair only Queue-owned A without mutating absent deferred B");
+    assert_eq!(lifecycle.recovered_attempts(), 0);
+    let replanned = plan_lane_reservation_ownership(
+        fixture.state.as_ref(),
+        queue.as_ref(),
+        fixture.kura.as_ref(),
+        &verified_context,
+        Some(lifecycle),
+    )
+    .expect("replan with deferred A+B lifecycle handoff");
+    let LaneReservationReconciliationPlanning::Ready(plan) = replanned else {
+        panic!("paired deferred carrier plan must be ready for Queue application");
+    };
+
+    DeferredCanonicalCarrierStartupFixture {
+        fixture,
+        queue,
+        plan,
+        expected_groups,
+        outcome_paths,
+        _queue_root: queue_root,
+    }
 }

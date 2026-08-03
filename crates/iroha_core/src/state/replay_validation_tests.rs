@@ -1787,7 +1787,7 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
     let user_id = AccountId::new(user_keypair.public_key().clone());
     let domain_id = DomainId::try_new("settlement", "private-fixture").expect("domain id");
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "credit".parse().expect("asset definition name"),
     );
@@ -1795,9 +1795,12 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     let instructions = vec![
         InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
         InstructionBox::from(Register::account(Account::new(user_id.clone()))),
-        InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone()).with_name("credit".to_owned()),
-        )),
+        InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "credit".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))),
         InstructionBox::from(Mint::asset_quantity(7_u32, asset_id.clone())),
         InstructionBox::from(SetKeyValue::account(
             user_id.clone(),

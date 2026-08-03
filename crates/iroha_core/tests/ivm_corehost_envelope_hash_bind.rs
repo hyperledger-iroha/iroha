@@ -51,16 +51,16 @@ fn envelope_hash_is_injected_into_enqueued_unshield() {
     vm.load_program(&metadata.encode()).expect("load metadata");
 
     // Build an Unshield instruction and pass via the vendor bridge
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let unshield = iroha_data_model::isi::zk::Unshield {
         asset,
         to: authority.clone(),
         public_amount: 5_u128.into(),
         inputs: vec![[0u8; 32]],
-        outputs: Vec::new(),
         proof: iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0x01, 0x02, 0x03]),

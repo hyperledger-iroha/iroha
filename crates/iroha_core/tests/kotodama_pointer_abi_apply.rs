@@ -15,7 +15,7 @@ use ivm::{
     kotodama::compiler::{CompilerMode, CompilerOptions},
 };
 use mv::storage::StorageReadOnly;
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 
 fn pointer_abi_test_compiler() -> KotodamaCompiler {
     KotodamaCompiler::new_with_options(CompilerOptions {
@@ -73,24 +73,18 @@ fn world_with_asset_definitions(
     authority: &AccountId,
     asset_definitions: &[AssetDefinitionId],
 ) -> World {
-    let domain_ids: BTreeSet<DomainId> = asset_definitions
-        .iter()
-        .filter_map(|id| id.try_domain().cloned())
-        .collect();
-    let domains = domain_ids
-        .into_iter()
-        .map(|domain_id| Domain::new(domain_id).build(authority));
     let definitions = asset_definitions.iter().cloned().map(|id| {
-        let name = id
-            .try_name()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| id.canonical_address());
-        AssetDefinition::numeric(id)
-            .with_name(name)
-            .build(authority)
+        let name = id.canonical_address();
+        AssetDefinition::numeric(
+            id,
+            name,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(authority)
     });
 
-    World::with_assets(domains, [], definitions, [], [])
+    World::with_assets([], [], definitions, [], [])
 }
 
 fn state_with_asset_definitions(
@@ -109,10 +103,13 @@ fn state_with_asset_definitions(
 #[test]
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
-    let asset_domain = DomainId::try_new("wonder", "universal").unwrap();
+    let asset_domain_id = DomainId::try_new("wonder", "universal").unwrap();
     let asset_name: Name = "coin".parse().unwrap();
     let asset_def_seed: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::new(asset_domain.clone(), asset_name.clone());
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            asset_domain_id.clone(),
+            asset_name.clone(),
+        );
     let sample_asset_literal = asset_def_seed.canonical_address();
     let src = include_str!("../../kotodama_lang/src/samples/asset_ops.ko")
         .replace("coin#wonder", &sample_asset_literal)
@@ -141,21 +138,24 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         eprintln!("queued[{i}]: {instr:?}");
     }
 
-    // Seed the opaque canonical asset definition directly. Ordinary
-    // domain-owned registration intentionally rejects domainless address IDs;
-    // this test exercises the generated asset operations, not registration.
+    // Seed the canonical asset definition directly. This test exercises the
+    // generated asset operations, not registration authorization.
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let asset_def = AssetDefinitionId::parse_address_literal(&sample_asset_literal)
         .expect("canonical asset definition literal");
     let account_domain = Domain::new(account_domain_id).build(&from);
-    let asset_domain_record = Domain::new(asset_domain).build(&from);
+    let asset_domain_record = Domain::new(asset_domain_id).build(&from);
     let from_account = Account::new(from.clone()).build(&from);
     let to_account = Account::new(to.clone()).build(&to);
-    let asset_definition = AssetDefinition::numeric(asset_def.clone())
-        .with_name(asset_name.to_string())
-        .build(&from);
+    let asset_definition = AssetDefinition::numeric(
+        asset_def.clone(),
+        asset_name.to_string(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&from);
     let world = World::with(
         [account_domain, asset_domain_record],
         [from_account, to_account],
@@ -225,10 +225,12 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
 
 #[test]
 fn kotodama_state_loaded_pointers_drive_transfer_asset() {
-    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonder", "universal").unwrap(),
-        "coin".parse().unwrap(),
-    );
+    let asset_domain_id = DomainId::try_new("wonder", "universal").unwrap();
+    let asset_def: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            asset_domain_id.clone(),
+            "coin".parse().unwrap(),
+        );
     let asset_literal = asset_def.canonical_address();
     let src = format!(
         r#"
@@ -279,11 +281,14 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let reg_account_domain =
         RegisterBox::from(Register::domain(Domain::new(account_domain_id.clone())));
     let reg_asset_domain =
-        RegisterBox::from(Register::domain(Domain::new(asset_def.domain().clone())));
+        RegisterBox::from(Register::domain(Domain::new(asset_domain_id.clone())));
     let reg_authority = RegisterBox::from(Register::account(NewAccount::new(authority.clone())));
-    let reg_asset_def = RegisterBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
-    ));
+    let reg_asset_def = RegisterBox::from(Register::asset_definition(AssetDefinition::numeric(
+        asset_def.clone(),
+        "coin".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(asset_domain_id),
+    )));
     let mint = MintBox::from(Mint::asset_quantity(
         1u32,
         AssetId::of(asset_def.clone(), authority.clone()),
@@ -331,10 +336,11 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
 
 #[test]
 fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
-    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonder", "universal").unwrap(),
-        "coin".parse().unwrap(),
-    );
+    let asset_def: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonder", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
     let asset_literal = asset_def.canonical_address();
     let write_src = format!(
         r#"
@@ -408,10 +414,11 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
 
 #[test]
 fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
-    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonder", "universal").unwrap(),
-        "coin".parse().unwrap(),
-    );
+    let asset_def: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonder", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
     let asset_literal = asset_def.canonical_address();
     let authority = ALICE_ID.clone();
     let vault = BOB_ID.clone();

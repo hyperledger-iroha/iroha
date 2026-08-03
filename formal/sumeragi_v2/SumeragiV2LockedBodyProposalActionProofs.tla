@@ -402,7 +402,8 @@ BY IsaT(360)
 THEOREM LockedBodyIgnoredProposalProducerHasDurableDisposition ==
   \A target, leader \in ValidatorIds, lockedRound \in Views,
      subject \in Subjects, leaderView \in Views:
-    \A prepareQc, candidate \in AsyncCandidateSet:
+    \A prepareQc:
+      \A candidate \in AsyncCandidateSet:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ AsyncCandidateServiceLifecycleInvariant
@@ -446,7 +447,8 @@ BY AsyncCandidateDiscardInstallsTerminalTombstone, IsaT(900)
 THEOREM LockedBodyScheduledProposalProducerDepartureIsClassified ==
   \A target, leader \in ValidatorIds, lockedRound \in Views,
      subject \in Subjects, leaderView \in Views:
-    \A prepareQc, candidate \in AsyncCandidateSet:
+    \A prepareQc:
+      \A candidate \in AsyncCandidateSet:
       /\ AsyncStrongTypeInvariant
       /\ AsyncProgressOwnershipInvariant
       /\ AsyncCandidateServiceLifecycleInvariant

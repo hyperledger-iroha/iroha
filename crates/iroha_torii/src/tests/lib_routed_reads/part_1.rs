@@ -1611,7 +1611,7 @@
         let forged_subject = routed_read_test_account(0x99);
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -1670,7 +1670,7 @@
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         bind_account_alias_for_test(&app, &authority, "merchant@universal");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,

@@ -51,8 +51,9 @@ raise the baseline merely to make an unexplained regression pass.
 
 Four fast, read-only checks keep structural debt from returning:
 
-- `python3 scripts/check_source_file_budget.py` caps new production and test
-  source files and applies an exact no-growth ratchet to legacy files that are
+- `python3 scripts/check_source_file_budget.py` caps production and test source
+  files across the complete non-ignored candidate tree, including files not
+  yet staged, and applies an exact no-growth ratchet to legacy files that are
   still above the limit. Intentional splits should lower
   `ci/source_file_budget.json`; unexplained growth must not refresh it.
 - `python3 scripts/check_cargo_feature_hygiene.py` rejects workspace-wide

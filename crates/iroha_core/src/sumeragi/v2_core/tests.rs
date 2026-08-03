@@ -11,7 +11,10 @@ fn signature(byte: u8) -> OpaqueSignature {
     OpaqueSignature::new(vec![byte; 8])
 }
 
-fn context_with_powers(mode: VotingMode, powers: &[u64]) -> HeightContext {
+fn try_context_with_powers(
+    mode: VotingMode,
+    powers: &[u64],
+) -> Result<HeightContext, HeightContextError> {
     let roster = powers
         .iter()
         .enumerate()
@@ -40,7 +43,10 @@ fn context_with_powers(mode: VotingMode, powers: &[u64]) -> HeightContext {
         Digest::repeat(0x53),
         Digest::repeat(0x54),
     )
-    .expect("valid fixture context")
+}
+
+fn context_with_powers(mode: VotingMode, powers: &[u64]) -> HeightContext {
+    try_context_with_powers(mode, powers).expect("valid fixture context")
 }
 
 fn context() -> HeightContext {
@@ -269,6 +275,8 @@ fn height_context_rejects_rosters_above_first_release_bound() {
 
     assert!(matches!(result, Err(HeightContextError::RosterTooLarge)));
 }
+
+include!("tests/committee_fallback_and_retransmit.rs");
 
 #[test]
 fn height_context_requires_one_same_round_parent_commit_geometry() {
@@ -707,7 +715,7 @@ fn proposal_then_prepare_qc_monotonically_upgrades_the_body_fetch() {
     );
     let manifest = *proposal.proposal().manifest();
     let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
-    let mut reducer = Reducer::new(context, Some(id(4)), Generation::new(33)).unwrap();
+    let mut reducer = Reducer::new(context, Some(id(3)), Generation::new(33)).unwrap();
 
     let ordinary = reducer
         .step(Event::ProposalReceived {
@@ -751,7 +759,7 @@ fn equal_prepare_qcs_with_different_quorum_subsets_reuse_first_fetch_authority()
     let second = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 4]);
     assert_eq!(first.reference(), second.reference());
     assert_ne!(first, second);
-    let mut reducer = Reducer::new(context, Some(id(4)), Generation::new(35)).unwrap();
+    let mut reducer = Reducer::new(context, Some(id(3)), Generation::new(35)).unwrap();
 
     let started = reducer
         .step(Event::QuorumCertificateReceived {
@@ -805,7 +813,7 @@ fn prepare_qc_then_proposal_adds_the_manifest_without_dropping_certification() {
     );
     let manifest = *proposal.proposal().manifest();
     let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
-    let mut reducer = Reducer::new(context, Some(id(4)), Generation::new(34)).unwrap();
+    let mut reducer = Reducer::new(context, Some(id(3)), Generation::new(34)).unwrap();
 
     let certified = reducer
         .step(Event::QuorumCertificateReceived {
@@ -1050,22 +1058,11 @@ fn stale_persistence_completions_stutter_while_current_append_is_pending() {
 }
 
 #[test]
-fn quorum_requires_both_validator_count_and_voting_power() {
-    let context = context_with_powers(VotingMode::Npos, &[7, 1, 1, 1]);
-    let count_only = Quorum::calculate(&context, &[id(2), id(3), id(4)]).unwrap();
-    assert_eq!(count_only.signer_count(), 3);
-    assert!(!count_only.satisfies(&context));
-
-    let power_only = Quorum::calculate(&context, &[id(1)]).unwrap();
-    assert_eq!(power_only.voting_power(), VotingPower::new(7));
-    assert!(
-        !power_only.satisfies(&context),
-        "a supermajority of power cannot replace the independent signer-count quorum"
-    );
-
-    let dual = Quorum::calculate(&context, &[id(1), id(2), id(3)]).unwrap();
-    assert!(dual.satisfies(&context));
-    assert!(Quorum::require(&context, &[id(1), id(2), id(3)]).is_ok());
+fn npos_context_rejects_stake_weighted_consensus_votes() {
+    assert!(matches!(
+        try_context_with_powers(VotingMode::Npos, &[7, 1, 1, 1]),
+        Err(HeightContextError::VotingPowerNotOne(validator)) if validator == id(1)
+    ));
 }
 
 #[test]
@@ -1209,7 +1206,7 @@ fn self_contained_timeout_high_qc_cannot_poison_an_eligible_quorum() {
         if signer == 2 {
             let install = only_persist(outcome);
             let WalRecord::InstallTimeout(certificate) = install.record() else {
-                panic!("dual quorum must form a grouped timeout certificate");
+                panic!("equal-vote quorum must form a grouped timeout certificate");
             };
             assert_eq!(certificate.groups().len(), 2);
             assert_eq!(certificate.highest_prepare(), Some(&expected_high));
@@ -7078,7 +7075,7 @@ fn decision_retains_in_flight_body_pipeline_without_duplicate_fetch() {
     let context = context();
     let subject = Subject::repeat(0x84);
     let round = Round::new(context.height(), 0);
-    let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(34)).unwrap();
+    let mut reducer = Reducer::new(context.clone(), Some(id(3)), Generation::new(34)).unwrap();
 
     let proposed = reducer
         .step(Event::ProposalReceived {
@@ -7304,7 +7301,7 @@ fn conflicting_local_manifest_cannot_replace_decided_body_identity() {
     let subject = Subject::repeat(0x8e);
     let round = Round::new(context.height(), 0);
     let mut reducer =
-        Reducer::new(context.clone(), Some(id(4)), Generation::new(43)).expect("reducer");
+        Reducer::new(context.clone(), Some(id(3)), Generation::new(43)).expect("reducer");
     let admitted = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),

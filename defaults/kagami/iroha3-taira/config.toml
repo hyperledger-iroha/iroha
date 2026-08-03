@@ -9,7 +9,7 @@ role = "validator"
 
 [sumeragi.block]
 max_transactions = 96
-max_payload_bytes = 22020096
+max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
@@ -18,8 +18,8 @@ proposal_queue_scan_multiplier = 4
 # The validator-bundle renderer scales body_bytes to at least
 # (N + authenticated_non_validator_sources + 1) * body_source_bytes.
 authenticated_non_validator_sources = 2
-body_bytes = 315621376
-body_source_bytes = 45088768
+body_bytes = 242221056
+body_source_bytes = 34603008
 
 [confidential]
 enabled = true
@@ -29,6 +29,7 @@ tech_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽo
 
 [genesis]
 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
+expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 
 [gov]
 bond_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
@@ -81,6 +82,7 @@ identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBE
 [torii]
 address = "addr:0.0.0.0:8080#B922"
 max_content_len = 1073741824
+preauth_ban_capacity = 4096
 
 [torii.cors]
 allowed_headers = ["accept", "authorization", "content-type", "idempotency-key", "x-api-token", "x-iroha-onboarding-token", "x-iroha-account", "x-iroha-signature", "x-iroha-timestamp-ms", "x-iroha-nonce"]

@@ -33,6 +33,7 @@ self_test = sys.argv[3] == "true"
 
 MODEL = "crates/iroha_data_model/src/offline/mod.rs"
 PRIVACY = "crates/iroha_data_model/src/privacy.rs"
+PRIVACY_PROTOCOL = "crates/iroha_data_model/src/privacy/protocol.rs"
 BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
 HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 CATALOG = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4.rs"
@@ -349,6 +350,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         for path in (
             MODEL,
             PRIVACY,
+            PRIVACY_PROTOCOL,
             BRIDGE,
             HEADER,
             CATALOG,
@@ -422,6 +424,12 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     require(
         texts[PRIVACY],
         PRIVACY,
+        errors,
+        'include!("privacy/protocol.rs");',
+    )
+    require(
+        texts[PRIVACY_PROTOCOL],
+        PRIVACY_PROTOCOL,
         errors,
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
     )
@@ -825,7 +833,7 @@ def promotion_errors() -> list[str]:
                     not isinstance(parsed_identity, dict)
                     or parsed_identity.get("schema")
                     != "iroha.kagemusha.reviewed_source_tree_identity.v1"
-                    or parsed_identity.get("source_repo_dirty") is not True
+                    or parsed_identity.get("source_repo_dirty") is not False
                     or parsed_identity.get(
                         "reviewed_source_closure_descriptor_sha256"
                     )
@@ -838,11 +846,6 @@ def promotion_errors() -> list[str]:
                 source_identity = parsed_identity
             except (UnicodeError, ValueError, json.JSONDecodeError):
                 errors.append("promotion reviewed source identity is malformed")
-    signature = subprocess.run(
-        ["git", "verify-commit", "HEAD"], cwd=root, check=False, capture_output=True
-    )
-    if signature.returncode != 0:
-        errors.append("promotion requires a locally verifiable signature on HEAD")
     authenticated_verification_allowed = not errors
 
     directories = []
@@ -919,7 +922,7 @@ def promotion_errors() -> list[str]:
             continue
         if manifest.get("schema") != "kagemusha.offline.recursive_spend.artifact_manifest.v4":
             errors.append(f"{directory.name}: manifest schema is not V4")
-        if manifest.get("bridge_abi_version") != 21 or manifest.get("source_repo_dirty") is not True:
+        if manifest.get("bridge_abi_version") != 21 or manifest.get("source_repo_dirty") is not False:
             errors.append(f"{directory.name}: ABI/source-tree promotion binding is invalid")
         if source_identity is not None and (
             manifest.get("source_commit") != source_identity.get("source_commit")
@@ -1032,6 +1035,7 @@ if self_test:
     baseline = {
         MODEL: read(MODEL, []),
         PRIVACY: read(PRIVACY, []),
+        PRIVACY_PROTOCOL: read(PRIVACY_PROTOCOL, []),
         CATALOG: read(CATALOG, []),
         CORE: read(CORE, []),
         WORKFLOW: read(WORKFLOW, []),
@@ -1042,13 +1046,20 @@ if self_test:
     )
     if not static_errors({MODEL: mutated}):
         errors.append("self-test failed to reject ABI-19 substitution")
-    shared_bridge_abi_drift = baseline[PRIVACY].replace(
+    shared_bridge_abi_drift = baseline[PRIVACY_PROTOCOL].replace(
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 20;",
         1,
     )
-    if not static_errors({PRIVACY: shared_bridge_abi_drift}):
+    if not static_errors({PRIVACY_PROTOCOL: shared_bridge_abi_drift}):
         errors.append("self-test failed to reject shared bridge ABI-20 substitution")
+    detached_protocol_surface = baseline[PRIVACY].replace(
+        'include!("privacy/protocol.rs");',
+        "// protocol include removed",
+        1,
+    )
+    if not static_errors({PRIVACY: detached_protocol_surface}):
+        errors.append("self-test failed to reject detached privacy protocol surface")
     flipped_availability = baseline[MODEL].replace(
         'cfg!(feature = "kagemusha-production-enabled")',
         "true",

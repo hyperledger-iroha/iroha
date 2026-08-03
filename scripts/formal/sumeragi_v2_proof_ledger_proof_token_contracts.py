@@ -2,6 +2,89 @@
 
 FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
+    ): (
+        "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+        "AsyncRetransmitLifecycleConsumesFreshOrdinal",
+        "AsyncRetransmitLifecycleFreshOrdinalForStep",
+        "AsyncRetransmitLifecyclePhysicalCutForStep",
+        "AsyncRetransmitLifecyclePhysicalCut",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+    ): (
+        "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+        "AsyncRetransmitLifecycleConsumesFreshOrdinal",
+        "AsyncRetransmitLifecycleOrdinal",
+        "AsyncRetransmitLifecyclePhysicalCut",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
+    ): (
+        "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+        "AsyncRetransmitLifecycleConsumesFreshOrdinal",
+        "AsyncRetransmitLifecycleOrdinal",
+        "AsyncRetransmitLifecyclePhysicalCut",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateProducerContinuationPostRetransmitCutCannotOwnRunnerTurn",
+    ): (
+        "AsyncCandidateProducerContinuationRunnableResolutionRecordsForNode",
+        "AsyncCandidateProducerContinuationMayOwnRuntimeTurn",
+        "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestRuntimePrefixSnapshotIsFinite",
+    ): (
+        "CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound",
+        "AsyncFrozenLeaderWireBarrierRankIsFinite",
+        "ExactDecisionRequestRuntimePrefixSnapshot",
+        "ExactDecisionRequestRuntimePrefixSnapshotActive",
+        "ExactDecisionRequestRuntimeFrozenPrefixRank",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestOwnedEpisodeHasRigidPrefixSnapshot",
+    ): (
+        "ExactDecisionRequestRuntimePrefixSnapshotIsFinite",
+        "ExactDecisionRequestClockPrefixSnapshotBinding",
+        "AsyncRetransmitLifecyclePhysicalCut",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestClockPrefixStepIsDescentOrFrame",
+    ): (
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestSameNodeRunConsumesRuntimePrefix",
+    ): (
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestRuntimeBlockedStepIsSafe",
+    ): (
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "FairExactDecisionRequestOwnedPrefixAndRuntimeConverges",
+    ): ("ExactDecisionRequestOwnedEpisodeHasRigidPrefixSnapshot",),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicRetryCoalescesAtExactOrdinal",
+    ): ("AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",),
+    (
         "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
         "AdequateLeaderFixedSelectedOwnerUsesExactAsyncFairness",
     ): (
@@ -1712,7 +1795,7 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ): (
         "AsyncSpecAlwaysStrongTypeInvariant",
         "AsyncLiveSpecProjectsAsyncSpec",
-        "AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode",
+        "AdequateLeaderProtectedPeriodicClosureStartsFiniteOwnerEpisode",
         "AdequateLeaderKnownAdvanceProjectsToServiceExitBudgetDescent",
         "AdequateLeaderFiniteBudgetDescentClosesNonDescentEpisode",
         "AdequateLeaderTargetOccurrenceRankServiceProperty",
@@ -1725,6 +1808,38 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "AdequateLeaderTargetNonDescentEpisodeAtBudget",
         "AdequateLeaderTargetNonDescentEpisodeBudgetFrontier",
         "AdequateLeaderTargetRankServiceExitProperty",
+        "PTL",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicSnapshotCannotReplenish",
+    ): (
+        "AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint",
+        "AsyncSharedSchedulerHighWatermarkIsMonotone",
+        "AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition",
+        "AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition",
+        "AsyncRetransmitFreshLiveEpisodeRetainsSharedLifecycleOrdinal",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+        "AdequateLeaderPeriodicLifecyclePredecessorOwned",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicIdentityServiceClosesSnapshot",
+    ): (
+        "AdequateLeaderProtectedPeriodicSnapshotIsExactAndFinite",
+        "AdequateLeaderProtectedPeriodicRetiredSnapshotPersists",
+        "AdequateLeaderProtectedPeriodicSnapshotCannotReplenish",
+        "AdequateLeaderProtectedPeriodicSnapshotDrained",
+        "PTL",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicClosureStartsFiniteOwnerEpisode",
+    ): (
+        "AdequateLeaderProtectedPeriodicEpisodeClosureProperty",
+        "AdequateLeaderProtectedPeriodicSnapshotDrained",
+        "AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode",
+        "AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty",
         "PTL",
     ),
     (
@@ -3513,7 +3628,7 @@ EXACT_TARGET_NEUTRAL_FORBIDDEN_TOKENS = (
 # structurally by ``check_exact_target_neutral_contract``.
 EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_COUNT = 130
 EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_SHA256 = (
-    "cd7db5290e241081ff3c8230fc43222d15e25483856bf12e8b101a2c1720de4d"
+    "88b4d95068147a2147907a5a03530ccd4178f0ab22df47dd605978f659a2ebb5"
 )
 EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_COUNT = 66
 EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_SHA256 = (
@@ -3621,6 +3736,7 @@ EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
     ),
     "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame": (
         "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
+        "ExactDecisionTargetNeutralDormantLocalReplayReplacementConsumesFrozenCausalCharge",
         "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
         "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
         "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix",
@@ -3628,7 +3744,6 @@ EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
         "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
         "ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesCannotReplenish",
         "ExactDecisionTargetNeutralFrozenOrdinaryIngressCandidatesCannotReplenish",
-        "ExactDecisionTargetNeutralDormantLocalReplayReplacementConsumesFrozenCausalCharge",
         "ExactDecisionTargetNeutralActionInertDormantHasZeroProoflessCharge",
         "ExactDecisionTargetNeutralPostCutLeaderWireAdmissionCannotEnterFrozenPrefix",
         "ExactDecisionTargetNeutralPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
@@ -3640,6 +3755,9 @@ EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
         "CandidateProducerContinuationPreCutOrdinaryIngressConsumesBarrierStage",
         "ExactDecisionTargetNeutralExactLocalReplayReplacesFrozenCharge",
         "AsyncCandidateCausalSuccessorInheritsContinuationPhysicalOwnership",
+        "ExternalContinuationPersistsOrDescendsOrReplayExits",
+        "LocalContinuationPersistsOrDescendsOrReplayExits",
+        "AsyncCandidateProducerContinuationGstExcludesResetReplay",
         "ExactDecisionTargetNeutralLeaderWireStageBudgetForSnapshot",
         "ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot",
         "ExactDecisionTargetNeutralChargeableOrdinaryIngressCandidatesForSnapshot",

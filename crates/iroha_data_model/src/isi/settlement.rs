@@ -821,7 +821,7 @@ mod tests {
     }
 
     fn asset(domain: &str, name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("domain"),
             name.parse().expect("name"),
         )

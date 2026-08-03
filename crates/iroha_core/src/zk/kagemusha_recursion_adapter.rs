@@ -10,10 +10,11 @@
 //! release manifest at V4. It fixes both parities at degree 17, exposes one
 //! 66-element commitment column, keeps the exact 138-`u32`
 //! predecessor/result state boundary private, and caps each processed proving
-//! key at 5 GiB. Production retains authenticated proving keys as file-backed
-//! spools and verifier keys as bounded raw bytes. It parses Eq and Ep one at a
-//! time, then materializes terminal verifier domains only after both proving
-//! keys and populated circuits have been released.
+//! key at 5 GiB. Proving paths retain authenticated proving keys as file-backed
+//! spools and parse Eq and Ep one at a time, then materialize terminal verifier
+//! domains only after both proving keys and populated circuits have been
+//! released. Receipt-only verification instead authenticates and structurally
+//! scans each spool with fixed scratch because it never consumes a proving key.
 //!
 //! The production wire carries the current Eq/Fp and Ep/Fq proofs together.
 //! The fixed verifier derives every transcript challenge, residual coefficient,
@@ -32,6 +33,8 @@ use iroha_data_model::offline::{
     KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5, KAGEMUSHA_COMPACT_PROFILE_VERSION_V5,
     KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5, KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4,
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4, KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4,
@@ -82,7 +85,7 @@ pub const KAGEMUSHA_PASTA_PARENT_STATES_OFFSET_V4: usize =
     KAGEMUSHA_PASTA_PARENT_COUNT_OFFSET_V4 + 1;
 /// Exact stride of one parent/result state.
 pub const KAGEMUSHA_PASTA_STATE_STRIDE_V4: usize =
-    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2;
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5;
 /// First result-state limb.
 pub const KAGEMUSHA_PASTA_RESULT_STATE_OFFSET_V4: usize = KAGEMUSHA_PASTA_PARENT_STATES_OFFSET_V4
     + KAGEMUSHA_PASTA_PARENT_SLOTS_V1 * KAGEMUSHA_PASTA_STATE_STRIDE_V4;
@@ -223,23 +226,101 @@ const KAGEMUSHA_GENERATION_GRAPH_TRANSIENT_DIVISOR_V5: u64 = 4;
 const KAGEMUSHA_GENERATION_V1_PLANNER_RESERVE_BYTES_V5: u64 = 64 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_PROCESS_RESERVE_BYTES_V5: u64 = 2 * 1024 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_RAYON_THREADS_V5: usize = 1;
-const RESOURCE_GUARD_AUTH_FD_ENV_V4: &str = "IROHA_RESOURCE_GUARD_AUTH_FD";
-const RESOURCE_GUARD_AUTH_TOKEN_ENV_V4: &str = "IROHA_RESOURCE_GUARD_AUTH_TOKEN";
-const RESOURCE_GUARD_AUTH_MAGIC_V4: &str = "IROHA_RESOURCE_GUARD_AUTH_V1";
-const RESOURCE_GUARD_AUTH_TOKEN_HEX_BYTES_V4: usize = 64;
-const RESOURCE_GUARD_AUTH_RECORD_MAX_BYTES_V4: usize = 128;
-static KAGEMUSHA_GENERATION_GUARD_CLAIMED_V4: std::sync::atomic::AtomicBool =
+const KAGEMUSHA_GENERATION_MEMORY_POLL_INTERVAL_V4: std::time::Duration =
+    std::time::Duration::from_millis(100);
+static KAGEMUSHA_GENERATION_MEMORY_GUARD_STARTED_V4: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// One-shot proof that the V4 generator inherited the active resource guard.
+/// One-shot proof that the mandatory in-process memory monitor is active.
 ///
-/// Construction consumes the guard's inherited pipe capability. The value is
-/// deliberately neither cloneable nor constructible by callers, so the
-/// allocation-heavy generator cannot be invoked through an ordinary library
-/// call or a stale environment marker.
+/// The effective limit is derived inside Core from physical RAM and the fixed
+/// 64-GiB ceiling. A caller may lower it, but cannot raise or disable it.
+#[derive(Clone, Copy, Debug)]
+pub struct KagemushaGenerationMemoryGuardV4 {
+    effective_memory_limit_bytes: u64,
+    _private: (),
+}
+
+impl KagemushaGenerationMemoryGuardV4 {
+    /// Exact ceiling enforced by the in-process physical-footprint monitor.
+    #[must_use]
+    pub const fn effective_memory_limit_bytes(&self) -> u64 {
+        self.effective_memory_limit_bytes
+    }
+
+    /// Exact enforcement profile committed by generated release metadata.
+    #[must_use]
+    pub const fn memory_enforcement_profile(&self) -> &'static str {
+        KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum KagemushaQualificationMemoryContractModeV4<'guard> {
+    Operator(&'guard KagemushaGenerationMemoryGuardV4),
+    RuntimeCatalog { max_decoded_bytes: u64 },
+}
+
+/// Unforgeable memory-enforcement authority for qualification-role verification.
+///
+/// External operator paths can construct this contract only from an active
+/// [`KagemushaGenerationMemoryGuardV4`]. Core's runtime catalog uses its
+/// separately validated decoded-resident budget through a crate-private
+/// constructor.
 #[derive(Debug)]
-pub struct KagemushaGenerationSupervisorPermitV4 {
-    _not_copy: std::cell::Cell<()>,
+pub struct KagemushaQualificationMemoryContractV4<'guard> {
+    mode: KagemushaQualificationMemoryContractModeV4<'guard>,
+}
+
+impl<'guard> KagemushaQualificationMemoryContractV4<'guard> {
+    /// Bind an operator qualification pass to an active in-process memory guard.
+    #[must_use]
+    pub const fn for_operator(memory_guard: &'guard KagemushaGenerationMemoryGuardV4) -> Self {
+        Self {
+            mode: KagemushaQualificationMemoryContractModeV4::Operator(memory_guard),
+        }
+    }
+
+    pub(crate) fn for_runtime_catalog(max_decoded_bytes: u64) -> Result<Self, String> {
+        if max_decoded_bytes == 0 {
+            return Err(
+                "Kagemusha V4 runtime qualification requires a nonzero decoded-memory budget"
+                    .to_owned(),
+            );
+        }
+        Ok(Self {
+            mode: KagemushaQualificationMemoryContractModeV4::RuntimeCatalog { max_decoded_bytes },
+        })
+    }
+
+    fn validate_candidate(
+        &self,
+        candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+    ) -> Result<(), String> {
+        match self.mode {
+            KagemushaQualificationMemoryContractModeV4::Operator(memory_guard) => {
+                if candidate.manifest.generation_memory_limit_bytes
+                    != memory_guard.effective_memory_limit_bytes()
+                    || candidate.manifest.generation_memory_enforcement_profile
+                        != memory_guard.memory_enforcement_profile()
+                {
+                    return Err(
+                        "Kagemusha V4 candidate memory contract differs from the active operator guard"
+                            .to_owned(),
+                    );
+                }
+            }
+            KagemushaQualificationMemoryContractModeV4::RuntimeCatalog { max_decoded_bytes } => {
+                if max_decoded_bytes == 0 {
+                    return Err(
+                        "Kagemusha V4 runtime qualification lost its decoded-memory budget"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -627,118 +708,700 @@ fn preflight_kagemusha_generation_v4(
     })
 }
 
-fn validate_kagemusha_generation_guard_token_v4(token: &str) -> Result<(), String> {
-    if token.len() != RESOURCE_GUARD_AUTH_TOKEN_HEX_BYTES_V4
-        || !token
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        return Err("Kagemusha V4 resource-guard token is invalid".to_owned());
+fn select_kagemusha_generation_memory_limit_v4(
+    physical_memory_bytes: u64,
+    requested_memory_limit_bytes: Option<u64>,
+) -> Result<u64, String> {
+    let host_half = physical_memory_bytes / 2;
+    let safety_ceiling =
+        host_half.min(KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4);
+    if safety_ceiling == 0 {
+        return Err(
+            "Kagemusha V4 physical-memory capacity is too small to derive a safe ceiling"
+                .to_owned(),
+        );
     }
-    Ok(())
+    match requested_memory_limit_bytes {
+        None => Ok(safety_ceiling),
+        Some(0) => Err("Kagemusha V4 requested memory ceiling must be nonzero".to_owned()),
+        Some(requested) if requested > safety_ceiling => Err(format!(
+            "Kagemusha V4 requested memory ceiling {requested} exceeds the in-process safety ceiling {safety_ceiling}"
+        )),
+        Some(requested) => Ok(requested),
+    }
 }
 
-fn validate_kagemusha_generation_guard_record_v4(record: &[u8], token: &str) -> Result<(), String> {
-    validate_kagemusha_generation_guard_token_v4(token)?;
-    let expected = format!("{RESOURCE_GUARD_AUTH_MAGIC_V4}:{token}\n");
-    if record != expected.as_bytes() {
-        return Err("Kagemusha V4 resource-guard capability is invalid".to_owned());
-    }
-    Ok(())
+/// Versioned schema emitted by the source-sealed memory-capacity query.
+pub const KAGEMUSHA_GENERATION_MEMORY_CAPACITY_SCHEMA_V1: &str =
+    "iroha.kagemusha.memory-capacity.v1";
+/// Exact first-release policy used to derive the generation safety ceiling.
+pub const KAGEMUSHA_GENERATION_MEMORY_CAPACITY_POLICY_V1: &str =
+    "half-effective-physical-cap-absolute-v1";
+
+/// Authoritative memory-policy result derived by the in-process guard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KagemushaGenerationMemoryCapacityV1 {
+    effective_physical_capacity_bytes: u64,
+    safety_ceiling_bytes: u64,
 }
 
-/// Consume the one-shot capability installed by the guarded V4 launcher.
-///
-/// The inherited descriptor is accepted only when it is a pipe containing the
-/// exact nonce-bound guard record and immediate EOF. It is made nonblocking
-/// before the read so malformed direct invocations fail instead of hanging.
-pub fn claim_kagemusha_generation_supervisor_permit_v4()
--> Result<KagemushaGenerationSupervisorPermitV4, String> {
-    if KAGEMUSHA_GENERATION_GUARD_CLAIMED_V4.swap(true, std::sync::atomic::Ordering::AcqRel) {
-        return Err("Kagemusha V4 resource-guard capability was already consumed".to_owned());
+impl KagemushaGenerationMemoryCapacityV1 {
+    /// Physical capacity visible to this process after container limits.
+    #[must_use]
+    pub const fn effective_physical_capacity_bytes(self) -> u64 {
+        self.effective_physical_capacity_bytes
     }
 
-    #[cfg(not(unix))]
-    {
-        Err("Kagemusha V4 guarded generation requires Unix process supervision".to_owned())
+    /// Maximum memory limit accepted by the in-process guard.
+    #[must_use]
+    pub const fn safety_ceiling_bytes(self) -> u64 {
+        self.safety_ceiling_bytes
     }
 
-    #[cfg(unix)]
+    /// Return the bounded canonical record consumed by the guarded launcher.
+    #[must_use]
+    pub fn canonical_record(self) -> String {
+        format!(
+            "{KAGEMUSHA_GENERATION_MEMORY_CAPACITY_SCHEMA_V1} physical={} ceiling={} absolute={} profile={} policy={KAGEMUSHA_GENERATION_MEMORY_CAPACITY_POLICY_V1}",
+            self.effective_physical_capacity_bytes,
+            self.safety_ceiling_bytes,
+            KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4,
+        )
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_memory_kib_v4(contents: &str, field: &str) -> Result<u64, String> {
+    let value = contents
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            (name == field).then_some(value)
+        })
+        .ok_or_else(|| format!("Linux {field} memory counter is unavailable"))?;
+    let mut parts = value.split_ascii_whitespace();
+    let kibibytes = parts
+        .next()
+        .ok_or_else(|| format!("Linux {field} memory counter is empty"))?
+        .parse::<u64>()
+        .map_err(|_| format!("Linux {field} memory counter is invalid"))?;
+    if parts.next() != Some("kB") || parts.next().is_some() || kibibytes == 0 {
+        return Err(format!("Linux {field} memory counter has an invalid unit"));
+    }
+    kibibytes
+        .checked_mul(1024)
+        .ok_or_else(|| format!("Linux {field} memory counter overflows bytes"))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_bounded_linux_text_file_v4(
+    path: &std::path::Path,
+    maximum_bytes: u64,
+) -> Result<String, String> {
+    use std::io::Read as _;
+
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if u64::try_from(bytes.len())
+        .ok()
+        .is_none_or(|length| length == 0 || length > maximum_bytes)
     {
-        use std::{
-            fs::File,
-            io::{ErrorKind, Read as _},
-            os::unix::fs::FileTypeExt as _,
+        return Err(format!("{} is empty or oversized", path.display()));
+    }
+    String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", path.display()))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_bounded_linux_proc_text_v4(path: &str) -> Result<String, String> {
+    const MAX_PROC_MEMORY_TEXT_BYTES: u64 = 1024 * 1024;
+    read_bounded_linux_text_file_v4(std::path::Path::new(path), MAX_PROC_MEMORY_TEXT_BYTES)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum LinuxMemoryCgroupVersionV4 {
+    V1,
+    V2,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinuxMemoryCgroupMembershipV4 {
+    version: LinuxMemoryCgroupVersionV4,
+    path: std::path::PathBuf,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinuxMemoryCgroupMountV4 {
+    version: LinuxMemoryCgroupVersionV4,
+    hierarchy_root: std::path::PathBuf,
+    mount_point: std::path::PathBuf,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_kernel_absolute_path_v4(
+    value: &str,
+    label: &str,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::Component;
+
+    if value.is_empty() || value.len() > 16 * 1024 {
+        return Err(format!("Linux {label} path is empty or oversized"));
+    }
+    let path = std::path::PathBuf::from(value);
+    let mut components = path.components();
+    if !matches!(components.next(), Some(Component::RootDir))
+        || components.any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("Linux {label} path is not canonical and absolute"));
+    }
+    Ok(path)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_memory_cgroup_memberships_v4(
+    contents: &str,
+) -> Result<Vec<LinuxMemoryCgroupMembershipV4>, String> {
+    const MAX_CGROUP_MEMBERSHIP_LINES: usize = 256;
+
+    let mut memberships = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        if index >= MAX_CGROUP_MEMBERSHIP_LINES {
+            return Err("Linux cgroup membership contains too many lines".to_owned());
+        }
+        let mut fields = line.splitn(3, ':');
+        let hierarchy = fields
+            .next()
+            .ok_or_else(|| "Linux cgroup membership hierarchy is missing".to_owned())?;
+        let controllers = fields
+            .next()
+            .ok_or_else(|| "Linux cgroup membership controllers are missing".to_owned())?;
+        let path = fields
+            .next()
+            .ok_or_else(|| "Linux cgroup membership path is missing".to_owned())?;
+        if hierarchy.is_empty()
+            || !hierarchy.bytes().all(|byte| byte.is_ascii_digit())
+            || path.contains('\0')
+        {
+            return Err("Linux cgroup membership line is malformed".to_owned());
+        }
+        let version = if hierarchy == "0" && controllers.is_empty() {
+            Some(LinuxMemoryCgroupVersionV4::V2)
+        } else if controllers
+            .split(',')
+            .any(|controller| controller == "memory")
+        {
+            Some(LinuxMemoryCgroupVersionV4::V1)
+        } else {
+            None
         };
-
-        let descriptor_text = std::env::var(RESOURCE_GUARD_AUTH_FD_ENV_V4).map_err(|_| {
-            "Kagemusha V4 generation must run through scripts/run_kagemusha_v4_generation.py"
-                .to_owned()
-        })?;
-        if descriptor_text.is_empty() || !descriptor_text.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return Err("Kagemusha V4 resource-guard descriptor is invalid".to_owned());
+        if let Some(version) = version {
+            let path = parse_linux_kernel_absolute_path_v4(path, "cgroup membership")?;
+            if memberships
+                .iter()
+                .any(|membership: &LinuxMemoryCgroupMembershipV4| membership.version == version)
+            {
+                return Err("Linux memory cgroup membership is duplicated".to_owned());
+            }
+            memberships.push(LinuxMemoryCgroupMembershipV4 { version, path });
         }
-        let descriptor = descriptor_text
-            .parse::<i32>()
-            .ok()
-            .filter(|descriptor| *descriptor >= 3 && descriptor.to_string() == descriptor_text)
-            .ok_or_else(|| "Kagemusha V4 resource-guard descriptor is invalid".to_owned())?;
-        let token = std::env::var(RESOURCE_GUARD_AUTH_TOKEN_ENV_V4)
-            .map_err(|_| "Kagemusha V4 resource-guard token is missing".to_owned())?;
-        validate_kagemusha_generation_guard_token_v4(&token)?;
+    }
+    if memberships.is_empty() {
+        return Err("Linux process has no discoverable memory cgroup membership".to_owned());
+    }
+    Ok(memberships)
+}
 
-        // Opening `/dev/fd` safely duplicates the inherited pipe without an
-        // unsafe raw-descriptor ownership conversion. Reading the duplicate
-        // consumes the shared one-shot record; the process-global claim above
-        // prevents a second library call from reusing the inherited endpoint.
-        let mut capability = File::open(format!("/dev/fd/{descriptor}"))
-            .map_err(|_| "Kagemusha V4 resource-guard descriptor is unavailable".to_owned())?;
-        if !capability
-            .metadata()
-            .map_err(|_| "Kagemusha V4 resource-guard descriptor is unavailable".to_owned())?
-            .file_type()
-            .is_fifo()
-        {
-            return Err("Kagemusha V4 resource-guard descriptor is not a pipe".to_owned());
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn decode_linux_mountinfo_path_v4(value: &str, label: &str) -> Result<std::path::PathBuf, String> {
+    use std::{os::unix::ffi::OsStringExt as _, path::Component};
+
+    let input = value.as_bytes();
+    if input.is_empty() || input.len() > 16 * 1024 {
+        return Err(format!("Linux {label} mount path is empty or oversized"));
+    }
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'\\' {
+            let octal = input
+                .get(index + 1..index + 4)
+                .ok_or_else(|| format!("Linux {label} mount path has a truncated escape"))?;
+            if !octal.iter().all(|byte| matches!(byte, b'0'..=b'7')) {
+                return Err(format!("Linux {label} mount path has a non-octal escape"));
+            }
+            let value = u16::from(octal[0] - b'0') * 64
+                + u16::from(octal[1] - b'0') * 8
+                + u16::from(octal[2] - b'0');
+            let byte = u8::try_from(value)
+                .map_err(|_| format!("Linux {label} mount path escape exceeds one byte"))?;
+            if byte == 0 {
+                return Err(format!("Linux {label} mount path contains NUL"));
+            }
+            decoded.push(byte);
+            index += 4;
+        } else {
+            decoded.push(input[index]);
+            index += 1;
         }
-        let flags = rustix::fs::fcntl_getfl(&capability).map_err(|_| {
-            "Kagemusha V4 resource-guard descriptor flags are unavailable".to_owned()
-        })?;
-        rustix::fs::fcntl_setfl(&capability, flags | rustix::fs::OFlags::NONBLOCK)
-            .map_err(|_| "Kagemusha V4 resource-guard descriptor cannot be bounded".to_owned())?;
+    }
+    let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(decoded));
+    let mut components = path.components();
+    if !matches!(components.next(), Some(Component::RootDir))
+        || components.any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "Linux {label} mount path is not canonical and absolute"
+        ));
+    }
+    Ok(path)
+}
 
-        let mut record = Vec::with_capacity(RESOURCE_GUARD_AUTH_RECORD_MAX_BYTES_V4);
-        let mut chunk = [0_u8; 64];
-        loop {
-            match capability.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(length) => {
-                    if record
-                        .len()
-                        .checked_add(length)
-                        .is_none_or(|length| length > RESOURCE_GUARD_AUTH_RECORD_MAX_BYTES_V4)
-                    {
-                        return Err(
-                            "Kagemusha V4 resource-guard capability is oversized".to_owned()
-                        );
-                    }
-                    record.extend_from_slice(&chunk[..length]);
-                }
-                Err(error) if error.kind() == ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    return Err("Kagemusha V4 resource-guard capability is incomplete".to_owned());
-                }
-                Err(_) => {
-                    return Err("Kagemusha V4 resource-guard capability is unreadable".to_owned());
-                }
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_memory_cgroup_mounts_v4(
+    contents: &str,
+) -> Result<Vec<LinuxMemoryCgroupMountV4>, String> {
+    const MAX_MOUNTINFO_LINES: usize = 16 * 1024;
+
+    let mut mounts = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        if index >= MAX_MOUNTINFO_LINES {
+            return Err("Linux mountinfo contains too many lines".to_owned());
+        }
+        let Some((left, right)) = line.split_once(" - ") else {
+            return Err("Linux mountinfo line has no filesystem separator".to_owned());
+        };
+        let left_fields = left.split_ascii_whitespace().collect::<Vec<_>>();
+        let right_fields = right.split_ascii_whitespace().collect::<Vec<_>>();
+        if left_fields.len() < 6 || right_fields.len() < 3 {
+            return Err("Linux mountinfo line has too few fields".to_owned());
+        }
+        let version = match right_fields[0] {
+            "cgroup2" => Some(LinuxMemoryCgroupVersionV4::V2),
+            "cgroup"
+                if right_fields[2]
+                    .split(',')
+                    .any(|controller| controller == "memory") =>
+            {
+                Some(LinuxMemoryCgroupVersionV4::V1)
+            }
+            _ => None,
+        };
+        if let Some(version) = version {
+            let hierarchy_root = decode_linux_mountinfo_path_v4(left_fields[3], "cgroup root")?;
+            let mount_point = decode_linux_mountinfo_path_v4(left_fields[4], "cgroup point")?;
+            mounts.push(LinuxMemoryCgroupMountV4 {
+                version,
+                hierarchy_root,
+                mount_point,
+            });
+            if mounts.len() > 16 {
+                return Err("Linux has too many memory cgroup mounts".to_owned());
             }
         }
-        validate_kagemusha_generation_guard_record_v4(&record, &token)?;
-        Ok(KagemushaGenerationSupervisorPermitV4 {
-            _not_copy: std::cell::Cell::new(()),
-        })
     }
+    if mounts.is_empty() {
+        return Err("Linux memory cgroup filesystem is not mounted".to_owned());
+    }
+    Ok(mounts)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_linux_cgroup_memory_limit_v4(
+    contents: &str,
+    version: LinuxMemoryCgroupVersionV4,
+) -> Result<Option<u64>, String> {
+    let value = contents
+        .strip_suffix('\n')
+        .ok_or_else(|| "Linux cgroup memory limit has no final newline".to_owned())?;
+    if value.contains('\n') || value.contains('\r') || value.is_empty() {
+        return Err("Linux cgroup memory limit is not one canonical line".to_owned());
+    }
+    if version == LinuxMemoryCgroupVersionV4::V2 && value == "max" {
+        return Ok(None);
+    }
+    if !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err("Linux cgroup memory limit is not canonical decimal".to_owned());
+    }
+    let bytes = value
+        .parse::<u64>()
+        .map_err(|_| "Linux cgroup memory limit overflows u64".to_owned())?;
+    if bytes == 0 {
+        return Err("Linux cgroup memory limit must be nonzero".to_owned());
+    }
+    // Cgroup v1 represents `unlimited` as a page-rounded value near signed
+    // LONG_MAX rather than a keyword. One exbibyte is above any supported host
+    // while remaining well below every kernel unlimited sentinel.
+    if version == LinuxMemoryCgroupVersionV4::V1 && bytes >= (1_u64 << 60) {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_optional_linux_cgroup_limit_v4(
+    path: &std::path::Path,
+    version: LinuxMemoryCgroupVersionV4,
+) -> Result<Option<Option<u64>>, String> {
+    const MAX_CGROUP_LIMIT_BYTES: u64 = 128;
+
+    match read_bounded_linux_text_file_v4(path, MAX_CGROUP_LIMIT_BYTES) {
+        Ok(contents) => parse_linux_cgroup_memory_limit_v4(&contents, version).map(Some),
+        Err(error) => match std::fs::symlink_metadata(path) {
+            Err(metadata_error) if metadata_error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            _ => Err(error),
+        },
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn kagemusha_cgroup_memory_limit_bytes_v4() -> Result<Option<u64>, String> {
+    use std::collections::BTreeSet;
+
+    let memberships = parse_linux_memory_cgroup_memberships_v4(&read_bounded_linux_proc_text_v4(
+        "/proc/self/cgroup",
+    )?)?;
+    let mounts = parse_linux_memory_cgroup_mounts_v4(&read_bounded_linux_proc_text_v4(
+        "/proc/self/mountinfo",
+    )?)?;
+    let mut candidates = BTreeSet::new();
+    for membership in &memberships {
+        let mut mapped = false;
+        for mount in mounts
+            .iter()
+            .filter(|mount| mount.version == membership.version)
+        {
+            let Ok(relative) = membership.path.strip_prefix(&mount.hierarchy_root) else {
+                continue;
+            };
+            mapped = true;
+            let leaf = mount.mount_point.join(relative);
+            let file_name = match membership.version {
+                LinuxMemoryCgroupVersionV4::V1 => "memory.limit_in_bytes",
+                LinuxMemoryCgroupVersionV4::V2 => "memory.max",
+            };
+            let mut directory = leaf.as_path();
+            loop {
+                if !directory.starts_with(&mount.mount_point) {
+                    return Err("Linux cgroup path escaped its mounted hierarchy".to_owned());
+                }
+                candidates.insert((membership.version, directory.join(file_name)));
+                if directory == mount.mount_point {
+                    break;
+                }
+                directory = directory.parent().ok_or_else(|| {
+                    "Linux cgroup path lost its mounted hierarchy parent".to_owned()
+                })?;
+            }
+        }
+        if !mapped {
+            return Err("Linux memory cgroup membership has no matching mount".to_owned());
+        }
+    }
+
+    let mut found_limit_file = false;
+    let mut effective_limit: Option<u64> = None;
+    for (version, path) in candidates {
+        if let Some(limit) = read_optional_linux_cgroup_limit_v4(&path, version)? {
+            found_limit_file = true;
+            if let Some(limit) = limit {
+                effective_limit = Some(effective_limit.map_or(limit, |current| current.min(limit)));
+            }
+        }
+    }
+    if !found_limit_file {
+        return Err("Linux memory cgroup exposes no readable limit file".to_owned());
+    }
+    Ok(effective_limit)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn select_linux_physical_capacity_v4(
+    host_memory: u64,
+    cgroup_limit: Option<u64>,
+) -> Result<u64, String> {
+    let capacity = cgroup_limit.map_or(host_memory, |limit| host_memory.min(limit));
+    if capacity == 0 {
+        return Err("Linux effective physical-memory capacity is zero".to_owned());
+    }
+    Ok(capacity)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
+    let host_memory = parse_linux_memory_kib_v4(
+        &read_bounded_linux_proc_text_v4("/proc/meminfo")?,
+        "MemTotal",
+    )?;
+    select_linux_physical_capacity_v4(host_memory, kagemusha_cgroup_memory_limit_bytes_v4()?)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
+    parse_linux_memory_kib_v4(
+        &read_bounded_linux_proc_text_v4("/proc/self/status")?,
+        "VmRSS",
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+const KAGEMUSHA_MACOS_SYSCTL_V4: &str = "/usr/sbin/sysctl";
+#[cfg(any(target_os = "macos", test))]
+const KAGEMUSHA_MACOS_FOOTPRINT_V4: &str = "/usr/bin/footprint";
+#[cfg(target_os = "macos")]
+const KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4: usize = 4 * 1024;
+#[cfg(target_os = "macos")]
+const KAGEMUSHA_MACOS_RESOURCE_PROBE_TIMEOUT_V4: std::time::Duration =
+    std::time::Duration::from_secs(2);
+
+// Core denies unsafe code, so macOS resource sampling delegates only to the
+// sealed operating-system probes by absolute path. Reauthenticate each tool,
+// clear the child environment, and bound both execution time and stdout before
+// trusting its strictly parsed numeric result.
+#[cfg(target_os = "macos")]
+fn run_kagemusha_macos_resource_probe_v4(
+    program: &str,
+    arguments: &[&str],
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    use std::{
+        io::Read as _,
+        os::unix::fs::MetadataExt as _,
+        process::{Command, Stdio},
+    };
+
+    let path = std::path::Path::new(program);
+    if !path.is_absolute() {
+        return Err(format!("macOS {label} probe path is not absolute"));
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect macOS {label} probe: {error}"))?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(format!(
+            "macOS {label} probe is not a root-owned, non-writable regular file"
+        ));
+    }
+
+    let mut child = Command::new(path)
+        .args(arguments)
+        .env_clear()
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("failed to start macOS {label} probe: {error}"))?;
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child
+            .try_wait()
+            .map_err(|error| format!("failed to poll macOS {label} probe: {error}"))?
+        {
+            Some(status) => break status,
+            None if started.elapsed() >= KAGEMUSHA_MACOS_RESOURCE_PROBE_TIMEOUT_V4 => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("macOS {label} probe timed out"));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(5)),
+        }
+    };
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("macOS {label} probe stdout was not captured"))?;
+    let output_limit = u64::try_from(KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4)
+        .map_err(|_| "macOS resource-probe output bound does not fit u64".to_owned())?;
+    let mut output = Vec::new();
+    stdout
+        .by_ref()
+        .take(output_limit.saturating_add(1))
+        .read_to_end(&mut output)
+        .map_err(|error| format!("failed to read macOS {label} probe: {error}"))?;
+    if !status.success() {
+        return Err(format!("macOS {label} probe failed"));
+    }
+    if output.len() > KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4 {
+        return Err(format!("macOS {label} probe output exceeded its bound"));
+    }
+    Ok(output)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_kagemusha_macos_physical_memory_bytes_v4(output: &[u8]) -> Result<u64, String> {
+    let text = std::str::from_utf8(output)
+        .map_err(|_| "macOS physical-memory probe returned non-UTF-8 output".to_owned())?;
+    let value = text
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| "macOS physical-memory probe returned a malformed byte count".to_owned())?;
+    if value == 0 {
+        return Err("macOS physical-memory probe returned zero".to_owned());
+    }
+    Ok(value)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_kagemusha_macos_physical_footprint_bytes_v4(output: &[u8]) -> Result<u64, String> {
+    let text = std::str::from_utf8(output)
+        .map_err(|_| "macOS physical-footprint probe returned non-UTF-8 output".to_owned())?;
+    let mut footprint = None;
+    for line in text.lines().map(str::trim) {
+        let Some(value) = line.strip_prefix("phys_footprint:") else {
+            continue;
+        };
+        if footprint.is_some() {
+            return Err("macOS physical-footprint probe returned duplicate samples".to_owned());
+        }
+        let mut fields = value.split_whitespace();
+        let bytes = fields
+            .next()
+            .ok_or_else(|| "macOS physical-footprint probe omitted its byte count".to_owned())?
+            .parse::<u64>()
+            .map_err(|_| {
+                "macOS physical-footprint probe returned a malformed byte count".to_owned()
+            })?;
+        if fields.next() != Some("B") || fields.next().is_some() || bytes == 0 {
+            return Err("macOS physical-footprint probe returned a malformed sample".to_owned());
+        }
+        footprint = Some(bytes);
+    }
+    footprint.ok_or_else(|| "macOS physical-footprint probe returned no sample".to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
+    let output = run_kagemusha_macos_resource_probe_v4(
+        KAGEMUSHA_MACOS_SYSCTL_V4,
+        &["-n", "hw.memsize"],
+        "physical-memory",
+    )?;
+    parse_kagemusha_macos_physical_memory_bytes_v4(&output)
+}
+
+#[cfg(target_os = "macos")]
+fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
+    let process_id = std::process::id().to_string();
+    let output = run_kagemusha_macos_resource_probe_v4(
+        KAGEMUSHA_MACOS_FOOTPRINT_V4,
+        &["-p", &process_id, "-f", "bytes", "--noCategories"],
+        "physical-footprint",
+    )?;
+    parse_kagemusha_macos_physical_footprint_bytes_v4(&output)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
+    Err("Kagemusha V4 physical-memory introspection is unsupported on this platform".to_owned())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
+    Err("Kagemusha V4 process-footprint introspection is unsupported on this platform".to_owned())
+}
+
+/// Query the exact first-release memory policy without starting the monitor.
+///
+/// The source-sealed bundle exposes this through its read-only
+/// `memory-capacity-v1` operation so external supervision applies the same
+/// container-aware capacity and fixed absolute ceiling as the in-process guard.
+pub fn kagemusha_generation_memory_capacity_v1()
+-> Result<KagemushaGenerationMemoryCapacityV1, String> {
+    let effective_physical_capacity_bytes = kagemusha_physical_memory_bytes_v4()?;
+    let safety_ceiling_bytes =
+        select_kagemusha_generation_memory_limit_v4(effective_physical_capacity_bytes, None)?;
+    Ok(KagemushaGenerationMemoryCapacityV1 {
+        effective_physical_capacity_bytes,
+        safety_ceiling_bytes,
+    })
+}
+
+fn start_kagemusha_generation_memory_monitor_v4(
+    effective_memory_limit_bytes: u64,
+    footprint: fn() -> Result<u64, String>,
+) -> Result<(), String> {
+    let (initialized_sender, initialized_receiver) = std::sync::mpsc::sync_channel(0);
+    std::thread::Builder::new()
+        .name("kagemusha-memory-v4".to_owned())
+        .spawn(move || {
+            let initial = footprint().and_then(|bytes| {
+                if bytes > effective_memory_limit_bytes {
+                    Err(format!(
+                        "Kagemusha V4 process footprint {bytes} already exceeds the effective {effective_memory_limit_bytes}-byte ceiling"
+                    ))
+                } else {
+                    Ok(())
+                }
+            });
+            let monitoring_active = initial.is_ok();
+            if initialized_sender.send(initial).is_err() || !monitoring_active {
+                return;
+            }
+            loop {
+                std::thread::sleep(KAGEMUSHA_GENERATION_MEMORY_POLL_INTERVAL_V4);
+                match footprint() {
+                    Ok(bytes) if bytes <= effective_memory_limit_bytes => {}
+                    Ok(bytes) => {
+                        eprintln!(
+                            "Kagemusha V4 mandatory memory monitor aborting: physical footprint {bytes} exceeds the effective {effective_memory_limit_bytes}-byte ceiling"
+                        );
+                        std::process::abort();
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "Kagemusha V4 mandatory memory monitor aborting after introspection failure: {error}"
+                        );
+                        std::process::abort();
+                    }
+                }
+            }
+        })
+        .map_err(|error| format!("failed to start mandatory Kagemusha memory monitor: {error}"))?;
+    initialized_receiver
+        .recv()
+        .map_err(|_| "mandatory Kagemusha memory monitor exited during initialization".to_owned())?
+}
+
+/// Start the mandatory one-shot in-process physical-memory monitor.
+///
+/// The effective ceiling is `min(64 GiB, physical RAM / 2)`. A caller-provided
+/// value can only lower that ceiling. Neither an inherited descriptor nor an
+/// environment variable grants authority to disable or raise enforcement.
+pub fn start_kagemusha_generation_memory_guard_v4(
+    requested_memory_limit_bytes: Option<u64>,
+) -> Result<KagemushaGenerationMemoryGuardV4, String> {
+    if KAGEMUSHA_GENERATION_MEMORY_GUARD_STARTED_V4.swap(true, std::sync::atomic::Ordering::AcqRel)
+    {
+        return Err("Kagemusha V4 in-process memory monitor was already claimed".to_owned());
+    }
+    let capacity = kagemusha_generation_memory_capacity_v1()?;
+    let effective_memory_limit_bytes = select_kagemusha_generation_memory_limit_v4(
+        capacity.effective_physical_capacity_bytes(),
+        requested_memory_limit_bytes,
+    )?;
+    start_kagemusha_generation_memory_monitor_v4(
+        effective_memory_limit_bytes,
+        kagemusha_process_physical_footprint_bytes_v4,
+    )?;
+    Ok(KagemushaGenerationMemoryGuardV4 {
+        effective_memory_limit_bytes,
+        _private: (),
+    })
 }
 
 fn validate_kagemusha_generated_payload_size_v4(
@@ -2302,11 +2965,11 @@ impl KagemushaSemanticBoundaryV4 {
         require_lexicographic_parent_state_order: bool,
         require_deferred_audit_joins: bool,
     ) -> Result<(), String> {
-        use super::kagemusha_v2::KagemushaRecursiveSpendStateVectorV2;
+        use super::kagemusha_v2::KagemushaRecursiveSpendStateVectorV5;
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
         };
 
         let parent_count = usize::try_from(self.parent_count)
@@ -2321,10 +2984,10 @@ impl KagemushaSemanticBoundaryV4 {
             || self
                 .parent_states
                 .iter()
-                .any(|state| state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2)
-            || self.result_state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2
+                .any(|state| state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5)
+            || self.result_state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5
             || self.result_state.first().copied()
-                != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2)
+                != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5)
         {
             return Err("Kagemusha exact-state public-instance shape mismatch".to_owned());
         }
@@ -2335,7 +2998,7 @@ impl KagemushaSemanticBoundaryV4 {
             let ep_digest = self.parent_ep_deferred_sha256[slot];
             if present {
                 if state.first().copied()
-                    != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2)
+                    != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5)
                     || state == &self.result_state
                     || if require_deferred_audit_joins {
                         eq_digest == [0; 8] || ep_digest == [0; 8] || eq_digest == ep_digest
@@ -2358,7 +3021,7 @@ impl KagemushaSemanticBoundaryV4 {
         {
             return Err("Kagemusha parent states are not in canonical order".to_owned());
         }
-        let result_vector = KagemushaRecursiveSpendStateVectorV2 {
+        let result_vector = KagemushaRecursiveSpendStateVectorV5 {
             limbs: self
                 .result_state
                 .clone()
@@ -2374,7 +3037,7 @@ impl KagemushaSemanticBoundaryV4 {
         let mut maximum_parent_step = 0_u32;
         let mut maximum_parent_hop = 0_u32;
         for state in self.parent_states.iter().take(parent_count) {
-            let vector = KagemushaRecursiveSpendStateVectorV2 {
+            let vector = KagemushaRecursiveSpendStateVectorV5 {
                 limbs: state
                     .clone()
                     .try_into()
@@ -3452,6 +4115,8 @@ const KAGEMUSHA_HALO2_UNCOMPRESSED_SELECTORS_V4: u8 = 0;
 const KAGEMUSHA_HALO2_VK_HEADER_BYTES_V4: u64 = 10;
 const KAGEMUSHA_HALO2_PK_VECTOR_HEADERS_BYTES_V4: u64 = 4 * 4;
 const KAGEMUSHA_HALO2_LENGTH_PREFIX_BYTES_V4: u64 = 4;
+/// Fixed scratch used while authenticating release-sized proving-key spools.
+pub(crate) const KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct KagemushaProcessedKeyShapeV4 {
@@ -5988,14 +6653,12 @@ fn kagemusha_ep_succinct_vk_v4(
 /// a promoted release throughout loading.
 enum KagemushaArtifactSpoolBindingV5<'a> {
     AuthenticatedRelease(&'a KagemushaAuthenticatedReleaseV4),
-    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     CandidateEvidenceLab {
         candidate: &'a iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
         manifest_sha256: [u8; 32],
     },
 }
 
-#[cfg(feature = "kagemusha-candidate-evidence-lab")]
 fn validate_kagemusha_candidate_spool_identity_v5(
     candidate_sha256: [u8; 32],
     manifest_sha256: [u8; 32],
@@ -6028,7 +6691,6 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
         Ok(Self::AuthenticatedRelease(release))
     }
 
-    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     fn candidate_evidence_lab(
         candidate: &'a iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
         expected_candidate_sha256: [u8; 32],
@@ -6055,7 +6717,6 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
     fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest(),
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidenceLab { candidate, .. } => &candidate.manifest,
         }
     }
@@ -6063,7 +6724,6 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
     fn manifest_sha256(&self) -> [u8; 32] {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest_sha256(),
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidenceLab {
                 manifest_sha256, ..
             } => *manifest_sha256,
@@ -6097,7 +6757,6 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
             Self::AuthenticatedRelease(_) => {
                 header.validate_against_manifest(self.manifest(), descriptor)
             }
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidenceLab { .. } => {
                 header.validate_against_candidate_manifest(self.manifest(), descriptor)
             }
@@ -6236,7 +6895,7 @@ impl KagemushaProvingKeySpoolV5 {
         let mut framed = Sha256::new();
         let mut payload = Sha256::new();
         let mut offset = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = [0_u8; KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5];
         while offset < self.framed_size {
             let remaining = self.framed_size - offset;
             let requested = usize::try_from(remaining.min(buffer.len() as u64))
@@ -6312,7 +6971,7 @@ impl KagemushaProvingKeyPayloadReaderV5 {
             .map_err(|error| format!("failed to rewind parsed Kagemusha V5 PK: {error}"))?;
         let mut hasher = Sha256::new();
         let mut remaining = self.length;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = [0_u8; KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5];
         while remaining != 0 {
             let requested = usize::try_from(remaining.min(buffer.len() as u64))
                 .expect("bounded PK hash chunk fits usize");
@@ -6495,6 +7154,85 @@ fn validate_kagemusha_processed_pk_reader_v5(
         ));
     }
     Ok(())
+}
+
+fn hash_kagemusha_pk_embedded_vk_prefix_v5(
+    reader: &mut dyn std::io::Read,
+    prefix_bytes: u64,
+    role: &str,
+) -> Result<[u8; 32], String> {
+    if prefix_bytes == 0 {
+        return Err(format!(
+            "Kagemusha V5 {role} embedded verifier-key length is zero"
+        ));
+    }
+    let mut hasher = Sha256::new();
+    let mut remaining = prefix_bytes;
+    let mut buffer = [0_u8; KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5];
+    while remaining != 0 {
+        let requested = usize::try_from(remaining.min(buffer.len() as u64))
+            .expect("bounded PK prefix chunk fits usize");
+        std::io::Read::read_exact(reader, &mut buffer[..requested]).map_err(|error| {
+            format!("failed to hash Kagemusha V5 {role} embedded verifier key: {error}")
+        })?;
+        hasher.update(&buffer[..requested]);
+        remaining -= requested as u64;
+    }
+    Ok(hasher.finalize().into())
+}
+
+/// Authenticate one receipt-only proving-key role without materializing its
+/// multi-gigabyte polynomial vectors.
+fn authenticate_kagemusha_receipt_pk_spool_v5(
+    source: &KagemushaProvingKeySpoolV5,
+    circuit_params: &KagemushaStepCircuitParamsV4,
+    parity: KagemushaPastaCycleParityV1,
+    expected_verifying_key_bytes: u64,
+    expected_verifying_key_sha256: [u8; 32],
+) -> Result<(), String> {
+    use std::io::Seek as _;
+
+    let (shape, role) = match parity {
+        KagemushaPastaCycleParityV1::StepEq => (
+            kagemusha_processed_key_shape_v4::<halo2_proofs::halo2curves::pasta::EqAffine>(
+                circuit_params,
+                "Eq",
+            )?,
+            "Eq",
+        ),
+        KagemushaPastaCycleParityV1::StepEp => (
+            kagemusha_processed_key_shape_v4::<halo2_proofs::halo2curves::pasta::EpAffine>(
+                circuit_params,
+                "Ep",
+            )?,
+            "Ep",
+        ),
+    };
+    let embedded_verifying_key_bytes = shape.verifier_key_bytes(role)?;
+    if expected_verifying_key_sha256 == [0; 32]
+        || expected_verifying_key_bytes != embedded_verifying_key_bytes
+    {
+        return Err(format!(
+            "Kagemusha V5 {role} standalone verifier-key descriptor does not match the authenticated shape"
+        ));
+    }
+
+    let mut reader = source.open_payload()?;
+    validate_kagemusha_processed_pk_reader_v5(&mut reader, shape, role)?;
+    reader
+        .seek(std::io::SeekFrom::Start(0))
+        .map_err(|error| format!("failed to rewind Kagemusha V5 {role} PK prefix: {error}"))?;
+    let embedded_verifying_key_sha256 =
+        hash_kagemusha_pk_embedded_vk_prefix_v5(&mut reader, embedded_verifying_key_bytes, role)?;
+    if embedded_verifying_key_sha256 != expected_verifying_key_sha256 {
+        return Err(format!(
+            "Kagemusha V5 {role} proving key embeds a different verifier key"
+        ));
+    }
+    reader
+        .seek(std::io::SeekFrom::End(0))
+        .map_err(|error| format!("failed to finish Kagemusha V5 {role} PK scan: {error}"))?;
+    reader.finish()
 }
 
 fn parse_kagemusha_eq_pk_spool_v5(
@@ -7060,7 +7798,7 @@ impl KagemushaPastaCycleProverV4 {
                 || {
                     vec![
                         0;
-                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2
+                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5
                     ]
                 },
                 Clone::clone,
@@ -8214,7 +8952,7 @@ impl KagemushaPastaCycleSourceBackedProverV4 {
         let parents = self.decode_parent_pairs_v4(parent_pair_bytes)?;
         for (pair, opening) in parents.iter().zip(parent_state_openings) {
             if opening.len()
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5
             {
                 return Err("Kagemusha V4 parent state opening has invalid length".to_owned());
             }
@@ -8243,7 +8981,7 @@ impl KagemushaPastaCycleSourceBackedProverV4 {
                 || {
                     vec![
                         0;
-                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2
+                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5
                     ]
                 },
                 Clone::clone,
@@ -12108,1070 +12846,7 @@ where
     Ok((proof, verifying_key))
 }
 
-/// Raw, manifest-independent payloads emitted by the V4 artifact generator for
-/// one Pasta parity.  The framing/export layer owns release identity and file
-/// publication; this type contains only material derived by the circuit/key
-/// generation process itself.
-pub struct KagemushaGeneratedParityArtifactsV4 {
-    /// Calibrated, inline circuit profile used to create every other payload.
-    pub circuit_params: KagemushaStepCircuitParamsV4,
-    /// Value-free compiled-protocol structure digest shared by bootstrap and
-    /// final self protocols.
-    pub compiled_protocol_structure_sha256: [u8; 32],
-    /// Exact augmented Step-proof size measured during generation.
-    pub step_proof_size_bytes: u32,
-    /// Canonical `ParamsIPA::write` bytes.
-    pub parameters: Vec<u8>,
-    /// Number of processed proving-key bytes written directly to the caller's
-    /// bounded staging sink.
-    pub proving_key_size_bytes: u64,
-    /// Processed verifier-key bytes.
-    pub verifying_key: Vec<u8>,
-    /// Canonical Norito bootstrap payload containing a genuine selector-zero
-    /// proof under `verifying_key`.
-    pub bootstrap_witness: Vec<u8>,
-}
-
-/// Owner-private, seekable spool containing one generated raw artifact.
-///
-/// Full release parameters and proving keys are intentionally parked here
-/// between generation phases.  This keeps the generator's resident set
-/// bounded to one Pasta parity without changing a single emitted byte.
-#[must_use]
-pub struct KagemushaGeneratedArtifactSpoolV4 {
-    file: std::fs::File,
-    size_bytes: u64,
-    sha256: [u8; 32],
-}
-
-impl KagemushaGeneratedArtifactSpoolV4 {
-    /// Exact number of raw payload bytes in this spool.
-    #[must_use]
-    pub const fn size_bytes(&self) -> u64 {
-        self.size_bytes
-    }
-
-    /// SHA-256 of the exact raw payload bytes in this spool.
-    #[must_use]
-    pub const fn sha256(&self) -> [u8; 32] {
-        self.sha256
-    }
-
-    /// Copy the exact payload to `writer`, rejecting any truncated or changed
-    /// backing file before returning.
-    pub fn copy_to<W: std::io::Write + ?Sized>(&mut self, writer: &mut W) -> Result<(), String> {
-        use std::io::{Read as _, Seek as _};
-
-        use sha2::Digest as _;
-
-        self.file
-            .seek(std::io::SeekFrom::Start(0))
-            .map_err(|error| format!("failed to rewind Kagemusha V4 artifact spool: {error}"))?;
-        let mut remaining = self.size_bytes;
-        let mut hasher = sha2::Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        while remaining != 0 {
-            let requested = usize::try_from(remaining.min(buffer.len() as u64))
-                .expect("bounded spool chunk fits usize");
-            let read = self
-                .file
-                .read(&mut buffer[..requested])
-                .map_err(|error| format!("failed to read Kagemusha V4 artifact spool: {error}"))?;
-            if read == 0 {
-                return Err("Kagemusha V4 artifact spool is truncated".to_owned());
-            }
-            writer
-                .write_all(&buffer[..read])
-                .map_err(|error| format!("failed to copy Kagemusha V4 artifact spool: {error}"))?;
-            hasher.update(&buffer[..read]);
-            remaining -= u64::try_from(read).expect("read length fits u64");
-        }
-        let mut trailing = [0_u8; 1];
-        if self
-            .file
-            .read(&mut trailing)
-            .map_err(|error| format!("failed to finish Kagemusha V4 artifact spool: {error}"))?
-            != 0
-        {
-            return Err("Kagemusha V4 artifact spool has trailing bytes".to_owned());
-        }
-        let actual: [u8; 32] = hasher.finalize().into();
-        if actual != self.sha256 {
-            return Err("Kagemusha V4 artifact spool digest changed".to_owned());
-        }
-        Ok(())
-    }
-
-    /// Materialize this one payload for tests.
-    #[cfg(test)]
-    pub fn into_bytes(mut self) -> Result<Vec<u8>, String> {
-        let length = usize::try_from(self.size_bytes)
-            .map_err(|_| "Kagemusha V4 artifact spool length does not fit usize".to_owned())?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(length)
-            .map_err(|_| "failed to reserve Kagemusha V4 artifact payload".to_owned())?;
-        self.copy_to(&mut bytes)?;
-        if bytes.len() != length {
-            return Err("Kagemusha V4 materialized artifact length mismatch".to_owned());
-        }
-        Ok(bytes)
-    }
-}
-
-/// Lightweight profile metadata supplied with every streamed generator role.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KagemushaGeneratedParityProfileV4 {
-    /// Pasta parity owning the emitted role.
-    pub parity: KagemushaPastaCycleParityV1,
-    /// Calibrated, inline circuit profile.
-    pub circuit_params: KagemushaStepCircuitParamsV4,
-    /// Value-free compiled-protocol structure digest.
-    pub compiled_protocol_structure_sha256: [u8; 32],
-    /// Exact augmented Step-proof size.
-    pub step_proof_size_bytes: u32,
-}
-
-/// File-backed writer that deliberately presents an infallible `Write`
-/// surface to Halo2's processed-key serializer. Several nested polynomial
-/// serializers ignore I/O results; the first real file/size failure is saved
-/// and returned by `finish` after serialization instead of being lost.
-struct KagemushaInfallibleArtifactSpoolWriterV4 {
-    file: std::fs::File,
-    size_bytes: u64,
-    sha256: sha2::Sha256,
-    first_error: Option<String>,
-}
-
-impl KagemushaInfallibleArtifactSpoolWriterV4 {
-    fn new(role: &str) -> Result<Self, String> {
-        use sha2::Digest as _;
-
-        Ok(Self {
-            file: tempfile::tempfile().map_err(|error| {
-                format!("failed to open owner-private Kagemusha V4 {role} spool: {error}")
-            })?,
-            size_bytes: 0,
-            sha256: sha2::Sha256::new(),
-            first_error: None,
-        })
-    }
-
-    fn finish(mut self, role: &str) -> Result<KagemushaGeneratedArtifactSpoolV4, String> {
-        use std::io::{Seek as _, Write as _};
-
-        if let Some(error) = self.first_error.take() {
-            return Err(error);
-        }
-        self.file
-            .flush()
-            .map_err(|error| format!("failed to flush Kagemusha V4 {role} spool: {error}"))?;
-        let actual_len = self.file.metadata().map_err(|error| {
-            format!("failed to inspect Kagemusha V4 {role} spool length: {error}")
-        })?;
-        if self.size_bytes == 0 || actual_len.len() != self.size_bytes {
-            return Err(format!("Kagemusha V4 {role} spool length mismatch"));
-        }
-        self.file
-            .seek(std::io::SeekFrom::Start(0))
-            .map_err(|error| format!("failed to seal Kagemusha V4 {role} spool: {error}"))?;
-        use sha2::Digest as _;
-        Ok(KagemushaGeneratedArtifactSpoolV4 {
-            file: self.file,
-            size_bytes: self.size_bytes,
-            sha256: self.sha256.finalize().into(),
-        })
-    }
-
-    fn remember_error(&mut self, error: String) {
-        if self.first_error.is_none() {
-            self.first_error = Some(error);
-        }
-    }
-}
-
-impl std::io::Write for KagemushaInfallibleArtifactSpoolWriterV4 {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if self.first_error.is_none() {
-            let next_len = self
-                .size_bytes
-                .checked_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-            match next_len {
-                Some(next_len)
-                    if next_len
-                        <= iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4 =>
-                {
-                    if let Err(error) = self.file.write_all(bytes) {
-                        self.remember_error(format!(
-                            "failed to write owner-private Kagemusha V4 artifact spool: {error}"
-                        ));
-                    } else {
-                        use sha2::Digest as _;
-                        self.sha256.update(bytes);
-                        self.size_bytes = next_len;
-                    }
-                }
-                _ => self.remember_error(
-                    "Kagemusha V4 generated artifact exceeds its explicit file bound".to_owned(),
-                ),
-            }
-        }
-        // Halo2's serializer assumes several nested writes cannot fail. The
-        // real error is retained above and returned by `finish`.
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        if self.first_error.is_none()
-            && let Err(error) = self.file.flush()
-        {
-            self.remember_error(format!(
-                "failed to flush owner-private Kagemusha V4 artifact spool: {error}"
-            ));
-        }
-        Ok(())
-    }
-}
-
-fn kagemusha_generated_spool_from_bytes_v4(
-    role: &str,
-    bytes: &[u8],
-) -> Result<KagemushaGeneratedArtifactSpoolV4, String> {
-    use std::io::Write as _;
-
-    let mut writer = KagemushaInfallibleArtifactSpoolWriterV4::new(role)?;
-    writer
-        .write_all(bytes)
-        .expect("Kagemusha V4 artifact spool writer is infallible");
-    writer.finish(role)
-}
-
-/// Complete raw Eq/Ep output of one V4 generation run.
-pub struct KagemushaGeneratedPastaCycleArtifactsV4 {
-    /// StepEq/Vesta material.
-    pub step_eq: KagemushaGeneratedParityArtifactsV4,
-    /// StepEp/Pallas material.
-    pub step_ep: KagemushaGeneratedParityArtifactsV4,
-    /// Canonical live selector-one pair used solely to measure the opaque ABI
-    /// payload.  It is terminally verified before being returned.
-    pub measured_live_pair_bytes: Vec<u8>,
-    /// Exact canonical payload size of a recursive pair carrying both parent
-    /// lineages and both fixed-size accumulation transcripts.
-    pub max_recursive_pair_bytes: u32,
-}
-
-/// Canonical opaque-pair measurements returned by streaming generation.
-pub struct KagemushaGeneratedProofPairMeasurementV4 {
-    /// Terminally verified selector-one initialization pair.
-    pub initialization_pair_bytes: Vec<u8>,
-    /// Exact canonical byte ceiling for a pair carrying recursive lineages and
-    /// fixed accumulation transcripts.
-    pub max_recursive_pair_bytes: u32,
-}
-
-struct KagemushaGenerationCalibrationV4 {
-    public_inputs: KagemushaPastaCyclePublicInputsV4,
-    secure: super::confidential_v2::KagemushaStepSecureWitnessV3,
-    output_membership: super::kagemusha_v2::KagemushaOutputMembershipWitnessV4,
-}
-
-fn kagemusha_calibration_exact_limbs_v4(bytes: [u8; 32]) -> [u32; 8] {
-    std::array::from_fn(|index| {
-        u32::from_le_bytes(
-            bytes[index * 4..index * 4 + 4]
-                .try_into()
-                .expect("32-byte calibration value has exact limbs"),
-        )
-    })
-}
-
-fn kagemusha_calibration_scalar_v4(bytes: [u8; 32], role: &str) -> Result<Fp, String> {
-    Option::<Fp>::from(Fp::from_repr(bytes.into()))
-        .ok_or_else(|| format!("Kagemusha V4 calibration {role} is not canonical Fp"))
-}
-
-fn kagemusha_calibration_put_digest_v4(
-    fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
-    start: usize,
-    bytes: [u8; 32],
-) -> Result<(), String> {
-    let target = fields
-        .get_mut(start..start + 4)
-        .ok_or_else(|| "Kagemusha V4 calibration digest range is invalid".to_owned())?;
-    for (field, chunk) in target.iter_mut().zip(bytes.chunks_exact(8)) {
-        *field = Fp::from(u64::from_le_bytes(
-            chunk
-                .try_into()
-                .expect("32-byte calibration digest has exact chunks"),
-        ));
-    }
-    Ok(())
-}
-
-fn kagemusha_calibration_put_field_v4(
-    fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
-    index: usize,
-    bytes: [u8; 32],
-    role: &str,
-) -> Result<(), String> {
-    *fields
-        .get_mut(index)
-        .ok_or_else(|| format!("Kagemusha V4 calibration {role} index is invalid"))? =
-        kagemusha_calibration_scalar_v4(bytes, role)?;
-    Ok(())
-}
-
-fn kagemusha_calibration_membership_path_v4(
-    path: super::confidential_v2::ConfidentialMerklePathV2,
-) -> iroha_data_model::offline::KagemushaConfidentialMerklePathV2 {
-    let (siblings, directions, _, root) = path.into_parts();
-    iroha_data_model::offline::KagemushaConfidentialMerklePathV2 {
-        siblings,
-        directions,
-        root,
-    }
-}
-
-/// Build one deterministic, satisfying initialization relation for key
-/// calibration and the measured live pair.  None of these values is an
-/// authenticated release identity: the exporter supplies that layer after the
-/// generated payloads and sizes are known.
-fn kagemusha_generation_calibration_v4(
-    step_eq_compiled_protocol_sha256: [u8; 32],
-    step_ep_compiled_protocol_sha256: [u8; 32],
-) -> Result<KagemushaGenerationCalibrationV4, String> {
-    use halo2_proofs::halo2curves::pasta::Fp;
-    use iroha_data_model::ChainId;
-
-    use super::{confidential_v2, kagemusha_v2};
-
-    const ASSET_DEFINITION: &str = "kagemusha-fixed-padding#internal";
-    const CHAIN: &str = "kagemusha-fixed-padding-chain";
-    const PAYER: &str = "kagemusha-fixed-padding-payer";
-    const AMOUNT: u128 = 1;
-    const ASSET_SCALE: u32 = 0;
-    const LEAF_INDEX: u32 = 0;
-
-    let chain_id = ChainId::from(CHAIN);
-    let spend_key = [0x46_u8; 32];
-    let rho = [0x47_u8; 32];
-    let operation_id = [0x48_u8; 32];
-    let diversifier = {
-        let repr = Fp::from(4).to_repr();
-        let mut bytes = [0_u8; 32];
-        bytes.copy_from_slice(repr.as_ref());
-        bytes
-    };
-
-    let empty_path = confidential_v2::compute_confidential_merkle_path_v3(&[], 0)?;
-    let secure = confidential_v2::prepare_kagemusha_step_topup_witness_v3(
-        &chain_id,
-        ASSET_DEFINITION,
-        PAYER,
-        operation_id,
-        AMOUNT,
-        ASSET_SCALE,
-        &spend_key,
-        rho,
-        diversifier,
-        LEAF_INDEX,
-        &empty_path,
-    )?;
-
-    let asset_tag = confidential_v2::derive_confidential_asset_tag_v3(ASSET_DEFINITION)?;
-    let chain_tag = confidential_v2::derive_confidential_chain_tag_v3(CHAIN)?;
-    let payer_tag = confidential_v2::derive_kagemusha_topup_payer_tag_v3(PAYER)?;
-    let operation_tag = confidential_v2::derive_kagemusha_topup_operation_tag_v3(&operation_id)?;
-    let owner_tag = confidential_v2::derive_confidential_owner_tag_v3_with_diversifier(
-        &spend_key,
-        diversifier,
-    )?;
-    let output_commitment =
-        confidential_v2::derive_confidential_note_v3(asset_tag, AMOUNT, rho, owner_tag)?;
-    let spend_nullifier =
-        confidential_v2::derive_confidential_nullifier_v3(&spend_key, rho, asset_tag, chain_tag)?;
-    let initial_root = confidential_v2::compute_confidential_root_v3(&[])?;
-    let final_commitments = [output_commitment];
-    let final_root = confidential_v2::compute_confidential_root_v3(&final_commitments)?;
-    if empty_path.root != initial_root {
-        return Err("Kagemusha V4 calibration empty path/root mismatch".to_owned());
-    }
-
-    let recipient_update_path = kagemusha_calibration_membership_path_v4(empty_path.clone());
-    let recipient_membership_path = kagemusha_calibration_membership_path_v4(
-        confidential_v2::compute_confidential_merkle_path_v3(&final_commitments, 0)?,
-    );
-    let dummy_leaf_index = 1_u32;
-    let dummy_path = kagemusha_calibration_membership_path_v4(
-        confidential_v2::compute_confidential_merkle_path_v3(
-            &final_commitments,
-            usize::try_from(dummy_leaf_index)
-                .map_err(|_| "Kagemusha V4 calibration dummy index does not fit usize")?,
-        )?,
-    );
-    let output_membership = kagemusha_v2::KagemushaOutputMembershipWitnessV4 {
-        operation: kagemusha_v2::KagemushaOutputMembershipOperationV4::Init,
-        initial_root,
-        final_root,
-        recipient: Some(kagemusha_v2::KagemushaOutputMembershipLeafV4 {
-            commitment: output_commitment,
-            leaf_index: LEAF_INDEX,
-            update_path: recipient_update_path,
-            membership_path: recipient_membership_path,
-        }),
-        change: None,
-        dummy_leaf_index,
-        dummy_path,
-    };
-    kagemusha_v2::KagemushaOutputMembershipCircuitV4::new(output_membership.clone())?;
-
-    let statement_digest = [0x11_u8; 32];
-    let topup_anchor_digest = [0x31_u8; 32];
-    let manifest_sha256 = [0x41_u8; 32];
-    let verifier_key_id_digest = [0x51_u8; 32];
-    let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4];
-    fields[kagemusha_v2::I_LAYOUT_VERSION] = Fp::ONE;
-    fields[kagemusha_v2::I_PROOF_STEP_COUNT] = Fp::ONE;
-    fields[kagemusha_v2::I_ASSET_SCALE] = Fp::from(u64::from(ASSET_SCALE));
-    for index in [
-        kagemusha_v2::I_INPUT_SCALE,
-        kagemusha_v2::I_TRANSFER_SCALE,
-        kagemusha_v2::I_RECIPIENT_SCALE,
-        kagemusha_v2::I_CURRENT_SCALE,
-    ] {
-        fields[index] = Fp::from(u64::from(ASSET_SCALE));
-    }
-    fields[kagemusha_v2::I_RECORD_OUTPUT_COUNT] = Fp::ONE;
-    fields[kagemusha_v2::I_TRANSFER_OUTPUT_COUNT] = Fp::ONE;
-    for index in [
-        kagemusha_v2::I_CURRENT_AMOUNT_LO,
-        kagemusha_v2::I_INPUT_AMOUNT_LO,
-        kagemusha_v2::I_TRANSFER_AMOUNT_LO,
-        kagemusha_v2::I_RECIPIENT_AMOUNT_LO,
-    ] {
-        fields[index] = Fp::from_u128(AMOUNT);
-    }
-    for (index, bytes, role) in [
-        (kagemusha_v2::I_INITIAL_ROOT, initial_root, "initial root"),
-        (kagemusha_v2::I_FINAL_ROOT, final_root, "final root"),
-        (
-            kagemusha_v2::I_RECORD_ROOT_BEFORE,
-            initial_root,
-            "record root before",
-        ),
-        (
-            kagemusha_v2::I_RECORD_ROOT_AFTER,
-            final_root,
-            "record root after",
-        ),
-        (kagemusha_v2::I_TRANSFER_ROOT, final_root, "transfer root"),
-        (
-            kagemusha_v2::I_CURRENT_COMMITMENT,
-            output_commitment,
-            "current commitment",
-        ),
-        (
-            kagemusha_v2::I_CURRENT_NULLIFIER,
-            spend_nullifier,
-            "current nullifier",
-        ),
-        (
-            kagemusha_v2::I_RECIPIENT_COMMITMENT,
-            output_commitment,
-            "recipient commitment",
-        ),
-        (
-            kagemusha_v2::I_RECIPIENT_NULLIFIER,
-            spend_nullifier,
-            "recipient nullifier",
-        ),
-        (
-            kagemusha_v2::I_RECORD_OUTPUT_0,
-            output_commitment,
-            "record output",
-        ),
-        (
-            kagemusha_v2::I_TRANSFER_OUTPUT_0,
-            output_commitment,
-            "transfer output",
-        ),
-        (kagemusha_v2::I_ASSET_TAG, asset_tag, "asset tag"),
-        (kagemusha_v2::I_CHAIN_TAG, chain_tag, "chain tag"),
-    ] {
-        kagemusha_calibration_put_field_v4(&mut fields, index, bytes, role)?;
-    }
-    for (index, bytes) in [
-        (kagemusha_v2::I_STATEMENT_DIGEST, statement_digest),
-        (kagemusha_v2::I_RECIPIENT_REQUEST_DIGEST, payer_tag),
-        (kagemusha_v2::I_OPERATION_ID, operation_tag),
-        (kagemusha_v2::I_BRANCH_LINEAGE_ROOT, topup_anchor_digest),
-        (kagemusha_v2::I_TOPUP_OPERATION_ID, operation_id),
-        (kagemusha_v2::I_ARTIFACT_MANIFEST_SHA256, manifest_sha256),
-        (kagemusha_v2::I_TOPUP_RECEIPT_DIGEST, topup_anchor_digest),
-        (kagemusha_v2::I_TOPUP_ANCHOR_DIGEST, topup_anchor_digest),
-        (
-            kagemusha_v2::I_VERIFIER_KEY_ID_DIGEST,
-            verifier_key_id_digest,
-        ),
-    ] {
-        kagemusha_calibration_put_digest_v4(&mut fields, index, bytes)?;
-    }
-    fields[kagemusha_v2::I_TOPUP_ANCHOR_COUNT] = Fp::ONE;
-    let operation = KagemushaStepOperationVectorV4::from_fields(fields);
-
-    let mut result_state =
-        vec![0_u32; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-    result_state[kagemusha_v2::S_VERSION] =
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
-    result_state[kagemusha_v2::S_CHAIN_TAG..kagemusha_v2::S_CHAIN_TAG + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(chain_tag));
-    result_state[kagemusha_v2::S_ASSET_TAG..kagemusha_v2::S_ASSET_TAG + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(asset_tag));
-    result_state[kagemusha_v2::S_ASSET_SCALE] = ASSET_SCALE;
-    result_state[kagemusha_v2::S_FINAL_ROOT..kagemusha_v2::S_FINAL_ROOT + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(final_root));
-    result_state[kagemusha_v2::S_TOPUP_ANCHOR_COUNT] = 1;
-    result_state[kagemusha_v2::S_TOPUP_ANCHORS..kagemusha_v2::S_TOPUP_ANCHORS + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(operation_id));
-    result_state[kagemusha_v2::S_TOPUP_ANCHORS + 8..kagemusha_v2::S_TOPUP_ANCHORS + 16]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(topup_anchor_digest));
-    result_state[kagemusha_v2::S_PROOF_STEP_COUNT] = 1;
-    result_state[kagemusha_v2::S_CURRENT_COMMITMENT..kagemusha_v2::S_CURRENT_COMMITMENT + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(output_commitment));
-    result_state[kagemusha_v2::S_CURRENT_NULLIFIER..kagemusha_v2::S_CURRENT_NULLIFIER + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(spend_nullifier));
-    for (target, limb) in result_state
-        [kagemusha_v2::S_CURRENT_AMOUNT..kagemusha_v2::S_CURRENT_AMOUNT + 4]
-        .iter_mut()
-        .zip(AMOUNT.to_le_bytes().chunks_exact(4))
-    {
-        *target = u32::from_le_bytes(
-            limb.try_into()
-                .expect("u128 calibration amount has exact limbs"),
-        );
-    }
-    result_state[kagemusha_v2::S_CURRENT_SCALE] = ASSET_SCALE;
-    result_state[kagemusha_v2::S_BRANCH_CLAIM_COUNT] = 1;
-    result_state[kagemusha_v2::S_BRANCH_CLAIMS..kagemusha_v2::S_BRANCH_CLAIMS + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(topup_anchor_digest));
-    result_state
-        [kagemusha_v2::S_ARTIFACT_MANIFEST_SHA256..kagemusha_v2::S_ARTIFACT_MANIFEST_SHA256 + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(manifest_sha256));
-    result_state[kagemusha_v2::S_VERIFIER_KEY_ID..kagemusha_v2::S_VERIFIER_KEY_ID + 8]
-        .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(
-            verifier_key_id_digest,
-        ));
-
-    let public_inputs = KagemushaPastaCyclePublicInputsV4 {
-        public_statement_digest: kagemusha_calibration_exact_limbs_v4(statement_digest),
-        operation,
-        parent_count: 0,
-        parent_states: std::array::from_fn(|_| {
-            vec![0; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2]
-        }),
-        result_state,
-        manifest_sha256: kagemusha_calibration_exact_limbs_v4(manifest_sha256),
-        step_eq_compiled_protocol_sha256: kagemusha_sha256_public_words(
-            step_eq_compiled_protocol_sha256,
-        ),
-        step_ep_compiled_protocol_sha256: kagemusha_sha256_public_words(
-            step_ep_compiled_protocol_sha256,
-        ),
-        parent_eq_lineage_accumulator: None,
-        parent_ep_lineage_accumulator: None,
-        parent_eq_deferred_sha256: [[0; 8]; KAGEMUSHA_PASTA_PARENT_SLOTS_V1],
-        parent_ep_deferred_sha256: [[0; 8]; KAGEMUSHA_PASTA_PARENT_SLOTS_V1],
-        live_selector: KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4,
-    };
-
-    Ok(KagemushaGenerationCalibrationV4 {
-        public_inputs,
-        secure,
-        output_membership,
-    })
-}
-
-struct KagemushaEqBootstrapSeedV4 {
-    protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EqAffine>,
-    structure_sha256: [u8; 32],
-    protocol_sha256: [u8; 32],
-    proof: Vec<u8>,
-    current: snark_verifier::pcs::ipa::IpaAccumulator<
-        halo2_proofs::halo2curves::pasta::EqAffine,
-        snark_verifier::loader::native::NativeLoader,
-    >,
-}
-
-struct KagemushaEpBootstrapSeedV4 {
-    protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EpAffine>,
-    structure_sha256: [u8; 32],
-    protocol_sha256: [u8; 32],
-    proof: Vec<u8>,
-    current: snark_verifier::pcs::ipa::IpaAccumulator<
-        halo2_proofs::halo2curves::pasta::EpAffine,
-        snark_verifier::loader::native::NativeLoader,
-    >,
-}
-
-fn kagemusha_eq_bootstrap_seed_v4(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
-        halo2_proofs::halo2curves::pasta::EqAffine,
-    >,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-) -> Result<KagemushaEqBootstrapSeedV4, String> {
-    let layout = validate_kagemusha_circuit_params_v4(circuit_params)?;
-    let public_len = usize::try_from(layout.instance_column_limbs)
-        .map_err(|_| "Kagemusha V4 Eq bootstrap public length does not fit usize".to_owned())?;
-    let target = KagemushaUniversalProtocolTargetV1 {
-        base_circuit_params: kagemusha_base_circuit_params_v4(circuit_params)?,
-        instance_column_lengths: vec![public_len],
-    };
-    let circuit = KagemushaStepEqProtocolBootstrapCircuitV5 {
-        params: circuit_params.clone(),
-    };
-    let proving_key = kagemusha_bootstrap_proving_key_v1(params, &target, &circuit)
-        .map_err(|error| format!("failed to generate Kagemusha V4 Eq bootstrap PK: {error}"))?;
-    let instances = vec![vec![Fp::ZERO; public_len]];
-    let (proof, verifying_key) =
-        create_augmented_eq_proof_v4(params, proving_key, circuit, &instances)?;
-    let current =
-        succinct_verify_step_eq_instances(params, &verifying_key, &proof, &instances, proof.len())?;
-    let protocol = snark_verifier::system::halo2::compile(
-        params,
-        &verifying_key,
-        kagemusha_ipa_compile_config_v4(public_len),
-    );
-    let structure_sha256 = kagemusha_compiled_protocol_structure_sha256(
-        &protocol,
-        KagemushaPastaCycleParityV1::StepEq,
-    )?;
-    let protocol_sha256 = kagemusha_compiled_protocol_identity_sha256(
-        &protocol,
-        KagemushaPastaCycleParityV1::StepEq,
-    )?;
-    Ok(KagemushaEqBootstrapSeedV4 {
-        protocol,
-        structure_sha256,
-        protocol_sha256,
-        proof,
-        current,
-    })
-}
-
-fn kagemusha_ep_bootstrap_seed_v4(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
-        halo2_proofs::halo2curves::pasta::EpAffine,
-    >,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-) -> Result<KagemushaEpBootstrapSeedV4, String> {
-    let layout = validate_kagemusha_circuit_params_v4(circuit_params)?;
-    let public_len = usize::try_from(layout.instance_column_limbs)
-        .map_err(|_| "Kagemusha V4 Ep bootstrap public length does not fit usize".to_owned())?;
-    let target = KagemushaUniversalProtocolTargetV1 {
-        base_circuit_params: kagemusha_base_circuit_params_v4(circuit_params)?,
-        instance_column_lengths: vec![public_len],
-    };
-    let circuit = KagemushaStepEpProtocolBootstrapCircuitV5 {
-        params: circuit_params.clone(),
-    };
-    let proving_key = kagemusha_bootstrap_proving_key_v1(params, &target, &circuit)
-        .map_err(|error| format!("failed to generate Kagemusha V4 Ep bootstrap PK: {error}"))?;
-    let instances = vec![vec![Fq::ZERO; public_len]];
-    let (proof, verifying_key) =
-        create_augmented_ep_proof_v4(params, proving_key, circuit, &instances)?;
-    let current =
-        succinct_verify_step_ep_instances(params, &verifying_key, &proof, &instances, proof.len())?;
-    let protocol = snark_verifier::system::halo2::compile(
-        params,
-        &verifying_key,
-        kagemusha_ipa_compile_config_v4(public_len),
-    );
-    let structure_sha256 = kagemusha_compiled_protocol_structure_sha256(
-        &protocol,
-        KagemushaPastaCycleParityV1::StepEp,
-    )?;
-    let protocol_sha256 = kagemusha_compiled_protocol_identity_sha256(
-        &protocol,
-        KagemushaPastaCycleParityV1::StepEp,
-    )?;
-    Ok(KagemushaEpBootstrapSeedV4 {
-        protocol,
-        structure_sha256,
-        protocol_sha256,
-        proof,
-        current,
-    })
-}
-
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-struct KagemushaK17ShapeProbeScopeV5;
-
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-impl KagemushaK17ShapeProbeScopeV5 {
-    fn enter() -> Result<Self, String> {
-        let already_active =
-            KAGEMUSHA_K17_SHAPE_PROBE_ACTIVE_V5.with(|active| active.replace(true));
-        if already_active {
-            return Err("Kagemusha k17 shape probe cannot be nested".to_owned());
-        }
-        KAGEMUSHA_K17_SHAPE_PROBE_REQUIRED_V5.with(|captured| captured.borrow_mut().clear());
-        Ok(Self)
-    }
-}
-
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-impl Drop for KagemushaK17ShapeProbeScopeV5 {
-    fn drop(&mut self) {
-        KAGEMUSHA_K17_SHAPE_PROBE_REQUIRED_V5.with(|captured| captured.borrow_mut().clear());
-        KAGEMUSHA_K17_SHAPE_PROBE_ACTIVE_V5.with(|active| active.set(false));
-    }
-}
-
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-fn kagemusha_k17_shape_probe_params_v5(
-    advice_columns: u32,
-    lookup_columns: u32,
-) -> KagemushaStepCircuitParamsV4 {
-    let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
-    let public_input_limbs = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
-        .expect("production k17 public layout")
-        .instance_column_limbs;
-    KagemushaStepCircuitParamsV4 {
-        version: iroha_data_model::offline::KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-        k,
-        num_advice_per_phase: vec![advice_columns],
-        num_lookup_advice_per_phase: vec![lookup_columns, 0, 0],
-        num_fixed: 1,
-        lookup_bits: k - 1,
-        num_instance_columns: 1,
-        public_input_limbs,
-        minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-        max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
-    }
-}
-
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-fn kagemusha_k17_dummy_parent_proof_v5<C>(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
-    protocol: &PlonkProtocol<C>,
-    seed: u64,
-) -> Result<Vec<u8>, String>
-where
-    C: CurveAffine,
-    C::ScalarExt: PrimeField + From<u64>,
-{
-    use halo2_proofs::poly::commitment::ParamsProver as _;
-
-    let generators = params.get_g();
-    if generators.is_empty() {
-        return Err("Kagemusha k17 shape probe ParamsIPA has no generators".to_owned());
-    }
-    let mut point_index = usize::try_from(seed)
-        .map_err(|_| "Kagemusha k17 dummy point seed does not fit usize".to_owned())?;
-    let mut scalar_index = seed;
-    let mut proof = Vec::new();
-    let mut push_point = |proof: &mut Vec<u8>| {
-        let point = &generators[point_index % generators.len()];
-        proof.extend_from_slice(point.to_bytes().as_ref());
-        point_index += 1;
-    };
-    let mut push_scalar = |proof: &mut Vec<u8>| {
-        let scalar = C::ScalarExt::from(scalar_index.max(1));
-        proof.extend_from_slice(scalar.to_repr().as_ref());
-        scalar_index = scalar_index.saturating_add(1);
-    };
-
-    for _ in 0..protocol.num_witness.iter().sum::<usize>() {
-        push_point(&mut proof);
-    }
-    for _ in 0..protocol.quotient.num_chunk() {
-        push_point(&mut proof);
-    }
-    for _ in 0..protocol.evaluations.len() {
-        push_scalar(&mut proof);
-    }
-
-    let mut rotations_by_polynomial =
-        std::collections::BTreeMap::<usize, std::collections::BTreeSet<i32>>::new();
-    for query in &protocol.queries {
-        rotations_by_polynomial
-            .entry(query.poly)
-            .or_default()
-            .insert(query.rotation.0);
-    }
-    let query_sets = rotations_by_polynomial
-        .into_values()
-        .map(|rotations| rotations.into_iter().collect::<Vec<_>>())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-
-    // BGH19 multi-open: f, one evaluation per distinct polynomial rotation
-    // set, the ZK commitment, k pairs of IPA round points, c, the blind, and u.
-    push_point(&mut proof);
-    for _ in 0..query_sets {
-        push_scalar(&mut proof);
-    }
-    push_point(&mut proof);
-    for _ in 0..protocol.domain.k {
-        push_point(&mut proof);
-        push_point(&mut proof);
-    }
-    push_scalar(&mut proof);
-    push_scalar(&mut proof);
-    // This final BGH19 `g` is the augmented folded-generator suffix: Halo2's
-    // ordinary transcript omits it and Kagemusha appends exactly this point.
-    push_point(&mut proof);
-    Ok(proof)
-}
-
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-fn kagemusha_k17_dummy_accumulator_v5<C>(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
-    seed: u64,
-) -> Result<
-    snark_verifier::pcs::ipa::IpaAccumulator<C, snark_verifier::loader::native::NativeLoader>,
-    String,
->
-where
-    C: CurveAffine,
-    C::ScalarExt: PrimeField + From<u64>,
-{
-    use halo2_proofs::poly::commitment::{Params as _, ParamsProver as _};
-
-    let round_count = usize::try_from(params.k())
-        .map_err(|_| "Kagemusha k17 accumulator degree does not fit usize".to_owned())?;
-    let generators = params.get_g();
-    let generator_index = usize::try_from(seed)
-        .map_err(|_| "Kagemusha k17 accumulator seed does not fit usize".to_owned())?
-        % generators.len();
-    let xi = (0..round_count)
-        .map(|round| {
-            C::ScalarExt::from(
-                seed.saturating_add(u64::try_from(round).unwrap_or(u64::MAX))
-                    .saturating_add(1),
-            )
-        })
-        .collect();
-    Ok(snark_verifier::pcs::ipa::IpaAccumulator::new(
-        xi,
-        generators[generator_index],
-    ))
-}
-
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-fn kagemusha_k17_eq_probe_seed_v5(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
-        halo2_proofs::halo2curves::pasta::EqAffine,
-    >,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-    expected_proof_bytes: u32,
-) -> Result<KagemushaEqBootstrapSeedV4, String> {
-    use halo2_proofs::plonk::keygen_vk_custom;
-
-    let public_len = usize::try_from(
-        validate_kagemusha_circuit_params_v4(circuit_params)?.instance_column_limbs,
-    )
-    .map_err(|_| "Kagemusha k17 Eq public length does not fit usize".to_owned())?;
-    let circuit = KagemushaStepEqProtocolBootstrapCircuitV5 {
-        params: circuit_params.clone(),
-    };
-    let verifying_key = keygen_vk_custom(params, &circuit, false)
-        .map_err(|error| format!("Kagemusha k17 Eq VK-only probe failed: {error}"))?;
-    let protocol = snark_verifier::system::halo2::compile(
-        params,
-        &verifying_key,
-        kagemusha_ipa_compile_config_v4(public_len),
-    );
-    drop(verifying_key);
-    let proof = kagemusha_k17_dummy_parent_proof_v5(params, &protocol, 11)?;
-    if proof.len() != usize::try_from(expected_proof_bytes).unwrap_or(0) {
-        return Err(format!(
-            "Kagemusha k17 Eq dummy transcript measured {} bytes instead of configured {expected_proof_bytes}",
-            proof.len()
-        ));
-    }
-    let structure_sha256 = kagemusha_compiled_protocol_structure_sha256(
-        &protocol,
-        KagemushaPastaCycleParityV1::StepEq,
-    )?;
-    let protocol_sha256 = kagemusha_compiled_protocol_identity_sha256(
-        &protocol,
-        KagemushaPastaCycleParityV1::StepEq,
-    )?;
-    Ok(KagemushaEqBootstrapSeedV4 {
-        protocol,
-        structure_sha256,
-        protocol_sha256,
-        proof,
-        current: kagemusha_k17_dummy_accumulator_v5(params, 101)?,
-    })
-}
-
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-fn kagemusha_k17_ep_probe_seed_v5(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
-        halo2_proofs::halo2curves::pasta::EpAffine,
-    >,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-    expected_proof_bytes: u32,
-) -> Result<KagemushaEpBootstrapSeedV4, String> {
-    use halo2_proofs::plonk::keygen_vk_custom;
-
-    let public_len = usize::try_from(
-        validate_kagemusha_circuit_params_v4(circuit_params)?.instance_column_limbs,
-    )
-    .map_err(|_| "Kagemusha k17 Ep public length does not fit usize".to_owned())?;
-    let circuit = KagemushaStepEpProtocolBootstrapCircuitV5 {
-        params: circuit_params.clone(),
-    };
-    let verifying_key = keygen_vk_custom(params, &circuit, false)
-        .map_err(|error| format!("Kagemusha k17 Ep VK-only probe failed: {error}"))?;
-    let protocol = snark_verifier::system::halo2::compile(
-        params,
-        &verifying_key,
-        kagemusha_ipa_compile_config_v4(public_len),
-    );
-    drop(verifying_key);
-    let proof = kagemusha_k17_dummy_parent_proof_v5(params, &protocol, 17)?;
-    if proof.len() != usize::try_from(expected_proof_bytes).unwrap_or(0) {
-        return Err(format!(
-            "Kagemusha k17 Ep dummy transcript measured {} bytes instead of configured {expected_proof_bytes}",
-            proof.len()
-        ));
-    }
-    let structure_sha256 = kagemusha_compiled_protocol_structure_sha256(
-        &protocol,
-        KagemushaPastaCycleParityV1::StepEp,
-    )?;
-    let protocol_sha256 = kagemusha_compiled_protocol_identity_sha256(
-        &protocol,
-        KagemushaPastaCycleParityV1::StepEp,
-    )?;
-    Ok(KagemushaEpBootstrapSeedV4 {
-        protocol,
-        structure_sha256,
-        protocol_sha256,
-        proof,
-        current: kagemusha_k17_dummy_accumulator_v5(params, 211)?,
-    })
-}
-
-fn kagemusha_eq_seed_bootstrap_payload_v4(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
-        halo2_proofs::halo2curves::pasta::EqAffine,
-    >,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-    seed: &KagemushaEqBootstrapSeedV4,
-) -> Result<KagemushaStepBootstrapV4, String> {
-    let layout = validate_kagemusha_circuit_params_v4(circuit_params)?;
-    if seed.proof.len()
-        != usize::try_from(circuit_params.max_parent_proof_bytes)
-            .map_err(|_| "Kagemusha V4 Eq proof size does not fit usize".to_owned())?
-    {
-        return Err("Kagemusha V4 Eq calibrated proof size changed".to_owned());
-    }
-    let (post_proof_fold, _) = super::kagemusha_accumulation::fold_eq_accumulators_v4(
-        params,
-        circuit_params.k,
-        seed.current.clone(),
-        Some(seed.current.clone()),
-    )?;
-    let (branch_merge_fold, _) = super::kagemusha_accumulation::fold_eq_accumulators_v4(
-        params,
-        circuit_params.k,
-        seed.current.clone(),
-        Some(seed.current.clone()),
-    )?;
-    let bootstrap = KagemushaStepBootstrapV4 {
-        version: KAGEMUSHA_STEP_BOOTSTRAP_VERSION_V4,
-        parity: KagemushaPastaCycleParityV1::StepEq,
-        circuit_params_sha256: kagemusha_circuit_params_sha256_v4(circuit_params)?,
-        compiled_protocol_structure_sha256: seed.structure_sha256,
-        bootstrap_compiled_protocol_sha256: seed.protocol_sha256,
-        circuit_break_points: Vec::new(),
-        parent_slot: KagemushaStepBootstrapParentSlotV4 {
-            instances: vec![vec![
-                0;
-                usize::try_from(layout.instance_column_limbs).map_err(
-                    |_| { "Kagemusha V4 Eq bootstrap public length does not fit usize".to_owned() }
-                )?
-            ]],
-            ordinary_proof_bytes: seed.proof.clone(),
-            carried_lineage: KagemushaIpaAccumulatorWireV4::from_eq(
-                &seed.current,
-                circuit_params.k,
-            )?,
-            post_proof_fold,
-        },
-        branch_merge_fold,
-    };
-    bootstrap.validate_provisional_bootstrap_protocol(
-        circuit_params,
-        KagemushaPastaCycleParityV1::StepEq,
-        seed.structure_sha256,
-        &seed.protocol,
-    )?;
-    Ok(bootstrap)
-}
-
-fn kagemusha_ep_seed_bootstrap_payload_v4(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
-        halo2_proofs::halo2curves::pasta::EpAffine,
-    >,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-    seed: &KagemushaEpBootstrapSeedV4,
-) -> Result<KagemushaStepBootstrapV4, String> {
-    let layout = validate_kagemusha_circuit_params_v4(circuit_params)?;
-    if seed.proof.len()
-        != usize::try_from(circuit_params.max_parent_proof_bytes)
-            .map_err(|_| "Kagemusha V4 Ep proof size does not fit usize".to_owned())?
-    {
-        return Err("Kagemusha V4 Ep calibrated proof size changed".to_owned());
-    }
-    let (post_proof_fold, _) = super::kagemusha_accumulation::fold_ep_accumulators_v4(
-        params,
-        circuit_params.k,
-        seed.current.clone(),
-        Some(seed.current.clone()),
-    )?;
-    let (branch_merge_fold, _) = super::kagemusha_accumulation::fold_ep_accumulators_v4(
-        params,
-        circuit_params.k,
-        seed.current.clone(),
-        Some(seed.current.clone()),
-    )?;
-    let bootstrap = KagemushaStepBootstrapV4 {
-        version: KAGEMUSHA_STEP_BOOTSTRAP_VERSION_V4,
-        parity: KagemushaPastaCycleParityV1::StepEp,
-        circuit_params_sha256: kagemusha_circuit_params_sha256_v4(circuit_params)?,
-        compiled_protocol_structure_sha256: seed.structure_sha256,
-        bootstrap_compiled_protocol_sha256: seed.protocol_sha256,
-        circuit_break_points: Vec::new(),
-        parent_slot: KagemushaStepBootstrapParentSlotV4 {
-            instances: vec![vec![
-                0;
-                usize::try_from(layout.instance_column_limbs).map_err(
-                    |_| { "Kagemusha V4 Ep bootstrap public length does not fit usize".to_owned() }
-                )?
-            ]],
-            ordinary_proof_bytes: seed.proof.clone(),
-            carried_lineage: KagemushaIpaAccumulatorWireV4::from_ep(
-                &seed.current,
-                circuit_params.k,
-            )?,
-            post_proof_fold,
-        },
-        branch_merge_fold,
-    };
-    bootstrap.validate_provisional_bootstrap_protocol(
-        circuit_params,
-        KagemushaPastaCycleParityV1::StepEp,
-        seed.structure_sha256,
-        &seed.protocol,
-    )?;
-    Ok(bootstrap)
-}
-
+include!("kagemusha_recursion_adapter/generated_artifacts.rs");
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct KagemushaK17CapturedShapeV5 {
@@ -13511,7 +13186,7 @@ pub fn run_kagemusha_k17_shape_probe_v5(
     initial_advice_columns: u32,
     initial_lookup_columns: u32,
     maximum_iterations: usize,
-    supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
 ) -> Result<(), String> {
     if initial_advice_columns == 0 || initial_lookup_columns == 0 || maximum_iterations == 0 {
         return Err("Kagemusha k17 shape probe arguments must be non-zero".to_owned());
@@ -13531,7 +13206,7 @@ pub fn run_kagemusha_k17_shape_probe_v5(
             initial_advice_columns,
             initial_lookup_columns,
             maximum_iterations,
-            supervisor_permit,
+            memory_guard,
         )
     })
 }
@@ -13541,7 +13216,7 @@ fn run_kagemusha_k17_shape_probe_in_pool_v5(
     initial_advice_columns: u32,
     initial_lookup_columns: u32,
     maximum_iterations: usize,
-    _supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    _memory_guard: &KagemushaGenerationMemoryGuardV4,
 ) -> Result<(), String> {
     let _scope = KagemushaK17ShapeProbeScopeV5::enter()?;
     let mut candidate = (initial_advice_columns, initial_lookup_columns);
@@ -13798,14 +13473,14 @@ where
         })
     };
     report("kagemusha-v5.generator.begin")?;
-    let supervisor_permit = claim_kagemusha_generation_supervisor_permit_v4()?;
+    let memory_guard = start_kagemusha_generation_memory_guard_v4(None)?;
     let mut step_eq_proving_key = KagemushaInfallibleArtifactSpoolWriterV4::new("Eq proving key")?;
     let mut step_ep_proving_key = KagemushaInfallibleArtifactSpoolWriterV4::new("Ep proving key")?;
     report("kagemusha-v5.generator.core.begin")?;
     let generated = generate_kagemusha_pasta_cycle_artifacts_v4(
         step_eq_circuit_params,
         step_ep_circuit_params,
-        supervisor_permit,
+        &memory_guard,
         &mut step_eq_proving_key,
         &mut step_ep_proving_key,
     )?;
@@ -13861,7 +13536,7 @@ where
 pub fn generate_kagemusha_pasta_cycle_artifacts_v4(
     step_eq_circuit_params: KagemushaStepCircuitParamsV4,
     step_ep_circuit_params: KagemushaStepCircuitParamsV4,
-    supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
     step_eq_proving_key_sink: &mut (dyn std::io::Write + Send),
     step_ep_proving_key_sink: &mut (dyn std::io::Write + Send),
 ) -> Result<KagemushaGeneratedPastaCycleArtifactsV4, String> {
@@ -13881,7 +13556,7 @@ pub fn generate_kagemusha_pasta_cycle_artifacts_v4(
         generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
             step_eq_circuit_params,
             step_ep_circuit_params,
-            supervisor_permit,
+            memory_guard,
             step_eq_proving_key_sink,
             step_ep_proving_key_sink,
         )
@@ -13891,7 +13566,7 @@ pub fn generate_kagemusha_pasta_cycle_artifacts_v4(
 fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
     mut step_eq_circuit_params: KagemushaStepCircuitParamsV4,
     mut step_ep_circuit_params: KagemushaStepCircuitParamsV4,
-    _supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    memory_guard: &KagemushaGenerationMemoryGuardV4,
     step_eq_proving_key_sink: &mut (dyn std::io::Write + Send),
     step_ep_proving_key_sink: &mut (dyn std::io::Write + Send),
 ) -> Result<KagemushaGeneratedPastaCycleArtifactsV4, String> {
@@ -13904,6 +13579,13 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
 
     let preflight =
         preflight_kagemusha_generation_v4(&step_eq_circuit_params, &step_ep_circuit_params)?;
+    if preflight.estimated_peak_bytes > memory_guard.effective_memory_limit_bytes() {
+        return Err(format!(
+            "Kagemusha V5 reviewed peak estimate {} exceeds the active in-process {}-byte physical-memory ceiling",
+            preflight.estimated_peak_bytes,
+            memory_guard.effective_memory_limit_bytes(),
+        ));
+    }
     debug_assert!(preflight.estimated_peak_bytes <= KAGEMUSHA_GENERATION_MAX_ESTIMATED_BYTES_V4);
     debug_assert!(
         preflight.estimated_peak_bytes <= KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5
@@ -15145,4 +14827,7 @@ where
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    include!("kagemusha_recursion_adapter/generation_tests.rs");
+    include!("kagemusha_recursion_adapter/protocol_tests.rs");
+}

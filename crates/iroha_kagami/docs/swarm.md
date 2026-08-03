@@ -10,15 +10,21 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
 
 ### Options
 
-- `-p, --peers <COUNT>`: Specifies the number of peer services in the configuration.
+- `-p, --peers <COUNT>`: Specifies an exact Sumeragi `3f + 1` validator
+  committee in the supported range 4 through 31.
 
-- `-s, --seed <SEED>`: Sets the UTF-8 seed for deterministic key-generation.
+- `-s, --seed <SEED>`: Enables deterministic development mode.
+  - This mode generates validator identities from the public seed and requires the three
+    `IROHA_GENESIS_*_FILE` source paths when Compose is evaluated.
+  - Omit this option for the normal prepared-bundle workflow. There is no implicit random
+    identity generation.
 
 - `-H, --healthcheck`: Includes a healthcheck for every service in the configuration. 
   - Healthchecks use predefined settings. 
   - For more details on healthcheck configuration in Docker Compose files, see: [Docker Compose Healthchecks](https://docs.docker.com/compose/compose-file/compose-file-v3/#healthcheck).
 
 - `    --peer-config <FILE>`: Loads peer overrides from a TOML file.
+  - This option is development-only and requires `--seed`.
   - The file provides the human-readable service names and external port mappings for each peer.
   - Example:
     ```toml
@@ -34,29 +40,72 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
     ```
   - The number of entries must match `--peers`.
 
-- `-c, --config-dir <DIR>`: Sets the directory with Iroha configuration. 
-  - It will be mapped to a volume for each container. 
-  - The directory should contain `genesis.json`. If you plan to upgrade the executor at genesis,
-    include the executor bytecode file and reference it from `genesis.json`.
+- `-c, --config-dir <DIR>`: Selects the authoritative prepared bundle.
+  - Normal mode requires `genesis.json`, exactly `peer0.toml` through `peerN.toml`,
+    `genesis.signed.nrt`, `genesis.public_key`, and `genesis.expected_hash`.
+  - Kagami verifies the canonical signed body and signer, checks that every instruction batch
+    exactly realizes the bound `genesis.json` (including the staging-derived consensus
+    commitment), then requires every peer config's chain, verifier key, exact hash, trusted
+    roster, validator identity, and PoP map to agree exactly with the signed
+    `RegisterPeerWithPop` roster.
+  - With `--seed`, only `genesis.json` is used for policy validation.
+  - Kagami derives a content-addressed, container-safe projection from each
+    validated `peerN.toml` and mounts it as the `/config/peer.toml` Compose
+    secret. Before publication it reparses the projection without ambient
+    environment overrides and proves that the Sumeragi fingerprint,
+    deterministic execution policy, and Nexus/AMX consensus context are
+    unchanged.
+  - Projection rewrites host-only storage and public auxiliary-file paths to
+    fixed container locations. Torii account-onboarding and faucet sections are
+    omitted because their local signer and client credentials are not part of
+    the validator container trust boundary. The source peer configs, bundle
+    directory, source manifest, genesis private signing key, and client
+    credentials are never mounted.
 
-The generated Compose manifest intentionally contains no genesis signing key.
-Every service reads the verifier key from a Docker Compose secret, and only
-`irohad0` receives the signing-key secret. Before evaluating the manifest, set
-both source paths:
+The generated Compose manifest is validator-only and contains no genesis
+signing key or signing service. In normal mode it reuses the exact validator
+identities from the prepared bundle and embeds relative read-only paths for the
+validated content-addressed config projection, verifier key, independently
+approved exact hash, and signed body. Validator private keys remain inside the
+file-backed config secret and are not serialized into Compose YAML or
+environment variables. Each validator receives an anonymous `/storage` volume;
+public rANS tables, lane manifests, and optional SoraFS site bindings are
+bounded and materialized as Compose configs. The generator cannot silently
+produce a roster different from the one signed into genesis:
 
 ```bash
-export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/localnet/genesis.public_key"
-export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/localnet/genesis.private_key"
+kagami localnet --fresh-random-keys --peers 4 --out-dir ./localnet
+kagami docker \
+    --peers 4 \
+    --config-dir ./localnet \
+    --image hyperledger/iroha:dev \
+    --out-file ./my-configs/docker-compose.yml
 docker compose -f ./my-configs/docker-compose.yml up
 ```
 
-`kagami localnet` emits both files and protects the private file with
-owner-only permissions. If you prepare genesis manually, create the private
-file as one canonical private-key multihash plus a final newline with mode
-`0600`, and create the public file as its matching public-key multihash plus a
-final newline. Compose refuses to evaluate when either path is unset. The
-in-container signer also rejects a private key that does not derive the
-supplied public key. Never commit the private file.
+`kagami localnet` emits and cross-checks the complete prepared bundle. An
+equivalent manually prepared bundle may use
+`kagami genesis sign --expected-hash-out`, but its `peerN.toml` identities and
+PoPs must match the signed roster exactly. Generated launchers reject an empty
+body, non-canonical one-line inputs, or a hash without Iroha's marker bit before
+invoking `irohad`; `irohad` then repeats body, signature, verifier-key, and exact
+hash validation.
+
+The explicit `--seed` development mode is for relocatable samples such as the
+checked-in Compose fixtures. It requires source paths at evaluation time:
+
+```bash
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/dev-bundle/genesis.public_key"
+export IROHA_GENESIS_SIGNED_FILE="$PWD/dev-bundle/genesis.signed.nrt"
+export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/dev-bundle/genesis.expected_hash"
+docker compose -f ./my-configs/docker-compose.dev.yml up
+```
+
+Those files must have been prepared by the same Kagami revision for the exact
+same seed, peer count, and consensus/profile policy. Port and service-name
+overrides affect launcher endpoints but do not enter the index-based validator
+key derivation. This mode is deterministic and intentionally not a production
+custody path.
 
 - `-i, --image <NAME>`: Specifies the Docker image used by the peer services. 
   - By default, the image is pulled from Docker Hub if not cached. 
@@ -83,78 +132,49 @@ supplied public key. Never commit the private file.
 
 ## Examples
 
-Generate a configuration with 4 peers, using `Iroha` as the cryptographic seed, using `./peer_config` as a directory with configuration, and using `.` as a directory with the Iroha `Dockerfile` to build a `myiroha:local` image, saving the Compose config to `./my-configs/docker-compose.build.yml` in the current directory: 
+Generate a normal configuration from an authoritative prepared bundle and build
+the image locally:
 
 ```bash
 kagami docker \
     --peers 4 \
-    --seed Iroha \
-    --peer-config ./peer_overrides.toml \
-    --config-dir ./peer_config \
+    --config-dir ./localnet \
     --image myiroha:local \
     --build . \
     --out-file ./my-configs/docker-compose.build.yml
 ```
 
-Generate the same configuration, but use an existing image pulled from Docker Hub instead. The output is printed to stdout (notice how the target path still has to be provided, as it is used to resolve the config and build directories):
+Generate an explicit deterministic development manifest using an existing image.
+The output is printed to stdout; the target path is still required for relative
+path resolution:
 
 ```bash
 kagami docker \
     --peers 4 \
     --seed Iroha \
     --healthcheck \
-    --config-dir ./peer_config \
+    --config-dir ./defaults \
     --image hyperledger/iroha:dev \
     --out-file ./my-configs/docker-compose.pull.yml \
     --print
 ```
 
-### NPoS devnet (Docker)
-
-1. Build or reuse a genesis manifest whose signed consensus mode is `npos` (for example `kagami genesis generate --consensus-mode npos --vrf-seed-hex <64_HEX_DIGITS> --ivm-dir <ivm> --genesis-public-key <pk>` or `kagami localnet --consensus-mode npos ...`).
-2. Place `genesis.json` and peer configs in `--config-dir` (PoPs/topology can be injected at sign time with `--topology`/`--peer-pop` as described in the README).
-3. Run:
-
-```bash
-kagami docker \
-    --peers 4 \
-    --seed Iroha \
-    --config-dir ./peer_config \
-    --image hyperledger/iroha:dev \
-    --out-file ./my-configs/docker-compose.npos.yml
-```
-
-The generated Compose file reads and reports the immutable consensus mode from `genesis.json`.
-Use a fixed `--seed` and a fixed `--vrf-seed-hex` when generating the manifest if you need deterministic VRF schedules for testing.
-
 ## NPoS devnet workflow
 
-1. Produce an NPoS genesis manifest. The generator records `npos` as the immutable consensus mode and includes `sumeragi_npos_parameters`.
+1. Produce one random-custody NPoS bundle. The generator records `npos`, includes
+   `sumeragi_npos_parameters`, signs the exact validator/PoP roster, and writes
+   every peer config against the same exact hash.
 
    ```bash
-   kagami genesis generate \
+   kagami localnet \
+       --fresh-random-keys \
+       --peers 4 \
        --consensus-mode npos \
-       --vrf-seed-hex <64_HEX_DIGITS> \
-       --ivm-dir ./ivm_libs \
-       --genesis-public-key <GENESIS_PK> \
-       > ./cfg/genesis.json
+       --out-dir ./cfg
    ```
 
-2. Sign with your BLS roster and PoPs so validators carry Proofs-of-Possession in the final block:
-
-   ```bash
-   TOPOLOGY='["bls_normal:pk1","bls_normal:pk2","bls_normal:pk3"]'
-   kagami genesis sign ./cfg/genesis.json \
-       --topology "$TOPOLOGY" \
-       --peer-pop "bls_normal:pk1=pop_hex1" \
-       --peer-pop "bls_normal:pk2=pop_hex2" \
-       --peer-pop "bls_normal:pk3=pop_hex3" \
-       --private-key-file <MODE_0600_GENESIS_KEY_FILE> \
-       --expected-public-key <GENESIS_PUBLIC_KEY> \
-       --out-file ./cfg/genesis.signed.nrt
-   ```
-
-3. Render the Docker Compose file; Kagami refuses to proceed if `genesis.json` is missing `sumeragi_npos_parameters`, so the compose workflow always carries the NPoS parameters:
+2. Render Compose from that bundle. Do not pass `--seed`: prepared mode refuses
+   missing, extra, or mismatched validator files and cryptographic artifacts.
 
    ```bash
    kagami docker \
@@ -162,13 +182,18 @@ Use a fixed `--seed` and a fixed `--vrf-seed-hex` when generating the manifest i
        --config-dir ./cfg \
        --image hyperledger/iroha:dev \
        --out-file ./my-configs/docker-compose.npos.yml
-   export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/cfg/genesis.public_key"
-   export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/cfg/genesis.private_key"
    docker compose -f ./my-configs/docker-compose.npos.yml up
    ```
 
-Use the same roster/PoPs when starting the containers to avoid mismatches between the signed genesis and node configs.
+Kagami derives the runtime identities from the validated configs, so there is no
+separate “use the same roster” operator step to get wrong. The source localnet
+configs still retain account-onboarding and faucet services for bare-metal
+operation; generated validator-only Compose deliberately disables those
+host-credential-backed services.
 
 ## Note on configuration structure
 
-When using the `--build` option, the first peer in the generated configuration builds the image, while the rest of the peers depend on it. This is needed to avoid redundant building of the same image by every peer.
+When using the `--build` option, the first validator declares the image build
+and the remaining validators reuse that image. Compose completes project image
+builds before starting the validator-only service set, avoiding redundant
+builds without introducing a runtime bootstrap service.

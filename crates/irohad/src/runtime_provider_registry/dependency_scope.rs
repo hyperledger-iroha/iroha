@@ -15,6 +15,9 @@ pub(super) fn dependency_is_present(
 
     let deps = dependencies;
     match slot {
+        Slot::BootleLanternIssuanceProviderRegistry => {
+            deps.bootle_lantern_issuance_provider_registry.is_some()
+        }
         Slot::ModerationQuarantineKeyWrapper => deps.moderation_quarantine_key_wrapper.is_some(),
         Slot::PrivacyCyclePrfProvider => deps.privacy_cycle_prf_provider.is_some(),
         Slot::PrivacyReleaseAnchor => deps.privacy_release_anchor.is_some(),
@@ -114,7 +117,13 @@ pub(super) fn has_unrequested_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
-    has_unrequested_storage_security_dependency(bindings, dependencies)
+    dependency_is_unrequested(
+        bindings,
+        IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry,
+        dependencies
+            .bootle_lantern_issuance_provider_registry
+            .is_some(),
+    ) || has_unrequested_storage_security_dependency(bindings, dependencies)
         || has_unrequested_finance_native_dependency(bindings, dependencies)
         || has_unrequested_moderation_viewer_dependency(bindings, dependencies)
         || has_unrequested_pop_potr_gateway_dependency(bindings, dependencies)

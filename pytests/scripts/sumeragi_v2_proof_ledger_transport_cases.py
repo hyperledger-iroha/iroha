@@ -1582,8 +1582,8 @@ def test_transport_geometry_source_fidelity_rejects_shortened_default_cap(
         ),
         (
             Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
-            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;",
-            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 127;",
+            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;",
+            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT;",
             "first-release maximum validator geometry",
         ),
         (
@@ -2591,10 +2591,20 @@ def test_transport_geometry_source_fidelity_rejects_cap_threading_mutants(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn run_inner(",
-            ".claim_autonomous_lifecycle_process_generation(",
-            ".read_autonomous_lifecycle_process_generation(",
-            "runner startup must validate membership before a validator claims one process generation and constructs lane services",
+            "fn claim_runner_lifecycle_process_generation(",
+            "kura.claim_autonomous_lifecycle_process_generation(",
+            "kura.read_autonomous_lifecycle_process_generation(",
+            "the configured-role process generation helper must durably claim validator ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn claim_runner_lifecycle_process_generation(",
+            "match role {",
+            "if local_validator_index(context, local_peer, role)?.is_none() {\n"
+            "        return Ok(None);\n"
+            "    }\n"
+            "    match role {",
+            "the configured-role process generation helper must not consult height-local roster membership",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",

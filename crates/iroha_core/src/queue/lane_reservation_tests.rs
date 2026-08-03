@@ -727,6 +727,50 @@ fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
             .expect("exact terminal FIFO release retry is a stutter"),
         0
     );
+
+    let original_plan = queue
+        .routing_plans
+        .get(&first)
+        .expect("forgotten release retains its exact routing plan")
+        .clone();
+    let original_decision = *queue
+        .routing_decisions
+        .get(&first)
+        .expect("forgotten release retains its exact routing decision")
+        .value();
+    assert!(queue.remove_routing_plan_for_test(first));
+    for failure in [
+        queue
+            .prepare_lane_reservation_release_barrier(&barrier)
+            .map(drop),
+        queue
+            .finalize_lane_reservation_release_barrier(&barrier)
+            .map(drop),
+    ] {
+        assert!(matches!(
+            failure,
+            Err(LaneQueueReservationError::InvalidIdentity(ref message))
+                if message.contains("lacks exact ordinary FIFO ownership")
+        ));
+    }
+
+    let substituted_route = RoutingDecision::new(LaneId::new(99), DataSpaceId::new(99));
+    queue
+        .routing_plans
+        .insert(first, RoutingPlan::single(substituted_route));
+    queue.routing_decisions.insert(first, substituted_route);
+    assert!(matches!(
+        queue.prepare_lane_reservation_release_barrier(&barrier),
+        Err(LaneQueueReservationError::InvalidIdentity(ref message))
+            if message.contains("lacks exact ordinary FIFO ownership")
+    ));
+    assert!(matches!(
+        queue.finalize_lane_reservation_release_barrier(&barrier),
+        Err(LaneQueueReservationError::InvalidIdentity(ref message))
+            if message.contains("lacks exact ordinary FIFO ownership")
+    ));
+    queue.routing_plans.insert(first, original_plan);
+    queue.routing_decisions.insert(first, original_decision);
 }
 
 #[test]
@@ -1109,6 +1153,358 @@ fn reservation_group_commit_preflights_later_identity_before_any_prefix_mutation
         2
     );
     assert!(queue.live_lane_reservations().is_empty());
+}
+
+#[test]
+fn canonical_cleanup_rejects_empty_and_oversized_group_batches_before_mutation() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Queue::test(config_factory(), &time_source);
+    let carrier_limit = iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS;
+    assert_eq!(
+        queue
+            .validate_lane_queue_carrier_cleanup_batch_bounds(&[carrier_limit, 1], 2)
+            .expect("two independently bounded carriers may exceed one carrier aggregate"),
+        carrier_limit + 1,
+    );
+    assert!(
+        queue
+            .validate_lane_queue_carrier_cleanup_batch_bounds(&[carrier_limit + 1], 1)
+            .is_err(),
+        "one carrier must remain within the merge execution bound",
+    );
+    assert!(
+        queue
+            .validate_lane_queue_carrier_cleanup_batch_bounds(&[1, 1], 1)
+            .is_err(),
+        "carrier batches cannot exceed their exact startup-anchor bound",
+    );
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    push_globally_bound_lane_reservation_candidate(
+        &queue,
+        &state,
+        &dir,
+        accepted_tx_by_someone(&time_source),
+    );
+    let key = *queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"bounded-cleanup-owner",
+                b"bounded-cleanup-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve bounded-cleanup key")[0]
+        .key();
+    let group = lane_queue_reservation_group_binding_from_ordered_keys([&key])
+        .expect("bind bounded-cleanup key");
+    let before = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture bounded-cleanup snapshot");
+
+    let empty_error = queue
+        .commit_prepared_lane_reservation_groups(Vec::new())
+        .expect_err("canonical cleanup must reject an empty group batch");
+    assert!(matches!(
+        empty_error,
+        LaneQueueReservationError::InvalidIdentity(detail)
+            if detail.contains("non-empty carrier set")
+    ));
+
+    let oversized = (0..=iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS)
+        .map(|_| PreparedLaneQueueCarrierCleanupGroup {
+            ordered_keys: vec![key],
+            group_binding: group,
+            cleanup_gate: LaneQueueCarrierCleanupGate::direct_test(group),
+        })
+        .collect::<Vec<_>>();
+    let oversized_error = queue
+        .commit_prepared_lane_reservation_groups(oversized)
+        .expect_err("canonical cleanup must reject an oversized all-group batch");
+    assert!(matches!(
+        oversized_error,
+        LaneQueueReservationError::InvalidIdentity(detail)
+            if detail.contains("exceeds hard limit")
+    ));
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("recapture bounded-cleanup snapshot"),
+        before,
+        "whole-call bounds must fail before any Queue owner changes",
+    );
+}
+
+#[test]
+fn canonical_cleanup_replays_two_finalized_carriers_beyond_live_queue_capacity() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let mut config = config_factory();
+    config.capacity = nonzero!(2_usize);
+    config.capacity_per_user = nonzero!(2_usize);
+    let queue = Queue::test(config, &time_source);
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+
+    let mut finalized_groups = Vec::new();
+    for carrier_index in 0_u64..2 {
+        for _ in 0..2 {
+            push_globally_bound_lane_reservation_candidate(
+                &queue,
+                &state,
+                &dir,
+                accepted_unique_entrypoint_tx_by_someone(&time_source),
+            );
+        }
+        let mut scope = lane_reservation_scope(
+            &state,
+            format!("finalized-carrier-owner-{carrier_index}").as_bytes(),
+            format!("finalized-carrier-proposal-{carrier_index}").as_bytes(),
+        );
+        scope.lane_block_height = carrier_index.saturating_add(1);
+        let keys = queue
+            .reserve_transactions_for_lane(&state, scope, nonzero!(2_usize))
+            .expect("reserve one full-capacity canonical carrier")
+            .iter()
+            .map(|reserved| *reserved.key())
+            .collect::<Vec<_>>();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(
+            queue
+                .commit_lane_reservation_group(&keys)
+                .expect("finalize canonical carrier before aggregate replay"),
+            2,
+        );
+        finalized_groups.push(keys);
+    }
+    assert_eq!(
+        finalized_groups.iter().map(Vec::len).sum::<usize>(),
+        4,
+        "the finalized sibling set must truly exceed Queue's live capacity",
+    );
+    assert!(queue.live_lane_reservations().is_empty());
+    assert!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture terminal Queue snapshot")
+            .is_empty(),
+    );
+
+    let carriers = finalized_groups
+        .into_iter()
+        .map(|keys| vec![prepared_canonical_cleanup_group(keys)])
+        .collect::<Vec<_>>();
+    let result = queue
+        .commit_prepared_lane_reservation_carriers(carriers, 2)
+        .expect("one journal snapshot authenticates all finalized carrier siblings");
+    let (finalized, terminal_evidence) = result.into_parts();
+    assert_eq!(finalized, 0, "all four reservations were already terminal");
+    assert_eq!(
+        terminal_evidence.len(),
+        2,
+        "each exact carrier group still mints terminal Queue evidence",
+    );
+    assert!(queue.live_lane_reservations().is_empty());
+}
+
+#[test]
+fn canonical_cleanup_rejects_cross_carrier_aliases_before_mutation() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Queue::test(config_factory(), &time_source);
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let [first_key, second_key] = reserve_two_canonical_cleanup_carrier_groups(
+        &queue,
+        &state,
+        &dir,
+        &time_source,
+    );
+    let first_binding = lane_queue_reservation_group_binding_from_ordered_keys([&first_key])
+        .expect("bind first cross-carrier alias group");
+    let second_binding = lane_queue_reservation_group_binding_from_ordered_keys([&second_key])
+        .expect("bind second cross-carrier alias group");
+    let before = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture cross-carrier alias snapshot");
+
+    for alias_case in 0_u8..4 {
+        let mut aliased_key = second_key;
+        let mut aliased_binding = second_binding;
+        match alias_case {
+            0 => {
+                aliased_key.lane_block_height = first_key.lane_block_height;
+                aliased_binding =
+                    lane_queue_reservation_group_binding_from_ordered_keys([&aliased_key])
+                        .expect("bind same-slot carrier alias");
+            }
+            1 => {
+                aliased_binding.reservation_group_hash = first_binding.reservation_group_hash;
+            }
+            2 => {
+                aliased_key.signed_transaction_hash = first_key.signed_transaction_hash;
+                aliased_binding.reservation_group_hash =
+                    Hash::new(b"cross-carrier duplicate transaction group");
+            }
+            3 => {
+                aliased_key.entrypoint_hash = first_key.entrypoint_hash;
+                aliased_binding.reservation_group_hash =
+                    Hash::new(b"cross-carrier duplicate entrypoint group");
+            }
+            _ => unreachable!(),
+        }
+        let aliased = PreparedLaneQueueCarrierCleanupGroup {
+            ordered_keys: vec![aliased_key],
+            group_binding: aliased_binding,
+            cleanup_gate: LaneQueueCarrierCleanupGate::direct_test(aliased_binding),
+        };
+        let error = queue
+            .commit_prepared_lane_reservation_carriers(
+                vec![
+                    vec![prepared_canonical_cleanup_group(vec![first_key])],
+                    vec![aliased],
+                ],
+                2,
+            )
+            .expect_err("a cross-carrier identity alias must reject the whole batch");
+        let expected_detail = if alias_case < 2 {
+            "reservation group hash, attempt identity, or lane slot"
+        } else {
+            "transaction or entrypoint owner"
+        };
+        assert!(matches!(
+            error,
+            LaneQueueReservationError::InvalidIdentity(detail)
+                if detail.contains(expected_detail)
+        ));
+        assert_eq!(
+            queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("recapture cross-carrier alias snapshot"),
+            before,
+            "cross-carrier alias case {alias_case} must fail before any Queue mutation",
+        );
+        assert!(queue.lane_reservation_commit_barriers().is_empty());
+    }
+}
+
+#[test]
+fn canonical_cleanup_later_carrier_conflict_preserves_every_earlier_live_owner() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Queue::test(config_factory(), &time_source);
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let [first_key, second_key] = reserve_two_canonical_cleanup_carrier_groups(
+        &queue,
+        &state,
+        &dir,
+        &time_source,
+    );
+    let before = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture both live carrier owners");
+    let mut conflicting_later = second_key;
+    conflicting_later.routing_plan_digest =
+        Hash::new(b"later carrier changed its authenticated routing plan");
+
+    let error = queue
+        .commit_prepared_lane_reservation_carriers(
+            vec![
+                vec![prepared_canonical_cleanup_group(vec![first_key])],
+                vec![prepared_canonical_cleanup_group(vec![conflicting_later])],
+            ],
+            2,
+        )
+        .expect_err("a later carrier conflict must reject the complete cleanup set");
+    assert!(matches!(
+        error,
+        LaneQueueReservationError::Conflict { hash }
+            if hash == second_key.signed_transaction_hash
+    ));
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("recapture both live carrier owners after rejection"),
+        before,
+        "the valid earlier carrier must remain live when a later carrier conflicts",
+    );
+    assert_eq!(queue.live_lane_reservations().len(), 2);
+    assert!(queue.lane_reservation_commit_barriers().is_empty());
+}
+
+#[test]
+fn finalized_canonical_group_rejects_dangling_queue_owners_and_metadata() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Queue::test(config_factory(), &time_source);
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    push_globally_bound_lane_reservation_candidate(
+        &queue,
+        &state,
+        &dir,
+        accepted_tx_by_someone(&time_source),
+    );
+    let key = *queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"terminal-metadata-owner",
+                b"terminal-metadata-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve canonical terminal metadata fixture")[0]
+        .key();
+    assert_eq!(
+        queue
+            .commit_lane_reservation_group(&[key])
+            .expect("complete canonical Queue cleanup"),
+        1
+    );
+    let hash = key.signed_transaction_hash;
+    let assert_rejected = || {
+        assert!(matches!(
+            queue.commit_lane_reservation_group(&[key]),
+            Err(LaneQueueReservationError::Conflict { hash: conflict }) if conflict == hash
+        ));
+    };
+
+    queue.global_selection_owners.lock().insert(hash, 1);
+    assert_rejected();
+    queue.global_selection_owners.lock().remove(&hash);
+
+    queue.removed_hashes.insert(hash, ());
+    assert_rejected();
+    queue.removed_hashes.remove(&hash);
+
+    queue.tx_encoded_len.insert(hash, 1);
+    assert_rejected();
+    queue.tx_encoded_len.remove(&hash);
+
+    queue.tx_gas_cost.insert(hash, 1);
+    assert_rejected();
+    queue.tx_gas_cost.remove(&hash);
+
+    queue.tx_enqueued_at_ms.insert(hash, 1);
+    assert_rejected();
+    queue.tx_enqueued_at_ms.remove(&hash);
+
+    queue.queued_tx_enqueued_at_ms.insert(hash, 1);
+    assert_rejected();
+    queue.queued_tx_enqueued_at_ms.remove(&hash);
+
+    assert_eq!(
+        queue
+            .commit_lane_reservation_group(&[key])
+            .expect("clean already-empty canonical retry"),
+        0
+    );
 }
 
 #[test]
@@ -1797,6 +2193,25 @@ fn interleaved_reservation_batches_restore_one_global_fifo() {
 }
 
 #[test]
+fn empty_startup_reconciliation_receipt_publishes_with_gate_already_open() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let queue = Queue::test(config_factory(), &time_source);
+    let dir = tempdir().expect("empty startup-reconciliation journal directory");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+
+    let receipt = checked_startup_reconciliation_receipt(&queue);
+    assert!(receipt.initial_snapshot.is_empty());
+    assert!(
+        !queue.lane_reservation_startup_reconciliation_pending(),
+        "an initially empty durable replay has no quarantined owner"
+    );
+    queue
+        .complete_lane_reservation_startup_reconciliation(receipt)
+        .expect("an exact empty replay receipt may idempotently publish an open gate");
+    assert!(!queue.lane_reservation_startup_reconciliation_pending());
+}
+
+#[test]
 fn reservation_restart_release_restores_exact_global_fifo() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
@@ -1936,6 +2351,13 @@ fn reservation_restart_release_restores_exact_global_fifo() {
         queue.lane_reservation_startup_reconciliation_pending(),
         "restart release must remain quarantined until the State/Kura publication gate"
     );
+    assert!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture empty post-release reconciliation snapshot")
+            .is_empty(),
+        "consuming the last owner leaves an empty snapshot while its original gate stays closed"
+    );
     queue
         .complete_lane_reservation_startup_reconciliation(reconciliation_receipt)
         .expect("publish completed FIFO restart reconciliation");
@@ -2018,6 +2440,10 @@ fn reservation_restart_fits_ordinary_fifo_around_middle_anchor() {
     queue
         .complete_lane_reservation_startup_reconciliation(reconciliation_receipt)
         .expect("publish completed middle-anchor startup reconciliation");
+    assert!(
+        !queue.lane_reservation_startup_reconciliation_pending(),
+        "the first exact non-empty receipt opens the startup gate"
+    );
     assert!(matches!(
         queue.complete_lane_reservation_startup_reconciliation(stale_reconciliation_receipt),
         Err(LaneQueueReservationError::InvalidIdentity(ref reason))
@@ -2548,453 +2974,4 @@ fn ambiguous_reservation_put_disables_global_and_lane_selection_until_restart_re
             "a fully framed append owns the payload; a torn prefix is truncated"
         );
     }
-}
-
-#[test]
-fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain() {
-    #[derive(Clone, Copy, Debug)]
-    enum TerminalAppend {
-        Release,
-        OrderedRelease,
-        PrepareRelease,
-        CompleteRelease,
-        Commit,
-    }
-
-    for terminal in [
-        TerminalAppend::Release,
-        TerminalAppend::OrderedRelease,
-        TerminalAppend::PrepareRelease,
-        TerminalAppend::CompleteRelease,
-        TerminalAppend::Commit,
-    ] {
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let state = lane_reservation_test_state();
-        let dir = tempdir().expect("tempdir");
-        let queue = Arc::new(Queue::test(config_factory(), &time_source));
-        install_test_reservation_journal(&queue, &dir);
-        for _ in 0..2 {
-            push_globally_bound_lane_reservation_candidate(
-                &queue,
-                &state,
-                &dir,
-                accepted_tx_by_someone(&time_source),
-            );
-        }
-        let scope = lane_reservation_scope(
-            &state,
-            format!("terminal-fault-owner-{terminal:?}").as_bytes(),
-            format!("terminal-fault-proposal-{terminal:?}").as_bytes(),
-        );
-        let reserved = queue
-            .reserve_transactions_for_lane(&state, scope, nonzero!(2_usize))
-            .expect("reserve terminal-fault batch");
-        let keys = reserved.iter().map(|tx| *tx.key()).collect::<Vec<_>>();
-        let barrier = lane_reservation_release_barrier(
-            keys.clone(),
-            format!("terminal-fault-retirement-{terminal:?}").as_bytes(),
-        );
-        let unrelated_lane = LaneId::new(93);
-        let unrelated_dataspace = DataSpaceId::new(93);
-        let unrelated_incarnation =
-            Hash::new(format!("terminal-fault-unrelated-{terminal:?}").as_bytes());
-        assert!(
-            !queue.lane_has_pending_work(
-                unrelated_lane,
-                unrelated_dataspace,
-                unrelated_incarnation,
-            ),
-            "{terminal:?}: healthy unrelated route must initially be drainable"
-        );
-        let pressure_rx = queue.backpressure_handle().subscribe();
-        assert!(
-            !pressure_rx.borrow().is_saturated(),
-            "{terminal:?}: pressure must be healthy before fault injection"
-        );
-
-        let inject_ambiguous_append = || {
-            queue
-                .lane_reservation_journal
-                .lock()
-                .as_mut()
-                .expect("installed reservation journal")
-                .inject_next_append_fault(ReservationJournalAppendFault::SyncAfterFullWrite);
-        };
-        let result = match terminal {
-            TerminalAppend::Release => {
-                inject_ambiguous_append();
-                queue.release_lane_reservation(&keys[0]).map(|_| ())
-            }
-            TerminalAppend::OrderedRelease => {
-                inject_ambiguous_append();
-                queue.release_lane_reservations_in_order(&keys).map(|_| ())
-            }
-            TerminalAppend::PrepareRelease => {
-                inject_ambiguous_append();
-                queue
-                    .prepare_lane_reservation_release_barrier(&barrier)
-                    .map(|_| ())
-            }
-            TerminalAppend::CompleteRelease => {
-                queue
-                    .prepare_lane_reservation_release_barrier(&barrier)
-                    .expect("prepare completion-fault release");
-                inject_ambiguous_append();
-                queue
-                    .finalize_lane_reservation_release_barrier(&barrier)
-                    .map(|_| ())
-            }
-            TerminalAppend::Commit => {
-                inject_ambiguous_append();
-                queue.commit_lane_reservation_for_test(&keys[0]).map(|_| ())
-            }
-        };
-
-        assert!(
-            matches!(result, Err(LaneQueueReservationError::Journal(_))),
-            "{terminal:?}: ambiguous terminal append must report a journal error"
-        );
-        assert!(
-            queue.lane_reservation_durability_faulted(),
-            "{terminal:?}: terminal ambiguity must latch the process fault"
-        );
-        assert!(
-            pressure_rx.borrow().is_saturated(),
-            "{terminal:?}: terminal ambiguity must publish saturated pressure to existing observers"
-        );
-        assert!(
-            !queue.lane_reservation_group_is_finalized_for_diagnostics(&keys),
-            "{terminal:?}: diagnostics must fail closed after terminal ambiguity"
-        );
-        assert!(
-            queue
-                .lane_has_pending_work(unrelated_lane, unrelated_dataspace, unrelated_incarnation,),
-            "{terminal:?}: terminal ambiguity must block even unrelated lane drain"
-        );
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    enum StartupTerminalAppend {
-        ForgetCommitAfterProof,
-        ForgetReleaseAfterProof,
-    }
-
-    for terminal in [
-        StartupTerminalAppend::ForgetCommitAfterProof,
-        StartupTerminalAppend::ForgetReleaseAfterProof,
-    ] {
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let state = lane_reservation_test_state();
-        let dir = tempdir().expect("tempdir");
-        let reservation_path = dir
-            .path()
-            .join(format!("startup-terminal-fault-{terminal:?}.norito"));
-        let plan_path = test_lane_reservation_plan_path(&dir);
-        let (keys, barrier) = {
-            let queue = Arc::new(Queue::test(config_factory(), &time_source));
-            queue
-                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
-                .expect("install startup-terminal reservation journal");
-            let transaction_count = match terminal {
-                StartupTerminalAppend::ForgetCommitAfterProof => 1,
-                StartupTerminalAppend::ForgetReleaseAfterProof => 2,
-            };
-            for _ in 0..transaction_count {
-                push_globally_bound_lane_reservation_candidate(
-                    &queue,
-                    &state,
-                    &dir,
-                    accepted_tx_by_someone(&time_source),
-                );
-            }
-            let scope = lane_reservation_scope(
-                &state,
-                format!("startup-terminal-owner-{terminal:?}").as_bytes(),
-                format!("startup-terminal-proposal-{terminal:?}").as_bytes(),
-            );
-            let reserved = queue
-                .reserve_transactions_for_lane(
-                    &state,
-                    scope,
-                    NonZeroUsize::new(transaction_count)
-                        .expect("startup terminal fixture is nonempty"),
-                )
-                .expect("reserve startup-terminal batch");
-            let keys = reserved.iter().map(|tx| *tx.key()).collect::<Vec<_>>();
-            let barrier = lane_reservation_release_barrier(
-                keys.clone(),
-                format!("startup-terminal-retirement-{terminal:?}").as_bytes(),
-            );
-            match terminal {
-                StartupTerminalAppend::ForgetCommitAfterProof => {
-                    queue
-                        .lane_reservation_journal
-                        .lock()
-                        .as_mut()
-                        .expect("installed reservation journal")
-                        .commit(keys[0])
-                        .expect("persist commit before startup-boundary crash");
-                }
-                StartupTerminalAppend::ForgetReleaseAfterProof => {
-                    queue
-                        .prepare_lane_reservation_release_barrier(&barrier)
-                        .expect("persist prepared startup release");
-                    let store = queue.lane_reservations.lock();
-                    let ordered_records = barrier
-                        .ordered_keys
-                        .iter()
-                        .map(|key| store.live_by_hash[&key.signed_transaction_hash].clone())
-                        .collect();
-                    drop(store);
-                    queue
-                        .lane_reservation_journal
-                        .lock()
-                        .as_mut()
-                        .expect("installed reservation journal")
-                        .complete_release(LaneQueueReservationReleaseCompletionV5 {
-                            version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
-                            barrier: barrier.clone(),
-                            ordered_records,
-                        })
-                        .expect("persist release completion before startup-boundary crash");
-                }
-            }
-            (keys, barrier)
-        };
-
-        if matches!(terminal, StartupTerminalAppend::ForgetCommitAfterProof) {
-            let block_header =
-                ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
-                    .as_ref()
-                    .header();
-            let mut state_block = state.block(block_header);
-            state_block.transactions.insert_block(
-                HashSet::from([keys[0].signed_transaction_hash]),
-                nonzero!(1_usize),
-            );
-            state_block
-                .commit()
-                .expect("commit exact startup-terminal identity");
-        }
-
-        let queue = Arc::new(Queue::test(config_factory(), &time_source));
-        let replay = queue
-            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
-            .expect("restore startup-terminal boundary before its plan journal");
-        match terminal {
-            StartupTerminalAppend::ForgetCommitAfterProof => {
-                assert_eq!(keys.len(), 1);
-                assert_eq!(replay.restored, 0);
-                assert_eq!(replay.commit_barriers, 1);
-                assert_eq!(replay.completed_releases, 0);
-                assert!(queue.live_lane_reservations().is_empty());
-                assert_eq!(
-                    queue.lane_reservation_commit_barriers(),
-                    vec![keys[0]],
-                    "restart must reconstruct the exact commit identity that still needs a plan tombstone"
-                );
-            }
-            StartupTerminalAppend::ForgetReleaseAfterProof => {
-                assert_eq!(keys.len(), 2);
-                assert_eq!(replay.restored, 0);
-                assert_eq!(replay.commit_barriers, 0);
-                assert_eq!(replay.completed_releases, 1);
-                assert!(queue.live_lane_reservations().is_empty());
-                assert_eq!(
-                    queue.lane_reservation_release_barriers(),
-                    vec![barrier.clone()],
-                    "restart must reconstruct the exact completed release barrier"
-                );
-                let store = queue.lane_reservations.lock();
-                assert_eq!(store.completed_releases.len(), 1);
-                assert_eq!(store.completed_releases[0].barrier, barrier);
-                assert_eq!(
-                    store.completed_releases[0]
-                        .ordered_records
-                        .iter()
-                        .map(|record| record.key)
-                        .collect::<Vec<_>>(),
-                    keys,
-                    "completed release replay must retain the exact ordered reservation records"
-                );
-            }
-        }
-        let unrelated_lane = LaneId::new(95);
-        let unrelated_dataspace = DataSpaceId::new(95);
-        let unrelated_incarnation =
-            Hash::new(format!("startup-terminal-unrelated-{terminal:?}").as_bytes());
-        assert!(!queue.lane_has_pending_work(
-            unrelated_lane,
-            unrelated_dataspace,
-            unrelated_incarnation,
-        ));
-        let pressure_rx = queue.backpressure_handle().subscribe();
-        queue
-            .install_plan_journal(&plan_path, 1024 * 1024, true)
-            .expect("install exact production plan journal without finalizing barriers");
-        queue
-            .replay_plan_journal(&state)
-            .expect("materialize exact payloads under durable quarantine");
-        match terminal {
-            StartupTerminalAppend::ForgetCommitAfterProof => assert_eq!(
-                queue.lane_reservation_commit_barriers(),
-                vec![keys[0]],
-                "install and replay must retain the unproven Commit barrier"
-            ),
-            StartupTerminalAppend::ForgetReleaseAfterProof => assert_eq!(
-                queue.lane_reservation_release_barriers(),
-                vec![barrier.clone()],
-                "install and replay must retain the unproven completed-release barrier"
-            ),
-        }
-        queue
-            .lane_reservation_journal
-            .lock()
-            .as_mut()
-            .expect("restored reservation journal")
-            .inject_next_append_fault(ReservationJournalAppendFault::SyncAfterFullWrite);
-
-        let error = match terminal {
-            StartupTerminalAppend::ForgetCommitAfterProof => queue
-                .commit_lane_reservation_for_test(&keys[0])
-                .map(|_| ())
-                .expect_err("ambiguous ForgetCommit must fail the explicit proof path"),
-            StartupTerminalAppend::ForgetReleaseAfterProof => queue
-                .finalize_lane_reservation_release_barrier(&barrier)
-                .map(|_| ())
-                .expect_err("ambiguous ForgetRelease must fail the explicit proof path"),
-        };
-        assert!(
-            error.to_string().contains("lane queue reservation journal"),
-            "{terminal:?}: startup error must identify the ambiguous reservation boundary: {error}"
-        );
-        assert!(
-            queue.lane_reservation_durability_faulted(),
-            "{terminal:?}: ambiguous startup Forget must latch the process fault"
-        );
-        assert!(
-            pressure_rx.borrow().is_saturated(),
-            "{terminal:?}: ambiguous startup Forget must publish saturated pressure"
-        );
-        assert!(
-            !queue.lane_reservation_group_is_finalized_for_diagnostics(&keys),
-            "{terminal:?}: diagnostics must fail closed after startup Forget ambiguity"
-        );
-        assert!(
-            queue
-                .lane_has_pending_work(unrelated_lane, unrelated_dataspace, unrelated_incarnation,),
-            "{terminal:?}: startup Forget ambiguity must block unrelated lane drain"
-        );
-        match terminal {
-            StartupTerminalAppend::ForgetCommitAfterProof => assert_eq!(
-                queue.lane_reservation_commit_barriers(),
-                vec![keys[0]],
-                "ambiguous ForgetCommit must retain the exact affected identity"
-            ),
-            StartupTerminalAppend::ForgetReleaseAfterProof => {
-                let store = queue.lane_reservations.lock();
-                assert_eq!(store.completed_releases.len(), 1);
-                assert_eq!(store.completed_releases[0].barrier, barrier);
-                assert_eq!(
-                    store.completed_releases[0]
-                        .ordered_records
-                        .iter()
-                        .map(|record| record.key)
-                        .collect::<Vec<_>>(),
-                    keys,
-                    "ambiguous ForgetRelease must retain the exact affected ordered group"
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn ambiguous_reservation_compaction_fails_closed_after_terminal_application() {
-    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("ambiguous-compaction.norito");
-    let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    queue
-        .install_plan_journal(
-            dir.path().join("ambiguous-compaction-plans.norito"),
-            1024 * 1024,
-            true,
-        )
-        .expect("install globally certified reservation plan journal");
-    queue
-        .install_lane_reservation_journal(&path, 1)
-        .expect("install aggressively compacting reservation journal");
-    push_globally_bound_lane_reservation_candidate(
-        &queue,
-        &state,
-        &dir,
-        accepted_tx_by_someone(&time_source),
-    );
-    let key = *queue
-        .reserve_transactions_for_lane(
-            &state,
-            lane_reservation_scope(
-                &state,
-                b"compaction-fault-owner",
-                b"compaction-fault-proposal",
-            ),
-            nonzero!(1_usize),
-        )
-        .expect("reserve compaction-fault transaction")[0]
-        .key();
-    let unrelated_lane = LaneId::new(94);
-    let unrelated_dataspace = DataSpaceId::new(94);
-    let unrelated_incarnation = Hash::new(b"compaction-fault-unrelated-incarnation");
-    assert!(!queue.lane_has_pending_work(
-        unrelated_lane,
-        unrelated_dataspace,
-        unrelated_incarnation,
-    ));
-    let pressure_rx = queue.backpressure_handle().subscribe();
-    assert!(
-        !pressure_rx.borrow().is_saturated(),
-        "pressure must be healthy before compaction fault injection"
-    );
-    queue
-        .lane_reservation_journal
-        .lock()
-        .as_mut()
-        .expect("installed reservation journal")
-        .inject_next_compaction_fault(
-            ReservationJournalCompactionFault::AfterRenameBeforeParentSync,
-        );
-
-    assert_eq!(
-        queue
-            .release_lane_reservation(&key)
-            .expect("terminal release remains durably applied before compaction"),
-        LaneQueueReservationOutcome::Finalized
-    );
-    assert!(queue.live_lane_reservations().is_empty());
-    assert!(queue.lane_reservation_commit_barriers().is_empty());
-    assert!(queue.lane_reservation_release_barriers().is_empty());
-    assert!(
-        queue.lane_reservation_durability_faulted(),
-        "rename-before-parent-sync ambiguity must latch the process fault"
-    );
-    assert!(
-        pressure_rx.borrow().is_saturated(),
-        "compaction ambiguity must publish saturated pressure to existing observers"
-    );
-    assert!(
-        !queue.lane_reservation_group_is_finalized_for_diagnostics(&[key]),
-        "a fully applied terminal transition must still fail diagnostics closed while its compacted replacement is ambiguous"
-    );
-    assert!(
-        queue.lane_has_pending_work(unrelated_lane, unrelated_dataspace, unrelated_incarnation,),
-        "compaction ambiguity must block even unrelated lane drain"
-    );
-    let mut selected = Vec::new();
-    queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut selected);
-    assert!(
-        selected.is_empty(),
-        "the FIFO-restored transaction must remain nonselectable until restart recovery"
-    );
 }

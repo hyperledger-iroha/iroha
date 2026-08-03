@@ -36,14 +36,17 @@ class HttpClientTransportVpnParserTest {
                   "tunnel_addresses": ["10.208.0.2/32"],
                   "mtu_bytes": 1280,
                   "display_billing_label": "standard XOR",
-                  "fee_asset_id": "xor#universal.universal",
-                  "escrow_account_id": "sorauEscrow",
-                  "operator_account_id": "sorauOperator",
+                  "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
                   "lease_fee": "1000000.25",
                   "settlement_grace_secs": 120,
                   "flow_label_bits": 24,
                   "padding_budget_ms": 15,
-                  "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
+                  "relay_id_hex": "$validEd25519PublicKeyHex",
+                  "descriptor_commit_hex": "${"cd".repeat(32)}",
+                  "tls_server_name": "relay.example",
+                  "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+                  "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+                  "directory_snapshot_digest_hex": "${"42".repeat(32)}"
                 }
             """.trimIndent()
         val executor = StubResponseExecutor(
@@ -58,13 +61,16 @@ class HttpClientTransportVpnParserTest {
         val profile = transport.getVpnProfile().join()
 
         assertTrue(profile.available)
-        assertEquals("xor#universal.universal", profile.feeAssetId)
-        assertEquals("sorauEscrow", profile.escrowAccountId)
-        assertEquals("sorauOperator", profile.operatorAccountId)
+        assertEquals("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", profile.operatorAccountId)
         assertEquals("1000000.25", profile.leaseFee)
         assertEquals(60L, profile.dnsPushIntervalSecs)
         assertEquals(120L, profile.settlementGraceSecs)
+        assertEquals(validEd25519PublicKeyHex, profile.relayIdHex)
+        assertEquals("cd".repeat(32), profile.descriptorCommitHex)
+        assertEquals("relay.example", profile.tlsServerName)
         assertEquals("ab".repeat(32), profile.relayTlsSpkiSha256Hex)
+        assertEquals("ef".repeat(32), profile.relayCertificateSha256Hex)
+        assertEquals("42".repeat(32), profile.directorySnapshotDigestHex)
         assertEquals("GET", executor.lastRequest.method)
         assertEquals("https://torii.example/v1/vpn/profile", executor.lastRequest.uri.toString())
 

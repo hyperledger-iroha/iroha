@@ -133,7 +133,8 @@ impl CrossLaneTransferBuilder {
 /// Verify a batch of relay envelopes and reject duplicates.
 ///
 /// # Errors
-/// Returns an error if any envelope fails validation or if a duplicate `(lane_id, dataspace_id, block_height)` tuple is found.
+/// Returns an error if any envelope fails validation or if a duplicate
+/// `(lane_id, dataspace_id, lane_incarnation, block_height)` coordinate is found.
 pub fn verify_lane_relay_envelopes(
     envelopes: &[LaneRelayEnvelope],
 ) -> Result<(), CrossLaneProofError> {
@@ -152,6 +153,7 @@ pub fn verify_lane_relay_envelopes(
         let key = (
             envelope.lane_id,
             envelope.dataspace_id,
+            envelope.lane_incarnation,
             envelope.block_height,
         );
         if !seen.insert(key) {

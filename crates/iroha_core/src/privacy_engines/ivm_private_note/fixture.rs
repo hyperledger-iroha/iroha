@@ -87,7 +87,7 @@ fn note(
 
 fn release_asset_definition_id_v1() -> Result<AssetDefinitionId, IvmPrivateNoteReleaseFixtureErrorV1>
 {
-    Ok(AssetDefinitionId::new(
+    Ok(AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal")
             .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
         iroha_data_model::name::Name::from_str("ivmnote")

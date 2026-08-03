@@ -1,6 +1,9 @@
 //! [`Metrics`] and [`Status`]-related logic and functions.
 #![allow(clippy::doc_markdown)]
 
+/// Low-cardinality metrics for the Musubi V1 package ecosystem.
+pub mod musubi;
+
 use core::{
     convert::{TryFrom, TryInto},
     ops::Deref,
@@ -3414,6 +3417,7 @@ mod serde_tests {
             build: BuildStatus {
                 version: "2.0.0-rc.test".to_owned(),
                 git_commit_sha: "deadbeef".to_owned(),
+                dpn_validator_release_commit: "feedface".to_owned(),
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
             },
@@ -5614,6 +5618,8 @@ pub struct BuildStatus {
     pub version: String,
     /// Git commit SHA baked into this binary.
     pub git_commit_sha: String,
+    /// DPN validator release commit baked into a Taira validator binary.
+    pub dpn_validator_release_commit: String,
     /// Enabled Cargo features baked into this binary.
     pub cargo_features: String,
     /// Target triple used to compile this binary.
@@ -5625,6 +5631,9 @@ impl BuildStatus {
         Self {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             git_commit_sha: option_env!("VERGEN_GIT_SHA")
+                .unwrap_or("unknown")
+                .to_owned(),
+            dpn_validator_release_commit: option_env!("IROHA_DPN_VALIDATOR_RELEASE_COMMIT")
                 .unwrap_or("unknown")
                 .to_owned(),
             cargo_features: option_env!("VERGEN_CARGO_FEATURES")
@@ -8491,6 +8500,8 @@ pub struct Metrics {
     sorafs_orderbook_projection_exposition_lock: Mutex<()>,
     /// Serializes gateway-compliance serving-catalog updates with exposition.
     sorafs_gateway_compliance_exposition_lock: Mutex<()>,
+    /// Low-cardinality Musubi V1 registry, publication, cache, and storage metrics.
+    pub musubi: musubi::MusubiMetrics,
     /// Internal use only. Needed for generating the response.
     registry: Registry,
 }
@@ -10222,6 +10233,7 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         let registry = Registry::new();
+        let musubi = musubi::MusubiMetrics::new(&registry);
         register_guarded(&registry, &streaming_hpke_rekeys_total);
         register_guarded(&registry, &streaming_fec_parity_current);
         register_guarded(&registry, &streaming_soranet_provision_queue_drop_total);
@@ -16613,6 +16625,7 @@ impl Default for Metrics {
             nts_rtt_ms_count,
             sorafs_orderbook_projection_exposition_lock: Mutex::new(()),
             sorafs_gateway_compliance_exposition_lock: Mutex::new(()),
+            musubi,
             registry,
             sumeragi_vrf_commits_emitted_total,
             sumeragi_vrf_reveals_emitted_total,
@@ -19627,79 +19640,7 @@ impl Metrics {
     }
 }
 
-fn record_gauge_stats(gauge: &GaugeVec, samples: &[f64]) {
-    const AVG_LABEL: [&str; 1] = ["avg"];
-    const P95_LABEL: [&str; 1] = ["p95"];
-    const MAX_LABEL: [&str; 1] = ["max"];
-    const COUNT_LABEL: [&str; 1] = ["count"];
-
-    if samples.is_empty() {
-        gauge.with_label_values(&AVG_LABEL).set(0.0);
-        gauge.with_label_values(&P95_LABEL).set(0.0);
-        gauge.with_label_values(&MAX_LABEL).set(0.0);
-        gauge.with_label_values(&COUNT_LABEL).set(0.0);
-        return;
-    }
-
-    let len = samples.len();
-    let count = u64::try_from(len).map_or_else(|_| u64_to_f64(u64::MAX), u64_to_f64);
-    let sum: f64 = samples.iter().copied().sum();
-    let avg = sum / count.max(1.0);
-
-    let mut sorted = samples.to_vec();
-    sorted.sort_by(f64::total_cmp);
-
-    let max = *sorted.last().expect("non-empty after guard");
-    let rank = ((len as u128) * 95).div_ceil(100);
-    let p95_index = rank
-        .saturating_sub(1)
-        .try_into()
-        .map_or(len - 1, |idx: usize| idx.min(len - 1));
-    let p95 = sorted[p95_index];
-
-    gauge.with_label_values(&AVG_LABEL).set(avg);
-    gauge.with_label_values(&P95_LABEL).set(p95);
-    gauge.with_label_values(&MAX_LABEL).set(max);
-    gauge.with_label_values(&COUNT_LABEL).set(count);
-}
-
-#[allow(clippy::cast_precision_loss)]
-fn u64_to_f64(value: u64) -> f64 {
-    value as f64
-}
-
-fn clamp_u32_to_i64(value: u32) -> i64 {
-    i64::from(value)
-}
-
-fn u128_to_f64(value: u128) -> f64 {
-    u64::try_from(value).map_or(f64::MAX, u64_to_f64)
-}
-
-fn quantity_to_micro_f64(value: &iroha_data_model::prelude::Quantity) -> f64 {
-    let micros = value.as_numeric().to_f64_lossy() * 1_000_000.0;
-    if micros.is_finite() { micros } else { f64::MAX }
-}
-
-/// Project an exact quantity into the legacy nano-unit `f64` used only by
-/// telemetry instruments. This projection never feeds consensus state.
-fn quantity_to_nano_f64(value: &Quantity) -> f64 {
-    let nanos = value.as_numeric().to_f64_lossy() * 1_000_000_000.0;
-    if nanos.is_finite() { nanos } else { f64::MAX }
-}
-
-fn family_has_lane_labels(family: &prometheus::proto::MetricFamily) -> bool {
-    family
-        .get_metric()
-        .iter()
-        .flat_map(prometheus::proto::Metric::get_label)
-        .any(|label| {
-            matches!(
-                label.name(),
-                "lane" | "lane_id" | "dataspace" | "dataspace_id"
-            )
-        })
-}
+include!("metrics/tail_projection.rs");
 
 #[cfg(test)]
 #[path = "metrics/test.rs"]

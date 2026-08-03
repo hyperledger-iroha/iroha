@@ -1141,7 +1141,7 @@ internal static class SccpExactParser
             throw new ArgumentException($"{label} source network must be Taira.");
         }
 
-        var protocolVersion = checked((ushort)SccpJson.UInt32(item, "protocol_version", 4, 4));
+        var protocolVersion = checked((ushort)SccpJson.UInt32(item, "protocol_version", 3, 4));
         var chainHash = UpperHex(item, "chain_id_hash", 32);
         if (!chainHash.AsSpan().SequenceEqual(SccpV1.Keccak256(TairaChainId)))
         {

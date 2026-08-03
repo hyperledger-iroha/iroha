@@ -75,6 +75,29 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
     let barrier = retirement
         .queue_release_barrier()
         .expect("build exact queue barrier");
+    let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+        barrier.ordered_keys.iter(),
+    )
+    .expect("bind exact retirement reservation group");
+    let prepared_evidence = reopened
+        .authenticate_autonomous_lane_retirement_snapshot_evidence(
+            &payload,
+            &retirement,
+            reservation_group,
+            AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared,
+        )
+        .expect("authenticate exact pending retirement snapshot after restart");
+    assert_eq!(
+        prepared_evidence.phase(),
+        AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared
+    );
+    assert_eq!(prepared_evidence.reservation_group(), reservation_group);
+    assert_eq!(
+        prepared_evidence.retirement_hash(),
+        retirement.digest().expect("retirement digest")
+    );
+    assert_eq!(prepared_evidence.recovered_state().release.pending_prefix, 1);
+    assert_eq!(prepared_evidence.recovered_state().release.released_prefix, 0);
     let mut conflicting_barrier = barrier.clone();
     conflicting_barrier.executable_payload_hash = Hash::new(b"conflicting-queue-release-payload");
     assert!(
@@ -94,6 +117,21 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
     reopened
         .finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
         .expect("released claim retry is idempotent");
+    let completed_evidence = reopened
+        .authenticate_autonomous_lane_retirement_snapshot_evidence(
+            &payload,
+            &retirement,
+            reservation_group,
+            AutonomousLaneRetirementQueueSnapshotPhaseV1::Completed,
+        )
+        .expect("authenticate exact fully released retirement snapshot");
+    assert_eq!(
+        completed_evidence.phase(),
+        AutonomousLaneRetirementQueueSnapshotPhaseV1::Completed
+    );
+    assert_eq!(completed_evidence.reservation_group(), reservation_group);
+    assert_eq!(completed_evidence.recovered_state().release.pending_prefix, 1);
+    assert_eq!(completed_evidence.recovered_state().release.released_prefix, 1);
     let released =
         Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).expect("released claim");
     assert_eq!(
@@ -148,7 +186,7 @@ fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging(
 
     let _guard = kura.sidecar_lock.lock();
     let staged = kura
-        .prepare_autonomous_lane_entrypoint_claims_with_limit_locked(&payload, 2)
+        .prepare_autonomous_lane_entrypoint_claims_with_limit_locked(0, &payload, 2)
         .expect("one free inventory slot admits one crash-staged claim");
     assert_eq!(staged.len(), 1);
     assert!(
@@ -170,7 +208,7 @@ fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging(
     );
     let second_filler_bytes = fs::read(&second_filler).expect("read second filler");
     assert!(
-        kura.prepare_autonomous_lane_entrypoint_claims_with_limit_locked(&payload, 2)
+        kura.prepare_autonomous_lane_entrypoint_claims_with_limit_locked(0, &payload, 2)
             .is_err(),
         "a full live inventory must reject staging before creating any file",
     );
@@ -272,7 +310,7 @@ fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or
     {
         let _guard = kura.sidecar_lock.lock();
         assert!(
-            kura.prepare_autonomous_lane_entrypoint_claims_with_limit_locked(&payload, 8)
+            kura.prepare_autonomous_lane_entrypoint_claims_with_limit_locked(0, &payload, 8)
                 .is_err(),
             "live preparation must fail closed on an unexpected namespace artifact",
         );
@@ -1246,8 +1284,17 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
         payload.origin_proposal.descriptor.proposal_height,
     );
     {
-        let _guard = kura.sidecar_lock.lock();
+        let _prune_guard = kura.prune_lock.lock();
+        kura.ensure_prune_recovery_not_required()
+            .expect("view-state fixture has no prune recovery");
+        let _canonical_chain_guard = kura.canonical_chain_lock.lock();
+        let pending_canonical_bytes = kura
+            .pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
+            .expect("measure pending canonical bytes before view-state write");
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
         kura.write_autonomous_lane_block_view_state_locked(
+            pending_canonical_bytes,
             &AutonomousLaneBlockArtifact {
                 format: AutonomousLaneBlockArtifactFormat::Current,
                 executable_payload: payload.clone(),
@@ -1642,8 +1689,16 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         AutonomousLifecycleCursorPhaseV2::live(1, activated)
             .expect("construct already-durable Kura live lifecycle phase"),
     );
-    kura.compare_and_swap_autonomous_lifecycle_cursor(absent_lease, live_activated.clone())
-        .expect("create lifecycle cursor from already-durable Kura state");
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(
+            absent_lease,
+            live_activated.clone(),
+        )
+        .expect("create lifecycle cursor from already-durable Kura state")
+        .cursor(),
+        Some(&live_activated),
+        "successful lifecycle creation must return its exact durable cursor",
+    );
 
     let foreign_temp_dir = TempDir::new().expect("foreign Kura root");
     let foreign_config = kura_config_for_dir(&foreign_temp_dir, BLOCKS_IN_MEMORY);
@@ -1794,10 +1849,59 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let (kura, _) = Kura::new(&config, &lane_config).expect("restart before Crash observation");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind exact lifecycle key identity");
+    assert!(
+        kura.read_only_active_autonomous_lifecycle_attempt_inventory(
+            Hash::new(b"wrong read-only lifecycle inventory chain"),
+            &local_peer,
+            lane.lane_id,
+            lane.dataspace_id,
+            payload.origin_proposal.descriptor.lane_incarnation,
+        )
+        .is_err(),
+        "read-only lifecycle inventory must authenticate the exact durable chain identity",
+    );
+    let wrong_local_peer = PeerId::new(
+        checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            .public_key()
+            .clone(),
+    );
+    assert!(
+        kura.read_only_active_autonomous_lifecycle_attempt_inventory(
+            chain_id_hash,
+            &wrong_local_peer,
+            lane.lane_id,
+            lane.dataspace_id,
+            payload.origin_proposal.descriptor.lane_incarnation,
+        )
+        .is_err(),
+        "read-only lifecycle inventory must authenticate the exact durable local peer",
+    );
+    let observer_inventory = kura
+        .read_only_active_autonomous_lifecycle_attempt_inventory(
+            chain_id_hash,
+            &local_peer,
+            lane.lane_id,
+            lane.dataspace_id,
+            payload.origin_proposal.descriptor.lane_incarnation,
+        )
+        .expect("observer reads the prior durable lifecycle inventory without claiming generation");
+    assert_eq!(observer_inventory.len(), 1);
+    assert_eq!(observer_inventory[0].executable_payload(), &payload);
+    assert_eq!(
+        observer_inventory[0]
+            .cursor()
+            .expect("observer inventory includes the prior signed cursor")
+            .owner_generation(),
+        1,
+    );
     let generation_two = kura
         .claim_autonomous_lifecycle_process_generation(chain_id_hash, &local_peer)
         .expect("claim second durable lifecycle process generation");
-    assert_eq!(generation_two.generation(), 2);
+    assert_eq!(
+        generation_two.generation(),
+        2,
+        "read-only observer inventory must not claim or increment process generation",
+    );
 
     let mut crashed = execution_input_durable;
     crashed.session.crashed = 1;
@@ -1841,8 +1945,16 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         AutonomousLifecycleCursorPhaseV2::crashed(1, 2, execution_input_durable, crashed)
             .expect("construct generation-aware crash phase"),
     );
-    kura.compare_and_swap_autonomous_lifecycle_cursor(crash_lease, crashed_cursor.clone())
-        .expect("publish generation-aware crash phase");
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(
+            crash_lease,
+            crashed_cursor.clone(),
+        )
+        .expect("publish generation-aware crash phase")
+        .cursor(),
+        Some(&crashed_cursor),
+        "successful Crash publication must return its exact durable cursor",
+    );
 
     let mut recovered = crashed;
     recovered.session.crashed = 0;
@@ -1863,8 +1975,16 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_two)
         .expect("read crash with its exact observing generation")
         .into_parts();
-    kura.compare_and_swap_autonomous_lifecycle_cursor(recover_lease, prepared_recover.clone())
-        .expect("publish exact prepared Recover phase");
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(
+            recover_lease,
+            prepared_recover.clone(),
+        )
+        .expect("publish exact prepared Recover phase")
+        .cursor(),
+        Some(&prepared_recover),
+        "successful Recover preparation must return its exact durable cursor",
+    );
     drop(kura);
 
     let (kura, _) = Kura::new(&config, &lane_config).expect("restart over prepared Recover");
@@ -1899,8 +2019,16 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_three)
         .expect("reread prepared phase for generation-aware takeover")
         .into_parts();
-    kura.compare_and_swap_autonomous_lifecycle_cursor(takeover_three_lease, takeover_three.clone())
-        .expect("publish generation-three crashed takeover");
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(
+            takeover_three_lease,
+            takeover_three.clone(),
+        )
+        .expect("publish generation-three crashed takeover")
+        .cursor(),
+        Some(&takeover_three),
+        "successful generation-three takeover must return its exact durable cursor",
+    );
     drop(kura);
 
     let (kura, _) = Kura::new(&config, &lane_config).expect("restart over crashed takeover");
@@ -1920,8 +2048,16 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_four)
         .expect("read generation-three crash observation")
         .into_parts();
-    kura.compare_and_swap_autonomous_lifecycle_cursor(takeover_four_lease, takeover_four.clone())
-        .expect("publish repeated crash takeover without a fabricated second Crash");
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(
+            takeover_four_lease,
+            takeover_four.clone(),
+        )
+        .expect("publish repeated crash takeover without a fabricated second Crash")
+        .cursor(),
+        Some(&takeover_four),
+        "successful repeated takeover must return its exact durable cursor",
+    );
     let prepared_recover_four = sign_cursor(
         8,
         Some(takeover_four.cursor_hash()),
@@ -1945,11 +2081,16 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         AutonomousLifecycleCursorPhaseV2::live(4, recovered)
             .expect("construct generation-four recovered live phase"),
     );
-    kura.compare_and_swap_autonomous_lifecycle_cursor(
-        prepared_recover_four_lease,
-        live_recovered.clone(),
-    )
-    .expect("publish recovered live phase after repeated takeover");
+    assert_eq!(
+        kura.compare_and_swap_autonomous_lifecycle_cursor(
+            prepared_recover_four_lease,
+            live_recovered.clone(),
+        )
+        .expect("publish recovered live phase after repeated takeover")
+        .cursor(),
+        Some(&live_recovered),
+        "successful Live recovery must return its exact durable cursor",
+    );
 
     let crashed_live_phase = AutonomousLifecycleCursorPhaseV2::live(4, crashed)
         .expect("the state kernel alone admits a crashed-member projection");
@@ -2109,8 +2250,13 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         "runtime reads must reject multiply linked cursor artifacts",
     );
     fs::remove_file(&hardlink_alias).expect("remove cursor hardlink alias");
-    kura.read_autonomous_lifecycle_cursor(&payload, &binding, &generation_four)
-        .expect("single-link cursor is readable again");
+    assert_eq!(
+        kura.read_autonomous_lifecycle_cursor(&payload, &binding, &generation_four)
+            .expect("single-link cursor is readable again")
+            .cursor(),
+        Some(&live_recovered),
+        "restoring the single-link artifact must preserve the exact durable cursor",
+    );
     assert!(
         !artifact_dir
             .join(OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE)
@@ -2252,14 +2398,39 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let process_generation_atomic_temp = temp_dir.path().join(format!(
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}crash-residue"
     ));
+    let generation_five_record = AutonomousLifecycleProcessGenerationRecordV1::new(
+        chain_id_hash,
+        local_peer.clone(),
+        5,
+    )
+    .expect("construct unpublished generation-five successor");
+    let generation_five_bytes = generation_five_record
+        .encode_framed()
+        .expect("encode unpublished generation-five successor");
+    fs::write(&process_generation_atomic_temp, generation_five_bytes)
+        .expect("stage pre-rename process-generation successor");
+    let (recovered_generation_kura, _) = Kura::new(&config, &lane_config)
+        .expect("startup cleans an exact unpublished process-generation successor");
+    assert!(!process_generation_atomic_temp.exists());
+    assert_eq!(
+        fs::read(&process_generation_path).expect("read authoritative process generation"),
+        process_generation_bytes,
+        "startup recovery must retain stable generation four instead of promoting generation five",
+    );
+    drop(recovered_generation_kura);
+
     fs::write(&process_generation_atomic_temp, &process_generation_bytes)
-        .expect("write forbidden process-generation atomic temporary");
+        .expect("write non-successor process-generation atomic temporary");
     assert!(
         Kura::new(&config, &lane_config).is_err(),
-        "startup must reject any process-generation atomic temporary",
+        "startup must reject a process-generation temporary that is not the exact successor",
+    );
+    assert!(
+        process_generation_atomic_temp.exists(),
+        "failed process-generation classification must preserve the residue",
     );
     fs::remove_file(&process_generation_atomic_temp)
-        .expect("remove process-generation atomic temporary");
+        .expect("remove rejected process-generation atomic temporary");
 
     fs::write(
         &process_generation_path,
@@ -2480,8 +2651,3 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         "startup must reject even a signed first cursor until the State/Queue adapter authenticates its exact payload",
     );
 }
-
-include!("07e_autonomous_lifecycle_and_canonical_artifact_tests.rs");
-
-include!("07d_strict_lane_ownership_barrier_tests.rs");
-include!("07c_lane_execution_sidecar_tests.rs");

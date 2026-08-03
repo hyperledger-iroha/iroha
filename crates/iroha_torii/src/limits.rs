@@ -7,10 +7,12 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use std::{
-    collections::{HashMap, VecDeque, hash_map::DefaultHasher},
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, VecDeque, hash_map::DefaultHasher},
     fmt,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    num::NonZeroUsize,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -51,6 +53,185 @@ const DEFAULT_MAX_BUCKETS: usize = 4_096;
 const DEFAULT_RATE_LIMITER_SHARDS: usize = 64;
 const MIN_BUCKETS_PER_SHARD: usize = 64;
 const PREAUTH_NOFILE_RESERVE: u64 = 128;
+/// Hard upper bound for simultaneously tracked pre-authentication bans.
+///
+/// This matches the rate limiter's default identity budget and prevents both
+/// the live map and stale expiry records from growing without bound.
+const DEFAULT_PREAUTH_BAN_CAPACITY: NonZeroUsize =
+    NonZeroUsize::new(DEFAULT_MAX_BUCKETS).expect("default ban capacity is non-zero");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BanEntry {
+    expires_at: Instant,
+    generation: u64,
+}
+
+/// Heap key ordered by earliest expiry and then IP for deterministic eviction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct BanExpiry {
+    expires_at: Instant,
+    ip: IpAddr,
+    generation: u64,
+}
+
+#[derive(Default)]
+struct ExpiringBanState {
+    entries: HashMap<IpAddr, BanEntry>,
+    expiries: BinaryHeap<Reverse<BanExpiry>>,
+    next_generation: u64,
+}
+
+struct ExpiringBanStore {
+    capacity: usize,
+    state: Mutex<ExpiringBanState>,
+}
+
+impl ExpiringBanStore {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            state: Mutex::new(ExpiringBanState::default()),
+        }
+    }
+
+    fn is_banned_at(&self, ip: IpAddr, now: Instant) -> bool {
+        let mut state = self.state.lock();
+        state.purge_expired(now);
+        state.entries.contains_key(&ip)
+    }
+
+    fn ban_for_at(&self, ip: IpAddr, duration: Duration, now: Instant) {
+        if self.capacity == 0 || duration.is_zero() {
+            return;
+        }
+        let Some(expires_at) = now.checked_add(duration) else {
+            return;
+        };
+
+        let mut state = self.state.lock();
+        state.purge_expired(now);
+
+        let generation = state.allocate_generation();
+        if !state.entries.contains_key(&ip) && state.entries.len() >= self.capacity {
+            state.evict_earliest();
+        }
+        state.entries.insert(
+            ip,
+            BanEntry {
+                expires_at,
+                generation,
+            },
+        );
+        state.expiries.push(Reverse(BanExpiry {
+            expires_at,
+            ip,
+            generation,
+        }));
+        state.compact_expiries_if_needed(self.capacity);
+    }
+
+    #[cfg(test)]
+    fn entry_count(&self) -> usize {
+        self.state.lock().entries.len()
+    }
+
+    #[cfg(test)]
+    fn expiry_count(&self) -> usize {
+        self.state.lock().expiries.len()
+    }
+}
+
+impl ExpiringBanState {
+    fn purge_expired(&mut self, now: Instant) {
+        while let Some(Reverse(expiry)) = self.expiries.peek().copied() {
+            if expiry.expires_at > now {
+                break;
+            }
+            self.expiries.pop();
+            if self.entry_matches(expiry) {
+                self.entries.remove(&expiry.ip);
+            }
+        }
+    }
+
+    fn evict_earliest(&mut self) {
+        while let Some(Reverse(expiry)) = self.expiries.pop() {
+            if self.entry_matches(expiry) {
+                self.entries.remove(&expiry.ip);
+                return;
+            }
+        }
+
+        // The heap and map are updated under one mutex, so this branch is only
+        // a defensive repair for an inconsistent in-memory index. Preserve the
+        // hard capacity invariant even then.
+        if let Some(ip) = self
+            .entries
+            .iter()
+            .min_by_key(|(ip, entry)| (entry.expires_at, **ip))
+            .map(|(&ip, _)| ip)
+        {
+            self.entries.remove(&ip);
+        }
+    }
+
+    fn entry_matches(&self, expiry: BanExpiry) -> bool {
+        self.entries.get(&expiry.ip).is_some_and(|entry| {
+            entry.generation == expiry.generation && entry.expires_at == expiry.expires_at
+        })
+    }
+
+    fn allocate_generation(&mut self) -> u64 {
+        if self.next_generation == u64::MAX {
+            self.renumber_generations();
+        }
+        let generation = self.next_generation;
+        self.next_generation += 1;
+        generation
+    }
+
+    fn renumber_generations(&mut self) {
+        let mut ordered = self
+            .entries
+            .iter()
+            .map(|(&ip, entry)| (entry.expires_at, ip))
+            .collect::<Vec<_>>();
+        ordered.sort_unstable();
+        self.expiries.clear();
+        for (generation, (expires_at, ip)) in ordered.into_iter().enumerate() {
+            let generation = u64::try_from(generation)
+                .expect("bounded pre-authentication ban count fits in u64");
+            let entry = self
+                .entries
+                .get_mut(&ip)
+                .expect("ban generation rebuild uses existing IPs");
+            entry.generation = generation;
+            self.expiries.push(Reverse(BanExpiry {
+                expires_at,
+                ip,
+                generation,
+            }));
+        }
+        self.next_generation = u64::try_from(self.entries.len())
+            .expect("bounded pre-authentication ban count fits in u64");
+    }
+
+    fn compact_expiries_if_needed(&mut self, capacity: usize) {
+        let max_expiry_records = capacity.saturating_mul(2).max(1);
+        if self.expiries.len() <= max_expiry_records {
+            return;
+        }
+        self.expiries.clear();
+        self.expiries
+            .extend(self.entries.iter().map(|(&ip, entry)| {
+                Reverse(BanExpiry {
+                    expires_at: entry.expires_at,
+                    ip,
+                    generation: entry.generation,
+                })
+            }));
+    }
+}
 
 impl ShardedLimiter {
     fn new(rate_per_sec: Option<f64>, burst: f64, max_buckets: usize) -> Self {
@@ -540,6 +721,7 @@ pub struct PreAuthConfig {
     pub rate_per_ip: Option<u32>,
     pub burst_per_ip: Option<u32>,
     pub ban_duration: Option<Duration>,
+    pub ban_capacity: NonZeroUsize,
     pub allow_nets: Vec<IpNet>,
     pub scheme_limits: Vec<SchemeLimit>,
 }
@@ -619,7 +801,7 @@ struct PreAuthGateInner {
     active_per_ip: DashMap<IpAddr, usize>,
     scheme_limits: HashMap<String, usize>,
     active_per_scheme: DashMap<String, usize>,
-    bans: DashMap<IpAddr, Instant>,
+    bans: ExpiringBanStore,
 }
 
 /// Guard tracking held slots within the pre-auth gate.
@@ -671,6 +853,7 @@ impl PreAuthGate {
             rate_per_ip,
             burst_per_ip,
             ban_duration,
+            ban_capacity,
             allow_nets,
             scheme_limits,
         } = cfg;
@@ -696,7 +879,7 @@ impl PreAuthGate {
             active_per_ip: DashMap::new(),
             scheme_limits: scheme_limits_map,
             active_per_scheme: DashMap::new(),
-            bans: DashMap::new(),
+            bans: ExpiringBanStore::new(ban_capacity.get()),
         };
         Self {
             inner: Arc::new(inner),
@@ -710,6 +893,7 @@ impl PreAuthGate {
             rate_per_ip: None,
             burst_per_ip: None,
             ban_duration: None,
+            ban_capacity: DEFAULT_PREAUTH_BAN_CAPACITY,
             allow_nets: Vec::new(),
             scheme_limits: Vec::new(),
         })
@@ -826,49 +1010,32 @@ impl PreAuthGateInner {
     }
 
     fn is_banned(&self, ip: IpAddr) -> bool {
-        if let Some(expiry) = self.bans.get(&ip) {
-            if expiry.checked_duration_since(Instant::now()).is_some() {
-                return true;
-            }
-            self.bans.remove(&ip);
-        }
-        false
+        self.bans.is_banned_at(ip, Instant::now())
     }
 
     fn note_ban(&self, ip: IpAddr) {
         if let Some(duration) = self.ban_duration {
-            self.bans.insert(ip, Instant::now() + duration);
+            self.bans.ban_for_at(ip, duration, Instant::now());
         }
     }
 
     fn release_ip(&self, ip: IpAddr) {
-        let should_remove = self.active_per_ip.get_mut(&ip).map_or(false, |mut entry| {
-            if *entry > 1 {
-                *entry -= 1;
-                false
+        if let Entry::Occupied(mut entry) = self.active_per_ip.entry(ip) {
+            if *entry.get() > 1 {
+                *entry.get_mut() -= 1;
             } else {
-                true
+                entry.remove();
             }
-        });
-        if should_remove {
-            self.active_per_ip.remove(&ip);
         }
     }
 
     fn release_scheme(&self, scheme: &str) {
-        let should_remove = self
-            .active_per_scheme
-            .get_mut(scheme)
-            .map_or(false, |mut entry| {
-                if *entry > 1 {
-                    *entry -= 1;
-                    false
-                } else {
-                    true
-                }
-            });
-        if should_remove {
-            self.active_per_scheme.remove(scheme);
+        if let Entry::Occupied(mut entry) = self.active_per_scheme.entry(scheme.to_owned()) {
+            if *entry.get() > 1 {
+                *entry.get_mut() -= 1;
+            } else {
+                entry.remove();
+            }
         }
     }
 }
@@ -907,6 +1074,171 @@ impl Drop for PreAuthPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn churn_ip(index: u64) -> IpAddr {
+        let prefix = u128::from(0x2001_0db8_u32) << 96;
+        IpAddr::V6(Ipv6Addr::from(prefix | u128::from(index)))
+    }
+
+    #[test]
+    fn preauth_ban_store_caps_unique_ipv6_churn() {
+        const CAPACITY: usize = 32;
+        let store = ExpiringBanStore::new(CAPACITY);
+        let now = Instant::now();
+
+        for index in 0..10_000 {
+            store.ban_for_at(churn_ip(index), Duration::from_secs(60), now);
+        }
+
+        assert_eq!(store.entry_count(), CAPACITY);
+        assert!(store.expiry_count() <= CAPACITY * 2);
+    }
+
+    #[test]
+    fn preauth_ban_store_purges_expiry_on_unrelated_lookup() {
+        let store = ExpiringBanStore::new(4);
+        let now = Instant::now();
+        let banned = churn_ip(1);
+
+        store.ban_for_at(banned, Duration::from_secs(1), now);
+        assert!(store.is_banned_at(banned, now));
+        assert!(!store.is_banned_at(churn_ip(2), now + Duration::from_secs(2)));
+        assert_eq!(store.entry_count(), 0);
+        assert_eq!(store.expiry_count(), 0);
+    }
+
+    #[test]
+    fn preauth_ban_store_evicts_earliest_expiry_then_lowest_ip() {
+        let store = ExpiringBanStore::new(2);
+        let now = Instant::now();
+        let lower_ip = churn_ip(1);
+        let higher_ip = churn_ip(2);
+        let replacement = churn_ip(3);
+
+        store.ban_for_at(higher_ip, Duration::from_secs(10), now);
+        store.ban_for_at(lower_ip, Duration::from_secs(10), now);
+        store.ban_for_at(replacement, Duration::from_secs(20), now);
+
+        assert!(!store.is_banned_at(lower_ip, now));
+        assert!(store.is_banned_at(higher_ip, now));
+        assert!(store.is_banned_at(replacement, now));
+
+        let earliest = churn_ip(4);
+        store.ban_for_at(earliest, Duration::from_secs(5), now);
+        assert!(!store.is_banned_at(higher_ip, now));
+        assert!(store.is_banned_at(earliest, now));
+        store.ban_for_at(churn_ip(5), Duration::from_secs(30), now);
+        assert!(!store.is_banned_at(earliest, now));
+    }
+
+    #[test]
+    fn preauth_ban_store_refresh_ignores_stale_heap_records_and_compacts() {
+        let store = ExpiringBanStore::new(2);
+        let now = Instant::now();
+        let ip = churn_ip(1);
+
+        store.ban_for_at(ip, Duration::from_secs(1), now);
+        for seconds in 2..=100 {
+            store.ban_for_at(ip, Duration::from_secs(seconds), now);
+        }
+
+        assert_eq!(store.entry_count(), 1);
+        assert!(store.expiry_count() <= 4);
+        assert!(store.is_banned_at(ip, now + Duration::from_secs(2)));
+        assert!(!store.is_banned_at(churn_ip(2), now + Duration::from_secs(101)));
+        assert_eq!(store.entry_count(), 0);
+    }
+
+    #[test]
+    fn preauth_ban_store_stale_expiry_cannot_remove_a_refreshed_ban() {
+        let store = ExpiringBanStore::new(8);
+        let now = Instant::now();
+        let ip = churn_ip(1);
+
+        store.ban_for_at(ip, Duration::from_secs(1), now);
+        store.ban_for_at(ip, Duration::from_secs(10), now);
+        assert_eq!(store.expiry_count(), 2);
+
+        assert!(store.is_banned_at(ip, now + Duration::from_secs(2)));
+        assert_eq!(store.entry_count(), 1);
+        assert_eq!(store.expiry_count(), 1);
+    }
+
+    #[test]
+    fn preauth_ban_store_ignores_zero_duration() {
+        let store = ExpiringBanStore::new(1);
+        let now = Instant::now();
+
+        store.ban_for_at(churn_ip(1), Duration::ZERO, now);
+
+        assert_eq!(store.entry_count(), 0);
+        assert_eq!(store.expiry_count(), 0);
+    }
+
+    #[test]
+    fn preauth_ban_store_remains_usable_after_unwind() {
+        let store = ExpiringBanStore::new(1);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _state = store.state.lock();
+            panic!("exercise lock release during unwind");
+        }));
+        assert!(unwound.is_err());
+
+        let now = Instant::now();
+        let ip = churn_ip(1);
+        store.ban_for_at(ip, Duration::from_secs(1), now);
+        assert!(store.is_banned_at(ip, now));
+    }
+
+    #[test]
+    fn preauth_ban_store_preserves_capacity_under_concurrent_churn() {
+        const CAPACITY: usize = 64;
+        let store = Arc::new(ExpiringBanStore::new(CAPACITY));
+        let now = Instant::now();
+        let mut workers = Vec::new();
+
+        for worker in 0_u64..8 {
+            let store = Arc::clone(&store);
+            workers.push(std::thread::spawn(move || {
+                for index in 0_u64..1_000 {
+                    store.ban_for_at(
+                        churn_ip(worker * 1_000 + index),
+                        Duration::from_secs(60),
+                        now,
+                    );
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().expect("ban-store worker must not panic");
+        }
+
+        assert_eq!(store.entry_count(), CAPACITY);
+        assert!(store.expiry_count() <= CAPACITY * 2);
+    }
+
+    #[test]
+    fn preauth_gate_applies_configured_ban_capacity() {
+        let gate = PreAuthGate::new(PreAuthConfig {
+            max_total: None,
+            max_per_ip: None,
+            rate_per_ip: None,
+            burst_per_ip: None,
+            ban_duration: Some(Duration::from_secs(60)),
+            ban_capacity: NonZeroUsize::new(1).expect("test capacity is non-zero"),
+            allow_nets: Vec::new(),
+            scheme_limits: Vec::new(),
+        });
+        let first = churn_ip(1);
+        let second = churn_ip(2);
+
+        gate.inner.note_ban(first);
+        gate.inner.note_ban(second);
+
+        assert_eq!(gate.inner.bans.entry_count(), 1);
+        assert!(!gate.inner.is_banned(first));
+        assert!(gate.inner.is_banned(second));
+    }
 
     #[tokio::test]
     async fn limiter_allows_then_limits() {
@@ -1143,6 +1475,7 @@ mod tests {
             rate_per_ip: None,
             burst_per_ip: None,
             ban_duration: None,
+            ban_capacity: DEFAULT_PREAUTH_BAN_CAPACITY,
             allow_nets: Vec::new(),
             scheme_limits: Vec::new(),
         });
@@ -1171,6 +1504,7 @@ mod tests {
             rate_per_ip: None,
             burst_per_ip: None,
             ban_duration: None,
+            ban_capacity: DEFAULT_PREAUTH_BAN_CAPACITY,
             allow_nets: nets,
             scheme_limits: Vec::new(),
         });
@@ -1191,6 +1525,7 @@ mod tests {
             rate_per_ip: Some(1),
             burst_per_ip: Some(1),
             ban_duration: Some(Duration::from_millis(50)),
+            ban_capacity: DEFAULT_PREAUTH_BAN_CAPACITY,
             allow_nets: Vec::new(),
             scheme_limits: Vec::new(),
         });
@@ -1218,6 +1553,7 @@ mod tests {
             rate_per_ip: None,
             burst_per_ip: None,
             ban_duration: None,
+            ban_capacity: DEFAULT_PREAUTH_BAN_CAPACITY,
             allow_nets: Vec::new(),
             scheme_limits: vec![SchemeLimit {
                 name: "norito_rpc".to_string(),
@@ -1252,6 +1588,7 @@ mod tests {
             rate_per_ip: None,
             burst_per_ip: None,
             ban_duration: None,
+            ban_capacity: DEFAULT_PREAUTH_BAN_CAPACITY,
             allow_nets: Vec::new(),
             scheme_limits: vec![SchemeLimit {
                 name: "http".to_owned(),
@@ -1273,6 +1610,72 @@ mod tests {
         gate.acquire(Some(ip), Some("http"))
             .await
             .expect("unwind releases global, IP, and scheme counters exactly once");
+    }
+
+    #[test]
+    fn preauth_counter_release_is_atomic_with_concurrent_reacquire() {
+        const ITERATIONS: usize = 20_000;
+
+        let gate = PreAuthGate::disabled();
+        let inner = Arc::clone(&gate.inner);
+        let ip: IpAddr = "203.0.113.55".parse().expect("valid test address");
+        let scheme = "http".to_owned();
+        inner.active_per_ip.insert(ip, 1);
+        inner.active_per_scheme.insert(scheme.clone(), 1);
+
+        let start = Arc::new(std::sync::Barrier::new(3));
+        let finish = Arc::new(std::sync::Barrier::new(3));
+
+        let release_worker = {
+            let inner = Arc::clone(&inner);
+            let start = Arc::clone(&start);
+            let finish = Arc::clone(&finish);
+            let scheme = scheme.clone();
+            std::thread::spawn(move || {
+                for _ in 0..ITERATIONS {
+                    start.wait();
+                    inner.release_ip(ip);
+                    inner.release_scheme(&scheme);
+                    finish.wait();
+                }
+            })
+        };
+        let acquire_worker = {
+            let inner = Arc::clone(&inner);
+            let start = Arc::clone(&start);
+            let finish = Arc::clone(&finish);
+            let scheme = scheme.clone();
+            std::thread::spawn(move || {
+                for _ in 0..ITERATIONS {
+                    start.wait();
+                    *inner.active_per_ip.entry(ip).or_insert(0) += 1;
+                    *inner.active_per_scheme.entry(scheme.clone()).or_insert(0) += 1;
+                    finish.wait();
+                }
+            })
+        };
+
+        for iteration in 0..ITERATIONS {
+            start.wait();
+            finish.wait();
+            assert_eq!(
+                inner.active_per_ip.get(&ip).map(|entry| *entry),
+                Some(1),
+                "IP counter lost a concurrent acquisition at iteration {iteration}"
+            );
+            assert_eq!(
+                inner.active_per_scheme.get(&scheme).map(|entry| *entry),
+                Some(1),
+                "scheme counter lost a concurrent acquisition at iteration {iteration}"
+            );
+        }
+
+        release_worker
+            .join()
+            .expect("release worker must not panic");
+        acquire_worker
+            .join()
+            .expect("acquire worker must not panic");
     }
 
     fn parse_cidrs_skips_invalid_entries() {

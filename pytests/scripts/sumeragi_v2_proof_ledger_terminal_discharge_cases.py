@@ -1084,10 +1084,17 @@ def test_liveness_ownership_terminal_discharge_artifact_rename_fails_closed(
             "strict-newer replacement requires consumed predecessor",
         ),
         (
-            "CanAdmitIngressItem",
+            "CanAdmitIngressItemVia",
             "  /\\ ~AsyncControlServiceAdmissionBlockedByLivePredecessor(item)\n",
             "",
-            "full live-predecessor and ordinary-carrier ingress admission gate",
+            "full authenticated-source live-predecessor and ordinary-carrier "
+            "ingress admission gate",
+        ),
+        (
+            "CanAdmitIngressItem",
+            "  CanAdmitIngressItemVia(item, item.source)\n",
+            "  TRUE\n",
+            "canonical packet-source ingress admission wrapper",
         ),
     ),
 )
@@ -1132,6 +1139,12 @@ def test_liveness_ownership_source_seal_rejects_live_predecessor_gate_weakening(
             "installed timeout-root retransmission coalescing",
         ),
         (
+            "ExecutePersistInstall",
+            '@ \\ {"TimeoutElapsed", "RetransmitElapsed"}',
+            '@ \\ {"TimeoutElapsed"}',
+            "PersistInstallTC atomically clears old-view clock tags",
+        ),
+        (
             "RemoveNextNodeCommandAfterDispatch",
             '        IF command.kind = "PersistInstallTC"\n',
             "        IF FALSE\n",
@@ -1147,6 +1160,12 @@ def test_liveness_ownership_source_seal_rejects_live_predecessor_gate_weakening(
             "AsyncIoTimeoutLifecycleRetirementTransition",
             "                  ![node] = AsyncTimeoutLifecycleSetAfterInstall(\n",
             "                  ![node] = @\n",
+            "atomic install retirement and PersistDecision Serve conversion",
+        ),
+        (
+            "AsyncIoTimeoutLifecycleRetirementTransition",
+            "                         asyncServeAttempts,\n",
+            "",
             "atomic install retirement and PersistDecision Serve conversion",
         ),
         (

@@ -5,9 +5,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use norito::{DecodeLimits, decode_from_bytes_with_limits, to_bytes};
 use thiserror::Error;
 
-use crate::pin_registry::{
-    AliasProofBundleV1, AliasProofBundleValidationError, AliasProofVerificationError,
-    MAX_ALIAS_PROOF_ENCODED_BYTES, verify_alias_proof_bundle,
+use crate::{
+    pin_registry::{
+        AliasProofBundleV1, AliasProofBundleValidationError, AliasProofVerificationError,
+        MAX_ALIAS_PROOF_ENCODED_BYTES, verify_alias_proof_bundle,
+        verify_alias_proof_bundle_untrusted_signers,
+    },
+    provider_admission::ProviderAdmissionCouncilPolicy,
 };
 
 /// Alias cache policy describing TTL boundaries for alias proofs.
@@ -214,8 +218,40 @@ pub enum AliasProofError {
     Verification(#[from] AliasProofVerificationError),
 }
 
-/// Decodes and validates an alias proof bundle.
-pub fn decode_alias_proof(bytes: &[u8]) -> Result<AliasProofBundleV1, AliasProofError> {
+/// Decode and verify an alias proof against an operator-controlled council policy.
+///
+/// # Errors
+///
+/// Returns [`AliasProofError`] for a non-canonical, malformed, internally
+/// inconsistent, or insufficiently trusted proof.
+pub fn decode_alias_proof(
+    bytes: &[u8],
+    policy: &ProviderAdmissionCouncilPolicy,
+) -> Result<AliasProofBundleV1, AliasProofError> {
+    let bundle = decode_alias_proof_canonical(bytes)?;
+    verify_alias_proof_bundle(&bundle, policy)?;
+    Ok(bundle)
+}
+
+/// Decode alias-proof integrity without establishing signer trust.
+///
+/// This API is reserved for fixture/reference tooling and SDK utilities that
+/// only inspect proof freshness. It must not authorize node, gateway, or
+/// registry admission because signer keys are supplied by the proof itself.
+///
+/// # Errors
+///
+/// Returns [`AliasProofError`] for a non-canonical, malformed, or internally
+/// inconsistent proof.
+pub fn decode_alias_proof_untrusted_signers(
+    bytes: &[u8],
+) -> Result<AliasProofBundleV1, AliasProofError> {
+    let bundle = decode_alias_proof_canonical(bytes)?;
+    verify_alias_proof_bundle_untrusted_signers(&bundle)?;
+    Ok(bundle)
+}
+
+fn decode_alias_proof_canonical(bytes: &[u8]) -> Result<AliasProofBundleV1, AliasProofError> {
     if bytes.is_empty() {
         return Err(AliasProofError::Empty);
     }
@@ -238,7 +274,6 @@ pub fn decode_alias_proof(bytes: &[u8]) -> Result<AliasProofBundleV1, AliasProof
     if to_bytes(&bundle)? != bytes {
         return Err(AliasProofError::NonCanonical);
     }
-    verify_alias_proof_bundle(&bundle)?;
     Ok(bundle)
 }
 
@@ -254,7 +289,11 @@ pub fn unix_now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pin_registry::AliasBindingV1;
+    use crate::{
+        CouncilSignature,
+        pin_registry::{AliasBindingV1, alias_merkle_root, alias_proof_signature_digest},
+    };
+    use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
 
     fn sample_bundle(generated: u64, expires: u64) -> AliasProofBundleV1 {
         AliasProofBundleV1 {
@@ -271,6 +310,55 @@ mod tests {
             merkle_path: Vec::new(),
             council_signatures: Vec::new(),
         }
+    }
+
+    fn signed_bundle_and_policy() -> (Vec<u8>, ProviderAdmissionCouncilPolicy) {
+        let mut bundle = sample_bundle(100, 200);
+        bundle.registry_root =
+            alias_merkle_root(&bundle.binding, &bundle.merkle_path).expect("alias Merkle root");
+        let private =
+            PrivateKey::from_bytes(Algorithm::Ed25519, &[0x31; 32]).expect("seeded council key");
+        let keypair = KeyPair::from_private_key(private).expect("derive council keypair");
+        let signature = Signature::try_new(
+            keypair.private_key(),
+            alias_proof_signature_digest(&bundle).as_ref(),
+        )
+        .expect("sign alias proof");
+        let signer: [u8; 32] = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("encode council key")
+            .1
+            .try_into()
+            .expect("Ed25519 key width");
+        bundle.council_signatures.push(CouncilSignature {
+            signer,
+            signature: signature.payload().to_vec(),
+        });
+        let policy =
+            ProviderAdmissionCouncilPolicy::new([signer], 1).expect("valid alias council policy");
+        (to_bytes(&bundle).expect("encode alias proof"), policy)
+    }
+
+    #[test]
+    fn trusted_alias_proof_decode_requires_configured_signer() {
+        let (encoded, policy) = signed_bundle_and_policy();
+        decode_alias_proof(&encoded, &policy).expect("trusted alias proof");
+
+        let other_private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x32; 32])
+            .expect("seeded alternate council key");
+        let other = KeyPair::from_private_key(other_private).expect("derive alternate keypair");
+        let other_signer: [u8; 32] = other
+            .public_key()
+            .try_to_bytes()
+            .expect("encode alternate key")
+            .1
+            .try_into()
+            .expect("Ed25519 key width");
+        let other_policy =
+            ProviderAdmissionCouncilPolicy::new([other_signer], 1).expect("valid alternate policy");
+
+        assert!(decode_alias_proof(&encoded, &other_policy).is_err());
     }
 
     #[test]
@@ -349,12 +437,12 @@ mod tests {
     #[test]
     fn alias_proof_decode_rejects_empty_and_oversized_payloads_before_decode() {
         assert!(matches!(
-            decode_alias_proof(&[]),
+            decode_alias_proof_untrusted_signers(&[]),
             Err(AliasProofError::Empty)
         ));
         let oversized = vec![0xA5; MAX_ALIAS_PROOF_ENCODED_BYTES + 1];
         assert!(matches!(
-            decode_alias_proof(&oversized),
+            decode_alias_proof_untrusted_signers(&oversized),
             Err(AliasProofError::Oversized { .. })
         ));
     }
@@ -363,7 +451,7 @@ mod tests {
     fn alias_proof_decode_rejects_trailing_noncanonical_bytes() {
         let mut encoded = to_bytes(&sample_bundle(100, 200)).expect("encode fixture");
         encoded.push(0);
-        assert!(decode_alias_proof(&encoded).is_err());
+        assert!(decode_alias_proof_untrusted_signers(&encoded).is_err());
     }
 
     #[test]
@@ -372,7 +460,7 @@ mod tests {
         bomb.binding.manifest_cid = vec![0xA5; 129];
         let encoded = to_bytes(&bomb).expect("encode bounded allocation bomb");
         assert!(matches!(
-            decode_alias_proof(&encoded),
+            decode_alias_proof_untrusted_signers(&encoded),
             Err(AliasProofError::Decode(
                 norito::Error::SequenceLengthExceeded { .. }
             ))

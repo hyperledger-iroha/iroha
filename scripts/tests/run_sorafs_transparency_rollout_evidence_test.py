@@ -22,9 +22,52 @@ from sorafs_rollout_runner_test_support import (  # noqa: E402
     write_topology_qualification,
 )
 
+SOURCE_KINDS = (
+    "gar-enforcement-receipt",
+    "moderation-ballot-governance-event",
+    "appeal-finance-report",
+    "appeal-finance-settlement-receipt",
+    "legal-hold-notice",
+    "redaction-notice",
+    "evidence-access-summary",
+)
+
 
 def write_payload(path: Path) -> Path:
     path.write_text("{}", encoding="utf-8")
+    return path
+
+
+def write_source_producer_evidence(path: Path) -> Path:
+    producers = [
+        {
+            "source_kind": source_kind,
+            "producer_id": f"transparency-{index}",
+            "producer_route": f"internal:transparency/{index}",
+            "provenance_digest_hex": f"{index + 1:x}" * 64,
+            "durable_checkpoint_verified": True,
+        }
+        for index, source_kind in enumerate(SOURCE_KINDS)
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "sorafs.transparency.source_entry.producer_evidence.v1",
+                "status": "passed",
+                "generated_at_unix": 1_800_400_000,
+                "deployment_id": "transparency-production-a",
+                "environment": "production",
+                "deployment_context_reviewed": True,
+                "source_batch_digest_hex": "a" * 64,
+                "producer_count": len(producers),
+                "generic_public_ingress_absent": True,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+                "producers": producers,
+            }
+        ),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -61,6 +104,8 @@ def complete_args(tmp_path: Path) -> list[str]:
         "7",
         "--timeout-secs",
         "5",
+        "--source-entry-producer-evidence",
+        str(write_source_producer_evidence(payload_dir / "source-producers.json")),
         "--privacy-source-event",
         str(write_payload(payload_dir / "privacy-source-event.json")),
         "--privacy-publish-due",
@@ -68,9 +113,6 @@ def complete_args(tmp_path: Path) -> list[str]:
         "--proof-token-issuance",
         str(write_payload(payload_dir / "proof-token-issuance.json")),
     ]
-    for source_kind in MODULE.DEFAULT_REQUIRED_SOURCE_KINDS:
-        path = write_payload(payload_dir / f"{source_kind}.json")
-        args.extend(["--source-entry", f"{source_kind}={path}"])
     return args
 
 
@@ -109,10 +151,10 @@ def test_dry_run_prints_complete_rollout_plan(tmp_path: Path, capsys) -> None:
         "deployment_context_reviewed": True,
     }
     assert plan["evidence_contract"]["source_entry"]["schema"] == (
-        "sorafs.transparency.source_entry.canary.v1"
+        "sorafs.transparency.source_entry.producer_evidence.v1"
     )
     assert (
-        "source_entry_probe_count"
+        "generic_public_ingress_absent"
         in plan["evidence_contract"]["source_entry"]["required_payload_fields"]
     )
     assert (
@@ -133,24 +175,25 @@ def test_dry_run_prints_complete_rollout_plan(tmp_path: Path, capsys) -> None:
     )
     labels = [step["label"] for step in plan["steps"]]
     assert labels == [
-        "source_entry_canary",
         "privacy_aggregate_canary",
         "proof_token_issuance_canary",
         "publication_canary",
         "explorer_canary",
         "rollout_evidence_gate",
     ]
-    publication = plan["steps"][3]["command"]
+    publication = plan["steps"][2]["command"]
     assert publication[:4] == ["/usr/local/bin/iroha", "--config", "/runtime/client.toml", "sorafs"]
     assert "publication-canary" in publication
     assert "--cycle-id" in publication
     assert "--torii-url" in publication
-    verifier = plan["steps"][5]["command"]
+    verifier = plan["steps"][4]["command"]
     assert "check_sorafs_transparency_rollout_evidence.py" in verifier[1]
     assert "--now-unix" in verifier
     assert "1800400000" in verifier
     assert "--max-evidence-age-secs" in verifier
     assert "604800" in verifier
+    assert "--evidence" in verifier
+    assert any(value.endswith("source-producers.json") for value in verifier)
 
 
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
@@ -362,7 +405,7 @@ def test_response_file_dry_run_prints_complete_rollout_plan(tmp_path: Path, caps
 
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
-    publication = plan["steps"][3]["command"]
+    publication = plan["steps"][2]["command"]
     assert publication[:4] == ["/usr/local/bin/iroha", "--config", "/runtime/client.toml", "sorafs"]
     assert "publication-canary" in publication
     assert "source_entry" in plan["evidence_contract"]
@@ -377,69 +420,75 @@ def test_split_response_file_dry_run_prints_complete_rollout_plan(
 
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["steps"][0]["label"] == "source_entry_canary"
-    assert plan["steps"][5]["label"] == "rollout_evidence_gate"
+    assert plan["steps"][0]["label"] == "privacy_aggregate_canary"
+    assert plan["steps"][4]["label"] == "rollout_evidence_gate"
 
 
-def test_missing_source_kind_fails_before_plan(tmp_path: Path, capsys) -> None:
-    args = complete_args(tmp_path)
-    source_index = args.index("--source-entry")
-    del args[source_index : source_index + 2]
-
-    assert MODULE.main([*args, "--dry-run"]) == 2
-
-    captured = capsys.readouterr()
-    assert "missing required source-entry coverage" in captured.err
-    assert "feed_source" not in captured.err
-    assert captured.out == ""
-
-
-def test_unknown_source_kind_fails_before_plan_without_leaking(
+def test_missing_source_producer_evidence_fails_before_plan(
     tmp_path: Path, capsys
 ) -> None:
     args = complete_args(tmp_path)
-    source_kind = "source-entry-private-key-placeholder"
-    path = write_payload(tmp_path / "payloads" / "unsupported-source.json")
-    args.extend(["--source-entry", f"{source_kind}={path}"])
+    source_index = args.index("--source-entry-producer-evidence") + 1
+    args[source_index] = str(tmp_path / "missing-producer-evidence.json")
 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "source-entry supplied for unsupported kind" in captured.err
-    assert source_kind not in captured.err
+    assert "input evidence file must exist and be a file" in captured.err
+    assert "missing-producer-evidence.json" not in captured.err
+    assert captured.out == ""
+
+
+def test_invalid_source_producer_evidence_fails_before_plan_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    path = Path(args[args.index("--source-entry-producer-evidence") + 1])
+    path.write_text(
+        json.dumps({"schema": "private-key-placeholder"}),
+        encoding="utf-8",
+    )
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert MODULE.SOURCE_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC in captured.err
+    assert "private-key-placeholder" not in captured.err
     assert str(path) not in captured.err
     assert captured.out == ""
 
 
-def test_duplicate_source_kind_fails_before_plan_without_leaking(
+def test_source_producer_evidence_must_match_rollout_context(
     tmp_path: Path, capsys
 ) -> None:
     args = complete_args(tmp_path)
-    duplicate = MODULE.DEFAULT_REQUIRED_SOURCE_KINDS[0]
-    path = write_payload(tmp_path / "payloads" / "duplicate-source.json")
-    args.extend(["--source-entry", f"{duplicate}={path}"])
+    path = Path(args[args.index("--source-entry-producer-evidence") + 1])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["deployment_id"] = "different-production"
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "duplicate source-entry kind" in captured.err
-    assert duplicate not in captured.err
+    assert MODULE.SOURCE_PRODUCER_EVIDENCE_CONTEXT_DIAGNOSTIC in captured.err
+    assert "different-production" not in captured.err
     assert str(path) not in captured.err
     assert captured.out == ""
 
 
-def test_malformed_source_entry_sanitizes_exception_text(
+def test_source_producer_evidence_read_error_is_sanitized(
     tmp_path: Path, monkeypatch
 ) -> None:
-    bad_message = "transparency\nsource"
+    args = MODULE.parse_args(complete_args(tmp_path))
+    bad_message = "transparency\nprivate-key-placeholder"
 
-    def raise_malformed_source_entry(_spec: str):
+    def load_raises(_path: Path, _max_bytes: int):
         raise ValueError(bad_message)
 
-    monkeypatch.setattr(MODULE, "split_source_entry_spec", raise_malformed_source_entry)
-    errors = MODULE.validate_inputs(MODULE.parse_args(complete_args(tmp_path)))
+    monkeypatch.setattr(MODULE, "load_evidence_json", load_raises)
+    errors = MODULE.validate_source_entry_producer_evidence(args)
 
-    assert "<non-canonical-error>" in errors
+    assert errors == [MODULE.SOURCE_PRODUCER_EVIDENCE_READ_DIAGNOSTIC]
     assert bad_message not in "\n".join(errors)
 
 
@@ -463,41 +512,21 @@ def test_invalid_freshness_args_fail_before_plan(tmp_path: Path, capsys) -> None
         assert captured.out == ""
 
 
-def test_malformed_source_entry_does_not_echo_spec(tmp_path: Path) -> None:
+def test_source_producer_evidence_rejects_generic_public_ingress(
+    tmp_path: Path,
+) -> None:
     args = complete_args(tmp_path)
-    bad_spec = "source-entry-private-key-placeholder"
-    source_index = args.index("--source-entry") + 1
-    args[source_index] = bad_spec
+    path = Path(args[args.index("--source-entry-producer-evidence") + 1])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["generic_public_ingress_absent"] = False
+    payload["producers"][0]["producer_route"] = (
+        "/v1/sorafs/transparency/source-entries/gar-enforcement-receipt"
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
     errors = MODULE.validate_inputs(MODULE.parse_args(args))
 
-    diagnostics = "\n".join(errors)
-    assert "--source-entry must use KIND=PATH form" in diagnostics
-    assert bad_spec not in diagnostics
-
-
-def test_source_entry_rejects_padded_or_unicode_components_without_trimming(
-    tmp_path: Path,
-) -> None:
-    parsed_args = MODULE.parse_args(complete_args(tmp_path))
-    source_kind = MODULE.DEFAULT_REQUIRED_SOURCE_KINDS[0]
-    source_path = tmp_path / "payloads" / "source-entry-0.json"
-    cases = (
-        f" {source_kind}={source_path}",
-        f"{source_kind}={source_path} ",
-        f"{source_kind}\u200d={source_path}",
-        f"{source_kind}={source_path}\u202e",
-    )
-
-    for spec in cases:
-        parsed_args.source_entry = [spec]
-        errors = MODULE.validate_inputs(parsed_args)
-        diagnostics = "\n".join(errors)
-        escaped_spec = spec.encode("unicode_escape").decode("ascii")
-
-        assert "--source-entry must use KIND=PATH form" in diagnostics
-        assert spec not in diagnostics
-        assert escaped_spec not in diagnostics
+    assert errors == [MODULE.SOURCE_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC]
 
 
 def test_generated_artifact_read_error_is_sanitized(

@@ -707,10 +707,11 @@ pub trait SetReadOnly {
     /// Convert [`LoadedAction`] to original [`Action`] by retrieving original
     /// [`IvmBytecode`] if applicable.
     ///
-    /// Returns `None` when the original bytecode is missing.
-    fn get_original_action<F>(&self, action: LoadedAction<F>) -> Option<SpecializedAction<F>>
+    /// Returns `None` when the original bytecode is missing or stored action
+    /// invariants no longer validate.
+    fn get_original_action<F>(&self, action: LoadedAction<F>) -> Option<Action>
     where
-        F: Clone + EnsureTriggerAuthority,
+        F: Clone + EnsureTriggerAuthority + Into<EventFilterBox>,
     {
         let LoadedAction {
             executable,
@@ -739,10 +740,22 @@ pub trait SetReadOnly {
         };
 
         let mut specialized =
-            SpecializedAction::new(original_executable, repeats, authority, filter);
+            match SpecializedAction::new(original_executable, repeats, authority, filter) {
+                Ok(action) => action,
+                Err(error) => {
+                    warn!(%error, "stored trigger action violates its authority invariant");
+                    return None;
+                }
+            };
         specialized.retry_policy = retry_policy;
         specialized.metadata = metadata;
-        Some(specialized)
+        match Action::try_from(specialized) {
+            Ok(action) => Some(action),
+            Err(error) => {
+                warn!(%error, "stored trigger action violates its validation invariants");
+                None
+            }
+        }
     }
 
     /// Get all contained trigger ids without a particular order
@@ -767,26 +780,26 @@ pub trait SetReadOnly {
             .iter()
             .filter_map(move |(id, action)| {
                 self.get_original_action(action.clone())
-                    .map(|action| Trigger::new(id.clone(), action.into()))
+                    .map(|action| Trigger::new(id.clone(), action))
             })
             .chain(
                 self.pipeline_triggers()
                     .iter()
                     .filter_map(move |(id, action)| {
                         self.get_original_action(action.clone())
-                            .map(|action| Trigger::new(id.clone(), action.into()))
+                            .map(|action| Trigger::new(id.clone(), action))
                     }),
             )
             .chain(self.time_triggers().iter().filter_map(move |(id, action)| {
                 self.get_original_action(action.clone())
-                    .map(|action| Trigger::new(id.clone(), action.into()))
+                    .map(|action| Trigger::new(id.clone(), action))
             }))
             .chain(
                 self.by_call_triggers()
                     .iter()
                     .filter_map(move |(id, action)| {
                         self.get_original_action(action.clone())
-                            .map(|action| Trigger::new(id.clone(), action.into()))
+                            .map(|action| Trigger::new(id.clone(), action))
                     }),
             )
     }
@@ -801,25 +814,25 @@ pub trait SetReadOnly {
                 .get(id)
                 .cloned()
                 .and_then(|action| self.get_original_action(action))
-                .map(|action| Trigger::new(id.clone(), action.into())),
+                .map(|action| Trigger::new(id.clone(), action)),
             TriggeringEventType::Pipeline => self
                 .pipeline_triggers()
                 .get(id)
                 .cloned()
                 .and_then(|action| self.get_original_action(action))
-                .map(|action| Trigger::new(id.clone(), action.into())),
+                .map(|action| Trigger::new(id.clone(), action)),
             TriggeringEventType::Time => self
                 .time_triggers()
                 .get(id)
                 .cloned()
                 .and_then(|action| self.get_original_action(action))
-                .map(|action| Trigger::new(id.clone(), action.into())),
+                .map(|action| Trigger::new(id.clone(), action)),
             TriggeringEventType::ExecuteTrigger => self
                 .by_call_triggers()
                 .get(id)
                 .cloned()
                 .and_then(|action| self.get_original_action(action))
-                .map(|action| Trigger::new(id.clone(), action.into())),
+                .map(|action| Trigger::new(id.clone(), action)),
         };
         if trigger.is_none() {
             warn!(
@@ -1897,7 +1910,8 @@ mod tests {
             Repeats::Exactly(1),
             sample_authority(),
             ExecuteTriggerEventFilter::new(),
-        );
+        )
+        .expect("test trigger action satisfies its authority invariant");
 
         {
             let mut block = set.block();
@@ -1991,7 +2005,7 @@ mod tests {
     fn executable_ref_json_roundtrip_mixed_batch() {
         let authority = sample_authority();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             7,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -2048,13 +2062,15 @@ mod tests {
             Repeats::Exactly(1),
             old.clone(),
             TimeEventFilter(ExecutionTime::PreCommit),
-        );
+        )
+        .expect("test time-trigger action satisfies its authority invariant");
         let call_action = SpecializedAction::new(
             executable,
             Repeats::Exactly(1),
             old.clone(),
             ExecuteTriggerEventFilter::new(),
-        );
+        )
+        .expect("test by-call action satisfies its authority invariant");
 
         let mut block = set.block();
         let mut tx = block.transaction();
@@ -2107,7 +2123,8 @@ mod tests {
                     Repeats::Exactly(1),
                     authority,
                     TimeEventFilter(ExecutionTime::PreCommit),
-                );
+                )
+                .expect("test time-trigger action satisfies its authority invariant");
                 let mut metadata = Metadata::default();
                 metadata.insert(
                     "__registered_block_height".parse().expect("valid name"),
@@ -2182,7 +2199,8 @@ mod tests {
                     start_ms: 0,
                     period_ms: Some(1),
                 })),
-            );
+            )
+            .expect("test scheduled trigger action satisfies its authority invariant");
             action.metadata.insert(
                 "__registered_block_height".parse().expect("valid name"),
                 Json::from(1_u64),
@@ -2224,7 +2242,8 @@ mod tests {
                     Repeats::Exactly(1),
                     authority,
                     TimeEventFilter(ExecutionTime::PreCommit),
-                );
+                )
+                .expect("test time-trigger action satisfies its authority invariant");
                 let mut metadata = Metadata::default();
                 metadata.insert(
                     "__registered_block_height".parse().expect("valid name"),
@@ -2278,7 +2297,8 @@ mod tests {
                     Repeats::Exactly(1),
                     authority,
                     TimeEventFilter(ExecutionTime::PreCommit),
-                );
+                )
+                .expect("test time-trigger action satisfies its authority invariant");
                 let trigger = SpecializedTrigger::new(trigger_id, action);
                 tx.add_time_trigger(trigger)
                     .expect("time trigger should be added");
@@ -2688,7 +2708,8 @@ mod dto_tests {
                 dm::Repeats::Exactly(1),
                 authority.clone(),
                 data_filter,
-            );
+            )
+            .expect("test data-trigger action satisfies its authority invariant");
             let trig = SpecializedTrigger::new(data_id, action);
             tx.add_data_trigger(trig).expect("add data trigger");
 
@@ -2712,7 +2733,8 @@ mod dto_tests {
                 dm::Repeats::Exactly(3),
                 authority.clone(),
                 pipe_filter,
-            );
+            )
+            .expect("test pipeline-trigger action satisfies its authority invariant");
             let trig2 = SpecializedTrigger::new(pipe_id, action2);
             tx.add_pipeline_trigger(trig2)
                 .expect("add pipeline trigger");
@@ -2729,7 +2751,8 @@ mod dto_tests {
                 dm::Repeats::Exactly(1),
                 authority.clone(),
                 time_filter,
-            );
+            )
+            .expect("test scheduled trigger action satisfies its authority invariant");
             action3.retry_policy = Some(dm::TimeTriggerRetryPolicy {
                 max_retries: std::num::NonZeroU32::new(2).expect("nonzero"),
                 retry_after_ms: std::num::NonZeroU64::new(750).expect("nonzero"),
@@ -2743,7 +2766,8 @@ mod dto_tests {
             let ivm_code = IvmBytecode::from_compiled(vec![0xAA, 0xBB]);
             let exec4 = dm::Executable::Ivm(ivm_code);
             let action4 =
-                SpecializedAction::new(exec4, dm::Repeats::Exactly(1), authority, call_filter);
+                SpecializedAction::new(exec4, dm::Repeats::Exactly(1), authority, call_filter)
+                    .expect("test by-call action satisfies its authority invariant");
             let trig4 = SpecializedTrigger::new(call_id, action4);
             tx.add_by_call_trigger(trig4).expect("add by-call trigger");
 
@@ -2863,13 +2887,15 @@ mod dto_tests {
                 dm::Repeats::Exactly(1),
                 authority.clone(),
                 dm::ExecuteTriggerEventFilter::new(),
-            );
+            )
+            .expect("test by-call action satisfies its authority invariant");
             let depleted_action = SpecializedAction::new(
                 empty_exec,
                 dm::Repeats::Exactly(0),
                 authority,
                 dm::TimeEventFilter(dm::ExecutionTime::PreCommit),
-            );
+            )
+            .expect("test time-trigger action satisfies its authority invariant");
 
             tx.add_by_call_trigger(SpecializedTrigger::new(active_id.clone(), active_action))
                 .expect("add active by-call trigger");
@@ -3016,7 +3042,8 @@ mod dto_tests {
                 dm::TimeEventFilter(dm::ExecutionTime::Schedule(Schedule::starting_at(
                     std::time::Duration::from_millis(5),
                 ))),
-            );
+            )
+            .expect("test scheduled trigger action satisfies its authority invariant");
             action.retry_policy = Some(retry_policy);
             tx.add_time_trigger(SpecializedTrigger::new(trigger_id.clone(), action))
                 .expect("add time trigger");

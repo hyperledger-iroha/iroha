@@ -631,6 +631,22 @@ pub enum PrivacyStatementValidationError {
         /// Approved maximum.
         max: u32,
     },
+    /// A Jindo statement does not use the frozen first-release batch shape.
+    #[error("Jindo polynomial count {count} differs from the required exact count {expected}")]
+    InvalidJindoPolynomialCount {
+        /// Observed polynomial count.
+        count: u32,
+        /// Exact count compiled into the parameter and transcript profile.
+        expected: u32,
+    },
+    /// A consensus resource limit cannot contain the frozen Jindo batch shape.
+    #[error("Jindo requires capacity for {required} commitments, but consensus permits {maximum}")]
+    InsufficientJindoCommitmentCapacity {
+        /// Consensus commitment ceiling.
+        maximum: u32,
+        /// Exact count required by the compiled Jindo profile.
+        required: u32,
+    },
     /// A ZK-AMS admission anchor has a zero PHC hash.
     #[error("ZK-AMS admission anchor {index} has a zero PHC hash")]
     ZeroZkAmsPhcHash {
@@ -1505,7 +1521,7 @@ mod exact12_fixture {
     }
 
     pub(super) fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("asset").expect("asset name"),
         )
@@ -1925,9 +1941,9 @@ mod exact12_fixture {
             PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
                 IrohaJindoPolynomialCommitmentStatementV1 {
                     context: context(),
-                    polynomial_commitments: vec![jindo_commitment(70), jindo_commitment(71)],
+                    polynomial_commitments: (70..74).map(jindo_commitment).collect(),
                     evaluation_point: jindo_field(1),
-                    claimed_evaluations: vec![jindo_field(4), jindo_field(5)],
+                    claimed_evaluations: (4..8).map(jindo_field).collect(),
                 },
             ),
             PrivacyStatementV1::IrohaBootleLanternAnoncredV1(

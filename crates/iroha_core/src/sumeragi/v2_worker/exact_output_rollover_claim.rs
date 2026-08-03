@@ -4,6 +4,14 @@ enum ExactOutputRolloverClaim {
     Exact,
     GlobalV2(ExactOutputCreationScope),
     Lane(ExactOutputCreationScope),
+    /// Kura-backed autonomous payload or NewView output that the successor
+    /// rehydrates and deterministically retransmits with the same local
+    /// authority.
+    AutonomousLane {
+        scope: ExactOutputCreationScope,
+        local_peer: PeerId,
+        proposal_height: u64,
+    },
     /// Authenticated lane payload/NewView traffic with exact live ownership.
     ///
     /// These messages are admissible lane transport, but they have no
@@ -119,10 +127,19 @@ fn native_amx_message_body(
 }
 
 impl ExactOutputRolloverClaim {
+    const fn accepts_superseded_reply_delivery(&self) -> bool {
+        matches!(
+            self,
+            Self::DurableCommitCertificateResponse { .. }
+                | Self::DurableCertifiedBodyResponse { .. }
+        )
+    }
+
     fn scope(&self) -> Option<ExactOutputCreationScope> {
         match self {
             Self::Exact | Self::NonRetireableLaneTransport { .. } => None,
             Self::GlobalV2(scope) | Self::Lane(scope) => Some(*scope),
+            Self::AutonomousLane { scope, .. } => Some(*scope),
             Self::DurableCommitCertificateResponse { scope, .. }
             | Self::DurableCertifiedBodyResponse { scope, .. }
             | Self::DurableLaneCertificateResponse { scope, .. }
@@ -198,6 +215,24 @@ impl ExactOutputRolloverClaim {
                     Ok(())
                 } else {
                     Err("lane rollover claim covers a different output kind".to_owned())
+                }
+            }
+            Self::AutonomousLane { .. } => {
+                if messages.iter().all(|message| {
+                    matches!(
+                        message,
+                        NetworkMessage::SumeragiBlock(envelope)
+                            if matches!(
+                                envelope.as_message(),
+                                BlockMessage::LaneExecutablePayload(_)
+                                    | BlockMessage::LaneBlockNewViewVote(_)
+                                    | BlockMessage::LaneBlockNewViewCertificate(_)
+                            )
+                    )
+                }) {
+                    Ok(())
+                } else {
+                    Err("autonomous-lane rollover claim covers a different output kind".to_owned())
                 }
             }
             Self::NonRetireableLaneTransport {

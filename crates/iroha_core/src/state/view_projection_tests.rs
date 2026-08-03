@@ -264,12 +264,12 @@ fn asset_account_range() {
         gen_account_in("z").0,
     ];
     let asset_definitions = [
-        AssetDefinitionId::new(domain_id.clone(), "a".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "f".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "b".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "c".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "d".parse().unwrap()),
-        AssetDefinitionId::new(domain_id.clone(), "e".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "a".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "f".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "b".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "c".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "d".parse().unwrap()),
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "e".parse().unwrap()),
     ];
 
     let mut assets = accounts
@@ -280,7 +280,7 @@ fn asset_account_range() {
         .collect::<Vec<_>>();
     assets.push((
         AssetId::with_scope(
-            AssetDefinitionId::new(domain_id, "g".parse().unwrap()),
+            AssetDefinitionId::derive_from_components(domain_id, "g".parse().unwrap()),
             account_id.clone(),
             AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
         ),
@@ -297,8 +297,10 @@ fn asset_account_range() {
 fn asset_account_definition_range_includes_all_scopes() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = gen_account_in("wonderland").0;
-    let target_definition = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-    let other_definition = AssetDefinitionId::new(domain_id, "tulip".parse().unwrap());
+    let target_definition =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
+    let other_definition =
+        AssetDefinitionId::derive_from_components(domain_id, "tulip".parse().unwrap());
 
     let assets = [
         AssetId::new(target_definition.clone(), account_id.clone()),
@@ -345,15 +347,17 @@ fn set_asset_metadata_inserts_value_and_event() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -371,8 +375,11 @@ fn set_asset_metadata_inserts_value_and_event() {
     assert!(
         events.iter().any(|event| {
             if let EventBox::Data(ev) = event
-                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::Asset(data_pre::AssetEvent::MetadataInserted(mc)),
+                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(
+                    data_pre::ScopedAsset {
+                        event: data_pre::AssetEvent::MetadataInserted(mc),
+                        ..
+                    },
                 )) = ev.as_ref()
             {
                 return *mc.target() == asset_id && mc.key() == &key && mc.value() == &value;
@@ -403,15 +410,17 @@ fn remove_asset_metadata_emits_event_and_clears_entry() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose",
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(domain_id),
+    ))
     .execute(&ALICE_ID, &mut stx)
     .unwrap();
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -443,8 +452,11 @@ fn remove_asset_metadata_emits_event_and_clears_entry() {
     assert!(
         events.iter().any(|event| {
             if let EventBox::Data(ev) = event
-                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::Asset(data_pre::AssetEvent::MetadataRemoved(mc)),
+                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(
+                    data_pre::ScopedAsset {
+                        event: data_pre::AssetEvent::MetadataRemoved(mc),
+                        ..
+                    },
                 )) = ev.as_ref()
             {
                 return *mc.target() == asset_id && mc.key() == &key && mc.value() == &value;
@@ -648,6 +660,7 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
                 secret_generation: 0,
                 service_configs: std::collections::BTreeMap::new(),
                 service_secrets: std::collections::BTreeMap::new(),
+                fhe_policy_records: std::collections::BTreeMap::new(),
                 service_lease: None,
                 lease_volume_states: Vec::new(),
             },

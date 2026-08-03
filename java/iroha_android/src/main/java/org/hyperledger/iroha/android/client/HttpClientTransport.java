@@ -68,6 +68,8 @@ import org.hyperledger.iroha.android.telemetry.NetworkContext;
 import org.hyperledger.iroha.android.telemetry.NetworkContextProvider;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
+import org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotJsonV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
@@ -444,6 +446,31 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(request, RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list");
   }
 
+  /** Fetch the exact result-bearing {@code SignedBlockWire} committed at {@code height}. */
+  public CompletableFuture<byte[]> getLedgerExecutedBlockWire(final BigInteger height) {
+    if (height == null || height.signum() <= 0 || height.bitLength() > 64) {
+      throw new IllegalArgumentException("height must be a positive u64");
+    }
+    final TransportRequest request =
+        buildExactNoritoGetRequest(
+            "/v1/ledger/block/" + height.toString(), EXECUTED_BLOCK_WIRE_MAX_BYTES);
+    return fetchExactNoritoBytes(request, "executed block wire");
+  }
+
+  /** Convenience overload for positive signed heights. */
+  public CompletableFuture<byte[]> getLedgerExecutedBlockWire(final long height) {
+    return getLedgerExecutedBlockWire(BigInteger.valueOf(height));
+  }
+
+  /** Fetch and validate the authoritative committed privacy capability snapshot. */
+  public CompletableFuture<PrivacyCapabilitySnapshotV1> getPrivacyCapabilities() {
+    return fetchExactJson(
+        buildExactJsonGetRequest(
+            "/v1/privacy/capabilities", PrivacyCapabilitySnapshotJsonV1.MAX_RESPONSE_BYTES),
+        PrivacyCapabilitySnapshotJsonV1::parse,
+        "privacy capabilities");
+  }
+
   /** Fetch and strictly decode exact-lane SCCP capability discovery. */
   public CompletableFuture<SccpModels.Capabilities> getSccpCapabilities() {
     return fetchSccpJson(
@@ -673,6 +700,7 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Fetches the public Sora VPN profile. */
   public CompletableFuture<VpnProfile> getVpnProfile() {
+    requireSecureVpnBaseUri();
     final TransportRequest request =
         buildJsonGetRequest("/v1/vpn/profile", Collections.emptyMap());
     return fetchJson(request, VpnJsonParser::parseProfile, "vpn profile", 200);
@@ -1915,6 +1943,48 @@ public final class HttpClientTransport implements IrohaClient {
     return buildJsonPostRequest(path, body, null);
   }
 
+  private TransportRequest buildExactJsonGetRequest(
+      final String path, final long maximumResponseBytes) {
+    for (final String name : config.defaultHeaders().keySet()) {
+      if (name.equalsIgnoreCase("Accept")) {
+        throw new IllegalArgumentException(
+            "Accept must not be overridden for exact JSON requests");
+      }
+    }
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod("GET")
+            .addHeader("Accept", APPLICATION_JSON)
+            .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    return builder.build();
+  }
+
+  private TransportRequest buildExactNoritoGetRequest(
+      final String path, final long maximumResponseBytes) {
+    for (final String name : config.defaultHeaders().keySet()) {
+      if (name.equalsIgnoreCase("Accept")) {
+        throw new IllegalArgumentException(
+            "Accept must not be overridden for exact Norito requests");
+      }
+    }
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod("GET")
+            .addHeader("Accept", APPLICATION_NORITO)
+            .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    return builder.build();
+  }
+
   private TransportRequest buildJsonPostRequest(
       final String path, final byte[] body, final Long maximumResponseBytes) {
     final TransportRequest.Builder builder =
@@ -1944,6 +2014,9 @@ public final class HttpClientTransport implements IrohaClient {
       final String path,
       final byte[] body,
       final ToriiCanonicalRequestAuth canonicalAuth) {
+    if (path.startsWith("/v1/vpn/")) {
+      requireSecureVpnBaseUri();
+    }
     Objects.requireNonNull(canonicalAuth, "canonicalAuth");
     final URI target = resolvePath(path);
     final TransportRequest.Builder builder =
@@ -1963,6 +2036,12 @@ public final class HttpClientTransport implements IrohaClient {
       builder.addHeader(entry.getKey(), entry.getValue());
     }
     return builder.build();
+  }
+
+  private void requireSecureVpnBaseUri() {
+    if (!"https".equalsIgnoreCase(config.baseUri().getScheme())) {
+      throw new IllegalArgumentException("Sora VPN requests require an HTTPS Torii base URI");
+    }
   }
 
   private TransportRequest buildOnboardingRequest(
@@ -2236,6 +2315,191 @@ public final class HttpClientTransport implements IrohaClient {
               }
             });
     return future;
+  }
+
+  private <T> CompletableFuture<T> fetchExactJson(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext) {
+    final Long maximumResponseBytes =
+        Objects.requireNonNull(
+            request.maximumResponseBytes(),
+            errorContext + " request must declare a response-body limit");
+    notifyRequest(request);
+    final CompletableFuture<T> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                notifyFailure(request, cause);
+                future.completeExceptionally(
+                    new RuntimeException(errorContext + " request failed", cause));
+                return;
+              }
+              final byte[] body = response.body();
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      body,
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              try {
+                requireExactJsonResponse(
+                    response, body, maximumResponseBytes.longValue(), errorContext);
+                final T parsed = parser.apply(body);
+                notifyResponse(request, clientResponse);
+                future.complete(parsed);
+              } catch (final RuntimeException error) {
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+              }
+            });
+    return future;
+  }
+
+  private CompletableFuture<byte[]> fetchExactNoritoBytes(
+      final TransportRequest request, final String errorContext) {
+    notifyRequest(request);
+    final CompletableFuture<byte[]> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                notifyFailure(request, cause);
+                future.completeExceptionally(
+                    new RuntimeException(errorContext + " request failed", cause));
+                return;
+              }
+              final byte[] body = response.body();
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      body,
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              try {
+                if (response.statusCode() != 200) {
+                  throw new IllegalStateException(
+                      errorContext + " request failed with status " + response.statusCode());
+                }
+                requireExactHeader(
+                    response.headers(),
+                    "Content-Type",
+                    APPLICATION_NORITO,
+                    errorContext);
+                if (body.length == 0) {
+                  throw new IllegalStateException(errorContext + " response must not be empty");
+                }
+                if ((long) body.length > EXECUTED_BLOCK_WIRE_MAX_BYTES) {
+                  throw new IllegalStateException(
+                      errorContext
+                          + " response exceeds "
+                          + EXECUTED_BLOCK_WIRE_MAX_BYTES
+                          + " bytes");
+                }
+                requireExactOptionalContentLength(response.headers(), body.length, errorContext);
+                notifyResponse(request, clientResponse);
+                future.complete(body.clone());
+              } catch (final RuntimeException error) {
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+              }
+            });
+    return future;
+  }
+
+  private static void requireExactHeader(
+      final Map<String, List<String>> headers,
+      final String name,
+      final String expected,
+      final String errorContext) {
+    final List<String> values = headerValues(headers, name);
+    if (values.size() != 1 || !expected.equals(values.get(0))) {
+      throw new IllegalStateException(
+          errorContext + " response " + name + " must be exactly " + expected);
+    }
+  }
+
+  private static void requireExactOptionalContentLength(
+      final Map<String, List<String>> headers,
+      final int actualBytes,
+      final String errorContext) {
+    final List<String> values = headerValues(headers, "Content-Length");
+    if (values.isEmpty()) {
+      return;
+    }
+    if (values.size() != 1) {
+      throw new IllegalStateException(errorContext + " response has ambiguous Content-Length");
+    }
+    final String value = values.get(0);
+    if (!isCanonicalUnsignedDecimal(value)) {
+      throw new IllegalStateException(
+          errorContext + " response Content-Length must be one canonical decimal integer");
+    }
+    if (!Integer.toString(actualBytes).equals(value)) {
+      throw new IllegalStateException(
+          errorContext + " response Content-Length does not match the body");
+    }
+  }
+
+  private static List<String> headerValues(
+      final Map<String, List<String>> headers, final String name) {
+    final List<String> values = new ArrayList<>();
+    for (final Map.Entry<String, List<String>> entry : headers.entrySet()) {
+      if (entry.getKey() != null
+          && entry.getKey().equalsIgnoreCase(name)
+          && entry.getValue() != null) {
+        values.addAll(entry.getValue());
+      }
+    }
+    return values;
+  }
+
+  private static boolean isCanonicalUnsignedDecimal(final String value) {
+    if (value == null || value.isEmpty()) {
+      return false;
+    }
+    if (value.equals("0")) {
+      return true;
+    }
+    if (value.charAt(0) < '1' || value.charAt(0) > '9') {
+      return false;
+    }
+    for (int index = 1; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      if (character < '0' || character > '9') {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static void requireExactJsonResponse(
+      final TransportResponse response,
+      final byte[] body,
+      final long maximumResponseBytes,
+      final String errorContext) {
+    if (response.statusCode() != 200) {
+      throw new IllegalStateException(
+          errorContext + " request failed with status " + response.statusCode());
+    }
+    requireExactHeader(response.headers(), "Content-Type", APPLICATION_JSON, errorContext);
+    if (body.length == 0) {
+      throw new IllegalStateException(errorContext + " response must not be empty");
+    }
+    if ((long) body.length > maximumResponseBytes) {
+      throw new IllegalStateException(
+          errorContext + " response exceeds " + maximumResponseBytes + " bytes");
+    }
+    requireExactOptionalContentLength(response.headers(), body.length, errorContext);
   }
 
   private static void requireExactSccpJsonResponse(
@@ -3340,6 +3604,9 @@ public final class HttpClientTransport implements IrohaClient {
   private static final long NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L;
   private static final long SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L;
+  private static final long EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L;
+  private static final String APPLICATION_JSON = "application/json";
+  private static final String APPLICATION_NORITO = "application/x-norito";
 
   private static String requiredSccpArtifact(final Map<?, ?> fields, final String field) {
     final Object value = fields.get(field);

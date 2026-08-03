@@ -6,10 +6,7 @@
 use core::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use iroha_crypto::{
-    Hash,
-    fhe_bfv::{BfvEvaluationKeyBundle, BfvFullBootstrapCircuitArtifactBundleV1},
-};
+use iroha_crypto::Hash;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -20,16 +17,16 @@ use crate::{
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        AgentApartmentManifestV1, BfvEvaluationKeyRefreshTranscriptV1, DecryptionAuthorityPolicyV1,
-        DecryptionRequestV1, FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
-        SoraAppInfraManifestV1, SoraDeploymentBundleV1, SoraHfResourceProfileV1,
+        AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheJobSpecV1,
+        SecretEnvelopeV1, SoraAppInfraManifestV1, SoraDeploymentBundleV1, SoraHfResourceProfileV1,
         SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
         SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraRuntimeReceiptV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
         SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
-        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheFullBootstrapMaterialProofV1,
-        SoracloudFheInputAdmissionProofV1, SoracloudFhePublicKeyProofV1,
+        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheGovernedMaterialV1,
+        SoracloudFheInputAdmissionProofV1, SoracloudFhePolicyReferenceV1,
+        SoracloudFhePublicKeyProofV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -358,6 +355,77 @@ impl PartialOrd for MutateSoracloudState {
     }
 }
 
+/// Register the first governance-authenticated FHE material version for a service policy.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RegisterSoracloudFhePolicy {
+    /// Service that owns the policy.
+    pub service_name: Name,
+    /// Immutable first material version; its version must be one.
+    pub material: SoracloudFheGovernedMaterialV1,
+    /// Governance provenance attestation over the registration payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for RegisterSoracloudFhePolicy {}
+
+impl PartialOrd for RegisterSoracloudFhePolicy {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Rotate a service-scoped FHE policy to the next immutable material version.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RotateSoracloudFhePolicy {
+    /// Service that owns the policy.
+    pub service_name: Name,
+    /// Exact active version that must still be current when rotation executes.
+    pub expected_active: SoracloudFhePolicyReferenceV1,
+    /// Immutable next material version.
+    pub material: SoracloudFheGovernedMaterialV1,
+    /// Governance provenance attestation over the rotation payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for RotateSoracloudFhePolicy {}
+
+impl PartialOrd for RotateSoracloudFhePolicy {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Permanently revoke the exact active FHE policy version for a service.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RevokeSoracloudFhePolicy {
+    /// Service that owns the policy.
+    pub service_name: Name,
+    /// Exact active version that must still be current when revocation executes.
+    pub expected_active: SoracloudFhePolicyReferenceV1,
+    /// Governance provenance attestation over the revocation payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for RevokeSoracloudFhePolicy {}
+
+impl PartialOrd for RevokeSoracloudFhePolicy {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
 /// Record an ordered Soracloud FHE execution result.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -371,31 +439,17 @@ pub struct RunSoracloudFheJob {
     pub binding_name: Name,
     /// Deterministic FHE job specification.
     pub job: FheJobSpecV1,
-    /// Execution policy snapshot validated for this job.
-    pub policy: FheExecutionPolicyV1,
-    /// Parameter set validated for this job.
-    pub param_set: FheParamSetV1,
-    /// Public evaluation keys used for homomorphic execution.
-    pub evaluation_keys: BfvEvaluationKeyBundle,
-    /// Public deterministic refresh transcript inventory for evaluation keys.
-    pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    /// Exact active governed material version authorized for this job.
+    pub policy_reference: SoracloudFhePolicyReferenceV1,
     /// Optional verifier-backed proof for public BFV key material.
     #[norito(default)]
     pub public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     /// Optional verifier-backed proof for public bootstrap-key zero-refresh material.
     #[norito(default)]
     pub bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
-    /// Optional verifier-backed proof for governed full-bootstrap material.
-    #[norito(default)]
-    pub full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
-    /// Optional full-bootstrap evaluator/proof artifacts for full-bootstrap jobs.
-    #[norito(default)]
-    pub full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
     /// Verifier-backed proof for each full-bootstrap output ciphertext slot.
     #[norito(default)]
     pub full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
-    /// Governance transaction hash attached to the job.
-    pub governance_tx_hash: Hash,
     /// Provenance attestation over the job payload.
     pub provenance: ManifestProvenance,
 }
@@ -1610,16 +1664,29 @@ impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     service_name: Name,
     binding_name: Name,
     job: FheJobSpecV1,
-    policy: FheExecutionPolicyV1,
-    param_set: FheParamSetV1,
-    evaluation_keys: BfvEvaluationKeyBundle,
-    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    policy_reference: SoracloudFhePolicyReferenceV1,
     public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
-    full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
-    full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
     full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
-    governance_tx_hash: Hash,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RegisterSoracloudFhePolicy {
+    service_name: Name,
+    material: SoracloudFheGovernedMaterialV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RotateSoracloudFhePolicy {
+    service_name: Name,
+    expected_active: SoracloudFhePolicyReferenceV1,
+    material: SoracloudFheGovernedMaterialV1,
+    provenance: ManifestProvenance,
+});
+
+impl_soracloud_decode_from_slice!(RevokeSoracloudFhePolicy {
+    service_name: Name,
+    expected_active: SoracloudFhePolicyReferenceV1,
     provenance: ManifestProvenance,
 });
 

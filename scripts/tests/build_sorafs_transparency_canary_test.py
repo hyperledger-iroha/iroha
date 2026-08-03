@@ -61,10 +61,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--source-batch-digest-hex", SOURCE_BATCH_DIGEST])
     if kind in MODULE.CYCLE_DIGEST_KINDS:
         args.extend(["--cycle-digest-hex", CYCLE_DIGEST])
-    if kind == "source_entry":
-        for source_kind in MODULE.DEFAULT_REQUIRED_SOURCE_KINDS:
-            args.extend(["--source-kind", source_kind])
-    elif kind == "publication":
+    if kind == "publication":
         for route in MODULE.REQUIRED_PUBLICATION_ROUTES:
             args.extend(["--publication-route", route])
         for probe in MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES:
@@ -85,6 +82,41 @@ def checker_options() -> object:
     )
 
 
+def write_source_producer_evidence(path: Path) -> Path:
+    """Write reviewed trusted-producer evidence that the canary builder cannot mint."""
+
+    producers = [
+        {
+            "source_kind": source_kind,
+            "producer_id": f"transparency-{index}",
+            "producer_route": f"internal:transparency/{index}",
+            "provenance_digest_hex": f"{index + 1:x}" * 64,
+            "durable_checkpoint_verified": True,
+        }
+        for index, source_kind in enumerate(CHECKER.DEFAULT_REQUIRED_SOURCE_KINDS)
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "sorafs.transparency.source_entry.producer_evidence.v1",
+                "status": "passed",
+                "generated_at_unix": GENERATED_AT,
+                "deployment_id": "transparency-mainnet-20260701",
+                "environment": "production",
+                "deployment_context_reviewed": True,
+                "source_batch_digest_hex": SOURCE_BATCH_DIGEST,
+                "producer_count": len(producers),
+                "generic_public_ingress_absent": True,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+                "producers": producers,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def assert_rejected_without_artifact(
     args: list[str],
     *,
@@ -98,24 +130,6 @@ def assert_rejected_without_artifact(
     captured = capsys.readouterr()
     assert expected_error in captured.err
     assert not canary_path(tmp_path, kind).exists()
-
-
-def test_builds_payload_free_source_entry_canary(tmp_path: Path) -> None:
-    assert MODULE.main(args_for("source_entry", tmp_path)) == 0
-
-    payload = json.loads(canary_path(tmp_path, "source_entry").read_text("utf-8"))
-
-    assert payload["schema"] == "sorafs.transparency.source_entry.canary.v1"
-    assert payload["status"] == "passed"
-    assert payload["source_batch_digest_hex"] == SOURCE_BATCH_DIGEST
-    assert payload["payload_bytes_included"] is False
-    assert payload["private_payloads_included"] is False
-    assert payload["response_bodies_included"] is False
-    errors = MODULE.validate_generated_payload(
-        payload,
-        MODULE.parse_args(args_for("source_entry", tmp_path)),
-    )
-    assert errors == []
 
 
 def test_builds_payload_free_proof_token_issuance_canary(tmp_path: Path) -> None:
@@ -140,7 +154,9 @@ def test_builds_payload_free_proof_token_issuance_canary(tmp_path: Path) -> None
 
 
 def test_generated_canaries_pass_full_transparency_gate(tmp_path: Path) -> None:
-    evidence_paths: list[Path] = []
+    evidence_paths = [
+        write_source_producer_evidence(tmp_path / "source-producer-evidence.json")
+    ]
     for kind in MODULE.CANARY_KINDS:
         assert MODULE.main(args_for(kind, tmp_path)) == 0
         evidence_paths.append(canary_path(tmp_path, kind))
@@ -191,40 +207,6 @@ def test_response_file_can_build_publication_canary(tmp_path: Path) -> None:
     assert [probe["name"] for probe in payload["cycle_detail_probes"]] == list(
         MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES
     )
-
-
-def test_missing_source_kind_coverage_fails_closed(tmp_path: Path, capsys) -> None:
-    args = args_for("source_entry", tmp_path)
-    index = args.index("--source-kind")
-    del args[index : index + 2]
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert "--source-kind must include every required value" in captured.err
-    assert not canary_path(tmp_path, "source_entry").exists()
-
-
-def test_duplicate_source_kind_coverage_fails_closed(tmp_path: Path, capsys) -> None:
-    args = args_for("source_entry", tmp_path)
-    args.extend(["--source-kind", MODULE.DEFAULT_REQUIRED_SOURCE_KINDS[0]])
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert "--source-kind must not contain duplicates" in captured.err
-    assert not canary_path(tmp_path, "source_entry").exists()
-
-
-def test_unknown_source_kind_coverage_fails_closed(tmp_path: Path, capsys) -> None:
-    args = args_for("source_entry", tmp_path)
-    args.extend(["--source-kind", "shadow-source-kind"])
-
-    assert MODULE.main(args) == 2
-
-    captured = capsys.readouterr()
-    assert "--source-kind contains an unknown value" in captured.err
-    assert not canary_path(tmp_path, "source_entry").exists()
 
 
 def test_duplicate_publication_route_coverage_fails_closed(
@@ -395,12 +377,6 @@ def test_unknown_explorer_route_coverage_fails_closed(
 @pytest.mark.parametrize(
     ("kind", "option", "duplicate_value", "unknown_value"),
     (
-        (
-            "source_entry",
-            "--source-kind",
-            MODULE.DEFAULT_REQUIRED_SOURCE_KINDS[0],
-            "shadow-source-kind",
-        ),
         (
             "publication",
             "--publication-route",

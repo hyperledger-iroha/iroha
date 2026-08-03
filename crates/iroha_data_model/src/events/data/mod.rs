@@ -18,6 +18,7 @@ mod events;
 mod filters;
 #[cfg(feature = "governance")]
 pub mod governance;
+pub mod musubi;
 pub mod oracle;
 pub mod proof;
 pub mod runtime_upgrade;
@@ -35,6 +36,7 @@ pub mod prelude {
         escrow::prelude::*,
         events::prelude::*,
         filters::prelude::*,
+        musubi::prelude::*,
         oracle::prelude::*,
         social::prelude::*,
         soradns::{SoradnsDirectoryEvent, SoradnsDirectoryEventSet},

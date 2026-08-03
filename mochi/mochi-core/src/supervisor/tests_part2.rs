@@ -1492,6 +1492,146 @@ fn peer_spec_config_header_includes_lane_paths() {
 }
 
 #[test]
+#[cfg(unix)]
+fn four_peer_onboarding_bundle_is_private_identical_and_session_path_only() {
+    if !ports_available("four_peer_onboarding_bundle_is_private_identical_and_session_path_only") {
+        return;
+    }
+    let _env = env_lock().lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let _stub = KagamiStub::install(temp.path());
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
+        .data_root(temp.path().join("sandbox"))
+        .torii_base_port(24_000)
+        .p2p_base_port(25_000)
+        .build()
+        .expect("build four-peer supervisor");
+
+    let session = supervisor.session_info().expect("session info");
+    assert_eq!(
+        session.onboarding_token_file,
+        supervisor.onboarding.token_file
+    );
+    assert_eq!(
+        session.onboarding_credential_id,
+        LOCAL_ONBOARDING_CREDENTIAL_ID
+    );
+    assert_eq!(
+        session.onboarding_signer_file,
+        supervisor.onboarding.private_key_file
+    );
+    assert!(session.onboarding_token_file.is_absolute());
+    let token =
+        fs::read_to_string(&session.onboarding_token_file).expect("read private onboarding token");
+    assert!(token.starts_with("iroha-localnet-"));
+    assert!((32..=256).contains(&token.len()));
+    assert!(token.bytes().all(|byte| (b'!'..=b'~').contains(&byte)));
+    assert_eq!(token, token.trim_end());
+
+    let runtime_dir = session
+        .onboarding_token_file
+        .parent()
+        .expect("runtime directory");
+    assert_eq!(
+        fs::metadata(runtime_dir)
+            .expect("runtime metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    for private_file in [
+        &supervisor.onboarding.private_key_file,
+        &supervisor.onboarding.token_file,
+    ] {
+        let metadata = fs::metadata(private_file).expect("private file metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(metadata.nlink(), 1);
+    }
+
+    let admin = localnet_admin_signer().expect("localnet admin");
+    let admin_account = admin.account_id().to_string();
+    let admin_private = ExposedPrivateKey(admin.key_pair().private_key().clone()).to_string();
+    assert_eq!(
+        fs::read_to_string(&supervisor.onboarding.private_key_file)
+            .expect("read onboarding signer")
+            .trim_end(),
+        admin_private
+    );
+    let expected_digest = format!("blake3:{}", encode_hex(&blake3_256(token.as_bytes())));
+    let mut expected_onboarding = None;
+    for peer in supervisor.peers() {
+        let config_text = fs::read_to_string(peer.config_path()).expect("read peer config");
+        assert!(!config_text.contains(&token));
+        assert!(!config_text.contains(&admin_private));
+        let config: toml::Table = toml::from_str(&config_text).expect("parse peer config");
+        let onboarding = config
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("account_onboarding"))
+            .and_then(toml::Value::as_table)
+            .expect("managed account onboarding");
+        assert_eq!(
+            onboarding.get("authority").and_then(toml::Value::as_str),
+            Some(admin_account.as_str())
+        );
+        assert_eq!(
+            onboarding
+                .get("private_key_file")
+                .and_then(toml::Value::as_str),
+            Some(
+                supervisor
+                    .onboarding
+                    .private_key_file
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+        assert!(
+            onboarding
+                .get("additional_permissions")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|permissions| permissions.is_empty())
+        );
+        let credential = onboarding
+            .get("credentials")
+            .and_then(toml::Value::as_array)
+            .and_then(|credentials| credentials.first())
+            .and_then(toml::Value::as_table)
+            .expect("single onboarding credential");
+        assert_eq!(
+            credential.get("id").and_then(toml::Value::as_str),
+            Some(LOCAL_ONBOARDING_CREDENTIAL_ID)
+        );
+        assert_eq!(
+            credential
+                .get("scope")
+                .and_then(toml::Value::as_table)
+                .and_then(|scope| scope.get("dataspace"))
+                .and_then(toml::Value::as_str),
+            Some(LOCAL_ONBOARDING_DATASPACE)
+        );
+        assert_eq!(
+            credential.get("token_hash").and_then(toml::Value::as_str),
+            Some(expected_digest.as_str())
+        );
+        let onboarding = toml::Value::Table(onboarding.clone());
+        if let Some(expected) = expected_onboarding.as_ref() {
+            assert_eq!(&onboarding, expected);
+        } else {
+            expected_onboarding = Some(onboarding);
+        }
+    }
+
+    let session_debug = format!("{session:?}");
+    assert!(!session_debug.contains(&token));
+    assert!(!session_debug.contains(&expected_digest));
+    let supervisor_debug = format!("{supervisor:?}");
+    assert!(!supervisor_debug.contains(&token));
+    assert!(!supervisor_debug.contains(&expected_digest));
+}
+
+#[test]
 fn supervisor_session_info_reports_workspace_and_mcp_urls() {
     if !ports_available("supervisor_session_info_reports_workspace_and_mcp_urls") {
         return;
@@ -1517,6 +1657,15 @@ fn supervisor_session_info_reports_workspace_and_mcp_urls() {
     assert_eq!(info.mcp_url, "http://127.0.0.1:8080/v1/mcp");
     assert!(info.account_id.is_some());
     assert!(info.private_key.is_some());
+    assert_eq!(
+        info.onboarding_token_file,
+        info.sandbox_root.join("runtime/onboarding.token")
+    );
+    assert_eq!(info.onboarding_credential_id, "local-dev");
+    assert_eq!(
+        info.onboarding_signer_file,
+        info.sandbox_root.join("runtime/onboarding-signer.key")
+    );
 }
 
 #[test]

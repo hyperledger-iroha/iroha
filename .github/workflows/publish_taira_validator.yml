@@ -3,1042 +3,886 @@ name: Publish (Taira Dual-Target Archive)
 on:
   workflow_dispatch:
     inputs:
-      checkout_ref:
-        description: "The reviewed Iroha branch, tag, or SHA to reconstruct"
-        required: true
-        type: string
-        default: main
       validator_release_ref:
         description: "Exact 40-character DPN API commit containing the reviewed source closure and Cargo.lock"
         required: true
         type: string
-      artifact_suffix:
-        description: "Optional lowercase immutable OCI tag suffix"
-        required: false
-        type: string
+
+permissions:
+  contents: read
+
+# A Taira rollout is one fleet-wide state transition.  Serializing the whole
+# workflow prevents a second approved dispatch from deploying between the
+# first dispatch's health proof and publication.
+concurrency:
+  group: taira-validator-rollout
+  cancel-in-progress: false
 
 env:
   DPN_VALIDATOR_LOCK_SHA256: 4318f92184fedb10e9bc5cb5c47f1df930c419221be4bd61fbc41741d02f6289
-  ORAS_VERSION: 1.3.2
-  ORAS_SETUP_ACTION_COMMIT: 22ce207df3b08e061f537244349aac6ae1d214f6
-  ORAS_DARWIN_ARM64_URL: https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_darwin_arm64.tar.gz
-  ORAS_DARWIN_ARM64_SHA256: 7929f792cf272268412375ecad6f0fb3c20f164368d5b57966e67ad6d36eca53
-  TAIRA_PRIMARY_ARTIFACT_TYPE: application/vnd.hyperledger.iroha.taira.rollout-admission.v1
-  TAIRA_ADMISSION_ARCHIVE_MEDIA_TYPE: application/vnd.hyperledger.iroha.taira.rollout-admission.archive.v1+tar+gzip
-  TAIRA_DEPLOY_PAYLOAD_MEDIA_TYPE: application/vnd.hyperledger.iroha.taira.macos-arm64.deploy.v1+tar+gzip
-  TAIRA_AUTHORITY_MANIFEST_MEDIA_TYPE: application/vnd.hyperledger.iroha.release-manifest.v1+json
-  TAIRA_AUTHORITY_SIGNATURE_MEDIA_TYPE: application/vnd.hyperledger.iroha.release-manifest.signature.v1+ed25519
-  TAIRA_AUTHORITY_PUBLIC_KEY_MEDIA_TYPE: application/vnd.hyperledger.iroha.ed25519-public-key.v1
-  TAIRA_PUBLICATION_ARTIFACT_TYPE: application/vnd.hyperledger.iroha.taira.publication-receipt.v1
-  TAIRA_PUBLICATION_RECEIPT_MEDIA_TYPE: application/vnd.hyperledger.iroha.taira.publication-receipt.v1+json
-  TAIRA_OCI_MANIFEST_MEDIA_TYPE: application/vnd.oci.image.manifest.v1+json
-  TAIRA_OCI_EMPTY_CONFIG_MEDIA_TYPE: application/vnd.oci.empty.v1+json
-  TAIRA_OCI_EMPTY_CONFIG_DIGEST: sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+  TAIRA_CONTROLLER_COMMAND: /usr/local/libexec/iroha-taira-release-controller-v1
+  TAIRA_CONTROLLER_ROOT: /usr/local/libexec/iroha-taira-release-controller-v1.d
 
 jobs:
-  linux-native-authority:
-    environment: taira-validator-publish
-    runs-on: [self-hosted, Linux, ARM64, iroha2]
-    timeout-minutes: 360
-    env:
-      TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
-      TAIRA_RELEASE_EXTERNAL_SIGNER_PATH: ${{ vars.TAIRA_RELEASE_EXTERNAL_SIGNER_PATH }}
-      TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH: ${{ vars.TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH }}
-      TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
-      TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
-      TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}
+  # This job reads four explicitly public files.  It has no checkout and cannot
+  # sign, build, qualify, deploy, or publish.  Its protected environment must
+  # contain only the public input path and controller/host trust pins.
+  public-privacy-input:
+    environment: taira-validator-public-input
+    runs-on: [self-hosted, Linux, ARM64, taira-public-input]
+    timeout-minutes: 30
     steps:
+      - name: Attest the distinct public-input controller host
+        shell: bash
+        env:
+          EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
+          EXPECTED_CONTROLLER_DIGEST: ${{ vars.TAIRA_LINUX_RELEASE_CONTROLLER_DIGEST }}
+          EXPECTED_CONTROLLER_VERSION: ${{ vars.TAIRA_RELEASE_CONTROLLER_VERSION }}
+          EXPECTED_HOST_ID: ${{ vars.TAIRA_PUBLIC_INPUT_HOST_ID }}
+          EXPECTED_INSTALLATION_ID: ${{ vars.TAIRA_PUBLIC_INPUT_INSTALLATION_ID }}
+          EXPECTED_UID: "0"
+          TAIRA_WORKFLOW_COMMIT: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          for value in "$EXPECTED_LAUNCHER_SHA256" "$EXPECTED_CONTROLLER_DIGEST"; do
+            [[ "$value" =~ ^[0-9a-f]{64}$ ]]
+          done
+          test -n "$EXPECTED_CONTROLLER_VERSION"
+          test -n "$EXPECTED_HOST_ID"
+          test -n "$EXPECTED_INSTALLATION_ID"
+          [[ "$EXPECTED_UID" =~ ^(0|[1-9][0-9]*)$ ]]
+          [[ "$TAIRA_WORKFLOW_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(sha256sum "$TAIRA_CONTROLLER_COMMAND" | awk '{print $1}')" = "$EXPECTED_LAUNCHER_SHA256"
+          record="$(
+            sudo -n "$TAIRA_CONTROLLER_COMMAND" attest \
+              --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256" \
+              --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST" \
+              --expected-version "$EXPECTED_CONTROLLER_VERSION" \
+              --expected-host-id "$EXPECTED_HOST_ID" \
+              --expected-installation-id "$EXPECTED_INSTALLATION_ID" \
+              --expected-uid "$EXPECTED_UID" \
+              --source-commit "$TAIRA_WORKFLOW_COMMIT" \
+              --platform linux \
+              --role public-input-authority
+          )"
+          printf '%s' "$record" | /usr/bin/python3 -I -S -c \
+            'import json,sys; v=json.load(sys.stdin); assert v["role"]=="public-input-authority"; assert v["host_id"]==sys.argv[1]; assert v["installation_id"]==sys.argv[2]; assert v["uid"]==int(sys.argv[3])' \
+            "$EXPECTED_HOST_ID" "$EXPECTED_INSTALLATION_ID" "$EXPECTED_UID"
+
+      - name: Snapshot only the four public privacy inputs with the installed controller
+        shell: bash
+        env:
+          EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
+          EXPECTED_CONTROLLER_DIGEST: ${{ vars.TAIRA_LINUX_RELEASE_CONTROLLER_DIGEST }}
+          EXPECTED_CONTROLLER_VERSION: ${{ vars.TAIRA_RELEASE_CONTROLLER_VERSION }}
+          EXPECTED_HOST_ID: ${{ vars.TAIRA_PUBLIC_INPUT_HOST_ID }}
+          EXPECTED_INSTALLATION_ID: ${{ vars.TAIRA_PUBLIC_INPUT_INSTALLATION_ID }}
+          EXPECTED_UID: "0"
+          AUTHORITY_STAGING_ROOT: ${{ vars.TAIRA_PUBLIC_INPUT_STAGING_ROOT }}
+          PUBLIC_INPUT_DIR: ${{ vars.TAIRA_PRIVACY_RELEASE_INPUT_DIR }}
+          TAIRA_WORKFLOW_COMMIT: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$PUBLIC_INPUT_DIR"
+          [[ "$AUTHORITY_STAGING_ROOT" == /* ]]
+          handoff="$AUTHORITY_STAGING_ROOT/public-input-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$handoff"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run \
+            --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256" \
+            --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST" \
+            --expected-version "$EXPECTED_CONTROLLER_VERSION" \
+            --expected-host-id "$EXPECTED_HOST_ID" \
+            --expected-installation-id "$EXPECTED_INSTALLATION_ID" \
+            --expected-uid "$EXPECTED_UID" \
+            --source-commit "$TAIRA_WORKFLOW_COMMIT" \
+            --platform linux \
+            --role public-input-authority \
+            snapshot-public-privacy -- \
+              --source "$PUBLIC_INPUT_DIR" \
+              --output "$handoff" \
+              --forbidden-root "$GITHUB_WORKSPACE"
+      - name: Upload the secret-free public privacy input handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: taira-public-privacy-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ vars.TAIRA_PUBLIC_INPUT_STAGING_ROOT }}/public-input-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Source checkout, reconstruction, Cargo build scripts, and the produced
+  # binaries are hostile in this job.  This runner has no protected environment
+  # and is never reused by a controller authority role.
+  linux-native-build:
+    needs: public-privacy-input
+    runs-on: [self-hosted, Linux, ARM64, taira-untrusted-build]
+    timeout-minutes: 360
+    steps:
+      - name: Require one exact validator release commit before checkout
+        shell: bash
+        env:
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+          TAIRA_WORKFLOW_COMMIT: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TAIRA_WORKFLOW_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.event.inputs.checkout_ref }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Require native Linux aarch64
+      - name: Download the secret-free privacy input bytes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-public-privacy-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-public-privacy-input
+
+      - name: Reconstruct source and build the unsigned Linux archive
         shell: bash
+        env:
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
         run: |
           set -Eeuo pipefail
           test "$(uname -s)" = Linux
           test "$(uname -m)" = aarch64
-
-      - name: Reconstruct the reviewed release source closure
-        id: source
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          source_root="${RUNNER_TEMP}/taira-linux-source-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          source_root="$RUNNER_TEMP/taira-linux-source"
           bash configs/soranexus/taira/prepare_taira_release_source.sh \
             --workspace "$GITHUB_WORKSPACE" \
             --output-dir "$source_root" \
             --validator-release-ref "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
             --validator-lock-sha256 "$DPN_VALIDATOR_LOCK_SHA256"
-          source_identity="$source_root/taira-source-identity-v1.json"
-          build_provenance="$source_root/validator-build-provenance-v1.json"
-          source_bundle="$source_root/dpn-validator-release/source-bundle"
-          source_verifier="$source_root/dpn-validator-release/iroha_source_bundle.py"
-          test -s "$source_identity"
-          test -s "$build_provenance"
-          {
-            echo "source_root=$source_root"
-            echo "source_identity=$source_identity"
-            echo "build_provenance=$build_provenance"
-            echo "source_bundle=$source_bundle"
-            echo "source_verifier=$source_verifier"
-          } >>"$GITHUB_OUTPUT"
+          output_dir="$RUNNER_TEMP/taira-linux-unsigned"
+          mkdir -m 0700 "$output_dir"
+          privacy_handoff="$RUNNER_TEMP/taira-public-privacy-input"
+          privacy_input="$privacy_handoff/inputs"
+          test -s "$privacy_handoff/handoff-inventory-v1.json"
+          test -d "$privacy_input"
+          chmod 0700 "$privacy_input"
+          chmod 0600 \
+            "$privacy_input/bootle_lantern_broker_public.json" \
+            "$privacy_input/config.toml" \
+            "$privacy_input/genesis.json" \
+            "$privacy_input/privacy_bootstrap_plan.json"
+          clean_build_env=(
+            env -i "HOME=$HOME" "PATH=$PATH" "TMPDIR=${TMPDIR:-/tmp}" LANG=C LC_ALL=C
+            "IROHA_DPN_VALIDATOR_RELEASE_COMMIT=$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+            "IROHA_VALIDATOR_LOCK_SHA256=$DPN_VALIDATOR_LOCK_SHA256"
+            "IROHA_VALIDATOR_BUILD_PROVENANCE=$source_root/validator-build-provenance-v1.json"
+            "IROHA_VALIDATOR_SOURCE_BUNDLE_DIR=$source_root/dpn-validator-release/source-bundle"
+            "IROHA_VALIDATOR_SOURCE_VERIFIER=$source_root/dpn-validator-release/iroha_source_bundle.py"
+            "TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR=$privacy_input"
+            "OUTPUT_DIR=$output_dir"
+          )
+          for name in CARGO_HOME RUSTUP_HOME; do
+            if [[ -n "${!name:-}" ]]; then clean_build_env+=("$name=${!name}"); fi
+          done
+          "${clean_build_env[@]}" bash configs/soranexus/taira/build_taira_rollout_bundle.sh \
+            --profile release --output-dir "$output_dir"
+          cp "$source_root/taira-source-identity-v1.json" "$output_dir/taira-source-identity-v1.json"
 
-      - name: Build and sign the Linux aarch64 native privacy authority
-        id: linux
+      - name: Close the unsigned Linux handoff inventory
         shell: bash
-        env:
-          SOURCE_ROOT: ${{ steps.source.outputs.source_root }}
-          BUILD_PROVENANCE: ${{ steps.source.outputs.build_provenance }}
-          SOURCE_BUNDLE: ${{ steps.source.outputs.source_bundle }}
-          SOURCE_VERIFIER: ${{ steps.source.outputs.source_verifier }}
         run: |
           set -Eeuo pipefail
-          output_dir="${RUNNER_TEMP}/taira-linux-rollout-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -m 0700 "$output_dir"
-          IROHA_VALIDATOR_LOCK_SHA256="$DPN_VALIDATOR_LOCK_SHA256" \
-          IROHA_VALIDATOR_BUILD_PROVENANCE="$BUILD_PROVENANCE" \
-          IROHA_VALIDATOR_SOURCE_BUNDLE_DIR="$SOURCE_BUNDLE" \
-          IROHA_VALIDATOR_SOURCE_VERIFIER="$SOURCE_VERIFIER" \
-          OUTPUT_DIR="$output_dir" \
-            bash configs/soranexus/taira/build_taira_rollout_bundle.sh \
-              --profile release \
-              --output-dir "$output_dir"
+          /usr/bin/python3 -I -S - "$RUNNER_TEMP/taira-linux-unsigned" linux-unsigned <<'PY'
+          import hashlib, json, os, re, stat, sys
+          from pathlib import Path
+          root = Path(sys.argv[1]).resolve(strict=True)
+          archives = sorted(root.glob("taira-rollout-*-linux-aarch64.tar.gz"))
+          if len(archives) != 1 or re.fullmatch(r"taira-rollout-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-release-linux-aarch64\.tar\.gz", archives[0].name) is None:
+              raise SystemExit("unsigned Linux archive name is not canonical")
+          evidence = root / archives[0].name.removesuffix(".tar.gz")
+          if not evidence.is_dir() or evidence.is_symlink():
+              raise SystemExit("unsigned Linux evidence root is missing")
+          if (root / f"{evidence.name}.authority").exists():
+              raise SystemExit("hostile build produced an unexpected authority")
+          rows = []
+          for current, dirs, files in os.walk(root, followlinks=False):
+              for name in dirs:
+                  if (Path(current) / name).is_symlink(): raise SystemExit("handoff directory symlink")
+              for name in files:
+                  path = Path(current) / name
+                  info = path.lstat()
+                  if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1 or info.st_size <= 0:
+                      raise SystemExit(f"unsafe handoff file: {path}")
+                  payload = path.read_bytes()
+                  rows.append({"path": path.relative_to(root).as_posix(), "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)})
+          rows.sort(key=lambda row: row["path"])
+          manifest = {"files": rows, "kind": sys.argv[2], "schema": "iroha.taira.release_handoff", "schema_version": 1}
+          target = root / "handoff-inventory-v1.json"
+          descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+          try:
+              payload = (json.dumps(manifest, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+              os.write(descriptor, payload); os.fsync(descriptor)
+          finally: os.close(descriptor)
+          PY
 
-          python3 -I -S - "$output_dir" "${{ steps.source.outputs.source_identity }}" <<'PY'
+      - name: Upload inert unsigned Linux bytes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: taira-linux-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-linux-unsigned/
+          if-no-files-found: error
+          retention-days: 7
+
+  linux-native-authority:
+    needs: [public-privacy-input, linux-native-build]
+    environment: taira-validator-authority
+    runs-on: [self-hosted, Linux, ARM64, taira-linux-authority]
+    timeout-minutes: 90
+    steps:
+      - name: Download unsigned Linux bytes into quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-linux-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-linux-unsigned-quarantine
+
+      - name: Download the trusted public-input snapshot into separate quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-public-privacy-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-linux-public-input-quarantine
+
+      - name: Attest authority host and inspect every hostile handoff inode
+        shell: bash
+        env:
+          EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
+          EXPECTED_CONTROLLER_DIGEST: ${{ vars.TAIRA_LINUX_RELEASE_CONTROLLER_DIGEST }}
+          EXPECTED_CONTROLLER_VERSION: ${{ vars.TAIRA_RELEASE_CONTROLLER_VERSION }}
+          EXPECTED_HOST_ID: ${{ vars.TAIRA_LINUX_AUTHORITY_HOST_ID }}
+          EXPECTED_INSTALLATION_ID: ${{ vars.TAIRA_LINUX_AUTHORITY_INSTALLATION_ID }}
+          EXPECTED_UID: "0"
+          TAIRA_WORKFLOW_COMMIT: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          for value in "$EXPECTED_LAUNCHER_SHA256" "$EXPECTED_CONTROLLER_DIGEST"; do [[ "$value" =~ ^[0-9a-f]{64}$ ]]; done
+          test -n "$EXPECTED_CONTROLLER_VERSION"; test -n "$EXPECTED_HOST_ID"; test -n "$EXPECTED_INSTALLATION_ID"
+          [[ "$EXPECTED_UID" =~ ^(0|[1-9][0-9]*)$ ]]
+          test "$(sha256sum "$TAIRA_CONTROLLER_COMMAND" | awk '{print $1}')" = "$EXPECTED_LAUNCHER_SHA256"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff \
+            --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256" \
+            --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST" \
+            --expected-version "$EXPECTED_CONTROLLER_VERSION" \
+            --expected-host-id "$EXPECTED_HOST_ID" \
+            --expected-installation-id "$EXPECTED_INSTALLATION_ID" \
+            --expected-uid "$EXPECTED_UID" \
+            --source-commit "$TAIRA_WORKFLOW_COMMIT" --platform linux --role linux-authority \
+            --root "$RUNNER_TEMP/taira-linux-unsigned-quarantine" --expected-kind linux-unsigned \
+            --stage-name "linux-unsigned-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            >"$RUNNER_TEMP/linux-inspection.json"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff \
+            --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256" \
+            --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST" \
+            --expected-version "$EXPECTED_CONTROLLER_VERSION" \
+            --expected-host-id "$EXPECTED_HOST_ID" \
+            --expected-installation-id "$EXPECTED_INSTALLATION_ID" \
+            --expected-uid "$EXPECTED_UID" \
+            --source-commit "$TAIRA_WORKFLOW_COMMIT" --platform linux --role linux-authority \
+            --root "$RUNNER_TEMP/taira-linux-public-input-quarantine" --expected-kind public-privacy-input \
+            --stage-name "linux-public-input-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            >"$RUNNER_TEMP/linux-public-input-inspection.json"
+
+      - name: Finalize and sign Linux bytes using only installed authority code
+        shell: bash
+        env:
+          EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
+          EXPECTED_CONTROLLER_DIGEST: ${{ vars.TAIRA_LINUX_RELEASE_CONTROLLER_DIGEST }}
+          EXPECTED_CONTROLLER_VERSION: ${{ vars.TAIRA_RELEASE_CONTROLLER_VERSION }}
+          EXPECTED_HOST_ID: ${{ vars.TAIRA_LINUX_AUTHORITY_HOST_ID }}
+          EXPECTED_INSTALLATION_ID: ${{ vars.TAIRA_LINUX_AUTHORITY_INSTALLATION_ID }}
+          EXPECTED_UID: "0"
+          TAIRA_RELEASE_EXTERNAL_SIGNER_PATH: ${{ vars.TAIRA_RELEASE_EXTERNAL_SIGNER_PATH }}
+          TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH: ${{ vars.TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH }}
+          TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
+          TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
+          TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+          TAIRA_WORKFLOW_COMMIT: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          root="$(/usr/bin/python3 -I -S -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="ascii"))["staged_root"])' "$RUNNER_TEMP/linux-inspection.json")"
+          public_root="$(/usr/bin/python3 -I -S -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="ascii"))["staged_root"])' "$RUNNER_TEMP/linux-public-input-inspection.json")"
+          [[ "$root" == /* && "$public_root" == /* ]]; test -d "$root"; test -d "$public_root/inputs"
+          IFS=$'\t' read -r archive evidence source_epoch dpn_commit < <(
+            /usr/bin/python3 -I -S - "$root" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          archives = sorted(root.glob("taira-rollout-*-linux-aarch64.tar.gz"))
+          if len(archives) != 1 or re.fullmatch(r"taira-rollout-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-release-linux-aarch64\.tar\.gz", archives[0].name) is None: raise SystemExit("archive contract")
+          identity = json.loads((root / "taira-source-identity-v1.json").read_text(encoding="ascii"))
+          epoch = identity["source_date_epoch"]
+          if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch <= 0: raise SystemExit("source epoch")
+          source = identity["source"]
+          print(archives[0], root / archives[0].name.removesuffix(".tar.gz"), epoch, source["dpn_validator_release_commit"], sep="\t")
+          PY
+          )
+          test "$dpn_commit" = "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+          authority="$RUNNER_TEMP/taira-linux-authority-output"
+          test ! -e "$authority"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run \
+            --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256" \
+            --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST" \
+            --expected-version "$EXPECTED_CONTROLLER_VERSION" \
+            --expected-host-id "$EXPECTED_HOST_ID" \
+            --expected-installation-id "$EXPECTED_INSTALLATION_ID" \
+            --expected-uid "$EXPECTED_UID" \
+            --source-commit "$TAIRA_WORKFLOW_COMMIT" --platform linux --role linux-authority \
+            finalize-linux -- \
+              --evidence-root "$evidence" --archive "$archive" --output-dir "$authority" \
+              --dpn-validator-release-commit "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
+              --commit "$TAIRA_WORKFLOW_COMMIT" --source-date-epoch "$source_epoch" \
+              --checkout-root "$root" \
+              --public-privacy-input-dir "$public_root/inputs" \
+              --controller-manifest "$TAIRA_CONTROLLER_ROOT/authority-controller-v1.json" \
+              --controller-digest "$EXPECTED_CONTROLLER_DIGEST" \
+              --external-signer "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH" \
+              --signing-public-key "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH" \
+              --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
+              --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
+              --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
+          stage="$RUNNER_TEMP/taira-linux-authority-handoff"
+          mkdir -m 0700 "$stage"
+          cp "$archive" "$stage/"
+          cp "$root/taira-source-identity-v1.json" "$stage/"
+          cp -R "$authority" "$stage/authority"
+          /usr/bin/python3 -I -S - "$stage" linux-authority <<'PY'
+          import hashlib,json,os,stat,sys
+          from pathlib import Path
+          root=Path(sys.argv[1]); rows=[]
+          for path in sorted(value for value in root.rglob("*") if value.is_file()):
+              info=path.lstat()
+              if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1 or info.st_size <= 0: raise SystemExit("unsafe authority handoff")
+              payload=path.read_bytes(); rows.append({"path":path.relative_to(root).as_posix(),"sha256":hashlib.sha256(payload).hexdigest(),"size":len(payload)})
+          manifest={"files":rows,"kind":sys.argv[2],"schema":"iroha.taira.release_handoff","schema_version":1}
+          target=root/"handoff-inventory-v1.json"; fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600)
+          try: os.write(fd,(json.dumps(manifest,ensure_ascii=True,sort_keys=True,separators=(",",":"))+"\n").encode("ascii")); os.fsync(fd)
+          finally: os.close(fd)
+          PY
+
+      - name: Upload signed Linux authority handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: taira-linux-authority-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-linux-authority-handoff/
+          if-no-files-found: error
+          retention-days: 30
+
+  macos-native-build:
+    runs-on: [self-hosted, macOS, ARM64, taira-untrusted-build]
+    timeout-minutes: 360
+    steps:
+      - name: Require one exact validator release commit before checkout
+        shell: bash
+        env:
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${{ github.sha }}" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Reconstruct and compile inert macOS binaries
+        shell: bash
+        env:
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -s)" = Darwin; test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          source_root="$RUNNER_TEMP/taira-macos-source"
+          bash configs/soranexus/taira/prepare_taira_release_source.sh \
+            --workspace "$GITHUB_WORKSPACE" --output-dir "$source_root" \
+            --validator-release-ref "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
+            --validator-lock-sha256 "$DPN_VALIDATOR_LOCK_SHA256"
+          target_root="$RUNNER_TEMP/taira-macos-target"; mkdir -m 0700 "$target_root"
+          clean=(env -i "HOME=$HOME" "PATH=$PATH" "TMPDIR=${TMPDIR:-/tmp}" LANG=C LC_ALL=C CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS=1 "IROHA_DPN_VALIDATOR_RELEASE_COMMIT=$TAIRA_INPUT_VALIDATOR_RELEASE_REF")
+          for name in CARGO_HOME RUSTUP_HOME; do if [[ -n "${!name:-}" ]]; then clean+=("$name=${!name}"); fi; done
+          "${clean[@]}" cargo build --locked --release -p irohad --bin irohad --features embedded-soracloud-runtime,zk-stark
+          stage="$RUNNER_TEMP/taira-macos-build-handoff"; mkdir -m 0700 "$stage" "$stage/bin"
+          install -m 0500 "$target_root/release/irohad" "$stage/bin/irohad"
+          install -m 0600 "$source_root/taira-source-identity-v1.json" "$stage/taira-source-identity-v1.json"
+          /usr/bin/python3 -I -S - "$stage" macos-build <<'PY'
+          import hashlib,json,os,stat,sys
+          from pathlib import Path
+          root=Path(sys.argv[1]); rows=[]
+          for path in sorted(value for value in root.rglob("*") if value.is_file()):
+              info=path.lstat()
+              if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1 or info.st_size <= 0: raise SystemExit("unsafe macOS build handoff")
+              payload=path.read_bytes(); rows.append({"path":path.relative_to(root).as_posix(),"sha256":hashlib.sha256(payload).hexdigest(),"size":len(payload)})
+          manifest={"files":rows,"kind":sys.argv[2],"schema":"iroha.taira.release_handoff","schema_version":1}
+          target=root/"handoff-inventory-v1.json"; fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600)
+          try: os.write(fd,(json.dumps(manifest,ensure_ascii=True,sort_keys=True,separators=(",",":"))+"\n").encode("ascii")); os.fsync(fd)
+          finally: os.close(fd)
+          PY
+      - name: Upload inert macOS build handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: taira-macos-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-macos-build-handoff/
+          if-no-files-found: error
+          retention-days: 7
+
+  # This host executes the produced validator under the installed root harness,
+  # but receives only public trust anchors and disposable qualification inputs.
+  # It has no production reset, release signer, registry, or deployment access.
+  macos-secret-free-qualification:
+    needs: [linux-native-authority, macos-native-build]
+    environment: taira-validator-qualification
+    runs-on: [self-hosted, macOS, ARM64, taira-secret-free-qualification]
+    timeout-minutes: 180
+    steps:
+      - name: Download signed Linux handoff into quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-linux-authority-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-qualification-linux-quarantine
+      - name: Download inert macOS handoff into quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-macos-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-qualification-macos-quarantine
+      - name: Inspect both hostile handoffs and run the installed qualification harness
+        shell: bash
+        env:
+          EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
+          EXPECTED_CONTROLLER_DIGEST: ${{ vars.TAIRA_MACOS_RELEASE_CONTROLLER_DIGEST }}
+          EXPECTED_CONTROLLER_VERSION: ${{ vars.TAIRA_RELEASE_CONTROLLER_VERSION }}
+          EXPECTED_HOST_ID: ${{ vars.TAIRA_QUALIFICATION_HOST_ID }}
+          EXPECTED_INSTALLATION_ID: ${{ vars.TAIRA_QUALIFICATION_INSTALLATION_ID }}
+          EXPECTED_UID: "0"
+          AUTHORITY_STAGING_ROOT: ${{ vars.TAIRA_QUALIFICATION_STAGING_ROOT }}
+          QUALIFICATION_SOURCE_RESET_BUNDLE_PATH: ${{ vars.TAIRA_QUALIFICATION_SOURCE_RESET_BUNDLE_PATH }}
+          QUALIFICATION_SOURCE_RESET_BUNDLE_SHA256: ${{ vars.TAIRA_QUALIFICATION_SOURCE_RESET_BUNDLE_SHA256 }}
+          QUALIFICATION_GENESIS_SIGNER_PATH: ${{ vars.TAIRA_QUALIFICATION_GENESIS_SIGNER_PATH }}
+          QUALIFICATION_GENESIS_SIGNER_SHA256: ${{ vars.TAIRA_QUALIFICATION_GENESIS_SIGNER_SHA256 }}
+          TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH: ${{ vars.TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH }}
+          TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
+          TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
+          TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+          TAIRA_WORKFLOW_COMMIT: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(shasum -a 256 "$TAIRA_CONTROLLER_COMMAND" | awk '{print $1}')" = "$EXPECTED_LAUNCHER_SHA256"
+          linux_root="$RUNNER_TEMP/taira-qualification-linux-quarantine"
+          mac_root="$RUNNER_TEMP/taira-qualification-macos-quarantine"
+          common=(--expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256" --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST" --expected-version "$EXPECTED_CONTROLLER_VERSION" --expected-host-id "$EXPECTED_HOST_ID" --expected-installation-id "$EXPECTED_INSTALLATION_ID" --expected-uid "$EXPECTED_UID" --source-commit "$TAIRA_WORKFLOW_COMMIT" --platform macos --role macos-qualification)
+          attestation="$(sudo -n "$TAIRA_CONTROLLER_COMMAND" attest "${common[@]}")"
+          IFS=$'\t' read -r runtime_identity_root handoff_root < <(/usr/bin/python3 -I -S -c 'import json,sys; v=json.load(sys.stdin); print(v["runtime_root"],v["handoff_root"],sep="\t")' <<<"$attestation")
+          test "$handoff_root" = "$AUTHORITY_STAGING_ROOT"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff "${common[@]}" --root "$linux_root" --expected-kind linux-authority --stage-name "qualification-linux-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >"$RUNNER_TEMP/linux-inspection.json"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff "${common[@]}" --root "$mac_root" --expected-kind macos-build --stage-name "qualification-macos-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >"$RUNNER_TEMP/macos-inspection.json"
+          handoff_digest="$(/usr/bin/python3 -I -S -c 'import json,sys; v=json.load(open(sys.argv[1],encoding="ascii")); d=v["handoff_digest"]; assert len(d)==64; print(d)' "$RUNNER_TEMP/macos-inspection.json")"
+          linux_stage="$(/usr/bin/python3 -I -S -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="ascii"))["staged_root"])' "$RUNNER_TEMP/linux-inspection.json")"
+          mac_stage="$(/usr/bin/python3 -I -S -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="ascii"))["staged_root"])' "$RUNNER_TEMP/macos-inspection.json")"
+          cmp "$linux_stage/taira-source-identity-v1.json" "$mac_stage/taira-source-identity-v1.json"
+          IFS=$'\t' read -r source_commit dpn_commit cargo_lock source_manifest source_epoch < <(/usr/bin/python3 -I -S - "$mac_stage/taira-source-identity-v1.json" <<'PY'
+          import json,sys
+          value=json.load(open(sys.argv[1],encoding="ascii")); source=value["source"]
+          print(source["commit"],source["dpn_validator_release_commit"],source["cargo_lock_sha256"],source["workspace_source_manifest_sha256"],value["source_date_epoch"],sep="\t")
+          PY
+          )
+          test "$source_commit" = "$TAIRA_WORKFLOW_COMMIT"
+          test "$dpn_commit" = "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+          linux_archive="$(find "$linux_stage" -maxdepth 1 -type f -name '*.tar.gz' -print)"; test -n "$linux_archive"
+          privacy="$runtime_identity_root/qualification-privacy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$privacy"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" extract-privacy -- \
+            --archive "$linux_archive" --authority-dir "$linux_stage/authority" \
+            --dpn-validator-release-commit "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
+            --source-commit "$source_commit" --cargo-lock-sha256 "$cargo_lock" \
+            --workspace-source-manifest-sha256 "$source_manifest" \
+            --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
+            --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
+            --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
+            --output-dir "$privacy"
+          reset="$runtime_identity_root/qualification-reset-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"; binary_sha="$(shasum -a 256 "$mac_stage/bin/irohad" | awk '{print $1}')"
+          test ! -e "$reset"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" prepare-reset -- \
+            --source-bundle "$QUALIFICATION_SOURCE_RESET_BUNDLE_PATH" \
+            --source-bundle-sha256 "$QUALIFICATION_SOURCE_RESET_BUNDLE_SHA256" \
+            --privacy-release-dir "$privacy" \
+            --genesis-external-signer "$QUALIFICATION_GENESIS_SIGNER_PATH" \
+            --trusted-genesis-external-signer-sha256 "$QUALIFICATION_GENESIS_SIGNER_SHA256" \
+            --onboarding-token-hash-tool "$TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH" \
+            --irohad-sha256 "$binary_sha" --source-commit "$source_commit" \
+            --dpn-validator-release-commit "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
+            --cargo-lock-sha256 "$cargo_lock" --workspace-source-manifest-sha256 "$source_manifest" \
+            --controller-manifest "$TAIRA_CONTROLLER_ROOT/authority-controller-v1.json" \
+            --controller-digest "$EXPECTED_CONTROLLER_DIGEST" --output-bundle "$reset"
+          supervisor="$TAIRA_CONTROLLER_ROOT/scripts/taira_peer_supervisor.py"
+          generation="$(printf 'iroha.taira.qualification.v2\0%s\0%s\0' "$handoff_digest" "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" | shasum -a 256 | awk '{print $1}')"
+          stage="$AUTHORITY_STAGING_ROOT/qualification-receipt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"; test ! -e "$stage"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" capture-four-peer -- \
+            --reset-bundle "$reset" --validator-binary "$mac_stage/bin/irohad" --supervisor "$supervisor" \
+            --artifact-handoff-sha256 "$handoff_digest" --source-commit "$source_commit" \
+            --dpn-validator-release-commit "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
+            --cargo-lock-sha256 "$cargo_lock" --workspace-source-manifest-sha256 "$source_manifest" \
+            --restart-generation "$generation" \
+            --source-identity "$mac_stage/taira-source-identity-v1.json" \
+            --output "$stage" --health-timeout-seconds 900
+      - name: Upload secret-free qualification result
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: taira-qualification-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ vars.TAIRA_QUALIFICATION_STAGING_ROOT }}/qualification-receipt-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  macos-candidate-authority:
+    needs: macos-secret-free-qualification
+    environment: taira-validator-authority
+    runs-on: [self-hosted, macOS, ARM64, taira-candidate-authority]
+    timeout-minutes: 90
+    steps:
+      - name: Download Linux authority bytes into quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-linux-authority-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-candidate-linux-quarantine
+      - name: Download qualification bytes into quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-qualification-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-candidate-receipt-quarantine
+      - name: Inspect, sign, and close the candidate with installed authority code
+        shell: bash
+        env:
+          EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
+          EXPECTED_CONTROLLER_DIGEST: ${{ vars.TAIRA_MACOS_RELEASE_CONTROLLER_DIGEST }}
+          EXPECTED_CONTROLLER_VERSION: ${{ vars.TAIRA_RELEASE_CONTROLLER_VERSION }}
+          EXPECTED_HOST_ID: ${{ vars.TAIRA_CANDIDATE_AUTHORITY_HOST_ID }}
+          EXPECTED_INSTALLATION_ID: ${{ vars.TAIRA_CANDIDATE_AUTHORITY_INSTALLATION_ID }}
+          EXPECTED_UID: "0"
+          TAIRA_RELEASE_EXTERNAL_SIGNER_PATH: ${{ vars.TAIRA_RELEASE_EXTERNAL_SIGNER_PATH }}
+          TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH: ${{ vars.TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH }}
+          TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
+          TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
+          TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+          TAIRA_WORKFLOW_COMMIT: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(shasum -a 256 "$TAIRA_CONTROLLER_COMMAND" | awk '{print $1}')" = "$EXPECTED_LAUNCHER_SHA256"
+          linux_root="$RUNNER_TEMP/taira-candidate-linux-quarantine"
+          receipt_root="$RUNNER_TEMP/taira-candidate-receipt-quarantine"
+          common=(--expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256" --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST" --expected-version "$EXPECTED_CONTROLLER_VERSION" --expected-host-id "$EXPECTED_HOST_ID" --expected-installation-id "$EXPECTED_INSTALLATION_ID" --expected-uid "$EXPECTED_UID" --source-commit "$TAIRA_WORKFLOW_COMMIT" --platform macos --role macos-candidate-authority)
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff "${common[@]}" --root "$linux_root" --expected-kind linux-authority --stage-name "candidate-linux-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >"$RUNNER_TEMP/candidate-linux-inspection.json"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff "${common[@]}" --root "$receipt_root" --expected-kind qualification-receipt --stage-name "candidate-receipt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >"$RUNNER_TEMP/candidate-receipt-inspection.json"
+          linux_stage="$(/usr/bin/python3 -I -S -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="ascii"))["staged_root"])' "$RUNNER_TEMP/candidate-linux-inspection.json")"
+          receipt_stage="$(/usr/bin/python3 -I -S -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="ascii"))["staged_root"])' "$RUNNER_TEMP/candidate-receipt-inspection.json")"
+          cmp "$linux_stage/taira-source-identity-v1.json" "$receipt_stage/taira-source-identity-v1.json"
+          IFS=$'\t' read -r source_commit dpn_commit cargo_lock source_manifest source_epoch receipt_id < <(/usr/bin/python3 -I -S - "$receipt_stage" <<'PY'
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1]); identity=json.load(open(root/"taira-source-identity-v1.json",encoding="ascii")); receipt=json.load(open(root/"four-peer-receipt-v2.json",encoding="ascii")); source=identity["source"]
+          print(source["commit"],source["dpn_validator_release_commit"],source["cargo_lock_sha256"],source["workspace_source_manifest_sha256"],identity["source_date_epoch"],receipt["receipt_id"],sep="\t")
+          PY
+          )
+          test "$source_commit" = "$TAIRA_WORKFLOW_COMMIT"
+          test "$dpn_commit" = "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+          linux_archive="$(find "$linux_stage" -maxdepth 1 -type f -name '*.tar.gz' -print)"
+          candidate_dir="$RUNNER_TEMP/taira-final-candidate"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" assemble-candidate -- assemble \
+            --dpn-validator-release-commit "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
+            --source-commit "$source_commit" --cargo-lock-sha256 "$cargo_lock" \
+            --workspace-source-manifest-sha256 "$source_manifest" --source-date-epoch "$source_epoch" \
+            --linux-archive "$linux_archive" --linux-authority-dir "$linux_stage/authority" \
+            --macos-receipt "$receipt_stage/four-peer-receipt-v2.json" --expected-receipt-id "$receipt_id" \
+            --controller-manifest "$TAIRA_CONTROLLER_ROOT/authority-controller-v1.json" --controller-digest "$EXPECTED_CONTROLLER_DIGEST" \
+            --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
+            --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
+            --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
+            --external-signer "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH" --signing-public-key "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH" \
+            --output-directory "$candidate_dir"
+          stage="$RUNNER_TEMP/taira-candidate-handoff"; mkdir -m 0700 "$stage" "$stage/admission" "$stage/authority"
+          archive="$(find "$candidate_dir" -maxdepth 1 -type f -name '*.tar.gz' -print)"; test -n "$archive"
+          authority="${archive%.tar.gz}.authority"; test -d "$authority"
+          install -m 0600 "$archive" "$stage/admission/$(basename "$archive")"
+          for name in release_manifest.json release_manifest.json.pub release_manifest.json.sig; do install -m 0600 "$authority/$name" "$stage/authority/$name"; done
+          install -m 0600 "$receipt_stage/taira-source-identity-v1.json" "$stage/taira-source-identity-v1.json"
+          printf '%s\n' "$receipt_id" >"$stage/receipt-id"
+          /usr/bin/python3 -I -S - "$stage" candidate <<'PY'
+          import hashlib,json,os,stat,sys
+          from pathlib import Path
+          root=Path(sys.argv[1]); rows=[]
+          for path in sorted(value for value in root.rglob("*") if value.is_file()):
+              info=path.lstat()
+              if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1 or info.st_size <= 0: raise SystemExit("unsafe candidate handoff")
+              data=path.read_bytes(); rows.append({"path":path.relative_to(root).as_posix(),"sha256":hashlib.sha256(data).hexdigest(),"size":len(data)})
+          value={"files":rows,"kind":sys.argv[2],"schema":"iroha.taira.release_handoff","schema_version":1}; target=root/"handoff-inventory-v1.json"
+          fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600)
+          try: os.write(fd,(json.dumps(value,ensure_ascii=True,sort_keys=True,separators=(",",":"))+"\n").encode("ascii")); os.fsync(fd)
+          finally: os.close(fd)
+          PY
+      - name: Upload authenticated candidate handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: taira-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-candidate-handoff/
+          if-no-files-found: error
+          retention-days: 30
+
+  # This job owns production reset/deploy inputs and executes the already signed
+  # validator.  It has neither release signing nor OCI publication authority.
+  macos-deploy:
+    needs: [macos-candidate-authority, macos-native-build, linux-native-authority]
+    environment: taira-validator-deploy
+    runs-on: [self-hosted, macOS, ARM64, taira-deploy]
+    timeout-minutes: 180
+    steps:
+      - name: Download candidate into deployment quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-deploy-candidate-quarantine
+      - name: Download macOS build into deployment quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-macos-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-deploy-macos-quarantine
+      - name: Download Linux authority into deployment quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-linux-authority-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-deploy-linux-quarantine
+      - name: Prepare private reset and apply the signed candidate with the installed controller
+        shell: bash
+        env:
+          EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
+          EXPECTED_CONTROLLER_DIGEST: ${{ vars.TAIRA_MACOS_RELEASE_CONTROLLER_DIGEST }}
+          EXPECTED_CONTROLLER_VERSION: ${{ vars.TAIRA_RELEASE_CONTROLLER_VERSION }}
+          EXPECTED_HOST_ID: ${{ vars.TAIRA_DEPLOY_HOST_ID }}
+          EXPECTED_INSTALLATION_ID: ${{ vars.TAIRA_DEPLOY_INSTALLATION_ID }}
+          EXPECTED_UID: "0"
+          TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH: ${{ vars.TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH }}
+          TAIRA_MACOS_SOURCE_RESET_BUNDLE_SHA256: ${{ vars.TAIRA_MACOS_SOURCE_RESET_BUNDLE_SHA256 }}
+          TAIRA_MACOS_RESET_STAGING_ROOT: ${{ vars.TAIRA_MACOS_RESET_STAGING_ROOT }}
+          TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH: ${{ vars.TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH }}
+          TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256: ${{ vars.TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256 }}
+          TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH: ${{ vars.TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH }}
+          TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
+          TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
+          TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}
+          TAIRA_WORKFLOW_COMMIT: ${{ github.sha }}
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+        run: |
+          set -Eeuo pipefail
+          test "$(shasum -a 256 "$TAIRA_CONTROLLER_COMMAND" | awk '{print $1}')" = "$EXPECTED_LAUNCHER_SHA256"
+          mac_root="$RUNNER_TEMP/taira-deploy-macos-quarantine"
+          linux_root="$RUNNER_TEMP/taira-deploy-linux-quarantine"
+          candidate_root="$RUNNER_TEMP/taira-deploy-candidate-quarantine"
+          common=(--expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256" --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST" --expected-version "$EXPECTED_CONTROLLER_VERSION" --expected-host-id "$EXPECTED_HOST_ID" --expected-installation-id "$EXPECTED_INSTALLATION_ID" --expected-uid "$EXPECTED_UID" --source-commit "$TAIRA_WORKFLOW_COMMIT" --platform macos --role macos-deploy)
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff "${common[@]}" --root "$linux_root" --expected-kind linux-authority --stage-name "deploy-linux-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >"$RUNNER_TEMP/deploy-linux-inspection.json"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff "${common[@]}" --root "$candidate_root" --expected-kind candidate --stage-name "deploy-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >"$RUNNER_TEMP/deploy-candidate-inspection.json"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff "${common[@]}" --root "$mac_root" --expected-kind macos-build --stage-name "deploy-macos-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >"$RUNNER_TEMP/macos-inspection.json"
+          linux_stage="$(/usr/bin/python3 -I -S -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="ascii"))["staged_root"])' "$RUNNER_TEMP/deploy-linux-inspection.json")"
+          candidate_stage="$(/usr/bin/python3 -I -S -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="ascii"))["staged_root"])' "$RUNNER_TEMP/deploy-candidate-inspection.json")"
+          mac_stage="$(/usr/bin/python3 -I -S -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="ascii"))["staged_root"])' "$RUNNER_TEMP/macos-inspection.json")"
+          handoff_digest="$(/usr/bin/python3 -I -S -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="ascii"))["handoff_digest"])' "$RUNNER_TEMP/macos-inspection.json")"
+          cmp "$linux_stage/taira-source-identity-v1.json" "$mac_stage/taira-source-identity-v1.json"; cmp "$mac_stage/taira-source-identity-v1.json" "$candidate_stage/taira-source-identity-v1.json"
+          IFS=$'\t' read -r source_commit dpn_commit cargo_lock source_manifest < <(/usr/bin/python3 -I -S - "$mac_stage/taira-source-identity-v1.json" <<'PY'
+          import json,sys
+          source=json.load(open(sys.argv[1],encoding="ascii"))["source"]
+          print(source["commit"],source["dpn_validator_release_commit"],source["cargo_lock_sha256"],source["workspace_source_manifest_sha256"],sep="\t")
+          PY
+          )
+          test "$source_commit" = "$TAIRA_WORKFLOW_COMMIT"
+          test "$dpn_commit" = "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+          linux_archive="$(find "$linux_stage" -maxdepth 1 -type f -name '*.tar.gz' -print)"; privacy="$RUNNER_TEMP/deploy-privacy"; mkdir -m 0700 "$privacy"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" extract-privacy -- --archive "$linux_archive" --authority-dir "$linux_stage/authority" --source-commit "$source_commit" --dpn-validator-release-commit "$dpn_commit" --cargo-lock-sha256 "$cargo_lock" --workspace-source-manifest-sha256 "$source_manifest" --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" --output-dir "$privacy/release"
+          [[ "$TAIRA_MACOS_RESET_STAGING_ROOT" == /* ]]
+          test "$(cd "$TAIRA_MACOS_RESET_STAGING_ROOT" && pwd -P)" = "$TAIRA_MACOS_RESET_STAGING_ROOT"
+          reset="$TAIRA_MACOS_RESET_STAGING_ROOT/taira-${source_commit}-${dpn_commit}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$reset"; binary_sha="$(shasum -a 256 "$mac_stage/bin/irohad" | awk '{print $1}')"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" prepare-reset -- --source-bundle "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH" --source-bundle-sha256 "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_SHA256" --privacy-release-dir "$privacy/release" --genesis-external-signer "$TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_PATH" --trusted-genesis-external-signer-sha256 "$TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256" --onboarding-token-hash-tool "$TAIRA_ONBOARDING_TOKEN_HASH_TOOL_PATH" --irohad-sha256 "$binary_sha" --source-commit "$source_commit" --dpn-validator-release-commit "$dpn_commit" --cargo-lock-sha256 "$cargo_lock" --workspace-source-manifest-sha256 "$source_manifest" --controller-manifest "$TAIRA_CONTROLLER_ROOT/authority-controller-v1.json" --controller-digest "$EXPECTED_CONTROLLER_DIGEST" --output-bundle "$reset"
+          production_manifest_sha="$(shasum -a 256 "$reset/reset-manifest.json" | awk '{print $1}')"
+          supervisor="$TAIRA_CONTROLLER_ROOT/scripts/taira_peer_supervisor.py"
+          candidate_archive="$(find "$candidate_stage/admission" -maxdepth 1 -type f -name '*.tar.gz' -print)"; receipt_id="$(tr -d '\n' <"$candidate_stage/receipt-id")"
+          args=(--bundle "$reset" --binary "$mac_stage/bin/irohad" --supervisor "$supervisor" --admission-archive "$candidate_archive" --admission-authority-dir "$candidate_stage/authority" --expected-source-commit "$source_commit" --expected-dpn-validator-release-commit "$dpn_commit" --expected-cargo-lock-sha256 "$cargo_lock" --expected-workspace-source-manifest-sha256 "$source_manifest" --expected-receipt-id "$receipt_id" --expected-artifact-handoff-sha256 "$handoff_digest" --expected-production-reset-manifest-sha256 "$production_manifest_sha" --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" --health-timeout-seconds 900)
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" deploy-reset -- "${args[@]}" >"$RUNNER_TEMP/deploy-preflight.json"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" deploy-reset -- "${args[@]}" --apply >"$RUNNER_TEMP/deploy-applied.json"
+          /usr/bin/python3 -I -S - "$RUNNER_TEMP/deploy-preflight.json" "$RUNNER_TEMP/deploy-applied.json" <<'PY'
+          import json,sys
+          before,after=(json.load(open(path,encoding="ascii")) for path in sys.argv[1:])
+          if before.get("applied") is not False or after.get("applied") is not True or before.get("admission_receipt_id") != after.get("admission_receipt_id"): raise SystemExit("deployment preflight/apply contract failed")
+          PY
+      - name: Require exact-four public advancement without signer or OCI credentials
+        shell: bash
+        env:
+          EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
+          EXPECTED_CONTROLLER_DIGEST: ${{ vars.TAIRA_MACOS_RELEASE_CONTROLLER_DIGEST }}
+          EXPECTED_CONTROLLER_VERSION: ${{ vars.TAIRA_RELEASE_CONTROLLER_VERSION }}
+          EXPECTED_HOST_ID: ${{ vars.TAIRA_DEPLOY_HOST_ID }}
+          EXPECTED_INSTALLATION_ID: ${{ vars.TAIRA_DEPLOY_INSTALLATION_ID }}
+          EXPECTED_UID: "0"
+          TAIRA_PUBLIC_TORII_ROOT: ${{ vars.TAIRA_PUBLIC_TORII_ROOT }}
+          TAIRA_VALIDATOR_1_TORII_ROOT: ${{ vars.TAIRA_VALIDATOR_1_TORII_ROOT }}
+          TAIRA_VALIDATOR_2_TORII_ROOT: ${{ vars.TAIRA_VALIDATOR_2_TORII_ROOT }}
+          TAIRA_VALIDATOR_3_TORII_ROOT: ${{ vars.TAIRA_VALIDATOR_3_TORII_ROOT }}
+          TAIRA_VALIDATOR_4_TORII_ROOT: ${{ vars.TAIRA_VALIDATOR_4_TORII_ROOT }}
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+        run: |
+          set -Eeuo pipefail
+          common=(--expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256" --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST" --expected-version "$EXPECTED_CONTROLLER_VERSION" --expected-host-id "$EXPECTED_HOST_ID" --expected-installation-id "$EXPECTED_INSTALLATION_ID" --expected-uid "$EXPECTED_UID" --source-commit "${{ github.sha }}" --platform macos --role macos-deploy)
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" check-public -- --public-root "$TAIRA_PUBLIC_TORII_ROOT" --validator-root "taira-validator-1=$TAIRA_VALIDATOR_1_TORII_ROOT" --validator-root "taira-validator-2=$TAIRA_VALIDATOR_2_TORII_ROOT" --validator-root "taira-validator-3=$TAIRA_VALIDATOR_3_TORII_ROOT" --validator-root "taira-validator-4=$TAIRA_VALIDATOR_4_TORII_ROOT" --require-all-validators --expected-git-sha "${{ github.sha }}" --expected-dpn-validator-release-commit "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" --skip-write-canary
+
+  # The publisher runs on a separately attested authority installation.  It
+  # never checks out or executes repository/product bytes.
+  macos-publish:
+    needs: macos-deploy
+    environment: taira-validator-publish
+    runs-on: [self-hosted, macOS, ARM64, taira-publish-authority]
+    timeout-minutes: 90
+    steps:
+      - name: Download candidate bytes into publication quarantine
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-publication-quarantine
+
+      - name: Publish through the sealed installed authority controller
+        id: publish
+        shell: bash
+        env:
+          EXPECTED_LAUNCHER_SHA256: ${{ vars.TAIRA_RELEASE_CONTROLLER_LAUNCHER_SHA256 }}
+          EXPECTED_CONTROLLER_DIGEST: ${{ vars.TAIRA_MACOS_RELEASE_CONTROLLER_DIGEST }}
+          EXPECTED_CONTROLLER_VERSION: ${{ vars.TAIRA_RELEASE_CONTROLLER_VERSION }}
+          EXPECTED_HOST_ID: ${{ vars.TAIRA_PUBLISH_HOST_ID }}
+          EXPECTED_INSTALLATION_ID: ${{ vars.TAIRA_PUBLISH_INSTALLATION_ID }}
+          EXPECTED_UID: "0"
+          TAIRA_PUBLISH_HANDOFF_ROOT: ${{ vars.TAIRA_PUBLISH_HANDOFF_ROOT }}
+          TAIRA_OCI_REPOSITORY: ${{ vars.TAIRA_OCI_REPOSITORY }}
+          TAIRA_OCI_TAG_SUFFIX: ${{ vars.TAIRA_OCI_TAG_SUFFIX }}
+          TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
+          TAIRA_WORKFLOW_COMMIT: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          for digest in "$EXPECTED_LAUNCHER_SHA256" "$EXPECTED_CONTROLLER_DIGEST"; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          done
+          [[ "$TAIRA_WORKFLOW_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TAIRA_PUBLISH_HANDOFF_ROOT" == /* ]]
+          test "$(cd "$TAIRA_PUBLISH_HANDOFF_ROOT" && pwd -P)" = "$TAIRA_PUBLISH_HANDOFF_ROOT"
+          test "$(shasum -a 256 "$TAIRA_CONTROLLER_COMMAND" | awk '{print $1}')" = "$EXPECTED_LAUNCHER_SHA256"
+
+          common=(
+            --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA256"
+            --expected-controller-digest "$EXPECTED_CONTROLLER_DIGEST"
+            --expected-version "$EXPECTED_CONTROLLER_VERSION"
+            --expected-host-id "$EXPECTED_HOST_ID"
+            --expected-installation-id "$EXPECTED_INSTALLATION_ID"
+            --expected-uid "$EXPECTED_UID"
+            --source-commit "$TAIRA_WORKFLOW_COMMIT"
+            --platform macos
+            --role macos-publish
+          )
+          candidate="$TAIRA_PUBLISH_HANDOFF_ROOT/publish-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          inspection="$RUNNER_TEMP/publish-inspection.json"
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" inspect-handoff \
+            "${common[@]}" \
+            --root "$RUNNER_TEMP/taira-publication-quarantine" \
+            --expected-kind candidate \
+            --stage-name "publish-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            >"$inspection"
+          inspected_candidate="$(/usr/bin/python3 -I -S -c \
+            'import json,sys; print(json.load(open(sys.argv[1], encoding="ascii"))["staged_root"])' \
+            "$inspection")"
+          test "$inspected_candidate" = "$candidate"
+
+          IFS=$'\t' read -r \
+            source_commit dpn_commit cargo_lock source_manifest receipt_id \
+            < <(/usr/bin/python3 -I -S - "$candidate" <<'PY'
           import json
-          import os
-          import shutil
+          import re
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          value = json.loads((root / "taira-source-identity-v1.json").read_bytes())
+          source = value.get("source")
+          expected = {
+              "cargo_lock_sha256",
+              "commit",
+              "dpn_validator_release_commit",
+              "workspace_source_manifest_sha256",
+          }
+          if not isinstance(source, dict) or set(source) != expected:
+              raise SystemExit("candidate source identity differs")
+          receipt_id = (root / "receipt-id").read_text(encoding="ascii")
+          if re.fullmatch(r"[0-9a-f]{64}\n", receipt_id) is None:
+              raise SystemExit("candidate qualification receipt ID differs")
+          print(
+              source["commit"],
+              source["dpn_validator_release_commit"],
+              source["cargo_lock_sha256"],
+              source["workspace_source_manifest_sha256"],
+              receipt_id.removesuffix("\n"),
+              sep="\t",
+          )
+          PY
+          )
+          [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$dpn_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$cargo_lock" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$source_manifest" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$receipt_id" =~ ^[0-9a-f]{64}$ ]]
+          test "$source_commit" = "$TAIRA_WORKFLOW_COMMIT"
+          test "$dpn_commit" = "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+
+          sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" \
+            publish-rollout -- \
+              --candidate-root "$candidate" \
+              --expected-source-commit "$source_commit" \
+              --expected-dpn-validator-release-commit "$dpn_commit" \
+              --expected-cargo-lock-sha256 "$cargo_lock" \
+              --expected-workspace-source-manifest-sha256 "$source_manifest" \
+              --expected-qualification-receipt-id "$receipt_id" \
+              --repository "$TAIRA_OCI_REPOSITORY" \
+              --suffix "$TAIRA_OCI_TAG_SUFFIX"
+
+          final="$TAIRA_PUBLISH_HANDOFF_ROOT/publication-receipt-$receipt_id"
+          /usr/bin/python3 -I -S - "$final" <<'PY'
           import stat
           import sys
           from pathlib import Path
 
-          output = Path(sys.argv[1])
-          identity = Path(sys.argv[2])
-          archives = sorted(output.glob("taira-rollout-*-linux-aarch64.tar.gz"))
-          if len(archives) != 1:
-              raise SystemExit(f"expected one Linux aarch64 rollout archive, got {archives}")
-          archive = archives[0]
-          authority = output / f"{archive.name.removesuffix('.tar.gz')}.authority"
-          if not authority.is_dir() or authority.is_symlink():
-              raise SystemExit("signed Linux authority directory is missing")
-          stage = output / "publication-transfer"
-          stage.mkdir(mode=0o700)
-          shutil.copyfile(archive, stage / archive.name)
-          shutil.copytree(authority, stage / "authority", symlinks=False)
-          shutil.copyfile(identity, stage / "taira-source-identity-v1.json")
-          for current, directories, files in os.walk(stage):
-              for name in directories:
-                  path = Path(current) / name
-                  if stat.S_ISLNK(path.lstat().st_mode):
-                      raise SystemExit(f"transfer stage contains a symlink: {path}")
-              for name in files:
-                  path = Path(current) / name
-                  info = path.lstat()
-                  if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-                      raise SystemExit(f"transfer stage contains a non-file: {path}")
-          metadata = {
-              "archive_name": archive.name,
-              "authority_directory": "authority",
-              "source_identity": json.loads(identity.read_text(encoding="ascii")),
+          root = Path(sys.argv[1])
+          expected = {
+              "publication-receipt-v1.json",
+              "publication-receipt-v1.json.pub",
+              "publication-receipt-v1.json.sig",
+              "published-primary-digest",
+              "published-receipt-digest",
+              "taira-primary-oci-manifest.json",
+              "taira-publication-receipt-oci-manifest.json",
           }
-          (stage / "linux-transfer-v1.json").write_text(
-              json.dumps(metadata, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n",
-              encoding="ascii",
-          )
-          print(stage)
+          info = root.lstat()
+          if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o555:
+              raise SystemExit("publication handoff directory identity differs")
+          if {path.name for path in root.iterdir()} != expected:
+              raise SystemExit("publication handoff inventory differs")
+          for path in root.iterdir():
+              info = path.lstat()
+              if (
+                  not stat.S_ISREG(info.st_mode)
+                  or info.st_nlink != 1
+                  or stat.S_IMODE(info.st_mode) != 0o444
+              ):
+                  raise SystemExit(f"publication handoff file identity differs: {path.name}")
           PY
-          stage="$output_dir/publication-transfer"
-          echo "stage=$stage" >>"$GITHUB_OUTPUT"
+          printf 'receipt_id=%s\n' "$receipt_id" >>"$GITHUB_OUTPUT"
 
-      - name: Upload the signed Linux aarch64 archive authority
+      - name: Upload the exact root-closed publication handoff
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: taira-linux-arm64-authority-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.linux.outputs.stage }}/
+          name: taira-publication-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ vars.TAIRA_PUBLISH_HANDOFF_ROOT }}/publication-receipt-${{ steps.publish.outputs.receipt_id }}/
           if-no-files-found: error
           retention-days: 30
-
-  macos-four-peer-and-publish:
-    needs: linux-native-authority
-    environment: taira-validator-publish
-    runs-on: [self-hosted, macOS, ARM64, taira-release]
-    timeout-minutes: 360
-    env:
-      TAIRA_INPUT_VALIDATOR_RELEASE_REF: ${{ inputs.validator_release_ref }}
-      TAIRA_INPUT_ARTIFACT_SUFFIX: ${{ inputs.artifact_suffix }}
-      TAIRA_RELEASE_EXTERNAL_SIGNER_PATH: ${{ vars.TAIRA_RELEASE_EXTERNAL_SIGNER_PATH }}
-      TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH: ${{ vars.TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH }}
-      TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
-      TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
-      TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}
-      TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH: ${{ vars.TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH }}
-      TAIRA_OCI_REPOSITORY: ${{ vars.TAIRA_OCI_REPOSITORY }}
-      TAIRA_OCI_USERNAME: ${{ secrets.TAIRA_OCI_USERNAME }}
-      TAIRA_OCI_PASSWORD: ${{ secrets.TAIRA_OCI_PASSWORD }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.event.inputs.checkout_ref }}
-
-      - name: Require native macOS arm64 and protected authority inputs
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          test "$(uname -s)" = Darwin
-          test "$(uname -m)" = arm64
-          require_external_file() {
-            local label="$1"
-            local path="$2"
-            if [[ -z "$path" || "$path" != /* || ! -f "$path" || -L "$path" ]]; then
-              echo "${label} must be an absolute non-symlink regular file" >&2
-              exit 1
-            fi
-            local canonical_path canonical_workspace
-            canonical_path="$(python3 -I -S -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$path")"
-            canonical_workspace="$(python3 -I -S -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$GITHUB_WORKSPACE")"
-            if [[ "$canonical_path" != "$path" ]]; then
-              echo "${label} must use its canonical physical path" >&2
-              exit 1
-            fi
-            if [[ "$canonical_path" == "$canonical_workspace" || "$canonical_path" == "$canonical_workspace/"* ]]; then
-              echo "${label} must be provisioned outside the GitHub workspace" >&2
-              exit 1
-            fi
-          }
-          require_external_directory() {
-            local label="$1"
-            local path="$2"
-            if [[ -z "$path" || "$path" != /* || ! -d "$path" || -L "$path" ]]; then
-              echo "${label} must be an absolute non-symlink directory" >&2
-              exit 1
-            fi
-            local canonical_path canonical_workspace
-            canonical_path="$(cd "$path" && pwd -P)"
-            canonical_workspace="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
-            if [[ "$canonical_path" != "$path" ]]; then
-              echo "${label} must use its canonical physical path" >&2
-              exit 1
-            fi
-            if [[ "$canonical_path" == "$canonical_workspace" || "$canonical_path" == "$canonical_workspace/"* ]]; then
-              echo "${label} must be provisioned outside the GitHub workspace" >&2
-              exit 1
-            fi
-          }
-          require_external_file "release external signer" "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH"
-          require_external_file "release public key" "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH"
-          require_external_file "native release verifier" "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH"
-          require_external_directory "source reset bundle" "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH"
-          [[ "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          test "$(shasum -a 256 "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" | awk '{print $1}')" = "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
-
-      - name: Reconstruct the identical reviewed source closure
-        id: source
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          source_root="${RUNNER_TEMP}/taira-macos-source-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          bash configs/soranexus/taira/prepare_taira_release_source.sh \
-            --workspace "$GITHUB_WORKSPACE" \
-            --output-dir "$source_root" \
-            --validator-release-ref "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
-            --validator-lock-sha256 "$DPN_VALIDATOR_LOCK_SHA256"
-          python3 -I -S - "$source_root/taira-source-identity-v1.json" "$GITHUB_ENV" "$GITHUB_OUTPUT" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          identity_path, github_env, github_output = map(Path, sys.argv[1:])
-          identity = json.loads(identity_path.read_text(encoding="ascii"))
-          source = identity["source"]
-          values = {
-              "TAIRA_SOURCE_COMMIT": source["commit"],
-              "TAIRA_CARGO_LOCK_SHA256": source["cargo_lock_sha256"],
-              "TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256": source["workspace_source_manifest_sha256"],
-              "TAIRA_SOURCE_DATE_EPOCH": str(identity["source_date_epoch"]),
-          }
-          with github_env.open("a", encoding="utf-8") as stream:
-              for key, value in values.items():
-                  stream.write(f"{key}={value}\n")
-          with github_output.open("a", encoding="utf-8") as stream:
-              stream.write(f"source_identity={identity_path}\n")
-          PY
-
-      - name: Download and authenticate the Linux aarch64 authority transfer
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: taira-linux-arm64-authority-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/taira-linux-arm64-authority-replay
-
-      - name: Require byte-identical cross-target source identity
-        id: linux
-        shell: bash
-        env:
-          MACOS_SOURCE_IDENTITY: ${{ steps.source.outputs.source_identity }}
-        run: |
-          set -Eeuo pipefail
-          linux_root="$RUNNER_TEMP/taira-linux-arm64-authority-replay"
-          cmp "$MACOS_SOURCE_IDENTITY" "$linux_root/taira-source-identity-v1.json"
-          python3 -I -S - "$linux_root" "$GITHUB_OUTPUT" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          root = Path(sys.argv[1])
-          output = Path(sys.argv[2])
-          metadata = json.loads((root / "linux-transfer-v1.json").read_text(encoding="ascii"))
-          expected = sorted([
-              "authority/artifacts/SHA256SUMS",
-              "authority/artifacts/release_artifact_contract.py",
-              "authority/artifacts/sorafs-validate",
-              "authority/artifacts/taira-exact12-release-authority-v1.json",
-              "authority/artifacts/taira_release_authority.py",
-              "authority/release_manifest.json",
-              "authority/release_manifest.json.pub",
-              "authority/release_manifest.json.sig",
-              metadata["archive_name"],
-              "linux-transfer-v1.json",
-              "taira-source-identity-v1.json",
-          ])
-          actual = sorted(
-              path.relative_to(root).as_posix()
-              for path in root.rglob("*")
-              if path.is_file()
-          )
-          if actual != expected:
-              raise SystemExit(f"Linux transfer inventory mismatch: expected={expected}, actual={actual}")
-          with output.open("a", encoding="utf-8") as stream:
-              stream.write(f"archive={root / metadata['archive_name']}\n")
-              stream.write(f"authority={root / 'authority'}\n")
-          PY
-
-      - name: Build the native macOS arm64 validator
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          target_root="$RUNNER_TEMP/taira-macos-cargo-target-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -m 0700 "$target_root"
-          test "$(python3 -I -S scripts/compute_workspace_source_manifest.py --root "$GITHUB_WORKSPACE")" = "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256"
-          CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS=1 cargo build --locked --release \
-            -p irohad --bin irohad \
-            --features embedded-soracloud-runtime,zk-stark
-          test "$(python3 -I -S scripts/compute_workspace_source_manifest.py --root "$GITHUB_WORKSPACE")" = "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256"
-          test "$(shasum -a 256 Cargo.lock | awk '{print $1}')" = "$TAIRA_CARGO_LOCK_SHA256"
-          test -x "$target_root/release/irohad"
-          {
-            echo "TAIRA_MACOS_IROHAD=$target_root/release/irohad"
-          } >>"$GITHUB_ENV"
-
-      - name: Prepare the exact fresh macOS deployment payload
-        id: reset
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          reset_bundle="${RUNNER_TEMP}/taira-macos-reset-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          binary_sha="$(shasum -a 256 "$TAIRA_MACOS_IROHAD" | awk '{print $1}')"
-          python3 scripts/prepare_taira_empty_reset_bundle.py \
-            --source-bundle "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH" \
-            --irohad-sha256 "$binary_sha" \
-            --source-commit "$TAIRA_SOURCE_COMMIT" \
-            --output-bundle "$reset_bundle"
-          supervisor="${RUNNER_TEMP}/taira-peer-supervisor-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.py"
-          install -m 0600 scripts/taira_peer_supervisor.py "$supervisor"
-          restart_generation="$(
-            printf 'iroha.taira.release-restart.v1\0%s\0%s\0%s\0' \
-              "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256" \
-              "$GITHUB_RUN_ID" \
-              "$GITHUB_RUN_ATTEMPT" | shasum -a 256 | awk '{print $1}'
-          )"
-          {
-            echo "reset_bundle=$reset_bundle"
-            echo "supervisor=$supervisor"
-            echo "restart_generation=$restart_generation"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Capture actual exact-four-peer macOS arm64 restart evidence
-        id: receipt
-        shell: bash
-        env:
-          RESET_BUNDLE: ${{ steps.reset.outputs.reset_bundle }}
-          SUPERVISOR: ${{ steps.reset.outputs.supervisor }}
-          RESTART_GENERATION: ${{ steps.reset.outputs.restart_generation }}
-        run: |
-          set -Eeuo pipefail
-          receipt="$RUNNER_TEMP/taira-macos-four-peer-receipt-v1.json"
-          runtime_root="$RUNNER_TEMP/taira-native-four-peer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          sudo -n /usr/bin/python3 -S \
-            "$GITHUB_WORKSPACE/scripts/capture_taira_macos_four_peer_receipt.py" \
-            --reset-bundle "$RESET_BUNDLE" \
-            --validator-binary "$TAIRA_MACOS_IROHAD" \
-            --supervisor "$SUPERVISOR" \
-            --source-commit "$TAIRA_SOURCE_COMMIT" \
-            --cargo-lock-sha256 "$TAIRA_CARGO_LOCK_SHA256" \
-            --workspace-source-manifest-sha256 "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256" \
-            --restart-generation "$RESTART_GENERATION" \
-            --runtime-root "$runtime_root" \
-            --output "$receipt" \
-            --health-timeout-seconds 900
-          receipt_id="$(python3 -I -S -c 'import json,sys;print(json.load(open(sys.argv[1], encoding="ascii"))["receipt_id"])' "$receipt")"
-          [[ "$receipt_id" =~ ^[0-9a-f]{64}$ ]]
-          {
-            echo "receipt=$receipt"
-            echo "receipt_id=$receipt_id"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Construct, sign, and admission-verify the final macOS archive
-        id: candidate
-        shell: bash
-        env:
-          LINUX_ARCHIVE: ${{ steps.linux.outputs.archive }}
-          LINUX_AUTHORITY: ${{ steps.linux.outputs.authority }}
-          MACOS_RECEIPT: ${{ steps.receipt.outputs.receipt }}
-          RECEIPT_ID: ${{ steps.receipt.outputs.receipt_id }}
-          RESET_BUNDLE: ${{ steps.reset.outputs.reset_bundle }}
-          SUPERVISOR: ${{ steps.reset.outputs.supervisor }}
-        run: |
-          set -Eeuo pipefail
-          candidate_dir="$RUNNER_TEMP/taira-final-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python3 -S scripts/build_taira_rollout_candidate.py assemble \
-            --source-commit "$TAIRA_SOURCE_COMMIT" \
-            --cargo-lock-sha256 "$TAIRA_CARGO_LOCK_SHA256" \
-            --workspace-source-manifest-sha256 "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256" \
-            --source-date-epoch "$TAIRA_SOURCE_DATE_EPOCH" \
-            --linux-archive "$LINUX_ARCHIVE" \
-            --linux-authority-dir "$LINUX_AUTHORITY" \
-            --macos-receipt "$MACOS_RECEIPT" \
-            --expected-receipt-id "$RECEIPT_ID" \
-            --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-            --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
-            --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
-            --external-signer "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH" \
-            --signing-public-key "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH" \
-            --output-directory "$candidate_dir" \
-            >"$RUNNER_TEMP/taira-candidate-build.json"
-          candidate_archive="$(find "$candidate_dir" -maxdepth 1 -type f -name '*.tar.gz' -print)"
-          test "$(find "$candidate_dir" -maxdepth 1 -type f -name '*.tar.gz' -print | wc -l | tr -d ' ')" = 1
-          candidate_authority="${candidate_archive%.tar.gz}.authority"
-          test -d "$candidate_authority"
-
-          deploy_archive="$RUNNER_TEMP/taira-macos-arm64-deploy-${TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256:0:16}.tar.gz"
-          python3 -S scripts/build_taira_rollout_candidate.py pack-deploy-payload \
-            --source-commit "$TAIRA_SOURCE_COMMIT" \
-            --cargo-lock-sha256 "$TAIRA_CARGO_LOCK_SHA256" \
-            --workspace-source-manifest-sha256 "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256" \
-            --source-date-epoch "$TAIRA_SOURCE_DATE_EPOCH" \
-            --reset-bundle "$RESET_BUNDLE" \
-            --validator-binary "$TAIRA_MACOS_IROHAD" \
-            --supervisor "$SUPERVISOR" \
-            --macos-receipt "$MACOS_RECEIPT" \
-            --output "$deploy_archive" \
-            >"$RUNNER_TEMP/taira-deploy-payload-build.json"
-          {
-            echo "archive=$candidate_archive"
-            echo "authority=$candidate_authority"
-            echo "deploy_archive=$deploy_archive"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Stage the sole pre-publication byte inventory
-        id: stage
-        shell: bash
-        env:
-          CANDIDATE_ARCHIVE: ${{ steps.candidate.outputs.archive }}
-          CANDIDATE_AUTHORITY: ${{ steps.candidate.outputs.authority }}
-          DEPLOY_ARCHIVE: ${{ steps.candidate.outputs.deploy_archive }}
-        run: |
-          set -Eeuo pipefail
-          stage="$RUNNER_TEMP/taira-publication-input-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -m 0700 "$stage" "$stage/admission" "$stage/authority" "$stage/deploy"
-          install -m 0600 "$CANDIDATE_ARCHIVE" "$stage/admission/$(basename "$CANDIDATE_ARCHIVE")"
-          for name in release_manifest.json release_manifest.json.pub release_manifest.json.sig; do
-            install -m 0600 "$CANDIDATE_AUTHORITY/$name" "$stage/authority/$name"
-          done
-          install -m 0600 "$DEPLOY_ARCHIVE" "$stage/deploy/$(basename "$DEPLOY_ARCHIVE")"
-          python3 -I -S - "$stage" <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          root = Path(sys.argv[1])
-          rows = []
-          for path in sorted(value for value in root.rglob("*") if value.is_file()):
-              payload = path.read_bytes()
-              rows.append({
-                  "path": path.relative_to(root).as_posix(),
-                  "sha256": hashlib.sha256(payload).hexdigest(),
-                  "size": len(payload),
-              })
-          if len(rows) != 5:
-              raise SystemExit("pre-publication inventory must contain exactly five files")
-          (root / "byte-inventory-v1.json").write_text(
-              json.dumps(rows, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n",
-              encoding="ascii",
-          )
-          PY
-          echo "stage=$stage" >>"$GITHUB_OUTPUT"
-
-      - name: Upload the authenticated pre-publication bytes
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: taira-publication-input-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.stage.outputs.stage }}/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Download the pre-publication bytes into a fresh replay root
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: taira-publication-input-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/taira-publication-upload-replay
-
-      - name: Byte-compare and re-admit the uploaded archive before registry mutation
-        id: replay
-        shell: bash
-        env:
-          LOCAL_STAGE: ${{ steps.stage.outputs.stage }}
-          RECEIPT_ID: ${{ steps.receipt.outputs.receipt_id }}
-        run: |
-          set -Eeuo pipefail
-          replay="$RUNNER_TEMP/taira-publication-upload-replay"
-          python3 -I -S - "$LOCAL_STAGE" "$replay" <<'PY'
-          import sys
-          from pathlib import Path
-
-          left, right = map(Path, sys.argv[1:])
-          left_files = sorted(path.relative_to(left) for path in left.rglob("*") if path.is_file())
-          right_files = sorted(path.relative_to(right) for path in right.rglob("*") if path.is_file())
-          if left_files != right_files:
-              raise SystemExit(f"upload replay inventory differs: {left_files} != {right_files}")
-          for relative in left_files:
-              if (left / relative).read_bytes() != (right / relative).read_bytes():
-                  raise SystemExit(f"upload replay bytes differ: {relative}")
-          PY
-          candidate="$(find "$replay/admission" -maxdepth 1 -type f -name '*.tar.gz' -print)"
-          test "$(find "$replay/admission" -maxdepth 1 -type f -name '*.tar.gz' -print | wc -l | tr -d ' ')" = 1
-          deploy_archive="$(find "$replay/deploy" -maxdepth 1 -type f -name '*.tar.gz' -print)"
-          test "$(find "$replay/deploy" -maxdepth 1 -type f -name '*.tar.gz' -print | wc -l | tr -d ' ')" = 1
-          ledger="$RUNNER_TEMP/taira-publication-empty-replay-ledger.json"
-          python3 -S -c 'from scripts.taira_rollout_admission import canonical_replay_ledger_bytes;import sys;open(sys.argv[1],"xb").write(canonical_replay_ledger_bytes([]))' "$ledger"
-          python3 -S scripts/taira_rollout_admission.py verify \
-            --archive "$candidate" \
-            --authority-dir "$replay/authority" \
-            --expected-source-commit "$TAIRA_SOURCE_COMMIT" \
-            --expected-cargo-lock-sha256 "$TAIRA_CARGO_LOCK_SHA256" \
-            --expected-workspace-source-manifest-sha256 "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256" \
-            --expected-receipt-id "$RECEIPT_ID" \
-            --replay-ledger "$ledger" \
-            --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-            --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
-            --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
-            >"$RUNNER_TEMP/taira-prepublication-admission.json"
-          {
-            echo "root=$replay"
-            echo "candidate=$candidate"
-            echo "deploy_archive=$deploy_archive"
-            echo "admission_result=$RUNNER_TEMP/taira-prepublication-admission.json"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Install exact checksum-pinned ORAS
-        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
-        with:
-          url: https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_darwin_arm64.tar.gz
-          checksum: 7929f792cf272268412375ecad6f0fb3c20f164368d5b57966e67ad6d36eca53
-
-      - name: Pin OCI destination and authenticate ORAS
-        id: oci
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          oras_version="$(oras version | awk '/^Version:/ {print $2}')"
-          test "$oras_version" = "$ORAS_VERSION"
-          test "$ORAS_DARWIN_ARM64_URL" = "https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_darwin_arm64.tar.gz"
-          test "$ORAS_DARWIN_ARM64_SHA256" = "7929f792cf272268412375ecad6f0fb3c20f164368d5b57966e67ad6d36eca53"
-          if [[ -z "$TAIRA_OCI_USERNAME" || -z "$TAIRA_OCI_PASSWORD" ]]; then
-            echo "protected OCI publication credentials are mandatory" >&2
-            exit 1
-          fi
-          if [[ ! "$TAIRA_OCI_REPOSITORY" =~ ^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9]+([._/-][a-z0-9]+)*$ ]] \
-            || [[ "$TAIRA_OCI_REPOSITORY" == *".."* ]]; then
-            echo "TAIRA_OCI_REPOSITORY must be one canonical lowercase registry/repository" >&2
-            exit 1
-          fi
-          raw_suffix="$TAIRA_INPUT_ARTIFACT_SUFFIX"
-          if [[ -n "$raw_suffix" && ! "$raw_suffix" =~ ^[a-z0-9][a-z0-9._-]{0,47}$ ]]; then
-            echo "artifact_suffix must be a canonical lowercase 1-48 character tag component" >&2
-            exit 1
-          fi
-          tag="source-${TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256}"
-          if [[ -n "$raw_suffix" ]]; then
-            tag="${tag}-${raw_suffix}"
-          fi
-          registry_host="${TAIRA_OCI_REPOSITORY%%/*}"
-          auth_dir="$RUNNER_TEMP/taira-oras-auth-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -m 0700 "$auth_dir"
-          registry_config="$auth_dir/config.json"
-          printf '%s' "$TAIRA_OCI_PASSWORD" | oras login \
-            --registry-config "$registry_config" \
-            --username "$TAIRA_OCI_USERNAME" \
-            --password-stdin \
-            "$registry_host"
-          {
-            echo "reference=${TAIRA_OCI_REPOSITORY}:${tag}"
-            echo "registry_host=$registry_host"
-            echo "registry_config=$registry_config"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Publish the exact generic OCI artifact and capture its immutable digest
-        id: push
-        shell: bash
-        env:
-          REPLAY_ROOT: ${{ steps.replay.outputs.root }}
-          OCI_REFERENCE: ${{ steps.oci.outputs.reference }}
-          REGISTRY_CONFIG: ${{ steps.oci.outputs.registry_config }}
-        run: |
-          set -Eeuo pipefail
-          candidate="$(find "$REPLAY_ROOT/admission" -maxdepth 1 -type f -name '*.tar.gz' -print)"
-          deploy_archive="$(find "$REPLAY_ROOT/deploy" -maxdepth 1 -type f -name '*.tar.gz' -print)"
-          push_json="$RUNNER_TEMP/taira-oras-push.json"
-          (
-            cd "$REPLAY_ROOT"
-            oras push \
-              --registry-config "$REGISTRY_CONFIG" \
-              --image-spec v1.1 \
-              --artifact-type "$TAIRA_PRIMARY_ARTIFACT_TYPE" \
-              --annotation "org.opencontainers.image.revision=$TAIRA_SOURCE_COMMIT" \
-              --annotation "org.opencontainers.image.source=https://github.com/hyperledger/iroha" \
-              --format json \
-              "$OCI_REFERENCE" \
-              "admission/$(basename "$candidate"):${TAIRA_ADMISSION_ARCHIVE_MEDIA_TYPE}" \
-              "authority/release_manifest.json:${TAIRA_AUTHORITY_MANIFEST_MEDIA_TYPE}" \
-              "authority/release_manifest.json.pub:${TAIRA_AUTHORITY_PUBLIC_KEY_MEDIA_TYPE}" \
-              "authority/release_manifest.json.sig:${TAIRA_AUTHORITY_SIGNATURE_MEDIA_TYPE}" \
-              "deploy/$(basename "$deploy_archive"):${TAIRA_DEPLOY_PAYLOAD_MEDIA_TYPE}"
-          ) >"$push_json"
-          manifest_digest="$(python3 -I -S -c 'import json,re,sys;v=json.load(open(sys.argv[1]));d=v.get("digest","");assert re.fullmatch(r"sha256:[0-9a-f]{64}",d);print(d)' "$push_json")"
-          immutable_reference="${TAIRA_OCI_REPOSITORY}@${manifest_digest}"
-          resolved="$(oras resolve --registry-config "$REGISTRY_CONFIG" "$OCI_REFERENCE")"
-          test "$resolved" = "$manifest_digest"
-          raw_manifest="$RUNNER_TEMP/taira-primary-oci-manifest.json"
-          oras manifest fetch \
-            --registry-config "$REGISTRY_CONFIG" \
-            --output "$raw_manifest" \
-            "$immutable_reference"
-          test "sha256:$(shasum -a 256 "$raw_manifest" | awk '{print $1}')" = "$manifest_digest"
-          python3 -I -S - \
-            "$push_json" "$raw_manifest" "$REPLAY_ROOT" \
-            "$TAIRA_PRIMARY_ARTIFACT_TYPE" \
-            "$TAIRA_OCI_MANIFEST_MEDIA_TYPE" \
-            "$TAIRA_OCI_EMPTY_CONFIG_MEDIA_TYPE" \
-            "$TAIRA_OCI_EMPTY_CONFIG_DIGEST" \
-            "$TAIRA_ADMISSION_ARCHIVE_MEDIA_TYPE" \
-            "$TAIRA_AUTHORITY_MANIFEST_MEDIA_TYPE" \
-            "$TAIRA_AUTHORITY_PUBLIC_KEY_MEDIA_TYPE" \
-            "$TAIRA_AUTHORITY_SIGNATURE_MEDIA_TYPE" \
-            "$TAIRA_DEPLOY_PAYLOAD_MEDIA_TYPE" <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          def object_from_pairs(pairs):
-              result = {}
-              for key, value in pairs:
-                  if key in result:
-                      raise ValueError(f"duplicate JSON key: {key}")
-                  result[key] = value
-              return result
-
-          push = json.loads(
-              Path(sys.argv[1]).read_text(encoding="utf-8"),
-              object_pairs_hook=object_from_pairs,
-          )
-          manifest = json.loads(
-              Path(sys.argv[2]).read_text(encoding="utf-8"),
-              object_pairs_hook=object_from_pairs,
-          )
-          root = Path(sys.argv[3])
-          artifact_type = sys.argv[4]
-          manifest_media_type = sys.argv[5]
-          config_media_type = sys.argv[6]
-          config_digest = sys.argv[7]
-          media = sys.argv[8:]
-          files = [
-              next((root / "admission").glob("*.tar.gz")),
-              root / "authority/release_manifest.json",
-              root / "authority/release_manifest.json.pub",
-              root / "authority/release_manifest.json.sig",
-              next((root / "deploy").glob("*.tar.gz")),
-          ]
-          if push.get("artifactType") != artifact_type or manifest.get("artifactType") != artifact_type:
-              raise SystemExit("OCI artifact type differs from the fixed Taira type")
-          if push.get("mediaType") != manifest_media_type or manifest.get("mediaType") != manifest_media_type:
-              raise SystemExit("OCI manifest media type differs from the fixed Taira type")
-          if manifest.get("schemaVersion") != 2:
-              raise SystemExit("OCI manifest schema version is not exactly 2")
-          config = manifest.get("config")
-          if not isinstance(config, dict) or (
-              config.get("mediaType"), config.get("digest"), config.get("size")
-          ) != (config_media_type, config_digest, 2):
-              raise SystemExit("OCI empty config descriptor differs from the fixed Taira contract")
-          layers = manifest.get("layers")
-          if not isinstance(layers, list) or len(layers) != len(files):
-              raise SystemExit("OCI manifest does not contain the exact five layers")
-          expected = []
-          for path, media_type in zip(files, media):
-              payload = path.read_bytes()
-              expected.append((
-                  path.relative_to(root).as_posix(),
-                  media_type,
-                  "sha256:" + hashlib.sha256(payload).hexdigest(),
-                  len(payload),
-              ))
-          actual = [(
-              row.get("annotations", {}).get("org.opencontainers.image.title"),
-              row.get("mediaType"),
-              row.get("digest"),
-              row.get("size"),
-          ) for row in layers]
-          if actual != expected:
-              raise SystemExit(f"OCI layer contract mismatch: expected={expected}, actual={actual}")
-          PY
-          {
-            echo "manifest_digest=$manifest_digest"
-            echo "immutable_reference=$immutable_reference"
-            echo "push_json=$push_json"
-            echo "raw_manifest=$raw_manifest"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Pull by immutable digest, compare every byte, and re-run admission
-        id: pulled
-        shell: bash
-        env:
-          LOCAL_ROOT: ${{ steps.replay.outputs.root }}
-          IMMUTABLE_REFERENCE: ${{ steps.push.outputs.immutable_reference }}
-          REGISTRY_CONFIG: ${{ steps.oci.outputs.registry_config }}
-          RECEIPT_ID: ${{ steps.receipt.outputs.receipt_id }}
-        run: |
-          set -Eeuo pipefail
-          pulled="$RUNNER_TEMP/taira-oci-pull-replay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -m 0700 "$pulled"
-          oras pull \
-            --registry-config "$REGISTRY_CONFIG" \
-            --output "$pulled" \
-            "$IMMUTABLE_REFERENCE"
-          python3 -I -S - "$LOCAL_ROOT" "$pulled" <<'PY'
-          import sys
-          from pathlib import Path
-
-          left, right = map(Path, sys.argv[1:])
-          ignored = {"byte-inventory-v1.json", "linux-transfer-v1.json", "taira-source-identity-v1.json"}
-          left_files = sorted(
-              path.relative_to(left) for path in left.rglob("*")
-              if path.is_file() and path.name not in ignored
-          )
-          right_files = sorted(path.relative_to(right) for path in right.rglob("*") if path.is_file())
-          if left_files != right_files:
-              raise SystemExit(f"OCI pull inventory mismatch: {left_files} != {right_files}")
-          for relative in left_files:
-              if (left / relative).read_bytes() != (right / relative).read_bytes():
-                  raise SystemExit(f"OCI pull changed bytes: {relative}")
-          PY
-          candidate="$(find "$pulled/admission" -maxdepth 1 -type f -name '*.tar.gz' -print)"
-          ledger="$RUNNER_TEMP/taira-oci-empty-replay-ledger.json"
-          python3 -S -c 'from scripts.taira_rollout_admission import canonical_replay_ledger_bytes;import sys;open(sys.argv[1],"xb").write(canonical_replay_ledger_bytes([]))' "$ledger"
-          pulled_admission="$RUNNER_TEMP/taira-pulled-admission.json"
-          python3 -S scripts/taira_rollout_admission.py verify \
-            --archive "$candidate" \
-            --authority-dir "$pulled/authority" \
-            --expected-source-commit "$TAIRA_SOURCE_COMMIT" \
-            --expected-cargo-lock-sha256 "$TAIRA_CARGO_LOCK_SHA256" \
-            --expected-workspace-source-manifest-sha256 "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256" \
-            --expected-receipt-id "$RECEIPT_ID" \
-            --replay-ledger "$ledger" \
-            --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-            --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
-            --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
-            >"$pulled_admission"
-          cmp "$pulled_admission" "${{ steps.replay.outputs.admission_result }}"
-          {
-            echo "root=$pulled"
-            echo "admission_result=$pulled_admission"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Create and verify the signed publication receipt
-        id: publication_receipt
-        shell: bash
-        env:
-          PULLED_ROOT: ${{ steps.pulled.outputs.root }}
-          ADMISSION_RESULT: ${{ steps.pulled.outputs.admission_result }}
-          IMMUTABLE_REFERENCE: ${{ steps.push.outputs.immutable_reference }}
-          PRIMARY_MANIFEST_DIGEST: ${{ steps.push.outputs.manifest_digest }}
-          PRIMARY_MANIFEST: ${{ steps.push.outputs.raw_manifest }}
-        run: |
-          set -Eeuo pipefail
-          receipt_root="$RUNNER_TEMP/taira-publication-receipt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -m 0700 "$receipt_root" "$receipt_root/artifacts"
-          publication="$receipt_root/artifacts/taira-publication-receipt-v1.json"
-          python3 -I -S - \
-            "$PULLED_ROOT" "$ADMISSION_RESULT" "$PRIMARY_MANIFEST" "$publication" \
-            "$IMMUTABLE_REFERENCE" "$PRIMARY_MANIFEST_DIGEST" \
-            "$TAIRA_PRIMARY_ARTIFACT_TYPE" "$ORAS_VERSION" \
-            "$ORAS_SETUP_ACTION_COMMIT" "$ORAS_DARWIN_ARM64_URL" \
-            "$ORAS_DARWIN_ARM64_SHA256" <<'PY'
-          import hashlib
-          import json
-          import sys
-          import time
-          from pathlib import Path
-
-          def object_from_pairs(pairs):
-              result = {}
-              for key, value in pairs:
-                  if key in result:
-                      raise ValueError(f"duplicate JSON key: {key}")
-                  result[key] = value
-              return result
-
-          root, admission_path, manifest_path, output = map(Path, sys.argv[1:5])
-          immutable, digest, artifact_type, oras_version, action_commit, oras_url, oras_sha = sys.argv[5:]
-          manifest = json.loads(
-              manifest_path.read_text(encoding="utf-8"),
-              object_pairs_hook=object_from_pairs,
-          )
-          layers = []
-          for row in manifest["layers"]:
-              title = row["annotations"]["org.opencontainers.image.title"]
-              path = root / title
-              payload = path.read_bytes()
-              actual = "sha256:" + hashlib.sha256(payload).hexdigest()
-              if actual != row["digest"] or len(payload) != row["size"]:
-                  raise SystemExit(f"pulled layer differs while publication receipt is built: {title}")
-              layers.append({
-                  "media_type": row["mediaType"],
-                  "path": title,
-                  "sha256": actual.removeprefix("sha256:"),
-                  "size": len(payload),
-              })
-          payload = {
-              "admission": json.loads(admission_path.read_text(encoding="utf-8")),
-              "oci": {
-                  "artifact_type": artifact_type,
-                  "immutable_reference": immutable,
-                  "layers": layers,
-                  "manifest_digest": digest,
-              },
-              "oras": {
-                  "darwin_arm64_archive_sha256": oras_sha,
-                  "darwin_arm64_archive_url": oras_url,
-                  "setup_action_commit": action_commit,
-                  "version": oras_version,
-              },
-              "published_at_unix": int(time.time()),
-              "schema": "iroha.taira.oci_publication_receipt",
-              "schema_version": 1,
-          }
-          output.write_text(
-              json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n",
-              encoding="ascii",
-          )
-          PY
-          manifest="$receipt_root/release_manifest.json"
-          manifest_args=(
-            --artifacts-dir "$receipt_root/artifacts"
-            --version "taira-publication-${TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256:0:16}"
-            --commit "$TAIRA_SOURCE_COMMIT"
-            --source-date-epoch "$TAIRA_SOURCE_DATE_EPOCH"
-            --os-tag macos
-            --arch arm64
-            --artifact "iroha3:taira-publication-receipt:release-evidence:json:taira-publication-receipt-v1.json"
-          )
-          python3 -S scripts/generate_release_manifest.py \
-            "${manifest_args[@]}" --output "$manifest"
-          python3 -I -S scripts/release_manifest_signing.py sign \
-            --manifest "$manifest" \
-            --external-signer "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH" \
-            --signing-public-key "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH" \
-            --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-            --signature-output "$receipt_root/release_manifest.json.sig" \
-            --public-key-output "$receipt_root/release_manifest.json.pub" \
-            --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
-            --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
-          python3 -I -S scripts/release_manifest_signing.py verify \
-            --manifest "$manifest" \
-            --signature "$receipt_root/release_manifest.json.sig" \
-            --public-key "$receipt_root/release_manifest.json.pub" \
-            --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-            --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
-            --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
-          authority_manifest_replay="$receipt_root/release_manifest.replay.json"
-          python3 -S scripts/generate_release_manifest.py \
-            "${manifest_args[@]}" --output "$authority_manifest_replay"
-          cmp "$manifest" "$authority_manifest_replay"
-          rm -f -- "$authority_manifest_replay"
-          echo "root=$receipt_root" >>"$GITHUB_OUTPUT"
-
-      - name: Attach, pull, and byte-verify the signed publication receipt
-        id: receipt_publish
-        shell: bash
-        env:
-          RECEIPT_ROOT: ${{ steps.publication_receipt.outputs.root }}
-          IMMUTABLE_REFERENCE: ${{ steps.push.outputs.immutable_reference }}
-          PRIMARY_MANIFEST: ${{ steps.push.outputs.raw_manifest }}
-          PRIMARY_MANIFEST_DIGEST: ${{ steps.push.outputs.manifest_digest }}
-          REGISTRY_CONFIG: ${{ steps.oci.outputs.registry_config }}
-        run: |
-          set -Eeuo pipefail
-          attach_json="$RUNNER_TEMP/taira-publication-receipt-attach.json"
-          (
-            cd "$RECEIPT_ROOT"
-            oras attach \
-              --registry-config "$REGISTRY_CONFIG" \
-              --artifact-type "$TAIRA_PUBLICATION_ARTIFACT_TYPE" \
-              --format json \
-              "$IMMUTABLE_REFERENCE" \
-              "artifacts/taira-publication-receipt-v1.json:${TAIRA_PUBLICATION_RECEIPT_MEDIA_TYPE}" \
-              "release_manifest.json:${TAIRA_AUTHORITY_MANIFEST_MEDIA_TYPE}" \
-              "release_manifest.json.pub:${TAIRA_AUTHORITY_PUBLIC_KEY_MEDIA_TYPE}" \
-              "release_manifest.json.sig:${TAIRA_AUTHORITY_SIGNATURE_MEDIA_TYPE}"
-          ) >"$attach_json"
-          receipt_digest="$(python3 -I -S -c 'import json,re,sys;d=json.load(open(sys.argv[1])).get("digest","");assert re.fullmatch(r"sha256:[0-9a-f]{64}",d);print(d)' "$attach_json")"
-          receipt_reference="${TAIRA_OCI_REPOSITORY}@${receipt_digest}"
-          test "$(oras resolve --registry-config "$REGISTRY_CONFIG" "$receipt_reference")" = "$receipt_digest"
-          raw_receipt_manifest="$RUNNER_TEMP/taira-publication-receipt-oci-manifest.json"
-          oras manifest fetch \
-            --registry-config "$REGISTRY_CONFIG" \
-            --output "$raw_receipt_manifest" \
-            "$receipt_reference"
-          test "sha256:$(shasum -a 256 "$raw_receipt_manifest" | awk '{print $1}')" = "$receipt_digest"
-          python3 -I -S - \
-            "$raw_receipt_manifest" "$PRIMARY_MANIFEST" "$RECEIPT_ROOT" \
-            "$PRIMARY_MANIFEST_DIGEST" "$TAIRA_PUBLICATION_ARTIFACT_TYPE" \
-            "$TAIRA_OCI_MANIFEST_MEDIA_TYPE" \
-            "$TAIRA_OCI_EMPTY_CONFIG_MEDIA_TYPE" \
-            "$TAIRA_OCI_EMPTY_CONFIG_DIGEST" \
-            "$TAIRA_PUBLICATION_RECEIPT_MEDIA_TYPE" \
-            "$TAIRA_AUTHORITY_MANIFEST_MEDIA_TYPE" \
-            "$TAIRA_AUTHORITY_PUBLIC_KEY_MEDIA_TYPE" \
-            "$TAIRA_AUTHORITY_SIGNATURE_MEDIA_TYPE" <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          def object_from_pairs(pairs):
-              result = {}
-              for key, value in pairs:
-                  if key in result:
-                      raise ValueError(f"duplicate JSON key: {key}")
-                  result[key] = value
-              return result
-
-          receipt_manifest_path, primary_manifest_path, root = map(Path, sys.argv[1:4])
-          primary_digest, artifact_type, manifest_media, config_media, config_digest = sys.argv[4:9]
-          layer_media = sys.argv[9:]
-          manifest = json.loads(
-              receipt_manifest_path.read_text(encoding="utf-8"),
-              object_pairs_hook=object_from_pairs,
-          )
-          primary_bytes = primary_manifest_path.read_bytes()
-          if manifest.get("schemaVersion") != 2 or manifest.get("mediaType") != manifest_media:
-              raise SystemExit("publication receipt OCI manifest uses an unexpected schema or media type")
-          if manifest.get("artifactType") != artifact_type:
-              raise SystemExit("publication receipt OCI artifact type differs")
-          config = manifest.get("config")
-          if not isinstance(config, dict) or (
-              config.get("mediaType"), config.get("digest"), config.get("size")
-          ) != (config_media, config_digest, 2):
-              raise SystemExit("publication receipt OCI config descriptor differs")
-          subject = manifest.get("subject")
-          if not isinstance(subject, dict) or (
-              subject.get("mediaType"), subject.get("digest"), subject.get("size")
-          ) != (manifest_media, primary_digest, len(primary_bytes)):
-              raise SystemExit("publication receipt is not attached to the exact primary manifest")
-          files = [
-              root / "artifacts/taira-publication-receipt-v1.json",
-              root / "release_manifest.json",
-              root / "release_manifest.json.pub",
-              root / "release_manifest.json.sig",
-          ]
-          layers = manifest.get("layers")
-          if not isinstance(layers, list) or len(layers) != len(files):
-              raise SystemExit("publication receipt OCI manifest does not contain exactly four layers")
-          expected = []
-          for path, media_type in zip(files, layer_media):
-              payload = path.read_bytes()
-              expected.append((
-                  path.relative_to(root).as_posix(),
-                  media_type,
-                  "sha256:" + hashlib.sha256(payload).hexdigest(),
-                  len(payload),
-              ))
-          actual = [(
-              row.get("annotations", {}).get("org.opencontainers.image.title"),
-              row.get("mediaType"),
-              row.get("digest"),
-              row.get("size"),
-          ) for row in layers]
-          if actual != expected:
-              raise SystemExit(f"publication receipt OCI layer contract differs: {actual}")
-          PY
-          pulled="$RUNNER_TEMP/taira-publication-receipt-pull-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -m 0700 "$pulled"
-          oras pull --registry-config "$REGISTRY_CONFIG" --output "$pulled" "$receipt_reference"
-          python3 -I -S - "$RECEIPT_ROOT" "$pulled" <<'PY'
-          import sys
-          from pathlib import Path
-
-          left, right = map(Path, sys.argv[1:])
-          expected = sorted(path.relative_to(left) for path in left.rglob("*") if path.is_file())
-          actual = sorted(path.relative_to(right) for path in right.rglob("*") if path.is_file())
-          if expected != actual:
-              raise SystemExit(f"publication receipt pull inventory differs: {expected} != {actual}")
-          for relative in expected:
-              if (left / relative).read_bytes() != (right / relative).read_bytes():
-                  raise SystemExit(f"publication receipt pull changed bytes: {relative}")
-          PY
-          python3 -I -S scripts/release_manifest_signing.py verify \
-            --manifest "$pulled/release_manifest.json" \
-            --signature "$pulled/release_manifest.json.sig" \
-            --public-key "$pulled/release_manifest.json.pub" \
-            --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-            --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
-            --trusted-release-manifest-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
-          {
-            echo "receipt_digest=$receipt_digest"
-            echo "receipt_reference=$receipt_reference"
-            echo "raw_manifest=$raw_receipt_manifest"
-            echo "root=$pulled"
-          } >>"$GITHUB_OUTPUT"
-          {
-            echo "Published immutable Taira archive: $IMMUTABLE_REFERENCE"
-            echo "Signed publication receipt: $receipt_reference"
-            echo "Source commit: $TAIRA_SOURCE_COMMIT"
-            echo "Workspace source manifest: $TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256"
-          } >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Upload the signed publication receipt
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: taira-signed-publication-receipt-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.receipt_publish.outputs.root }}/
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Remove the ephemeral ORAS login
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          auth_dir="$RUNNER_TEMP/taira-oras-auth-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          registry_config="$auth_dir/config.json"
-          registry_host="${TAIRA_OCI_REPOSITORY%%/*}"
-          if [[ -f "$registry_config" && ! -L "$registry_config" ]]; then
-            if command -v oras >/dev/null 2>&1 && [[ -n "$registry_host" ]]; then
-              oras logout --registry-config "$registry_config" "$registry_host" || true
-            fi
-          fi
-          if [[ -e "$registry_config" || -L "$registry_config" ]]; then
-            rm -f -- "$registry_config"
-          fi
-          rmdir "$auth_dir" 2>/dev/null || true

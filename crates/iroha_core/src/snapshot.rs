@@ -2,7 +2,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -17,7 +17,8 @@ use iroha_config::{
     snapshot::Mode,
 };
 use iroha_crypto::{
-    Algorithm, CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature,
+    Algorithm, CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, MerkleTreeCommitment,
+    PublicKey, Signature,
 };
 use iroha_data_model::{
     ChainId,
@@ -631,7 +632,12 @@ impl SnapshotMerkleMetadata {
         let Some(proof) = tree.get_proof(index) else {
             return Err(SnapshotMerkleError::ProofUnavailable { chunk_index });
         };
-        Ok(CompactMerkleProof::from_full(proof))
+        CompactMerkleProof::try_from_full(proof).map_err(|error| {
+            SnapshotMerkleError::ProofInvalid {
+                chunk_index,
+                reason: error.to_string(),
+            }
+        })
     }
 
     fn verify_chunk(
@@ -646,7 +652,15 @@ impl SnapshotMerkleMetadata {
         leaf.copy_from_slice(&digest);
         let leaf = HashOf::from_untyped_unchecked(Hash::prehashed(leaf));
         let root = self.parse_root()?;
-        if !proof.verify_sha256(&leaf, &root) {
+        let chunk_size = self.chunk_size()?;
+        let leaf_count = NonZeroU64::new(self.expected_leaf_count(chunk_size)?).ok_or(
+            SnapshotMerkleError::ProofInvalid {
+                chunk_index,
+                reason: "empty snapshot has no chunk membership proof".to_owned(),
+            },
+        )?;
+        let commitment = MerkleTreeCommitment::new(root, leaf_count);
+        if !proof.verify_sha256(&leaf, &commitment) {
             return Err(SnapshotMerkleError::ProofInvalid {
                 chunk_index,
                 reason: "failed to verify Merkle path".to_owned(),

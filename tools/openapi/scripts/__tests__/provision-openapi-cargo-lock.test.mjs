@@ -28,6 +28,7 @@ import {
   OPENAPI_CARGO_LOCK_PIN_PATH,
   OPENAPI_CARGO_LOCK_PIN_SCHEMA,
   generateOpenApiCargoLockCandidate,
+  isolateGitRepositoryEnvironment,
   parseArgs,
   parseOpenApiCargoLockPin,
   provisionOpenApiCargoLock,
@@ -461,6 +462,78 @@ test('candidate mutation and target replacement fail closed', async (context) =>
   );
 });
 
+test('fixture Git commands ignore inherited repository routing', async (context) => {
+  const sentinel = await makeTempDirectory('openapi-lock-git-sentinel-');
+  const fixture = await makeTempDirectory('openapi-lock-git-fixture-');
+  context.after(() => rm(sentinel, {recursive: true, force: true}));
+  context.after(() => rm(fixture, {recursive: true, force: true}));
+
+  await writeFile(path.join(sentinel, 'sentinel.txt'), 'sentinel\n');
+  await gitText(sentinel, ['init', '--quiet']);
+  await gitText(sentinel, [
+    'config',
+    'user.email',
+    'sentinel@example.invalid',
+  ]);
+  await gitText(sentinel, ['config', 'user.name', 'Sentinel']);
+  await gitText(sentinel, ['add', '.']);
+  await gitText(sentinel, ['commit', '--quiet', '-m', 'sentinel']);
+
+  const sentinelGitDirectory = path.join(sentinel, '.git');
+  const sentinelConfigPath = path.join(sentinelGitDirectory, 'config');
+  const sentinelIndexPath = path.join(sentinelGitDirectory, 'index');
+  const [sentinelHeadBefore, sentinelConfigBefore, sentinelIndexBefore] =
+    await Promise.all([
+      gitText(sentinel, ['rev-parse', 'HEAD']),
+      readFile(sentinelConfigPath),
+      readFile(sentinelIndexPath),
+    ]);
+  const inheritedEnvironment = {
+    ...process.env,
+    GIT_COMMON_DIR: sentinelGitDirectory,
+    GIT_CONFIG: sentinelConfigPath,
+    GIT_DIR: sentinelGitDirectory,
+    GIT_INDEX_FILE: sentinelIndexPath,
+    GIT_OBJECT_DIRECTORY: path.join(sentinelGitDirectory, 'objects'),
+    GIT_WORK_TREE: sentinel,
+  };
+
+  await writeFile(path.join(fixture, 'fixture.txt'), 'fixture\n');
+  await gitText(fixture, ['init', '--quiet'], {
+    environment: inheritedEnvironment,
+  });
+  await gitText(
+    fixture,
+    ['config', 'user.email', 'fixture@example.invalid'],
+    {environment: inheritedEnvironment},
+  );
+  await gitText(fixture, ['config', 'user.name', 'Fixture'], {
+    environment: inheritedEnvironment,
+  });
+  await gitText(fixture, ['add', '.'], {
+    environment: inheritedEnvironment,
+  });
+  await gitText(fixture, ['commit', '--quiet', '-m', 'fixture'], {
+    environment: inheritedEnvironment,
+  });
+
+  const fixtureTopLevel = await gitText(
+    fixture,
+    ['rev-parse', '--show-toplevel'],
+    {environment: inheritedEnvironment},
+  );
+  assert.equal(
+    await realpath(fixtureTopLevel.trim()),
+    await realpath(fixture),
+  );
+  assert.equal(
+    await gitText(sentinel, ['rev-parse', 'HEAD']),
+    sentinelHeadBefore,
+  );
+  assert.deepEqual(await readFile(sentinelConfigPath), sentinelConfigBefore);
+  assert.deepEqual(await readFile(sentinelIndexPath), sentinelIndexBefore);
+});
+
 test('OpenAPI workflow provisions before both release gates and stays clean', async () => {
   const workflow = await readFile(
     path.join(repoRoot, '.github', 'workflows', 'openapi.yml'),
@@ -549,10 +622,15 @@ async function makeRepository({
   return realpath(root);
 }
 
-async function gitText(root, arguments_) {
+async function gitText(
+  root,
+  arguments_,
+  {environment = process.env} = {},
+) {
   const {stdout} = await execFileAsync('git', arguments_, {
     cwd: root,
     encoding: 'utf8',
+    env: isolateGitRepositoryEnvironment(environment),
   });
   return stdout;
 }

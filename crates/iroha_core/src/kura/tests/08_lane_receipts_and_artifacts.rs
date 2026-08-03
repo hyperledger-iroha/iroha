@@ -78,6 +78,99 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
 }
 
 #[test]
+fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismatched_bytes() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let lane_id = LaneId::from(1);
+    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+    let lane_block_height = 1;
+    let mut block = dummy_block_with_lane_payload_ownership(
+        lane_id,
+        lane_entry.dataspace_id,
+        lane_block_height,
+    )
+    .as_ref()
+    .clone();
+    attach_ok_results_to_block(&mut block);
+    let ownership = block
+        .execution_context()
+        .expect("execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("lane ownership")
+        .clone();
+    let proposal = lane_block_proposal_from_ownership(&ownership);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    kura.store_block(Arc::new(block))
+        .expect("store block with lane artifact and results");
+    kura.persist_lane_block_application_receipt(&proposal)
+        .expect("persist exact application receipt");
+    let expected = kura
+        .read_lane_block_application_receipt(lane_id, lane_block_height)
+        .expect("read exact application receipt");
+    let (data_path, index_path) =
+        Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
+    let original_data = fs::read(&data_path).expect("read receipt data bytes");
+    let original_index = fs::read(&index_path).expect("read receipt index bytes");
+    assert!(original_data.len() > 1);
+    assert!(original_index.len() > 1);
+
+    let require_exact = || {
+        kura.require_exact_autonomous_lifecycle_terminal_application_receipt_for_tests(
+            &expected,
+            &data_path,
+            &index_path,
+        )
+    };
+    require_exact().expect("an unchanged receipt pair must revalidate exactly");
+
+    fs::write(&data_path, &original_data[..original_data.len() - 1])
+        .expect("truncate receipt data");
+    assert!(
+        require_exact().is_err(),
+        "a truncated receipt data file must fail closed",
+    );
+    fs::write(&data_path, &original_data).expect("restore receipt data");
+    require_exact().expect("restored receipt data must revalidate");
+
+    let mut corrupt_data = original_data.clone();
+    let corrupt_data_index = corrupt_data.len() / 2;
+    corrupt_data[corrupt_data_index] ^= 0x80;
+    fs::write(&data_path, corrupt_data).expect("corrupt receipt data");
+    assert!(
+        require_exact().is_err(),
+        "corrupt receipt data must fail closed",
+    );
+    fs::write(&data_path, &original_data).expect("restore receipt data after corruption");
+
+    fs::write(&index_path, &original_index[..original_index.len() - 1])
+        .expect("truncate receipt index");
+    assert!(
+        require_exact().is_err(),
+        "a truncated receipt index must fail closed",
+    );
+    fs::write(&index_path, &original_index).expect("restore receipt index");
+
+    let mut mismatched_index = original_index.clone();
+    let mismatched_index_offset = mismatched_index.len() / 2;
+    mismatched_index[mismatched_index_offset] ^= 0x40;
+    fs::write(&index_path, mismatched_index).expect("mismatch receipt index");
+    assert!(
+        require_exact().is_err(),
+        "an index which no longer binds the exact data entry must fail closed",
+    );
+    fs::write(&index_path, &original_index).expect("restore receipt index after mismatch");
+    require_exact().expect("the fully restored receipt pair must revalidate");
+
+    fs::remove_file(&index_path).expect("remove receipt index");
+    assert!(
+        require_exact().is_err(),
+        "a missing receipt index must fail closed",
+    );
+}
+
+#[test]
 fn receipt_repair_preflight_does_not_request_an_already_present_unowned_body() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -332,7 +425,7 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let lane_entry = lane_config.primary();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (mut kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
     let entrypoint = offline_top_up_entrypoint_for_index([0xC1; 32], [0xC2; 32]);
     let mut merge_entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let execution = merge_entry
@@ -408,6 +501,49 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
         .is_some(),
         "the compact cursor must revalidate against the exact merge entry and carrier"
     );
+
+    let history_before_capacity_refusal =
+        snapshot_regular_files_recursively(temp_dir.path());
+    Arc::get_mut(&mut kura)
+        .expect("exclusive Kura before compaction capacity refusal")
+        .max_disk_usage_bytes = 1;
+    let compaction_outcome = {
+        let _prune_guard = kura.prune_lock.lock();
+        kura.ensure_prune_recovery_not_required()
+            .expect("prune recovery is complete");
+        let _canonical_chain_guard = kura.canonical_chain_lock.lock();
+        let pending_canonical_bytes = kura
+            .pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
+            .expect("snapshot pending canonical capacity");
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
+        kura.compact_lane_histories_through_merge_frontier_locked(
+            pending_canonical_bytes,
+            lane_entry,
+            &frontier,
+        )
+        .expect("capacity refusal is a bounded compaction outcome")
+    };
+    assert_eq!(
+        compaction_outcome,
+        LaneHistoryCompactionOutcome::CapacityBlocked,
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(temp_dir.path()),
+        history_before_capacity_refusal,
+        "capacity-blocked compaction must not mutate durable lane history",
+    );
+    kura.repair_lane_merge_application_frontiers_on_startup()
+        .expect("capacity-blocked startup compaction must finish one bounded pass");
+    assert_eq!(
+        snapshot_regular_files_recursively(temp_dir.path()),
+        history_before_capacity_refusal,
+        "bounded startup repair must retain uncompacted evidence without mutation",
+    );
+    Arc::get_mut(&mut kura)
+        .expect("exclusive Kura after compaction capacity refusal")
+        .max_disk_usage_bytes = 0;
+
     kura.first_release_lane_retirement_admissible_for_test(
         descriptor.lane_id,
         descriptor.dataspace_id,
@@ -1059,7 +1195,7 @@ fn lane_block_execution_input_rejects_forged_entrypoint_hashes() {
     forged.entrypoint_hashes[0] = Hash::new(b"forged lane execution input hash");
 
     assert!(
-        kura.write_lane_block_execution_input_artifact(&forged, None)
+        kura.write_lane_block_execution_input_artifact(&forged, None, 0)
             .is_err(),
         "forged execution input hashes must not be persisted"
     );
@@ -2838,139 +2974,5 @@ fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog()
         kura.latest_certified_lane_block_artifacts_matching(lane_id, 0, |_| true)
             .is_empty(),
         "a zero recovery budget must not scan certified history"
-    );
-}
-
-#[test]
-fn certified_lane_block_read_rejects_qc_body_mismatch() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let (session, signer_pops) = sample_committed_lane_block_session_for_kura(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-    kura.persist_committed_lane_block_session(&session, &signer_pops)
-        .expect("persist certified lane block");
-    let mut tampered = CertifiedLaneBlockArtifact::new(session, signer_pops);
-    tampered.commit_qc.body.descriptor_hash = Hash::new(b"tampered descriptor");
-    let payload = tampered
-        .encode_framed()
-        .expect("encode tampered certified lane block");
-    let (data_path, index_path) =
-        Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
-    assert!(
-        Kura::append_indexed_sidecar(
-            &data_path,
-            &index_path,
-            lane_block_height,
-            &payload,
-            "certified lane block",
-            FsyncMode::Batched,
-            None,
-            SidecarIndexOrigin::FirstWrite,
-        ),
-        "tampered sidecar overwrite should be written for read rejection test"
-    );
-
-    assert!(
-        kura.read_certified_lane_block_artifact(lane_id, lane_block_height)
-            .is_none(),
-        "certified lane block reads must reject QC bodies that drift from the proposal"
-    );
-}
-
-#[test]
-fn certified_lane_block_read_rejects_qc_signature_mismatch() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let lane_block_height = 1;
-    let (session, signer_pops) = sample_committed_lane_block_session_for_kura(
-        lane_id,
-        lane_entry.dataspace_id,
-        lane_block_height,
-    );
-
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-    kura.persist_committed_lane_block_session(&session, &signer_pops)
-        .expect("persist certified lane block");
-    let mut tampered = CertifiedLaneBlockArtifact::new(session, signer_pops);
-    tampered.commit_qc.bls_aggregate_signature[0] ^= 0x01;
-    let payload = tampered
-        .encode_framed()
-        .expect("encode tampered certified lane block");
-    let (data_path, index_path) =
-        Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
-    assert!(
-        Kura::append_indexed_sidecar(
-            &data_path,
-            &index_path,
-            lane_block_height,
-            &payload,
-            "certified lane block",
-            FsyncMode::Batched,
-            None,
-            SidecarIndexOrigin::FirstWrite,
-        ),
-        "tampered sidecar overwrite should be written for read rejection test"
-    );
-
-    assert!(
-        kura.read_certified_lane_block_artifact(lane_id, lane_block_height)
-            .is_none(),
-        "certified lane block reads must reject invalid QC aggregate signatures"
-    );
-}
-
-#[test]
-fn latest_lane_block_artifact_returns_highest_valid_height() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
-    let lane_id = LaneId::from(1);
-    let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-    let mut generator = DummyBlocks::new();
-    let first = dummy_block_with_lane_payload_ownership_from_generator(
-        &mut generator,
-        lane_id,
-        lane_entry.dataspace_id,
-        1,
-    );
-    let later = dummy_block_with_lane_payload_ownership_from_generator(
-        &mut generator,
-        lane_id,
-        lane_entry.dataspace_id,
-        3,
-    );
-    let expected = later
-        .execution_context()
-        .expect("execution context")
-        .lane_payload_ownerships
-        .first()
-        .expect("lane ownership")
-        .clone();
-
-    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-    kura.store_block(first).expect("store first lane artifact");
-    kura.store_block(later)
-        .expect("store sparse later artifact");
-
-    let latest = kura
-        .latest_lane_block_artifact(lane_id)
-        .expect("latest lane block artifact");
-    assert_eq!(latest.ownership, expected);
-    assert_eq!(latest.ownership.lane_block_height, 3);
-    assert!(
-        kura.read_lane_block_artifact(lane_id, 2).is_none(),
-        "sparse placeholder entries must not decode as artifacts"
     );
 }

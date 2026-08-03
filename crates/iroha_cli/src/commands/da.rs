@@ -10,8 +10,6 @@ use super::{
 use crate::cli_output::print_with_optional_text;
 use crate::{CliOutputFormat, Run, RunContext};
 use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
-#[cfg(test)]
-use blake3::hash as blake3_hash;
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha::da::{
@@ -2533,10 +2531,11 @@ mod tests {
         let pdp = AccountId::new(pdp_key.public_key().clone());
         let potr_key = fixture_key_pair(6);
         let potr = AccountId::new(potr_key.public_key().clone());
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset_definition: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let accounts = da::DaRentLedgerAccounts {
             payer: &payer,
             treasury: &treasury,

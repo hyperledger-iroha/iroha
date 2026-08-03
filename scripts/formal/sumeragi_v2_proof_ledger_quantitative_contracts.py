@@ -954,6 +954,9 @@ QUANTITATIVE_FIXED_CORRIDOR_PROOF_DEPENDENCIES = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
     ): (
+        # This is a one-step exact-successor multiset argument.  Candidate
+        # resurrection is excluded by the GST/lifecycle temporal layer, not by
+        # importing its stronger theorem into this assumption-light leaf.
         "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
         "AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget",
         "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",

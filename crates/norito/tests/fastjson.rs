@@ -26,3 +26,26 @@ fn fastjson_roundtrip() {
     let got = <Demo as FastFromJson>::parse(&mut w, &mut arena).expect("parse");
     assert_eq!(d, got);
 }
+
+#[test]
+fn fastjson_unknown_fields_use_strict_bounded_skip() {
+    let over_limit = format!(
+        "{}null{}",
+        "[".repeat(norito::json::MAX_JSON_VALUE_NESTING_DEPTH),
+        "]".repeat(norito::json::MAX_JSON_VALUE_NESTING_DEPTH)
+    );
+    let input = format!(r#"{{"id":7,"name":"alice","tags":[],"opt":null,"unknown":{over_limit}}}"#);
+    let mut walker = TapeWalker::new(&input);
+    let mut arena = norito::json::Arena::new();
+    assert!(matches!(
+        <Demo as FastFromJson>::parse(&mut walker, &mut arena),
+        Err(norito::Error::Json(
+            norito::json::Error::NestingDepthExceeded { .. }
+        ))
+    ));
+
+    let malformed = r#"{"id":7,"name":"alice","tags":[],"opt":null,"unknown":[}}"#;
+    let mut walker = TapeWalker::new(malformed);
+    let mut arena = norito::json::Arena::new();
+    assert!(<Demo as FastFromJson>::parse(&mut walker, &mut arena).is_err());
+}

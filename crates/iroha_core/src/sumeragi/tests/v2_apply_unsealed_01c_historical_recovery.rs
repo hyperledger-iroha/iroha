@@ -263,6 +263,7 @@ v2_apply_test!(
         };
         assert_eq!(
                 apply_lane_reservation_reconciliation_plan(
+                    fixture.state.as_ref(),
                     queue.as_ref(),
                     fixture.kura.as_ref(),
                     plan,

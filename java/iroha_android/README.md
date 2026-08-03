@@ -1513,6 +1513,45 @@ the Python and Swift descriptor-only mirrors from the same result. Always commit
 the complete generated set together; never retain an old hash, retired fixture,
 or compatibility-only payload in the Java resource directory.
 
+### Musubi V1 registry reads
+
+`MusubiToriiClientV1` and `MusubiModelsV1` mirror the Kotlin-default first-release
+registry surface without reflection, Android framework dependencies, or legacy
+wire aliases. The signer-free client exposes all eleven typed
+`/v1/musubi/queries/*` POST routes and strictly preserves structured package IDs,
+immutable namespace bindings, SemVer requirement ASTs, chain/genesis lock
+identity, finalized cursors, and authoritative archive commitments. Unknown
+fields and unsupported versions fail closed.
+
+Both Java and Kotlin validate the Rust-owned contract in
+[`fixtures/musubi/sdk_v1.json`](../../fixtures/musubi/sdk_v1.json). Credentials, if
+an operator configures them on the transport, are never represented by these DTOs
+or written into project files.
+
+`search(SearchQuery)` posts to `/v1/musubi/queries/search` and returns a bounded,
+structurally ordered page with a search-specific finalized projection cursor;
+the discovery projection is never a resolver input.
+
+`findArchiveRetention(ArchiveRetentionQuery)` accepts only sorted, distinct,
+non-zero archive identities and rejects a response whose identity order or
+optional finalized snapshot differs from the exact request.
+
+`MusubiInstructionsV1` mirrors the Kotlin typed construction surface for
+immutable namespace-binding registration, package invitation creation,
+acceptance, revocation, role replacement, and removal, permanent alias
+registration, exact release-digest assertion, archive registration, location
+addition or renewal, and location retirement, release publication and
+reversible yank state, package metadata replacement, and Parliament-enacted
+package ownership recovery, permanent-alias retargeting, artifact takedown, and
+registry-policy replacement. Public namespace bindings are constructible,
+maintainer roles require at least one independent permission, and mutation
+reasons use the canonical non-empty
+`MusubiModelsV1.Reason` value bounded to 1,024 UTF-8 bytes. Each builder exposes
+`barePayload()`, `concreteFrame()`, and
+`toInstructionBox()` and is checked at all four framing layers against
+all eighteen cases in
+[`fixtures/musubi/instructions_v1.json`](../../fixtures/musubi/instructions_v1.json).
+
 ## License
 
 Licensed under the Apache License, Version 2.0. See `LICENSE` for details.

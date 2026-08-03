@@ -25,7 +25,7 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     account::{AccountId, NewAccount},
-    asset::{AssetDefinitionId, AssetId, NewAssetDefinition},
+    asset::{AssetBalancePolicy, AssetDefinitionId, AssetId, NewAssetDefinition},
     block::BlockHeader,
     domain::{Domain, DomainId},
     isi::{Mint, Register},
@@ -135,7 +135,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     .expect("dataspace catalog");
     state.set_nexus(nexus).expect("set nexus config");
 
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("domain id"),
         "xor".parse().expect("asset definition name"),
     );
@@ -157,7 +157,8 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         mintable: Default::default(),
         logo: None,
         metadata: Default::default(),
-        balance_scope_policy: Default::default(),
+        balance_scope_policy: AssetBalancePolicy::Global,
+        owning_domain: Some(domain_id.clone()),
         confidential_policy: Default::default(),
     })
     .execute(&ALICE_ID, &mut stx)
@@ -308,7 +309,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         .expect("i105 account literal");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::portfolio_only"));
     let domain_id: DomainId = DomainId::try_new("portfolio-only", "universal").expect("domain id");
-    let definition_id = AssetDefinitionId::new(
+    let definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "rose".parse().expect("asset definition name"),
     );
@@ -330,7 +331,8 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         mintable: Default::default(),
         logo: None,
         metadata: Default::default(),
-        balance_scope_policy: Default::default(),
+        balance_scope_policy: AssetBalancePolicy::Global,
+        owning_domain: Some(domain_id.clone()),
         confidential_policy: Default::default(),
     })
     .execute(&ALICE_ID, &mut stx)
@@ -615,7 +617,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         .expect("i105 account literal");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::uncataloged_alias"));
     let domain_id: DomainId = DomainId::try_new("uncataloged", "universal").expect("domain id");
-    let definition_id = AssetDefinitionId::new(
+    let definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "lotus".parse().expect("asset definition name"),
     );
@@ -650,7 +652,8 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         mintable: Default::default(),
         logo: None,
         metadata: Default::default(),
-        balance_scope_policy: Default::default(),
+        balance_scope_policy: AssetBalancePolicy::Global,
+        owning_domain: Some(domain_id.clone()),
         confidential_policy: Default::default(),
     })
     .execute(&ALICE_ID, &mut stx)
@@ -750,7 +753,7 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         .expect("secondary i105 account literal");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::binding_consensus_merge"));
     let domain_id: DomainId = DomainId::try_new("multi-bindings", "universal").expect("domain id");
-    let definition_id = AssetDefinitionId::new(
+    let definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "cedar".parse().expect("asset definition name"),
     );
@@ -810,7 +813,8 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         mintable: Default::default(),
         logo: None,
         metadata: Default::default(),
-        balance_scope_policy: Default::default(),
+        balance_scope_policy: AssetBalancePolicy::Global,
+        owning_domain: Some(domain_id.clone()),
         confidential_policy: Default::default(),
     })
     .execute(&ALICE_ID, &mut stx)

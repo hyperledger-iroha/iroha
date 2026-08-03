@@ -11,8 +11,9 @@ use std::{
 use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
-        DEFAULT_DESCRIPTOR_COMMIT, HandshakeSuite, HarnessError, RuntimeParams, build_client_hello,
-        client_handle_relay_hello, relay_finalize_handshake,
+        DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_TLS_SERVER_NAME, HandshakeSuite, HarnessError,
+        RuntimeParams, SORANET_QUIC_ALPN, build_client_hello, client_handle_relay_hello,
+        relay_finalize_handshake,
     },
 };
 use norito::json::{self, Map, Value};
@@ -53,6 +54,8 @@ impl HandshakeScenario {
             relay_capabilities: &self.relay_caps,
             kem_id: 1,
             sig_id: 1,
+            transport_alpn: SORANET_QUIC_ALPN,
+            tls_server_name: DEFAULT_TLS_SERVER_NAME,
             resume_hash: None,
         }
     }
@@ -64,7 +67,6 @@ fn run_handshake(suite: HandshakeSuite) -> Result<(), HarnessError> {
 
     let mut rng_client = ChaCha20Rng::from_seed([0xA5; 32]);
     let mut rng_relay = ChaCha20Rng::from_seed([0x5A; 32]);
-    let client_keys = fixed_ed25519_keypair("client", 0x11)?;
     let relay_keys = fixed_ed25519_keypair("relay", 0x22)?;
 
     let (client_hello, client_state) = build_client_hello(&params, &mut rng_client)?;
@@ -89,7 +91,7 @@ fn run_handshake(suite: HandshakeSuite) -> Result<(), HarnessError> {
     let (client_finish, _) = client_handle_relay_hello(
         client_state,
         &relay_message,
-        &client_keys,
+        relay_keys.public_key(),
         &params,
         &mut rng_client,
     )?;

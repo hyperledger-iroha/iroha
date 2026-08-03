@@ -42,17 +42,31 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
-    let delivery_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "bond".parse().unwrap(),
-    );
-    let payment_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "usd".parse().unwrap(),
-    );
+    let delivery_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "bond".parse().unwrap(),
+        );
+    let payment_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "usd".parse().unwrap(),
+        );
 
-    let delivery_def = AssetDefinition::numeric(delivery_def_id.clone()).build(&ALICE_ID);
-    let payment_def = AssetDefinition::numeric(payment_def_id.clone()).build(&ALICE_ID);
+    let delivery_def = AssetDefinition::numeric(
+        delivery_def_id.clone(),
+        "bond".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
+    let payment_def = AssetDefinition::numeric(
+        payment_def_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
 
     let alice_delivery = Asset::new(
         AssetId::new(delivery_def_id.clone(), ALICE_ID.clone()),
@@ -87,18 +101,33 @@ fn settlement_state_with_payment_spec(
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
-    let delivery_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "bond".parse().unwrap(),
-    );
-    let payment_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "usd".parse().unwrap(),
-    );
+    let delivery_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "bond".parse().unwrap(),
+        );
+    let payment_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "usd".parse().unwrap(),
+        );
 
-    let delivery_def =
-        AssetDefinition::new(delivery_def_id.clone(), NumericSpec::integer()).build(&ALICE_ID);
-    let payment_def = AssetDefinition::new(payment_def_id.clone(), payment_spec).build(&ALICE_ID);
+    let delivery_def = AssetDefinition::new(
+        delivery_def_id.clone(),
+        "bond".to_owned(),
+        NumericSpec::integer(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
+    let payment_def = AssetDefinition::new(
+        payment_def_id.clone(),
+        "usd".to_owned(),
+        payment_spec,
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
 
     let alice_delivery = Asset::new(
         AssetId::new(delivery_def_id.clone(), ALICE_ID.clone()),

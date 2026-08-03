@@ -330,6 +330,30 @@ run_mutant autonomous-open-queue-before-recovery-install "$AUTONOMOUS_MODULE" \
 run_mutant autonomous-partial-recovery-group-preflight "$AUTONOMOUS_MODULE" \
   multilane_autonomous_partial_recovery_group_preflight_bug.cfg \
   MLHistoricalAllGroupsPreflight
+run_mutant autonomous-pending-only-canonical-terminal "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_pending_only_canonical_terminal_bug.cfg \
+  MLTerminalOutcomeJoinAuthenticated
+run_mutant autonomous-release-without-finalization-authority \
+  "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_release_without_finalization_authority_bug.cfg \
+  MLTerminalOutcomeJoinAuthenticated
+run_mutant autonomous-complete-without-queue-evidence "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_complete_without_queue_evidence_bug.cfg \
+  MLTerminalOutcomeJoinAuthenticated
+run_mutant autonomous-partial-terminal-unit-sweep "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_partial_terminal_unit_sweep_bug.cfg \
+  MLCanonicalTerminalBatchAtomic
+run_mutant autonomous-owned-group-mutation-before-planner "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_owned_group_mutation_before_planner_bug.cfg \
+  MLTerminalStartupSweepOrder
+run_mutant autonomous-open-queue-before-deferred-carrier-apply \
+  "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_open_queue_before_deferred_carrier_apply_bug.cfg \
+  MLTerminalStartupSweepOrder
+run_mutant autonomous-producer-recovery-without-queue-owner \
+  "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_producer_recovery_without_queue_owner_bug.cfg \
+  MLLocalProducerRecoveryRequiresQueueOwner
 run_mutant autonomous-volatile-stage-diagnostics "$AUTONOMOUS_MODULE" \
   multilane_autonomous_volatile_stage_diagnostics_bug.cfg \
   MLStageEvidenceMonotonic
@@ -403,4 +427,4 @@ run_mutant kura-replica-refresh-cursor-skip "$KURA_RETENTION_MODULE" \
 run_mutant kura-replica-skip-final-prestage-recheck "$KURA_RETENTION_MODULE" \
   kura_replica_skip_final_prestage_recheck_bug.cfg KRFinalPreStageRecheck
 
-echo "[tlc] all 99 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"
+echo "[tlc] all 106 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"

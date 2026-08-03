@@ -30,10 +30,11 @@ fn checked_random_keypair() -> KeyPair {
 
 #[test]
 fn dump_wallet_flow_hex() {
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let alice = AccountId::new(checked_random_keypair().public_key().clone());
     let bob = AccountId::new(checked_random_keypair().public_key().clone());
 

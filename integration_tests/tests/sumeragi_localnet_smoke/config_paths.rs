@@ -21,3 +21,22 @@ fn collect_config_paths(root: &Path, output: &mut Vec<PathBuf>) {
         }
     }
 }
+
+fn config_fingerprint(root: &Path) -> Result<Option<String>> {
+    if !root.exists() {
+        return Ok(None);
+    }
+    let mut paths = Vec::new();
+    collect_config_paths(root, &mut paths);
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    paths.sort();
+    let mut hasher = Blake3Hasher::new();
+    for path in paths {
+        hasher.update(path.to_string_lossy().as_bytes());
+        let contents = fs::read(&path).wrap_err_with(|| format!("read {}", path.display()))?;
+        hasher.update(&contents);
+    }
+    Ok(Some(hasher.finalize().to_hex().to_string()))
+}

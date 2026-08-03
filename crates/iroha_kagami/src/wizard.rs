@@ -20,6 +20,8 @@ use toml::{Value as TomlValue, value::Table as TomlTable};
 
 use crate::{Outcome, RunArgs, tui};
 
+const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
+
 /// Supported network profiles for the wizard.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Profile {
@@ -782,6 +784,10 @@ fn apply_overrides(
         TomlValue::String(keypair.public_key().to_string()),
     );
     genesis.insert("file".into(), TomlValue::String("genesis.json".to_owned()));
+    genesis.insert(
+        "expected_hash".into(),
+        TomlValue::String(GENESIS_EXPECTED_HASH_PLACEHOLDER.to_owned()),
+    );
     set_table(config, "genesis", genesis);
 
     Ok(())
@@ -942,6 +948,10 @@ fn build_vanilla_config(
         TomlValue::String(keypair.public_key().to_string()),
     );
     genesis.insert("file".into(), TomlValue::String("genesis.json".to_owned()));
+    genesis.insert(
+        "expected_hash".into(),
+        TomlValue::String(GENESIS_EXPECTED_HASH_PLACEHOLDER.to_owned()),
+    );
     root.insert("genesis".into(), TomlValue::Table(genesis));
 
     let mut nexus = TomlTable::new();
@@ -1068,6 +1078,15 @@ mod tests {
         assert!(table.get("network").is_some());
         assert!(table.get("torii").is_some());
         assert!(table.get("genesis").is_some());
+        assert_eq!(
+            table
+                .get("genesis")
+                .and_then(TomlValue::as_table)
+                .and_then(|genesis| genesis.get("expected_hash"))
+                .and_then(TomlValue::as_str),
+            Some(GENESIS_EXPECTED_HASH_PLACEHOLDER),
+            "wizard output must remain fail-closed until signing binds the exact block hash"
+        );
         assert!(table.get("trusted_peers").is_some());
         assert!(table.get("trusted_peers_pop").is_some());
     }

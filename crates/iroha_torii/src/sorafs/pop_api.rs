@@ -3905,6 +3905,7 @@ mod tests {
             "runtime:pop:providers:primary",
             "runtime:pop:providers:primary",
         );
+        let mut rng = OsRng;
         let substituted_wallet_recipient =
             HybridKeyPair::generate(&mut rng).expect("substituted wallet recipient key");
         registry

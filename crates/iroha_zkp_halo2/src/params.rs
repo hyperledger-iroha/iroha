@@ -8,7 +8,7 @@
 //! All generators are derived using SHA3-256 under a fixed DST.
 
 use std::{
-    any::Any,
+    any::{Any, TypeId},
     collections::HashMap,
     sync::{
         Arc,
@@ -22,7 +22,8 @@ use parking_lot::RwLock;
 use crate::{
     backend::{IpaBackend, traits::IpaGroup},
     errors::Error,
-    norito_types::{IpaParams, ZkCurveId, fingerprint_bytes},
+    hash::sha3_256,
+    norito_types::{IpaParams, ZkCurveId},
 };
 
 pub(crate) const PARAMS_REGISTRY_MAX_ENTRIES: usize = 32;
@@ -61,86 +62,20 @@ impl<B: IpaBackend> Params<B> {
         })
     }
 
-    /// Construct parameters directly from provided generator vectors.
-    pub(crate) fn from_generators(
-        n: usize,
-        g: Vec<B::Group>,
-        h: Vec<B::Group>,
-        u: B::Group,
-    ) -> Result<Self, Error> {
-        use std::collections::HashSet;
-
-        if n == 0 || (n & (n - 1)) != 0 {
-            return Err(Error::InvalidN(n));
-        }
-        if g.len() != n {
-            return Err(Error::DimensionMismatch {
-                expected: n,
-                actual: g.len(),
-            });
-        }
-        if h.len() != n {
-            return Err(Error::DimensionMismatch {
-                expected: n,
-                actual: h.len(),
-            });
-        }
-
-        let identity = B::Group::identity();
-
-        let mut seen_g = HashSet::with_capacity(n);
-        for (idx, point) in g.iter().enumerate() {
-            if *point == identity {
-                return Err(Error::InvalidGenerator {
-                    kind: "G",
-                    index: idx,
-                    reason: "identity element is not a valid generator",
-                });
-            }
-            let inserted = seen_g.insert(point.to_bytes());
-            if !inserted {
-                return Err(Error::InvalidGenerator {
-                    kind: "G",
-                    index: idx,
-                    reason: "duplicate generator",
-                });
-            }
-        }
-
-        let mut seen_h = HashSet::with_capacity(n);
-        for (idx, point) in h.iter().enumerate() {
-            if *point == identity {
-                return Err(Error::InvalidGenerator {
-                    kind: "H",
-                    index: idx,
-                    reason: "identity element is not a valid generator",
-                });
-            }
-            let inserted = seen_h.insert(point.to_bytes());
-            if !inserted {
-                return Err(Error::InvalidGenerator {
-                    kind: "H",
-                    index: idx,
-                    reason: "duplicate generator",
-                });
-            }
-        }
-
-        if u == identity {
-            return Err(Error::InvalidGenerator {
-                kind: "U",
-                index: 0,
-                reason: "identity element is not a valid generator",
-            });
-        }
-
-        Ok(Self {
-            n,
+    /// Return a deliberately different valid generator ordering for transcript tests.
+    #[cfg(test)]
+    pub(crate) fn with_rotated_generators_for_test(&self) -> Self {
+        let mut g = self.g.clone();
+        let mut h = self.h.clone();
+        g.rotate_left(1);
+        h.rotate_right(1);
+        Self {
+            n: self.n,
             g,
             h,
-            u,
+            u: self.u,
             fingerprint: OnceCell::new(),
-        })
+        }
     }
 
     /// Returns the vector length `n`.
@@ -197,58 +132,46 @@ impl<B: IpaBackend> Params<B> {
         if n == 0 || (n & (n - 1)) != 0 {
             return Err(Error::InvalidN(n));
         }
-        if w.g.len() != n {
-            return Err(Error::DimensionMismatch {
-                expected: n,
-                actual: w.g.len(),
-            });
-        }
-        if w.h.len() != n {
-            return Err(Error::DimensionMismatch {
-                expected: n,
-                actual: w.h.len(),
-            });
-        }
         Ok(n)
     }
+}
 
-    pub(crate) fn from_wire(w: &IpaParams) -> Result<Self, Error> {
-        let n = Self::validate_wire_header(w)?;
-        let g =
-            w.g.iter()
-                .map(B::Group::from_bytes)
-                .collect::<Result<Vec<_>, _>>()?;
-        let h =
-            w.h.iter()
-                .map(B::Group::from_bytes)
-                .collect::<Result<Vec<_>, _>>()?;
-        let u = B::Group::from_bytes(&w.u)?;
-        let supplied = Self::from_generators(n, g, h, u)?;
-        let canonical = Self::new(n)?;
-        if supplied.g != canonical.g || supplied.h != canonical.h || supplied.u != canonical.u {
-            return Err(Error::UnknownParams);
-        }
-        Ok(canonical)
+fn fingerprint_bytes(
+    curve_id: u16,
+    n: u32,
+    g: &[[u8; 32]],
+    h: &[[u8; 32]],
+    u: &[u8; 32],
+) -> [u8; 32] {
+    let mut buf = Vec::with_capacity(2 + 4 + (g.len() + h.len() + 1) * 32);
+    buf.extend_from_slice(&curve_id.to_le_bytes());
+    buf.extend_from_slice(&n.to_le_bytes());
+    for elem in g {
+        buf.extend_from_slice(elem);
     }
+    for elem in h {
+        buf.extend_from_slice(elem);
+    }
+    buf.extend_from_slice(u);
+    sha3_256(&buf)
 }
 
 pub(crate) fn params_from_wire_backend<B>(w: &IpaParams) -> Result<Arc<Params<B>>, Error>
 where
     B: IpaBackend + 'static,
 {
-    // The first-release IPA has one transparent parameter set per
-    // (curve, n), derived by `Params::new`. Parsing and exact comparison happen
-    // before the cache lookup so caller-chosen generator relations can never
-    // enter the verifier.
-    let params = Arc::new(Params::<B>::from_wire(w)?);
-    let fingerprint = params.fingerprint();
-    if let Some(existing) = PARAMS_REGISTRY.lookup::<B>(&fingerprint) {
+    // The wire selects only `(curve, n)`: it has no representation for
+    // caller-chosen generators. Cache lookup can therefore safely happen before
+    // the deterministic derivation.
+    let n = Params::<B>::validate_wire_header(w)?;
+    if let Some(existing) = PARAMS_REGISTRY.lookup::<B>(n) {
         return Ok(existing);
     }
-    Ok(PARAMS_REGISTRY.insert::<B>(fingerprint, params))
+    let params = Arc::new(Params::<B>::new(n)?);
+    Ok(PARAMS_REGISTRY.insert::<B>(n, params))
 }
 
-type ParamsKey = (ZkCurveId, [u8; 32]);
+type ParamsKey = (TypeId, ZkCurveId, usize);
 type ParamsSlot = Arc<dyn Any + Send + Sync>;
 
 struct ParamsEntry {
@@ -273,22 +196,22 @@ impl ParamsRegistry {
         self.clock.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
     }
 
-    fn lookup<B>(&self, fp: &[u8; 32]) -> Option<Arc<Params<B>>>
+    fn lookup<B>(&self, n: usize) -> Option<Arc<Params<B>>>
     where
         B: IpaBackend + 'static,
     {
-        let key = (B::CURVE_ID, *fp);
+        let key = (TypeId::of::<B>(), B::CURVE_ID, n);
         let mut guard = self.map.write();
         let entry = guard.get_mut(&key)?;
         entry.last_used = self.tick();
         entry.slot.clone().downcast::<Params<B>>().ok()
     }
 
-    fn insert<B>(&self, fp: [u8; 32], params: Arc<Params<B>>) -> Arc<Params<B>>
+    fn insert<B>(&self, n: usize, params: Arc<Params<B>>) -> Arc<Params<B>>
     where
         B: IpaBackend + 'static,
     {
-        let key = (B::CURVE_ID, fp);
+        let key = (TypeId::of::<B>(), B::CURVE_ID, n);
         let mut guard = self.map.write();
         let now = self.tick();
         if let Some(entry) = guard.get_mut(&key) {
@@ -329,16 +252,13 @@ impl ParamsRegistry {
     }
 
     #[cfg(test)]
-    fn len(&self) -> usize {
-        self.map.read().len()
-    }
-
-    #[cfg(test)]
-    fn contains<B>(&self, fp: &[u8; 32]) -> bool
+    fn contains<B>(&self, n: usize) -> bool
     where
         B: IpaBackend + 'static,
     {
-        self.map.read().contains_key(&(B::CURVE_ID, *fp))
+        self.map
+            .read()
+            .contains_key(&(TypeId::of::<B>(), B::CURVE_ID, n))
     }
 }
 
@@ -350,14 +270,9 @@ pub(crate) fn clear_params_registry_for_tests() {
 }
 
 #[cfg(test)]
-pub(crate) fn params_registry_len_for_tests() -> usize {
-    PARAMS_REGISTRY.len()
-}
-
-#[cfg(test)]
-pub(crate) fn params_registry_contains_for_tests<B>(fp: &[u8; 32]) -> bool
+pub(crate) fn params_registry_contains_for_tests<B>(n: usize) -> bool
 where
     B: IpaBackend + 'static,
 {
-    PARAMS_REGISTRY.contains::<B>(fp)
+    PARAMS_REGISTRY.contains::<B>(n)
 }

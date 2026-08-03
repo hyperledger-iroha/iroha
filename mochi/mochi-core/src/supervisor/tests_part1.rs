@@ -762,7 +762,7 @@ fn builder_creates_peer_configs() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .chain_id("test-chain")
         .torii_base_port(9000)
@@ -771,7 +771,7 @@ fn builder_creates_peer_configs() {
         .expect("build supervisor");
 
     assert_eq!(supervisor.chain_id(), "test-chain");
-    assert_eq!(supervisor.peers().len(), 1);
+    assert_eq!(supervisor.peers().len(), 4);
 
     let peer = &supervisor.peers()[0];
     let config_path = peer.config_path().to_path_buf();
@@ -1193,23 +1193,16 @@ fn multi_peer_configs_bound_soranet_pow_for_local_full_mesh() {
     }
     assert_eq!(revocation_paths.len(), 4);
 
-    let single = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let legacy = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path().join("single-peer"))
         .torii_base_port(30000)
         .p2p_base_port(31000)
         .build()
-        .expect("build single-peer supervisor");
-    let single_config: toml::Table = toml::from_str(
-        &fs::read_to_string(single.peers()[0].config_path()).expect("peer config readable"),
-    )
-    .expect("valid peer config");
-    assert!(
-        single_config
-            .get("network")
-            .and_then(toml::Value::as_table)
-            .and_then(|network| network.get("soranet_handshake"))
-            .is_none(),
-        "single-peer Mochi must keep Iroha's canonical production PoW defaults"
+        .expect("build historical profile alias");
+    assert_eq!(
+        legacy.peers().len(),
+        4,
+        "the historical profile name must still launch a safe committee"
     );
 }
 
@@ -1257,11 +1250,11 @@ fn custom_profile_supports_seven_peers_with_unique_ports() {
 
 #[test]
 fn profile_preset_preserves_consensus_mode() {
-    let profile = NetworkProfile::custom(3, SumeragiConsensusMode::Npos).expect("profile");
+    let profile = NetworkProfile::custom(7, SumeragiConsensusMode::Npos).expect("profile");
     let builder =
         SupervisorBuilder::with_profile(profile).profile_preset(ProfilePreset::SinglePeer);
     assert_eq!(builder.profile().preset, Some(ProfilePreset::SinglePeer));
-    assert_eq!(builder.profile().topology.peer_count, 1);
+    assert_eq!(builder.profile().topology.peer_count, 4);
     assert_eq!(
         builder.profile().consensus_mode,
         SumeragiConsensusMode::Npos
@@ -1271,12 +1264,12 @@ fn profile_preset_preserves_consensus_mode() {
 #[test]
 fn build_rejects_genesis_profile_without_npos() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let profile = NetworkProfile::custom(1, SumeragiConsensusMode::Permissioned).expect("profile");
+    let profile = NetworkProfile::custom(4, SumeragiConsensusMode::Permissioned).expect("profile");
     let builder = SupervisorBuilder::with_profile(profile)
         .data_root(temp.path())
         .genesis_profile(GenesisProfile::Iroha3Dev)
         .set_profile(
-            NetworkProfile::custom(1, SumeragiConsensusMode::Permissioned).expect("profile"),
+            NetworkProfile::custom(4, SumeragiConsensusMode::Permissioned).expect("profile"),
         );
 
     let err = builder
@@ -1375,6 +1368,41 @@ fn genesis_generation_invokes_kagami() {
             }),
         "temporary genesis signing keys must be removed after kagami exits"
     );
+}
+
+#[test]
+fn generated_genesis_binds_topology_specific_block_cadence() {
+    if !ports_available("generated_genesis_binds_topology_specific_block_cadence") {
+        return;
+    }
+    let _env = env_lock().lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _stub = KagamiStub::install(temp.path());
+
+    for (preset, expected_cadence_ms) in [
+        (ProfilePreset::SinglePeer, 1_000),
+        (ProfilePreset::FourPeerBft, 1_000),
+    ] {
+        let supervisor = SupervisorBuilder::new(preset)
+            .data_root(temp.path().join(format!("cadence-{}", preset.slug())))
+            .build()
+            .expect("build supervisor");
+        let manifest = RawGenesisTransaction::from_path(supervisor.genesis_manifest())
+            .expect("load generated genesis manifest");
+        let actual_cadence_ms = manifest
+            .effective_parameters()
+            .expect("derive effective genesis parameters")
+            .sumeragi()
+            .block_cadence_ms()
+            .get();
+
+        assert_eq!(
+            actual_cadence_ms,
+            expected_cadence_ms,
+            "{} must sign the topology-appropriate local cadence",
+            preset.slug()
+        );
+    }
 }
 
 #[cfg(unix)]

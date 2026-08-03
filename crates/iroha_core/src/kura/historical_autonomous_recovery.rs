@@ -2,6 +2,8 @@ const HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1: &str = "historical_autonomous
 const HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_VERSION_V1: u16 = 1;
 const HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS: usize = 4_096;
+const HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX: &str =
+    ".historical-autonomous-recovery-";
 const HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES: u64 =
     V2_PENDING_CONTROL_SIDECAR_BYTES_MAX as u64;
 
@@ -106,8 +108,8 @@ fn bounded_historical_autonomous_recovery_entries<T>(
                     directory.to_path_buf(),
                 )
             })?;
-        let after_bind = std::fs::symlink_metadata(&path)
-            .map_err(|error| Error::IO(error, path.clone()))?;
+        let after_bind =
+            std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
         if !Kura::sidecar_file_metadata_unchanged(&metadata, &after_bind) {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -134,8 +136,8 @@ fn bounded_historical_autonomous_recovery_entries<T>(
         ));
     }
     for (path, _, accounted) in &bounded {
-        let current = std::fs::symlink_metadata(path)
-            .map_err(|error| Error::IO(error, path.clone()))?;
+        let current =
+            std::fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.clone()))?;
         if !Kura::sidecar_file_metadata_unchanged(accounted, &current) {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -238,10 +240,32 @@ impl HistoricalAutonomousLaneRecoveryRecordV1 {
     }
 }
 
+/// Return the exact bytes used for validation, capacity admission, and stable
+/// no-clobber publication of one historical recovery seal.
+fn historical_autonomous_recovery_record_bytes(
+    record: &HistoricalAutonomousLaneRecoveryRecordV1,
+) -> Vec<u8> {
+    record.encode()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HistoricalAutonomousLaneRecoveryPersistOutcome {
     Installed,
     AlreadyInstalled,
+}
+
+struct HistoricalAutonomousLaneRecoveryBatchPreflight {
+    existing_recovery_ids: BTreeSet<Hash>,
+    additional_physical_peak_bytes: u64,
+}
+
+struct HistoricalAutonomousExecutionInputRouteCapacity {
+    namespace: BoundProgressNamespace,
+    initial_layout: SidecarIndexLayout,
+    layout: SidecarIndexLayout,
+    data_len: u64,
+    index_len: u64,
+    planned_inputs: BTreeMap<u64, LaneBlockExecutionInputArtifact>,
 }
 
 macro_rules! kura_historical_autonomous_recovery_methods {
@@ -381,7 +405,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     "historical autonomous recovery PoPs are missing, misordered, oversized, or invalid",
                 ));
             }
-            let bytes = record.encode();
+            let bytes = historical_autonomous_recovery_record_bytes(record);
             if bytes.is_empty() || bytes.len() > HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES {
                 return Err(Self::invalid_historical_autonomous_recovery(
                     path.to_path_buf(),
@@ -426,7 +450,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let record = HistoricalAutonomousLaneRecoveryRecordV1::decode_all(&mut cursor)
                 .map_err(Error::NoritoFrame)?;
             let expected_name = format!("{}.norito", hex::encode(record.recovery_id.as_ref()));
-            if record.encode() != snapshot.bytes
+            if historical_autonomous_recovery_record_bytes(&record) != snapshot.bytes
                 || path.file_name().and_then(std::ffi::OsStr::to_str)
                     != Some(expected_name.as_str())
             {
@@ -454,7 +478,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     .read_current_autonomous_lane_block_record_self_context_locked(
                         &entry,
                         descriptor.lane_block_height,
-                        false,
+                        None,
                     )?
                     .ok_or_else(|| {
                         Self::invalid_historical_autonomous_recovery(
@@ -522,6 +546,15 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             expected: &HistoricalAutonomousLaneRecoveryRecordV1,
         ) -> Result<()> {
             let _prune_guard = self.prune_lock.lock();
+            self.validate_historical_autonomous_lane_recovery_record_dependencies_under_prune_guard(
+                expected,
+            )
+        }
+
+        fn validate_historical_autonomous_lane_recovery_record_dependencies_under_prune_guard(
+            &self,
+            expected: &HistoricalAutonomousLaneRecoveryRecordV1,
+        ) -> Result<()> {
             self.ensure_prune_recovery_not_required()?;
             let descriptor = &expected.payload.origin_proposal.descriptor;
             let (path, directory) = {
@@ -621,6 +654,14 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             &self,
             limit: usize,
         ) -> Result<Vec<HistoricalAutonomousLaneRecoveryRecordV1>> {
+            let _prune_guard = self.prune_lock.lock();
+            self.historical_autonomous_lane_recovery_records_bounded_under_prune_guard(limit)
+        }
+
+        fn historical_autonomous_lane_recovery_records_bounded_under_prune_guard(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<HistoricalAutonomousLaneRecoveryRecordV1>> {
             #[cfg(test)]
             self.historical_autonomous_recovery_inventory_scans
                 .fetch_add(1, Ordering::Relaxed);
@@ -630,7 +671,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     "historical autonomous recovery reader has an invalid record limit",
                 ));
             }
-            let _prune_guard = self.prune_lock.lock();
             self.ensure_prune_recovery_not_required()?;
             let _geometry_guard = self.lane_geometry_lock.lock();
             let entries = self
@@ -722,10 +762,12 @@ macro_rules! kura_historical_autonomous_recovery_methods {
 
         /// Prove that normal autonomous-payload and execution-input writers
         /// will accept this record before an all-item runner batch mutates its
-        /// first file. This is deliberately read-only; crash repair remains the
-        /// responsibility of the later guarded persistence calls.
+        /// first file. This is deliberately read-only; startup must complete
+        /// any interrupted dependency publication before replay reaches this
+        /// batch gate.
         fn preflight_historical_autonomous_recovery_install_dependencies(
             &self,
+            pending_canonical_bytes: u64,
             record: &HistoricalAutonomousLaneRecoveryRecordV1,
             path: &Path,
         ) -> Result<()> {
@@ -759,7 +801,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 .read_current_autonomous_lane_block_record_self_context_locked(
                     &entry,
                     descriptor.lane_block_height,
-                    false,
+                    None,
                 )?
             {
                 let existing_payload = &existing.artifact.executable_payload;
@@ -793,46 +835,462 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 }
             }
             self.preflight_autonomous_lane_entrypoint_claims_locked(
+                pending_canonical_bytes,
                 &record.payload,
                 MAX_AUTONOMOUS_LANE_CLAIM_FILES,
             )?;
 
-            let existing_input = Self::read_indexed_sidecar_from_paths(
+            let existing_input = Self::read_indexed_sidecar_from_paths_with_recovery(
                 descriptor.lane_block_height,
                 &input_data_path,
                 &input_index_path,
                 norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
                 "historical autonomous lane block execution input preflight",
+                false,
             );
-            match existing_input {
-                Some(existing) if existing != expected_input => {
-                    return Err(Self::invalid_historical_autonomous_recovery(
-                        input_data_path,
-                        "historical autonomous execution input conflicts with durable bytes",
-                    ));
-                }
-                Some(_) => {}
-                None => {
-                    let tracked = Self::sidecar_tracked_bytes(
-                        &input_data_path,
-                        &input_index_path,
-                        None,
-                    )?;
-                    if tracked != 0 {
-                        return Err(Self::invalid_historical_autonomous_recovery(
-                            input_data_path,
-                            "historical autonomous execution-input sidecar is non-empty but unreadable",
-                        ));
-                    }
-                }
+            if existing_input.is_some_and(|existing| existing != expected_input) {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    input_data_path,
+                    "historical autonomous execution input conflicts with durable bytes",
+                ));
             }
             Ok(())
         }
 
-        fn preflight_historical_autonomous_lane_recovery_records_with_inventory(
+        fn historical_autonomous_execution_input_route_capacity_locked(
             &self,
+            entry: &LaneConfigEntry,
+        ) -> Result<HistoricalAutonomousExecutionInputRouteCapacity> {
+            let (data_path, index_path) =
+                Self::lane_block_execution_input_paths_for_entry(entry, &self.store_root);
+            let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+            // Historical replay is an all-batch read-only preflight until its
+            // capacity reservation succeeds. It therefore never repairs a
+            // half-published append in place: startup recovery owns that
+            // mutation, and a live retry remains fail-closed until restart.
+            self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                &namespace,
+                &data_path,
+                &index_path,
+                "historical autonomous lane block execution input",
+            )?;
+            let parent = data_path.parent().ok_or_else(|| {
+                Self::invalid_historical_autonomous_recovery(
+                    data_path.clone(),
+                    "historical autonomous execution-input path has no parent",
+                )
+            })?;
+            let data_metadata = self.regular_sidecar_metadata(&data_path, parent)?;
+            let index_metadata = self.regular_sidecar_metadata(&index_path, parent)?;
+            let (layout, data_len, index_len) = match (data_metadata, index_metadata) {
+                (None, None) => (SidecarIndexLayout::legacy(0), 0, 0),
+                (Some(data_metadata), Some(index_metadata)) => {
+                    let mut index = Self::open_direct_sidecar_file_in_namespace(
+                        &index_path,
+                        false,
+                        false,
+                        Some(&namespace),
+                    )
+                    .map_err(|error| Error::IO(error, index_path.clone()))?;
+                    let index_len = index_metadata.file.len();
+                    let layout = SidecarIndexLayout::read_from(&mut index, index_len).map_err(
+                        |reason| {
+                            Self::invalid_historical_autonomous_recovery(
+                                index_path.clone(),
+                                format!(
+                                    "historical autonomous execution-input index is malformed: {reason}"
+                                ),
+                            )
+                        },
+                    )?;
+                    if layout.aligned_len != index_len {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            index_path,
+                            "historical autonomous execution-input index has trailing or partial bytes",
+                        ));
+                    }
+                    (layout, data_metadata.file.len(), index_len)
+                }
+                _ => {
+                    return Err(Self::invalid_historical_autonomous_recovery(
+                        data_path,
+                        "historical autonomous execution-input data/index pair is only partially present",
+                    ));
+                }
+            };
+            Ok(HistoricalAutonomousExecutionInputRouteCapacity {
+                namespace,
+                initial_layout: layout,
+                layout,
+                data_len,
+                index_len,
+                planned_inputs: BTreeMap::new(),
+            })
+        }
+
+        fn historical_autonomous_initial_execution_input_locked(
+            &self,
+            route: &HistoricalAutonomousExecutionInputRouteCapacity,
+            lane_block_height: u64,
+        ) -> Result<Option<LaneBlockExecutionInputArtifact>> {
+            let Some(entry_position) = route.initial_layout.entry_position(lane_block_height)
+            else {
+                return Ok(None);
+            };
+            let mut index = Self::open_direct_sidecar_file_in_namespace(
+                &route.namespace.index_path,
+                false,
+                false,
+                Some(&route.namespace),
+            )
+            .map_err(|error| Error::IO(error, route.namespace.index_path.clone()))?;
+            let mut entry_bytes = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
+            index
+                .seek(SeekFrom::Start(entry_position))
+                .and_then(|_| index.read_exact(&mut entry_bytes))
+                .map_err(|error| Error::IO(error, route.namespace.index_path.clone()))?;
+            if SidecarIndexEntry::from_bytes(entry_bytes).len == 0 {
+                return Ok(None);
+            }
+            Self::read_indexed_sidecar_from_paths_with_recovery(
+                lane_block_height,
+                &route.namespace.data_path,
+                &route.namespace.index_path,
+                norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
+                "historical autonomous lane block execution input",
+                false,
+            )
+            .map(Some)
+            .ok_or_else(|| {
+                Self::invalid_historical_autonomous_recovery(
+                    route.namespace.data_path.clone(),
+                    "historical autonomous execution-input index owns unreadable bytes",
+                )
+            })
+        }
+
+        fn plan_historical_autonomous_execution_input_growth_locked(
+            &self,
+            route: &mut HistoricalAutonomousExecutionInputRouteCapacity,
+            artifact: &LaneBlockExecutionInputArtifact,
+            payload_len: u64,
+        ) -> Result<(u64, u64)> {
+            let descriptor = &artifact.proposal.descriptor;
+            let lane_block_height = descriptor.lane_block_height;
+            if let Some(existing) = route.planned_inputs.get(&lane_block_height) {
+                if existing == artifact {
+                    return Ok((0, 0));
+                }
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    route.namespace.data_path.clone(),
+                    "historical autonomous batch aliases one execution-input height",
+                ));
+            }
+            if let Some(existing) = self.historical_autonomous_initial_execution_input_locked(
+                route,
+                lane_block_height,
+            )? {
+                if existing == *artifact {
+                    return Ok((0, 0));
+                }
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    route.namespace.data_path.clone(),
+                    "historical autonomous execution input conflicts with durable bytes",
+                ));
+            }
+
+            let old_index_len = route.index_len;
+            let (next_layout, new_index_len, individual_peak) =
+                if route.layout.is_based() && lane_block_height < route.layout.base_height {
+                    let prepend = route
+                        .layout
+                        .base_height
+                        .checked_sub(lane_block_height)
+                        .ok_or_else(|| {
+                            Self::invalid_historical_autonomous_recovery(
+                                route.namespace.index_path.clone(),
+                                "historical autonomous execution-input prepend underflowed",
+                            )
+                        })?;
+                    if prepend > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
+                        return Err(Self::invalid_historical_autonomous_recovery(
+                            route.namespace.index_path.clone(),
+                            "historical autonomous execution-input prepend exceeds its bounded window",
+                        ));
+                    }
+                    let entry_count = route
+                        .layout
+                        .entry_count
+                        .checked_add(prepend)
+                        .ok_or_else(|| {
+                            Self::invalid_historical_autonomous_recovery(
+                                route.namespace.index_path.clone(),
+                                "historical autonomous execution-input prepend count overflowed",
+                            )
+                        })?;
+                    let entries_offset = if lane_block_height > 1 {
+                        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
+                    } else {
+                        0
+                    };
+                    let new_index_len = entry_count
+                        .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
+                        .and_then(|bytes| bytes.checked_add(entries_offset))
+                        .ok_or_else(|| {
+                            Self::invalid_historical_autonomous_recovery(
+                                route.namespace.index_path.clone(),
+                                "historical autonomous execution-input prepend bytes overflowed",
+                            )
+                        })?;
+                    let layout = if lane_block_height > 1 {
+                        SidecarIndexLayout::based(lane_block_height, new_index_len).map_err(
+                            |reason| {
+                                Self::invalid_historical_autonomous_recovery(
+                                    route.namespace.index_path.clone(),
+                                    format!(
+                                        "historical autonomous execution-input prepend layout is invalid: {reason}"
+                                    ),
+                                )
+                            },
+                        )?
+                    } else {
+                        SidecarIndexLayout::legacy(new_index_len)
+                    };
+                    let peak = payload_len.checked_add(new_index_len).ok_or_else(|| {
+                        Self::invalid_historical_autonomous_recovery(
+                            route.namespace.data_path.clone(),
+                            "historical autonomous execution-input prepend peak overflowed",
+                        )
+                    })?;
+                    (layout, new_index_len, peak)
+                } else {
+                    let index_growth = if route.layout.entry_position(lane_block_height).is_some() {
+                        0
+                    } else {
+                        let expected_height = route.layout.next_height().ok_or_else(|| {
+                            Self::invalid_historical_autonomous_recovery(
+                                route.namespace.index_path.clone(),
+                                "historical autonomous execution-input index height overflowed",
+                            )
+                        })?;
+                        let missing = lane_block_height.checked_sub(expected_height).ok_or_else(
+                            || {
+                                Self::invalid_historical_autonomous_recovery(
+                                    route.namespace.index_path.clone(),
+                                    "historical autonomous execution-input height precedes its index",
+                                )
+                            },
+                        )?;
+                        if missing > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
+                            return Err(Self::invalid_historical_autonomous_recovery(
+                                route.namespace.index_path.clone(),
+                                "historical autonomous execution-input append exceeds its bounded window",
+                            ));
+                        }
+                        let entries = missing.checked_add(1).ok_or_else(|| {
+                            Self::invalid_historical_autonomous_recovery(
+                                route.namespace.index_path.clone(),
+                                "historical autonomous execution-input append count overflowed",
+                            )
+                        })?;
+                        let entry_bytes = entries
+                            .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
+                            .ok_or_else(|| {
+                                Self::invalid_historical_autonomous_recovery(
+                                    route.namespace.index_path.clone(),
+                                    "historical autonomous execution-input append bytes overflowed",
+                                )
+                            })?;
+                        if route.index_len == 0 && lane_block_height > 1 {
+                            entry_bytes
+                                .checked_add(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
+                                .ok_or_else(|| {
+                                    Self::invalid_historical_autonomous_recovery(
+                                        route.namespace.index_path.clone(),
+                                        "historical autonomous execution-input base header overflowed",
+                                    )
+                                })?
+                        } else {
+                            entry_bytes
+                        }
+                    };
+                    let new_index_len = old_index_len.checked_add(index_growth).ok_or_else(|| {
+                        Self::invalid_historical_autonomous_recovery(
+                            route.namespace.index_path.clone(),
+                            "historical autonomous execution-input index growth overflowed",
+                        )
+                    })?;
+                    let layout = if new_index_len == old_index_len {
+                        route.layout
+                    } else if old_index_len == 0 && lane_block_height > 1 {
+                        SidecarIndexLayout::based(lane_block_height, new_index_len).map_err(
+                            |reason| {
+                                Self::invalid_historical_autonomous_recovery(
+                                    route.namespace.index_path.clone(),
+                                    format!(
+                                        "historical autonomous execution-input initial layout is invalid: {reason}"
+                                    ),
+                                )
+                            },
+                        )?
+                    } else if route.layout.is_based() {
+                        SidecarIndexLayout::based(route.layout.base_height, new_index_len).map_err(
+                            |reason| {
+                                Self::invalid_historical_autonomous_recovery(
+                                    route.namespace.index_path.clone(),
+                                    format!(
+                                        "historical autonomous execution-input extended layout is invalid: {reason}"
+                                    ),
+                                )
+                            },
+                        )?
+                    } else {
+                        SidecarIndexLayout::legacy(new_index_len)
+                    };
+                    let peak = payload_len
+                        .checked_add(Self::maximum_index_growth_for_unresolved_sidecar_write(
+                            lane_block_height,
+                        ))
+                        .and_then(|bytes| {
+                            bytes.checked_add(
+                                u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES).ok()?,
+                            )
+                        })
+                        .ok_or_else(|| {
+                            Self::invalid_historical_autonomous_recovery(
+                                route.namespace.data_path.clone(),
+                                "historical autonomous execution-input append peak overflowed",
+                            )
+                        })?;
+                    (layout, new_index_len, peak)
+                };
+
+            let stable_growth = payload_len
+                .checked_add(new_index_len)
+                .and_then(|bytes| bytes.checked_sub(old_index_len))
+                .ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        route.namespace.data_path.clone(),
+                        "historical autonomous execution-input stable bytes overflowed or regressed",
+                    )
+                })?;
+            let transient = individual_peak.checked_sub(stable_growth).ok_or_else(|| {
+                Self::invalid_historical_autonomous_recovery(
+                    route.namespace.data_path.clone(),
+                    "historical autonomous execution-input transient bytes underflowed",
+                )
+            })?;
+            route.data_len = route.data_len.checked_add(payload_len).ok_or_else(|| {
+                Self::invalid_historical_autonomous_recovery(
+                    route.namespace.data_path.clone(),
+                    "historical autonomous execution-input data bytes overflowed",
+                )
+            })?;
+            route.index_len = new_index_len;
+            route.layout = next_layout;
+            route
+                .planned_inputs
+                .insert(lane_block_height, artifact.clone());
+            Ok((stable_growth, transient))
+        }
+
+        fn preflight_historical_autonomous_recovery_batch_capacity_under_prune_guard(
+            &self,
+            pending_canonical_bytes: u64,
             incoming: &[HistoricalAutonomousLaneRecoveryRecordV1],
-        ) -> Result<BTreeSet<Hash>> {
+            existing_recovery_ids: &BTreeSet<Hash>,
+        ) -> Result<u64> {
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let _sidecar_guard = self.sidecar_lock.lock();
+            let mut routes = BTreeMap::<PathBuf, HistoricalAutonomousExecutionInputRouteCapacity>::new();
+            let mut planned_recovery_ids = BTreeSet::new();
+            let mut stable_growth = 0_u64;
+            let mut maximum_transient = 0_u64;
+            for record in incoming {
+                if existing_recovery_ids.contains(&record.recovery_id)
+                    || !planned_recovery_ids.insert(record.recovery_id)
+                {
+                    continue;
+                }
+                let descriptor = &record.payload.origin_proposal.descriptor;
+                let entry = self.lane_storage_entry(descriptor.lane_id)?;
+                self.require_active_lane_artifact(&entry, descriptor)?;
+                let (data_path, _) =
+                    Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
+                if !routes.contains_key(&data_path) {
+                    routes.insert(
+                        data_path.clone(),
+                        self.historical_autonomous_execution_input_route_capacity_locked(&entry)?,
+                    );
+                }
+                let artifact = Self::autonomous_lane_block_execution_input_candidate(
+                    &record.payload,
+                    record.payload.chain_id_hash,
+                    record.payload.epoch,
+                )
+                .map_err(|availability| {
+                    Self::invalid_historical_autonomous_recovery(
+                        data_path.clone(),
+                        format!(
+                            "historical autonomous execution-input capacity planning failed: {availability:?}"
+                        ),
+                    )
+                })?;
+                let payload = artifact.encode_framed()?;
+                let route = routes
+                    .get_mut(&data_path)
+                    .expect("historical route was inserted before capacity planning");
+                let (input_stable_growth, input_transient) = self
+                    .plan_historical_autonomous_execution_input_growth_locked(
+                        route,
+                        &artifact,
+                        u64::try_from(payload.len())?,
+                    )?;
+                stable_growth = stable_growth
+                    .checked_add(input_stable_growth)
+                    .and_then(|bytes| {
+                        bytes.checked_add(u64::try_from(
+                            historical_autonomous_recovery_record_bytes(record).len(),
+                        )
+                        .ok()?)
+                    })
+                    .ok_or_else(|| {
+                        Self::invalid_historical_autonomous_recovery(
+                            data_path.clone(),
+                            "historical autonomous batch stable bytes overflowed",
+                        )
+                    })?;
+                maximum_transient = maximum_transient.max(input_transient);
+            }
+            // A no-clobber recovery seal is written into one temporary inode
+            // which is renamed into its stable name, so it does not coexist
+            // with a second allocation of its own stable bytes. Progress
+            // append intents and prepend replacement indexes do coexist with
+            // every stable byte admitted for the batch; reserve the largest
+            // such protocol transient exactly once.
+            let additional_physical_peak_bytes = stable_growth
+                .checked_add(maximum_transient)
+                .ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        self.store_root.clone(),
+                        "historical autonomous batch physical peak overflowed",
+                    )
+                })?;
+            self.validate_configured_autonomous_mutation_disk_peak_locked(
+                pending_canonical_bytes,
+                additional_physical_peak_bytes,
+                false,
+                false,
+                &self.store_root,
+            )?;
+            Ok(additional_physical_peak_bytes)
+        }
+
+        fn preflight_historical_autonomous_lane_recovery_records_under_prune_guard(
+            &self,
+            pending_canonical_bytes: u64,
+            incoming: &[HistoricalAutonomousLaneRecoveryRecordV1],
+        ) -> Result<HistoricalAutonomousLaneRecoveryBatchPreflight> {
             if incoming.is_empty()
                 || incoming.len() > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS
             {
@@ -841,9 +1299,10 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     "historical autonomous recovery batch is empty or exceeds its hard record limit",
                 ));
             }
-            let mut combined = self.historical_autonomous_lane_recovery_records_bounded(
-                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
-            )?;
+            let mut combined = self
+                .historical_autonomous_lane_recovery_records_bounded_under_prune_guard(
+                    HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+                )?;
             let existing_recovery_ids = combined
                 .iter()
                 .map(|record| record.recovery_id)
@@ -856,7 +1315,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let mut combined_encoded_bytes = 0_u64;
             let aggregate_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
             for existing in &combined {
-                let encoded = norito::encode_canonical(existing).map_err(Error::NoritoFrame)?;
+                let encoded = historical_autonomous_recovery_record_bytes(existing);
                 combined_encoded_bytes = accumulate_historical_autonomous_recovery_bytes(
                     combined_encoded_bytes,
                     encoded.len(),
@@ -883,7 +1342,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     record.recovery_id,
                 );
                 self.validate_historical_autonomous_recovery_record_shape(record, &path)?;
-                let encoded = norito::encode_canonical(record).map_err(Error::NoritoFrame)?;
+                let encoded = historical_autonomous_recovery_record_bytes(record);
                 if let Some(parent) = directory.parent() {
                     self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
                         Self::invalid_historical_autonomous_recovery(
@@ -934,7 +1393,9 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         )
                     })?;
                     self.preflight_historical_autonomous_recovery_install_dependencies(
-                        record, &path,
+                        pending_canonical_bytes,
+                        record,
+                        &path,
                     )?;
                     recovery_positions.insert(record.recovery_id, combined.len());
                     combined.push(record.clone());
@@ -947,7 +1408,16 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 ));
             }
             self.validate_historical_autonomous_recovery_inventory_collisions(&combined)?;
-            Ok(existing_recovery_ids)
+            let additional_physical_peak_bytes = self
+                .preflight_historical_autonomous_recovery_batch_capacity_under_prune_guard(
+                    pending_canonical_bytes,
+                    incoming,
+                    &existing_recovery_ids,
+                )?;
+            Ok(HistoricalAutonomousLaneRecoveryBatchPreflight {
+                existing_recovery_ids,
+                additional_physical_peak_bytes,
+            })
         }
 
         #[cfg(test)]
@@ -1022,9 +1492,12 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             &self,
             record: &HistoricalAutonomousLaneRecoveryRecordV1,
             existing_from_preflight: bool,
+            pending_canonical_bytes: u64,
         ) -> Result<HistoricalAutonomousLaneRecoveryPersistOutcome> {
             if existing_from_preflight {
-                self.validate_historical_autonomous_lane_recovery_record_dependencies(record)?;
+                self.validate_historical_autonomous_lane_recovery_record_dependencies_under_prune_guard(
+                    record,
+                )?;
                 return Ok(HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled);
             }
 
@@ -1034,17 +1507,12 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             // cannot safely call back into the signer/State coordinator; it
             // accepts only the exact independently durable payload produced by
             // that move-only adapter.
-            #[cfg(test)]
-            self.persist_lane_executable_payload(
-                &record.payload,
-                record.payload.chain_id_hash,
-                record.payload.epoch,
-            )?;
             let recovered = self
-                .recover_autonomous_lane_block_payload(
+                .recover_autonomous_lane_block_payload_with_sidecar_repair(
                     &record.payload.origin_proposal,
                     record.payload.chain_id_hash,
                     record.payload.epoch,
+                    false,
                 )
                 .map_err(|availability| {
                     Self::invalid_historical_autonomous_recovery(
@@ -1054,7 +1522,10 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         ),
                     )
                 })?;
-            self.persist_lane_block_execution_input(&recovered)?;
+            self.persist_lane_block_execution_input_under_prune_and_canonical_guards(
+                &recovered,
+                pending_canonical_bytes,
+            )?;
 
             let descriptor = &record.payload.origin_proposal.descriptor;
             let provisional_entry = self.lane_storage_entry(descriptor.lane_id)?;
@@ -1067,7 +1538,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 record,
                 &provisional_path,
             )?;
-            let bytes = record.encode();
+            let bytes = historical_autonomous_recovery_record_bytes(record);
 
             let accounting_mutation = self.begin_total_disk_usage_mutation();
             let _geometry_guard = self.lane_geometry_lock.lock();
@@ -1118,7 +1589,12 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 accounting_mutation.finish();
                 return Ok(HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled);
             }
-            let wrote = self.write_atomic_synced_noclobber(&path, &bytes)?;
+            let wrote = self.write_atomic_synced_impl_with_prefix(
+                &path,
+                &bytes,
+                false,
+                HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX,
+            )?;
             if wrote {
                 self.update_disk_usage_delta(0, u64::try_from(bytes.len())?);
             } else {
@@ -1160,6 +1636,27 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             })
         }
 
+        /// Return the already-validated physical reservation for an otherwise
+        /// read-only batch preflight.
+        #[cfg(test)]
+        pub(crate) fn historical_autonomous_recovery_batch_additional_peak_for_test(
+            &self,
+            records: &[HistoricalAutonomousLaneRecoveryRecordV1],
+        ) -> Result<u64> {
+            let _prune_guard = self.prune_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let _canonical_chain_guard = self.canonical_chain_lock.lock();
+            let pending_canonical_bytes =
+                self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+            let _historical_recovery_guard =
+                self.historical_autonomous_recovery_mutation_lock.lock();
+            self.preflight_historical_autonomous_lane_recovery_records_under_prune_guard(
+                pending_canonical_bytes,
+                records,
+            )
+            .map(|preflight| preflight.additional_physical_peak_bytes)
+        }
+
         /// Persist one all-or-restart batch with exactly one complete bounded
         /// inventory/preflight pass. Collision checks use ordered indexes;
         /// subsequent per-record work uses direct paths and immutable readback.
@@ -1167,19 +1664,30 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             &self,
             records: &[HistoricalAutonomousLaneRecoveryRecordV1],
         ) -> Result<Vec<HistoricalAutonomousLaneRecoveryPersistOutcome>> {
+            let _prune_guard = self.prune_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let _canonical_chain_guard = self.canonical_chain_lock.lock();
+            let pending_canonical_bytes =
+                self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
             let _historical_recovery_guard =
                 self.historical_autonomous_recovery_mutation_lock.lock();
-            self.ensure_prune_recovery_not_required()?;
-            self.durable_mutation_authorized()?;
-            let existing_recovery_ids = self
-                .preflight_historical_autonomous_lane_recovery_records_with_inventory(records)?;
+            let preflight = self
+                .preflight_historical_autonomous_lane_recovery_records_under_prune_guard(
+                    pending_canonical_bytes,
+                    records,
+                )?;
+            let _admitted_physical_peak_bytes = preflight.additional_physical_peak_bytes;
             let mut outcomes = Vec::new();
             outcomes.try_reserve_exact(records.len())?;
+            self.durable_mutation_authorized()?;
             for record in records {
                 outcomes.push(
                     self.persist_preflighted_historical_autonomous_lane_recovery_record(
                         record,
-                        existing_recovery_ids.contains(&record.recovery_id),
+                        preflight
+                            .existing_recovery_ids
+                            .contains(&record.recovery_id),
+                        pending_canonical_bytes,
                     )?,
                 );
             }
@@ -1194,6 +1702,11 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             &self,
             record: &HistoricalAutonomousLaneRecoveryRecordV1,
         ) -> Result<HistoricalAutonomousLaneRecoveryPersistOutcome> {
+            self.persist_lane_executable_payload(
+                &record.payload,
+                record.payload.chain_id_hash,
+                record.payload.epoch,
+            )?;
             self.persist_historical_autonomous_lane_recovery_records(std::slice::from_ref(record))?
                 .pop()
                 .ok_or_else(|| {
@@ -1358,10 +1871,7 @@ mod historical_autonomous_recovery_bound_tests {
             },
         };
         assert!(
-            !historical_autonomous_recovery_read_matches_accounting(
-                &accounted,
-                &length_mismatch,
-            ),
+            !historical_autonomous_recovery_read_matches_accounting(&accounted, &length_mismatch,),
             "bytes with a different scanner-accounted length must never reach decoding",
         );
 
@@ -1380,10 +1890,7 @@ mod historical_autonomous_recovery_bound_tests {
             },
         };
         assert!(
-            !historical_autonomous_recovery_read_matches_accounting(
-                &accounted,
-                &identity_mismatch,
-            ),
+            !historical_autonomous_recovery_read_matches_accounting(&accounted, &identity_mismatch,),
             "same-path and same-length replacement metadata must never reach decoding",
         );
     }
@@ -1572,22 +2079,18 @@ mod historical_autonomous_recovery_bound_tests {
         let temp = tempfile::tempdir().expect("temporary block store");
         let lane_artifacts = temp.path().join(LANE_ARTIFACTS_DIR_NAME);
         std::fs::create_dir(&lane_artifacts).expect("create lane artifacts");
-        let before = Kura::block_store_bytes_with_historical_limit(
-            temp.path(),
-            TEST_AGGREGATE_BYTE_LIMIT,
-        )
-        .expect("measure empty block store");
+        let before =
+            Kura::block_store_bytes_with_historical_limit(temp.path(), TEST_AGGREGATE_BYTE_LIMIT)
+                .expect("measure empty block store");
 
         let historical = lane_artifacts.join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1);
         std::fs::create_dir(&historical).expect("create historical recovery namespace");
         let record = historical.join(canonical_record_name(0));
         let record_bytes = b"bounded historical recovery accounting";
         std::fs::write(&record, record_bytes).expect("write historical recovery record");
-        let after = Kura::block_store_bytes_with_historical_limit(
-            temp.path(),
-            TEST_AGGREGATE_BYTE_LIMIT,
-        )
-        .expect("measure nested recovery record");
+        let after =
+            Kura::block_store_bytes_with_historical_limit(temp.path(), TEST_AGGREGATE_BYTE_LIMIT)
+                .expect("measure nested recovery record");
         assert_eq!(
             after.checked_sub(before),
             Some(u64::try_from(record_bytes.len()).expect("record length fits u64")),

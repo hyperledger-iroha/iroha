@@ -7,6 +7,7 @@ HISTORICAL_BODY_RESPONSE_PHASE_MARKERS = (
 )
 
 REQUIRED_MODEL_MODULES = (
+    "SumeragiV2Revision4",
     "SumeragiV2",
     "SumeragiV2Quorums",
     "SumeragiV2QuorumProofs",
@@ -76,6 +77,8 @@ REQUIRED_MODEL_MODULES = (
 )
 
 REQUIRED_TLC_CONFIGS = (
+    "SumeragiV2Revision4.cfg",
+    "SumeragiV2Revision4Liveness.cfg",
     "quorum_count.cfg",
     "quorum_stake.cfg",
     "safety_count.cfg",
@@ -87,6 +90,8 @@ REQUIRED_TLC_CONFIGS = (
 )
 
 REQUIRED_TLC_CONFIG_HEADERS = {
+    "SumeragiV2Revision4.cfg": "SPECIFICATION Spec",
+    "SumeragiV2Revision4Liveness.cfg": "SPECIFICATION PostGSTSpec",
     "quorum_count.cfg": "INIT Init\nNEXT QuorumCheckNext",
     "quorum_stake.cfg": "INIT Init\nNEXT QuorumCheckNext",
     "safety_count.cfg": "INIT Init\nNEXT Next",
@@ -114,10 +119,10 @@ _REPLY_ROUTE_FORMAL_SOURCE_SHA256 = {
         "e58c5bab1f59dc3e9c08c999fc2df2b7c7b9c008a8bcd2a0dbc1b3ee90c8d77c"
     ),
     "SumeragiV2AsyncNetworkReplyRoutes.tla": (
-        "11cc2f38ad35d0da52a11302a22036c37d9cb7285689780444e4d25d1857d732"
+        "3856e434243093287b94ce0799fc769ae458b156a694a1694165fb2fb2ff1c74"
     ),
     "SumeragiV2AsyncNetworkReplyRouteProofs.tla": (
-        "c78a573babc540b00f9078a663348f7097b241bb95915e9c8d38649d6e46ddbc"
+        "d09f0029f5dc280359f222040cac6184f2ef3e85a4e1cef2e570416207a2befa"
     ),
     "SumeragiV2ReplyRouteOwnershipMutation.tla": (
         "9c5dd145561e0d9715623e1839ffc95d00fb75fa748ed67814a2a5458c4bb533"

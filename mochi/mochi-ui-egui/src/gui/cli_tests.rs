@@ -108,12 +108,12 @@ fn parse_cli_genesis_profile_sets_value() {
 fn parse_cli_profile_inline_table_sets_custom_profile() {
     let args = vec![
         OsString::from("--profile"),
-        OsString::from("{ peer_count = 3, consensus_mode = \"permissioned\" }"),
+        OsString::from("{ peer_count = 7, consensus_mode = \"permissioned\" }"),
     ];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");
     let profile = parsed.overrides.profile.expect("profile override");
     assert_eq!(profile.preset, None);
-    assert_eq!(profile.topology.peer_count, 3);
+    assert_eq!(profile.topology.peer_count, 7);
     assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
 }
 

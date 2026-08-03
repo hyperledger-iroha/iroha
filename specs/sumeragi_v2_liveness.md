@@ -1,11 +1,12 @@
 # Sumeragi v2 liveness contract and release gate
 
 Sumeragi v2 does not promise unconditional termination. An unbounded network
-partition, the absence of a responsive dual quorum, or local disk, signing,
+partition, the absence of a responsive `2f + 1` equal-vote quorum, or local disk, signing,
 validation, and application work which never completes can prevent progress.
 The first-release target is therefore conditional:
 
-> After GST, with a responsive dual quorum and terminating local work, every
+> After GST, with an exact `n = 3f + 1` roster of 4 through 31 voting peers, a
+> responsive `2f + 1` equal-vote quorum, and deterministic terminating local work, every
 > height eventually decides and every responsive validator eventually applies
 > the decision and activates its successor height.
 
@@ -23,6 +24,11 @@ serialized, completion/ingress/runtime/sidecar work is serviced in finite
 batches, the watchdog is polled on every loop edge, and idle/continue paths use
 the finite 10 ms `IDLE_POLL`. Those checks do not prove host scheduling or I/O
 latency.
+
+The release claim is exercised only by networks with at least four voting
+peers. Single-peer and undersized fixtures are not representative Sumeragi v2
+networks and cannot satisfy the production-network release gate, even when a
+bounded local model is useful as mutation evidence.
 
 For the first release, a “responsive validator” is a voting Sumeragi v2 node
 running on the validator-storage platform contract implemented and exercised
@@ -164,6 +170,16 @@ restarts recovery, an available body restarts `StoreBody`, a durable body
 restarts `ValidateBody`, and a validated body restarts `Apply`. Dropping any
 one volatile owner therefore leaves a deterministic reconstruction path from
 the durable Decision and body-stage record.
+
+Application retransmission has the matching terminal rule. While `Apply` is
+in flight, an exact rediscovery coalesces with the incumbent work identifier
+and lifecycle owner. After Kura returns the typed finality receipt and exact
+artifact, the executor retains their original reducer tag as the completion
+tombstone: later exact rediscovery is absorbed, while any tag, subject,
+context, or CommitQC drift fails closed. Draining the work queue therefore
+cannot recreate the same logical application at its old stage. This is a
+source-level production repair and does not by itself promote the
+`application-liveness` or production-refinement ledger entries.
 
 Decision installation is also a terminal ownership boundary for global reducer
 input and losing carriers. Before its `FetchBody` effect can reserve capacity,
@@ -497,10 +513,12 @@ TransportCompletion slot for either a payload chunk or certified-body
 response. Short non-empty lanes retain the continuation potential needed to
 restore all four reservations after any service step. Each simultaneously
 materialized authenticated non-validator lane has two owners: one generic
-message slot and one TransportCompletion slot for a roster-origin completion
-forwarded through that source. The anonymous lane has the same two owners when
-the roster is non-empty, while its no-roster diagnostic geometry needs only the
-generic slot because no roster-origin completion can be valid. If `H` is the
+message slot and one TransportCompletion slot for either a current-roster
+completion forwarded through that source or a proof-carrying historical lane
+response from an authenticated predecessor signer. The anonymous lane has the
+same two owners when the roster is non-empty, while its no-roster diagnostic
+geometry needs only the generic slot because no anonymous completion can be
+valid. If `H` is the
 configured maximum number of simultaneously materialized authenticated
 non-validator lanes, the exact non-empty-roster count minimum is therefore
 `4 * roster_len + 2 * H + 2`; the no-roster minimum is `2 * H + 1`.
@@ -509,8 +527,8 @@ from the effective `network.max_total_connections`. Root validation resolves
 the selected lane profile before deriving `R`, so `lane_profile = "home"` with
 an omitted explicit maximum uses `R = 32`, and rejects any configuration with
 `H > R`.
-The canonical Sumeragi shared-config projection is format version 3 because
-`H` is fingerprint-bound, so incompatible source geometries cannot share a
+The canonical Sumeragi shared-config projection is format version 6. `H`
+remains fingerprint-bound, so incompatible source geometries cannot share a
 handshake fingerprint.
 Authenticated non-validator lanes are created on demand and removed when empty.
 A semantic duplicate carrying an alternate authenticated reply route is merged
@@ -520,7 +538,12 @@ lane. Non-timeout
 Progress includes Commit votes, QCs, TCs, certified-body requests, and both
 Commit-certificate request/response directions. Proposals, Prepare votes, and
 manifests remain ordinary; TimeoutVote uses its own signer-bounded corridor;
-`PayloadChunk` and `CertifiedBodyResponse` share TransportCompletion. Relay
+`PayloadChunk`, `CertifiedBodyResponse`, and
+`LaneHistoricalRecoveryResponse` share TransportCompletion. The first two
+require a current-roster semantic origin. The historical response may instead
+come from an authenticated predecessor signer, but the lane adapter admits it
+only for an outstanding exact request whose frozen CommitQC or READY
+certificate authorizes that signer. Relay
 delivery keeps semantic origin separate from authenticated transport via: the
 reducer and equivocation checks use origin, while count, bytes, and fair service
 are charged exclusively to the via lane. Pending exact retransmissions
@@ -538,7 +561,8 @@ isolated timeout-vote byte reserve and an independent full TransportCompletion
 envelope reserve, so ordinary traffic cannot consume the capacity required to
 advance a view or finish body recovery. Height activation derives the latter
 with checked arithmetic from the frozen DA layout and the exact bare-Norito
-framing of the largest valid `PayloadChunk` and `CertifiedBodyResponse`; an
+framing of the largest valid `PayloadChunk`, `CertifiedBodyResponse`, and
+bounded historical lane response; an
 overflow or undersized source partition fails closed before ingress opens.
 These count, byte, Progress, timeout, and completion reservations prevent one
 authenticated source from consuming another validator's recovery capacity or
@@ -552,11 +576,12 @@ canonical compact-length prefix. For a layout admitting `C` chunk hashes, the
 exact bare manifest ceiling is `M(C) = F(8 + C * F(32)) + 228`. The proposal
 ceiling then includes that manifest, a maximum-size signature, a timeout
 certificate with one non-empty group per validator and a full PrepareQC in
-every group, plus the separately carried highest PrepareQC. The recommended
-layout at the protocol maximum of 128 validators is exactly 232,541 bare bytes;
-the minimum one-validator, one-chunk layout is 2,302 bytes. For the recommended
-16 MiB layout, the larger of the maximum `PayloadChunk` and
-`CertifiedBodyResponse` envelopes is exactly 16,811,581 bare bytes.
+every group, plus the separately carried highest PrepareQC. The production
+calculation covers every valid `3f + 1` committee from 4 through the protocol
+maximum of 31 validators; no one-validator or non-`3f + 1` envelope is
+admissible. The implementation derives the exact proposal and recovery
+ceilings from the frozen context at activation instead of relying on one stale
+representative byte count.
 
 Recovery sizing is equally structural. A maximum QC contains all `N` signer
 indices and a 256-byte aggregate signature. `CertifiedBodyRequest` carries the
@@ -611,17 +636,19 @@ aggregate, consensus-topic, control-topic, block-sync-topic, or outbound-high
 requirement is undersized. Production defaults are 17 MiB for the global
 encrypted cap and the configured consensus and block-sync topic caps, 2 MiB
 for control, 128 MiB per peer for the high-priority encrypted-frame queue, and
-514 outer-ingress entries (`4 * 128 + 2`). The effective consensus and
+130 outer-ingress entries (`4 * 31 + 2 * 2 + 2`). The effective consensus and
 block-sync plaintext ceiling is the 17 MiB global cap minus the 28-byte AEAD
 expansion.
 
 Kagami-generated localnets inherit those 17/17/2/17 MiB frame caps, the
-514-entry count bound, and a 33 MiB per-source byte partition. They reject more
-than 128 validators and set aggregate body-ingress bytes to at least
-`(validator_count + 1) * 33 MiB`, retaining the 165 MiB four-validator default
-floor. The Taira template carries the same 165 MiB aggregate and 33 MiB
-per-source baseline; its bundle renderer accepts 4 through 128 validators and
-raises the aggregate to at least `(validator_count + 1) * body_source_bytes`.
+130-entry count bound, and a 33 MiB per-source byte partition. They accept only
+exact `3f + 1` rosters from 4 through 31 validators and set aggregate
+body-ingress bytes from the validator, authenticated non-validator, and
+anonymous source partitions, retaining the reviewed four-validator floor.
+The Taira template carries the same per-source baseline; its bundle renderer
+enforces the same 4, 7, 10, …, 31 geometry and raises the aggregate to at least
+`(validator_count + authenticated_non_validator_sources + 1) *
+body_source_bytes`.
 
 The peer sender extends that ownership boundary through encrypted stream I/O.
 It retains at most one bounded plaintext retry in each safety, ordinary-high,
@@ -671,14 +698,17 @@ lane-application projection, and their two-phase equality kernel. This progress
 argument remains conditional on publication of a ready exact receipt. The
 current `ReplyWriterDeadlineModelObligation` proof script targets local actor
 termination, and `ConditionalResponsiveWriterCursorLiveness` targets cursor
-advance under `ResponsiveWriterReceiptAssumption`; both remain
-`specified_unproved` until a fresh current-source strict run succeeds. Deriving
-that assumption from `ResponsiveReplyWriterSpec` is now the SANY-clean
+advance under `ResponsiveWriterReceiptAssumption`; both have source proof
+bodies and are deductively classified support for the still-unpromoted
+production progress refinement. Deriving that assumption from
+`ResponsiveReplyWriterSpec` is the SANY-clean
 `ResponsiveStrongFairnessToReceiptResidual` proof target. Its chain retains
 outstanding ownership, applies weak fairness to reconnect and first dispatch,
 then applies strong fairness to writer admission and publication across
-fragmented eligibility intervals. A fresh strict TLAPS run is still required;
-responsive TLC remains bounded evidence rather than proof authority. The finite
+fragmented eligibility intervals. It likewise has a source proof body and is
+not an independent ledger row. A fresh strict TLAPS run over the final
+dependency closure is still required; responsive TLC remains bounded evidence
+rather than proof authority. The finite
 `u8` attempt and saturating `Duration` make this a qualitative termination
 statement, not a fixed operational wall-clock SLA: later exponential deadlines
 can be extremely long.
@@ -707,12 +737,42 @@ same source's retained current chunk once while a reconnect retries it; sibling
 sources keep their independent cursors and reservations.
 
 Response materialization is selected internally, not owned by the network
-delivery which happened to arrive most recently. Request and Close allocation
-is rejected before the shared lane queue unless the semantic requester belongs
-to the frozen height roster; the authenticated relay carrying its exact return
-route need not be a validator. For roster size `N`, per-requester gate bound
-`S`, and authenticated reply-source bound `W`, the responder retains at most
-`N` streams, `N * S` logical request gates, and `N * S * W` route attempts.
+delivery which happened to arrive most recently. Before the shared lane queue,
+Request and Close require requester/sender identity plus an active exact return
+route; the authenticated relay carrying that route need not be a validator.
+The serialized adapter then admits either a current frozen-roster requester or
+an absent requester whose entry, finality, historical frozen roster, holder
+selection, carrier tuple, and retained compact reference all match Kura.
+For current roster size `N`, historical bound `H = 31`, per-requester gate
+bound `S`, and authenticated reply-source bound `W`, the responder retains at
+most `N + H` streams, `(N + H) * S` logical request gates, and
+`(N + H) * S * W` route attempts. At most `H` retained stream identities may
+be outside the current roster, so even a complete disjoint predecessor
+committee cannot consume any of the `N` live-roster reservations. Older
+archival demand beyond that bounded corridor fails closed; it cannot delay
+current consensus. A same-roster restart may monotonically expand a durable
+V3 lifecycle snapshot from the predecessor `N`-stream geometry to `N + H`;
+it preserves the generation, streams, gates, and attempts and republishes the
+expanded bound before returning. A shrink or any in-process geometry drift
+still fails closed.
+
+Historical serving does not require a locally retained block body. Before
+finality publication or eviction, Kura extracts the exact compact merge
+reference from the canonical body and stores it in the immutable retained
+block record beside the canonical header and proposal/executed-wire hashes.
+The combined reader revalidates finality and those wire bindings after
+remote-only eviction. This witness is bounded Kura-local serving authority,
+not an inclusion proof exported to consensus: every requester independently
+matches the reference and certified entry to its own canonical carrier and
+rejects a substituted or non-holder response.
+Canonical version-2 retained records remain restart-readable. They expose no
+merge witness because none was stored. If their exact body remains available,
+the same persistence operation that precedes eviction replaces the legacy
+record atomically with version 3 and verifies the replacement before eviction
+may continue. A bodyless legacy record therefore fails historical merge
+service closed instead of manufacturing authority. The version-3 byte ceiling
+is the sum of the complete version-2 envelope, the independently bounded
+reference, and explicit Norito option/struct framing headroom.
 An unknown current-generation Close is acknowledged statelessly and consumes
 none of those tables.
 
@@ -793,16 +853,18 @@ non-winning proposal is explicitly superseded by the finality authority rather
 than described as reconstructible winning output. The winning set is derived
 from the canonical finalized block's lane ownerships, never from the volatile
 output queue. An empty canonical ownership set is already complete, including
-for a result-bearing genesis block with external entries. Missing certificate
-or receipt evidence for a non-empty set leaves ingress open and the same height
-active so its exact lane session can finish; duplicate, conflicting, or
-non-canonical evidence fails closed. Only a complete Kura-first set authorizes
-the atomic output handoff and successor construction. Each rollover attempt
-rehydrates bounded, unapplied canonical ownership from Kura before collecting
-completed sessions. A block synchronized after adapter construction therefore
-retains its exact proposal as the request source for a peer's durable lane
-certificate instead of waiting forever with global application already
-complete. Native AMX
+for a result-bearing genesis block with external entries. Missing lane
+certificate or receipt evidence does not keep the finalized global height
+active. Rollover first canonicalizes every bounded unfinished winner against
+Kura, rejects conflicting quorum evidence, prunes proposal-only losers, and
+moves the exact remaining session cache, signing locks, autonomous payload and
+NewView cursors, historical recovery ownership, and retry cursors into the one
+immediate successor. Completed certificates keep their Kura-first source;
+unfinished certificates keep one move-only volatile owner. A block synchronized
+after adapter construction therefore retains its exact proposal as the request
+source for a peer's durable lane certificate while global successor progress
+continues. Duplicate, conflicting, unbounded, or non-canonical evidence fails
+closed. Native AMX
 output binds the creation scope, embedded consensus round, and exact message
 hash. A merge share binds its creation scope and exact share hash. Certified
 sidecar requests and chunks bind creation scope, exact target and
@@ -829,23 +891,28 @@ committed lane output and undispatched effect has crossed the worker boundary.
 It then binds the retained transport to one exact immediate successor context.
 An error at any of these post-finality checks is fail-stop.
 
-A successor adapter may ingest an earlier-height lane certificate only as local
-historical-recovery work. Earlier-height proposals, votes, and QCs are never
-emitted through the successor's generic `Lane(current_scope)` fanout: doing so
-would attach the successor context to a predecessor artifact and defer the
-contradiction until applied-height rollover. Once historical recovery is
-durable, exact request handling uses the separately typed Kura-backed response
-claims described above. Generic lane fanout is therefore restricted to output
-whose embedded proposal height equals the adapter's immutable height context.
+A successor adapter treats every moved earlier-height proposal, vote, QC,
+certificate, executable payload, and NewView artifact as historical work. Each
+ingress and retransmission rechecks the embedded predecessor height, frozen
+committee, canonical Kura carrier, exact body, and durable cursor; it cannot
+borrow the successor context's committee or carrier. A configured validator
+removed from the successor global roster runs global consensus as an observer,
+but retains lane authority only where an exact frozen descriptor names its key.
+That descriptor may belong to moved historical work or to an independently
+pinned current-height Nexus lane committee, which need not be a subset of the
+successor global roster. Authenticated non-roster ingress is bounded
+separately, so old committee members can finish their exact obligation without
+acquiring successor-global voting power. Once historical recovery is durable,
+exact request handling uses the separately typed Kura-backed response claims
+described above.
 
-Startup applies the same rule only at the durable tip. A tip with a complete
-checkpoint, manifest, and global finality artifact but incomplete canonical
-lane evidence reopens that exact terminal height with global reducer traffic
-closed and exact decided-lane transport enabled. It does not derive or persist
-the successor until every canonical ownership has its certificate and
-application receipt. Historical lane sidecars are not re-audited because
-canonical lifecycle changes may legitimately retire an older incarnation; the
-live crash boundary is the tip.
+Startup first completes any interrupted global application at the durable tip.
+After that strict boundary it activates the verified successor and hydrates
+bounded unfinished canonical lane evidence from Kura as historical work. It
+does not require the globally applied tip to wait for every lane certificate
+or application receipt. Historical artifacts are admitted only through the
+exact route/incarnation and canonical-carrier checks, so a later lifecycle
+cannot revive a retired lane generation.
 
 Broadcast and relay ownership are deliberately not claimed complete. A reliable
 broadcast snapshots the actor-accepted relay-aware topology and attempts each
@@ -877,7 +944,8 @@ allocator metadata remains count-bounded by that cap.
 `liveness` object in the canonical `SumeragiV2Status` payload. It contains:
 
 - the reducer generation and exact Prepare, Commit, and timeout partial pools,
-  including distinct signer count and signed/total voting power;
+  including distinct signer count plus signed/total unit-vote projections that
+  validation requires to equal that count and the frozen roster length;
 - durable outbound proposal, vote, QC, timeout-vote, and TC intents, with their
   persistence, signature, queue, or sent stage;
 - candidate, body recovery/store, validation, application, and successor
@@ -912,7 +980,7 @@ allocator metadata remains count-bounded by that cap.
 The watchdog deadline is derived from the configured, view-aware round timeout
 plus one retransmission interval. Its height-wide progress rank is bounded by
 the greatest semantic stage reached and the maximum Prepare/Commit signer count
-and signed power observed at that height. View and reducer generation are not
+observed at that height. View and reducer generation are not
 rank components. Timeout-vote admission, TC installation, and reconstruction of
 the same locked Commit pool update current diagnostics but cannot reset the
 height-progress clock; repeated view/generation cycles are not treated as
@@ -1149,24 +1217,35 @@ Subsequent source reconciliation and exact-ingress lifecycle, restart,
 provenance, and invalid-QC quarantine regressions bind one actor-global
 logical owner across its physical retries.
 Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
-regressions bring the current source-bound inventory to 813 exact tests across
+regressions produce the 813-test checkpoint. Five admission/coalescing, Busy
+pre-runtime ownership, and reconstructed-chunk terminality regressions bring
+the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
+high-water regressions bring the inventory to the 831-test checkpoint. Retiring
+five obsolete peer-genesis protocol regressions brings the 826-test checkpoint.
+Six autonomous-lifecycle terminal-outcome and startup-recovery regressions
+bring the current source-bound inventory to 834 exact tests across
 39 modules and 86 pre-network legs.
+The exact Apply regression also drains the typed Kura completion and verifies
+that its immutable finality artifact and original reducer tag absorb a later
+identical periodic rediscovery even after live tag authority is relinquished,
+without allocating a new work ID; tag drift or a conflicting post-completion
+certificate still fails closed. This extends an existing named regression and
+therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f`.
-Nine of those legs execute the separate 472-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 473 TSV lines and has SHA-256
-`9614482245a240ce1ea69b4e4f044514da1fd0029011b3ce5b0c639ceee0f6e3`.
-The 266-test core group includes grouped Native prevote-budget rejection before
+`2f818f6a1174b77a9078b9e80b000671a44d045f23088fdf0da271b91ff2ea12`.
+Nine of those legs execute the separate 474-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 475 TSV lines and has SHA-256
+`e74381ab01530611cb6ae2c7c8080af4a60024bf2b090e073a0d5c00b84d2989`.
+The 268-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
-Native signing-boundary drift rejection,
-atomic grouped reservation commit, exact QueuePlan obligation authentication,
-ApplyCarrier authorization, and canonical historical autonomous recovery into
-exactly-once merge application. It also binds the borrowed exact finalized
-carrier hash representation, the autonomous pristine and exact-height/empty
-post-block/pre-vote carrier surfaces, and rejection of event-surface drift both
-before publication and at finality. This source-derived inventory does not
-claim execution evidence.
+Native signing-boundary drift rejection, atomic grouped reservation commit,
+exact QueuePlan obligation authentication, ApplyCarrier authorization, and
+canonical historical autonomous recovery into exactly-once merge application.
+It also binds the borrowed exact finalized carrier hash representation, the
+autonomous pristine and exact-height/empty post-block/pre-vote carrier surfaces,
+and rejection of event-surface drift both before publication and at finality.
+This source-derived inventory does not claim execution evidence.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1398,20 +1477,21 @@ source under an explicit source-release disposition; the former route-era
 The current inventory retains the four-per-validator, two-per-materialized
 authenticated-non-validator, and two-anonymous owners (`4N+2H+2` total)
 capacity-negative boundary and the exact
-PrepareQC count-and-power quorum regressions. Its four integration tests run
+PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-86 legs, including separate exact status and atomic lane-certificate decode
+86 legs, including the autonomous lifecycle-recovery module, separate exact
+status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
 fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
-geometry modules, the shared-byte-budget module, the daemon genesis module,
-plus source-sealed workspace formatting, the legacy-codec guard, workspace
+geometry modules, the shared-byte-budget module, plus source-sealed workspace
+formatting, the legacy-codec guard, workspace
 build, Clippy, workspace tests, and feature-enabled `irohad` command-success
 legs, the G-SCALE runner/validator preflight, plus three proposal-origin
 data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 813-test inventory is a mechanically checked
+The current 834-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1491,10 +1571,12 @@ locked-body-reproposal entry denotes the exact three-arm progress obligation:
 old-round Commit, unchanged later-view same-round re-proposal, or legitimate
 Decision/higher-Prepare supersession. It and the production cross-tool refinements remain explicitly
 unproved; no bounded model or source-fidelity check promotes them. The
-aggregate temporal module likewise retains
+aggregate temporal module gives
 `AdequateLeaderExactClosureResidualObligation` and
-`ExactDecisionOffSchedulerResidualConvergenceObligation` as explicit proofless
-residuals; downstream wrappers cannot promote them.
+`ExactDecisionOffSchedulerResidualConvergenceObligation` pinned source proof
+bodies and classifies them as deductively proved support leaves. They are not
+independent ledger rows; downstream wrappers cannot promote their consumers
+without fresh strict evidence for the complete dependency closure.
 
 The adequate-leader residual is target-local rather than aggregate: another
 validator's Decision is not terminal for the indexed target. Its occurrence
@@ -1507,13 +1589,16 @@ The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
 drain, fresh causal Completion admission, or local Control enqueue; and
 priority growth to exact network-claim admission or the same archive's normal,
-recovery, or historical runner. Each classification is action-local. No
-current state expression decreases across every producer episode, so the five
-exact off-scheduler convergence leaves remain proofless.
-Independently, `ResponsiveStrongFairnessToReceiptResidual` now has a SANY-clean
-proof script, but remains `specified_unproved` pending fresh strict TLAPS; the
-current conditional cursor theorem is likewise not promoted from its stale
-receipt. An honest
+recovery, or historical runner. Each classification is action-local. The five
+exact off-scheduler convergence leaves have source proof bodies over immutable
+owner identity, finite prefixes, admission/coalescing, and the nonphysical
+response gate. Their composition does not count replenishment itself as
+progress; fresh strict TLAPS is still required before their consumer is
+promoted.
+Independently, `ResponsiveStrongFairnessToReceiptResidual` and the conditional
+cursor theorem have source proof bodies and remain source-bound support for the
+unpromoted production progress refinement; a stale receipt cannot attest the
+final dependency closure. An honest
 validator outside `Responsive` may retain activation queued before GST;
 neither the formal fairness premise nor the conditional release target promises
 its local-worker progress. The action-by-action safety
@@ -1596,9 +1681,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 813 exact production
+Before those longer scenarios, the PR gate inventories 834 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 472-test
+profile additionally records nine G-UNIT legs executing a separate 474-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1658,7 +1743,7 @@ Six outer TransportCompletion-corridor regressions raise it to 228; explicitly
 pinning the then-current four-per-validator plus two shared relay-lane owners
 (`4N+2` total, before authenticated non-validator lanes were separated)
 capacity-negative raises
-it to 229; and the four-validator exact PrepareQC count-and-power quorum test
+it to 229; and the four-validator exact PrepareQC equal-vote quorum test
 raises it to 230. Two exact locked-Commit progress-witness regressions then
 raised the baseline to 232. The next 32-regression delta added atomic
 lane-certificate and semantic-origin ownership, P2P source/flush/reconnect
@@ -1684,13 +1769,15 @@ Those tests pin immutable
 delivery-to-minting-tenure binding through bounded tombstone churn, reject
 second-route overwrite at the rehydration boundary, and isolate actor-exit/`Drop`
 cancellation to the actor's own routes and waiters.
-The current reconciliation adds 16 exact tests and two P2P geometry modules
-plus the daemon genesis module. It separately replaces one obsolete lane-relay
-name in place, yielding a net total of 439 tests across 29 modules. Its Kura,
+The historical reconciliation added 16 exact tests, two P2P geometry modules,
+and a daemon peer-genesis module that is now retired. It separately replaced
+one obsolete lane-relay name in place, yielding the historical total of 439
+tests across 29 modules. At that checkpoint, its Kura,
 refinement, effects, recovery, runner, watchdog,
-P2P, and genesis entries pin replay metadata, successor authority/lifecycle,
+P2P, and peer-genesis entries pinned replay metadata, successor authority/lifecycle,
 discovered CommitQC admission, source geometry, and clone-safe producer/fanout
-ownership. The lane-relay saturation test was renamed in place, so the module
+ownership. The five peer-genesis regressions are not part of the current
+inventory. The lane-relay saturation test was renamed in place, so the module
 still contributes four tests. The subsequent in-flight sidecar redelivery
 regression raises that total to 440 without adding a module or corridor leg
 and binds one exact writer-flush owner per source chunk. Three subsequent
@@ -1740,8 +1827,15 @@ without adding another module or leg. Subsequent source reconciliation and
 exact-ingress lifecycle, restart, provenance, and quarantine regressions bring
 the inventory to the 806-test checkpoint without adding another module or leg.
 Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
-regressions bring the current inventory to 813 tests, again without adding a
-module or leg. The rollover slice covers
+regressions produce the 813-test checkpoint. Five admission/coalescing, Busy
+pre-runtime ownership, and reconstructed-chunk terminality regressions bring
+the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
+high-water regressions bring the inventory to the 831-test checkpoint, again
+without adding a module or leg. Retiring five obsolete peer-genesis protocol
+regressions brings the inventory to the 826-test checkpoint and removes one
+owning module and one leg overall. Six autonomous-lifecycle terminal-outcome
+and startup-recovery regressions then bring the current inventory to 834 tests,
+adding one owning module and one leg. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -1953,11 +2047,14 @@ A production run cannot be started by invoking the candidate runner directly.
 The release operator first authenticates an out-of-tree copy of
 `bootstrap_sumeragi_v2_release.py`, the protected Python, Git, OpenSSH
 `ssh-keygen`, and Bash executables, the manifest and identity helpers, the SSH
-allowed-signers and revocation policies, and every expected SHA-256 digest and
-signer fingerprint. The protected interpreter must start in isolated, no-site
-mode; the evidence parent must already be owner-owned mode `0700`, and the
-requested evidence child must not exist. The complete invocation passes those
-protected paths and digests explicitly, for example:
+allowed-signers and revocation policies, the receipt validator's localnet
+manifest support module, and every expected SHA-256 digest and signer
+fingerprint. The bootstrap archives that support module as the receipt
+validator's exact sibling so the validator can load it without consulting the
+working directory or `PYTHONPATH`. The protected interpreter must start in
+isolated, no-site mode; the evidence parent must already be owner-owned mode
+`0700`, and the requested evidence child must not exist. The complete
+invocation passes those protected paths and digests explicitly, for example:
 
 ```bash
 /protected/python3 -I -S /protected/bootstrap_sumeragi_v2_release.py \
@@ -1974,9 +2071,19 @@ protected paths and digests explicitly, for example:
   --expected-identity-verifier-sha256 <sha256> \
   --receipt-validator /protected/write_sumeragi_v2_release_receipt.py \
   --expected-receipt-validator-sha256 <sha256> \
+  --receipt-validator-support /protected/sumeragi_v2_localnet_manifest.py \
+  --expected-receipt-validator-support-sha256 <sha256> \
   --runner-tool-manifest /protected/runner-tools.json \
   --expected-runner-tool-manifest-sha256 <sha256> \
   --bash-bin /protected/bash --expected-bash-sha256 <sha256> \
+  --runner-environment \
+    IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST=/authenticated/scaling/scaling_evidence.json \
+  --runner-environment \
+    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256=<sha256> \
+  --runner-environment \
+    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256=<sha256> \
+  --runner-environment IROHA_RELEASE_SCALING_IROHAD_SHA256=<sha256> \
+  --runner-environment IROHA_RELEASE_SCALING_IROHA_CLI_SHA256=<sha256> \
   --expected-signer-fingerprint SHA256:<fingerprint> \
   --ssh-allowed-signers /protected/allowed_signers \
   --expected-ssh-allowed-signers-sha256 <sha256> \
@@ -2012,13 +2119,21 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 86 pre-network corridor legs and
-their exact 813-test production inventory, the separate 472-test G-UNIT
-inventory, semantic test names/counts, commands, logs, source-bound localnet
-binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
-toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
-completion/log; and the exact-identity Taira completion/canonical JSON/full run
-log. It independently revalidates matrix, chaos, and Taira libtest markers and
-runs the Taira evidence checker against the archived canonical JSON.
+their exact 834-test production inventory, the separate 474-test G-UNIT
+inventory, semantic test names/counts, commands, logs, the exact source-bound
+prebuilt localnet binary bundle and attestation, and resolved tool identities.
+Formal evidence includes the completion, pinned harness lock and toolchain,
+proof ledger/evidence/log, multilane Apalache evidence, and the TLAPS resource
+JSONL and summary. The
+receipt also carries all 160 matrix logs; exact G-4P completion, summary, and
+four run logs; exact deterministic G-12 seed completion, summary, and ten run
+logs; the two-hour G-12 fault-soak completion and log; the closed multilane
+scaling bundle, retained validator, four authenticated digest anchors, retained
+tool inventory, and repository-root binding; the chaos completion/log; and the
+exact-identity Taira completion/canonical JSON/full run log. It independently
+revalidates the matrix, G-4P, G-12, scaling, chaos, and Taira evidence, including
+replaying the retained scaling and Taira validators against the archived
+artifacts.
 
 Every retained matrix localnet also has a canonical descriptor-relative
 manifest containing each regular file's relative path, byte length, and

@@ -3210,7 +3210,7 @@ mod tests {
     }
 
     fn asset() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("test domain"),
             Name::from_str("zkace").expect("test asset"),
         )
@@ -3974,7 +3974,7 @@ mod tests {
             ("source", |value| value.from = account(3)),
             ("destination", |value| value.to = account(4)),
             ("asset", |value| {
-                value.asset = AssetDefinitionId::new(
+                value.asset = AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("test domain"),
                     Name::from_str("other").expect("other asset"),
                 );

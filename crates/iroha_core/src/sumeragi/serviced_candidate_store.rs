@@ -2937,12 +2937,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [9; 32],
         };

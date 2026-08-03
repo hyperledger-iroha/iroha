@@ -56,6 +56,14 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(SumeragiV2IgnoreReason(rawValue: 11), .unsafeProposal)
     }
 
+    func testSuccessorActivationBlockerUsesRevisionFourWireDiscriminant() {
+        XCTAssertEqual(
+            SumeragiV2LivenessBlocker(rawValue: 7),
+            .successorActivationPending
+        )
+        XCTAssertEqual(SumeragiV2LivenessBlocker(rawValue: 8), .localControlPending)
+    }
+
     func testRustCanonicalMessageFixturesRoundtrip() throws {
         let messages = try fixtureRows().filter { $0.kind == "message" }
         XCTAssertEqual(Set(messages.map(\.name)), expectedMessageNames)

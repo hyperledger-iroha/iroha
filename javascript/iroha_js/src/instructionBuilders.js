@@ -48,6 +48,15 @@ import {
   proofBoxFitsEncodedBudget,
   proofBoxMaxProofBytes,
 } from "./proofAttachment.js";
+import {
+  assertExactNonBlankString,
+  assertNonBlankString,
+  assertString,
+  assertWellFormedUtf16,
+  canonicalHashLiteral,
+  parseHashLiteral,
+  parseHashLiteralToBuffer,
+} from "./instructionBuilderPrimitives.js";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -59,30 +68,6 @@ export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
 export const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BASE64_CHARS_V1 =
   4 * Math.ceil(SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 / 3);
-function crc16(tag, body) {
-  let crc = 0xffff;
-  const processByte = (byte) => {
-    crc ^= (byte & 0xff) << 8;
-    for (let i = 0; i < 8; i += 1) {
-      if ((crc & 0x8000) !== 0) {
-        crc = ((crc << 1) ^ 0x1021) & 0xffff;
-      } else {
-        crc = (crc << 1) & 0xffff;
-      }
-    }
-  };
-
-  for (const byte of Buffer.from(tag, "utf8")) {
-    processByte(byte);
-  }
-  processByte(":".charCodeAt(0));
-  for (const byte of Buffer.from(body, "utf8")) {
-    processByte(byte);
-  }
-
-  return crc & 0xffff;
-}
-
 function fail(code, message, path) {
   throw createValidationError(code, message, path);
 }
@@ -99,97 +84,6 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
         ValidationErrorCode.INVALID_OBJECT,
         `${context} uses unsupported snake_case validation fee field ${snakeName}; use ${camelName}`,
         `${context}.${snakeName}`,
-      );
-    }
-  }
-}
-
-function canonicalHashLiteral(buf) {
-  const normalized = Buffer.from(buf);
-  if (normalized.length !== 32) {
-    fail(ValidationErrorCode.INVALID_HEX, "hash must be 32 bytes");
-  }
-  normalized[normalized.length - 1] |= 1;
-  const body = normalized.toString("hex").toUpperCase();
-  const checksum = crc16("hash", body).toString(16).toUpperCase().padStart(4, "0");
-  return `hash:${body}#${checksum}`;
-}
-
-function parseHashLiteralToBuffer(literal, name) {
-  const match = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/.exec(literal.trim());
-  if (!match) {
-    fail(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must be a canonical "hash:<HEX>#<CRC>" literal`,
-      name,
-    );
-  }
-  const [, body, checksum] = match;
-  const bodyUpper = body.toUpperCase();
-  const expected = crc16("hash", bodyUpper).toString(16).toUpperCase().padStart(4, "0");
-  if (expected !== checksum.toUpperCase()) {
-    fail(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} has invalid checksum; expected ${expected}`,
-      name,
-    );
-  }
-  return Buffer.from(bodyUpper, "hex");
-}
-
-function parseHashLiteral(literal, name) {
-  return canonicalHashLiteral(parseHashLiteralToBuffer(literal, name));
-}
-
-function assertString(value, name) {
-  if (typeof value !== "string" || value.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
-  }
-  return value;
-}
-
-function assertNonBlankString(value, name) {
-  const raw = assertString(value, name);
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
-  }
-  return trimmed;
-}
-
-function assertExactNonBlankString(value, name) {
-  const raw = assertString(value, name);
-  if (raw.trim().length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
-  }
-  if (raw.trim() !== raw) {
-    fail(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must not contain surrounding whitespace`,
-      name,
-    );
-  }
-  return raw;
-}
-
-function assertWellFormedUtf16(value, name) {
-  for (let index = 0; index < value.length; index += 1) {
-    const codeUnit = value.charCodeAt(index);
-    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) {
-        fail(
-          ValidationErrorCode.INVALID_STRING,
-          `${name} must not contain unpaired UTF-16 surrogates`,
-          name,
-        );
-      }
-      index += 1;
-    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      fail(
-        ValidationErrorCode.INVALID_STRING,
-        `${name} must not contain unpaired UTF-16 surrogates`,
-        name,
       );
     }
   }
@@ -4055,8 +3949,10 @@ export function buildRegisterAccountInstruction({
  *   mintable?: string,
  *   mintOnce?: boolean,
  *   metadata?: object | null,
- *   balanceScopePolicy?: string,
+ *   balanceScopePolicy: string,
  *   balance_scope_policy?: string,
+ *   owningDomain?: string | null,
+ *   owning_domain?: string | null,
  *   confidentialPolicy?: object,
  *   confidential_policy?: object
  * }} options
@@ -4064,6 +3960,24 @@ export function buildRegisterAccountInstruction({
  */
 export function buildRegisterAssetDefinitionInstruction(options = {}) {
   const source = assertPlainObject(options, "registerAssetDefinition");
+  const hasOwningDomain = Object.prototype.hasOwnProperty.call(source, "owningDomain");
+  const hasSnakeOwningDomain = Object.prototype.hasOwnProperty.call(source, "owning_domain");
+  if (!hasOwningDomain && !hasSnakeOwningDomain) {
+    throw new TypeError(
+      "registerAssetDefinition.owningDomain is required; use null for an intentionally unowned global definition",
+    );
+  }
+  if (
+    hasOwningDomain &&
+    hasSnakeOwningDomain &&
+    source.owningDomain !== source.owning_domain
+  ) {
+    throw new TypeError("registerAssetDefinition ownership aliases disagree");
+  }
+  const rawOwningDomain = hasOwningDomain ? source.owningDomain : source.owning_domain;
+  const owningDomain = rawOwningDomain === null
+    ? null
+    : assertString(rawOwningDomain, "registerAssetDefinition.owningDomain");
   const scale = source.scale === undefined || source.scale === null
     ? null
     : asU128JsonNumber(source.scale, "registerAssetDefinition.scale");
@@ -4076,6 +3990,38 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
   const logo = source.logo === undefined || source.logo === null
     ? null
     : assertString(source.logo, "registerAssetDefinition.logo");
+  const hasBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    source,
+    "balanceScopePolicy",
+  );
+  const hasSnakeBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    source,
+    "balance_scope_policy",
+  );
+  if (!hasBalanceScopePolicy && !hasSnakeBalanceScopePolicy) {
+    throw new TypeError("registerAssetDefinition.balanceScopePolicy is required");
+  }
+  if (
+    hasBalanceScopePolicy &&
+    hasSnakeBalanceScopePolicy &&
+    source.balanceScopePolicy !== source.balance_scope_policy
+  ) {
+    throw new TypeError("registerAssetDefinition balance-scope policy aliases disagree");
+  }
+  const balanceScopePolicy = assertString(
+    hasBalanceScopePolicy ? source.balanceScopePolicy : source.balance_scope_policy,
+    "registerAssetDefinition.balanceScopePolicy",
+  );
+  if (balanceScopePolicy !== "Global" && balanceScopePolicy !== "DataspaceRestricted") {
+    throw new TypeError(
+      "registerAssetDefinition.balanceScopePolicy must be Global or DataspaceRestricted",
+    );
+  }
+  if (balanceScopePolicy === "DataspaceRestricted" && owningDomain === null) {
+    throw new TypeError(
+      "registerAssetDefinition.owningDomain is required for DataspaceRestricted balances",
+    );
+  }
   return {
     Register: {
       AssetDefinition: {
@@ -4092,10 +4038,8 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
           : assertString(source.mintable ?? "Infinitely", "registerAssetDefinition.mintable"),
         logo,
         metadata: normalizeMetadata(source.metadata),
-        balance_scope_policy: assertString(
-          source.balanceScopePolicy ?? source.balance_scope_policy ?? "Global",
-          "registerAssetDefinition.balanceScopePolicy",
-        ),
+        balance_scope_policy: balanceScopePolicy,
+        owning_domain: owningDomain,
         confidential_policy: source.confidentialPolicy ?? source.confidential_policy ?? {
           mode: "TransparentOnly",
           vk_set_hash: null,
@@ -5723,18 +5667,33 @@ export function buildZkTransferInstruction(options) {
 
 /**
  * Build a `zk::Unshield` instruction payload.
+ * Private outputs come from the verified statement; caller-supplied output
+ * commitments are not part of the first-release instruction.
  * @param {object} options
  * @returns {{zk: {Unshield: object}}}
  */
 export function buildUnshieldInstruction(options) {
   const source = assertPlainObject(options, "unshield");
+  assertAllowedFields(
+    source,
+    new Set([
+      "assetDefinitionId",
+      "asset_definition_id",
+      "asset",
+      "toAccountId",
+      "to",
+      "destinationAccountId",
+      "publicAmount",
+      "public_amount",
+      "inputs",
+      "proof",
+      "rootHint",
+      "root_hint",
+    ]),
+    "unshield",
+  );
   const inputs = Array.isArray(source.inputs)
     ? source.inputs.map((entry, index) => normalizeFixedBytes(entry, `unshield.inputs[${index}]`, 32))
-    : [];
-  const outputs = Array.isArray(source.outputs)
-    ? source.outputs.map((entry, index) =>
-        normalizeFixedBytes(entry, `unshield.outputs[${index}]`, 32),
-      )
     : [];
   if (inputs.length === 0) {
     fail(
@@ -5753,7 +5712,6 @@ export function buildUnshieldInstruction(options) {
       "unshield.publicAmount",
     ),
     inputs,
-    outputs,
     proof: normalizeProofAttachment(source.proof, "unshield.proof"),
     root_hint: normalizeOptionalFixedBytes(source.rootHint ?? source.root_hint, "unshield.rootHint"),
   };

@@ -435,8 +435,7 @@ fn plan_tombstoned_marker_is_exact_required_and_compaction_stable() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plan-tombstoned-compaction.norito");
     let record = record(10, 1);
-    let (mut journal, _) =
-        LaneQueueReservationJournal::open(&path, 1).expect("open journal");
+    let (mut journal, _) = LaneQueueReservationJournal::open(&path, 1).expect("open journal");
 
     assert!(
         journal.plan_tombstoned(record.key).is_err(),
@@ -739,7 +738,7 @@ fn authenticated_truncated_compaction_temp_is_discarded() {
             .put_batch(vec![first.clone()])
             .expect("persist record");
     }
-    let snapshot = canonical_snapshot(core::slice::from_ref(&first), &[], &[], &[])
+    let snapshot = canonical_snapshot(core::slice::from_ref(&first), &[], &[], &[], &[])
         .expect("build canonical snapshot");
     let compacted =
         encode_compacted_journal(snapshot.as_ref()).expect("encode canonical compaction");
@@ -773,7 +772,7 @@ fn corrupt_or_oversized_compaction_temp_fails_closed_and_is_retained() {
                 .put_batch(vec![first.clone()])
                 .expect("persist record");
         }
-        let snapshot = canonical_snapshot(core::slice::from_ref(&first), &[], &[], &[])
+        let snapshot = canonical_snapshot(core::slice::from_ref(&first), &[], &[], &[], &[])
             .expect("build canonical snapshot");
         let mut compacted =
             encode_compacted_journal(snapshot.as_ref()).expect("encode canonical compaction");
@@ -1401,7 +1400,6 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
         completion_state, completion_before,
         "failed completion preflight must preserve the barrier and every live record"
     );
-
 }
 
 #[test]
@@ -1447,10 +1445,7 @@ fn indexed_replay_matches_reference_vector_transitions_and_ordering() {
         LaneQueueReservationJournalFrameV6::PrepareRelease(release.clone()),
         LaneQueueReservationJournalFrameV6::ForgetRelease(stale_forget),
         LaneQueueReservationJournalFrameV6::ForgetRelease(release),
-        LaneQueueReservationJournalFrameV6::PutBatch(vec![
-            third.clone(),
-            fourth.clone(),
-        ]),
+        LaneQueueReservationJournalFrameV6::PutBatch(vec![third.clone(), fourth.clone()]),
         LaneQueueReservationJournalFrameV6::Commit(third.key),
         LaneQueueReservationJournalFrameV6::PlanTombstoned(third.key),
         LaneQueueReservationJournalFrameV6::ForgetCommit(third.key),

@@ -112,20 +112,22 @@ def test_reference_validator_exposes_only_exact_v1_selectors() -> None:
         assert "set_payload" not in parser_body
 
 
-def test_transparency_source_selector_has_no_normalization_aliases() -> None:
-    """Torii accepts only the seven documented transparency source path labels."""
+def test_retired_transparency_source_selector_and_aliases_stay_absent() -> None:
+    """Torii must not restore the retired process-local source-entry API."""
 
-    source = (ROOT / "crates/iroha_torii/src/sorafs/api.rs").read_text(
-        encoding="utf-8"
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "crates/iroha_torii/src/sorafs").rglob("*.rs"))
     )
-    body = source.split("fn parse_transparency_source_kind", 1)[1].split(
-        "fn transparency_source_entry_from_body", 1
-    )[0]
-
-    assert ".trim()" not in body
-    assert "to_ascii_lowercase" not in body
-    assert "replace('_', \"-\")" not in body
-    for alias in [
+    for retired in [
+        "/v1/sorafs/transparency/source-entries",
+        "TRANSPARENCY_SOURCE_ENTRIES_ROUTE",
+        "TransparencyPublicSourceEntryRequestDto",
+        "parse_transparency_source_kind",
+        "transparency_source_entry_from_body",
+    ]:
+        assert retired not in source
+    for retired_alias in [
         "gar-receipt",
         "moderation-ballot",
         "appeal-finance-settlement",
@@ -133,7 +135,7 @@ def test_transparency_source_selector_has_no_normalization_aliases() -> None:
         "redaction",
         "evidence-viewer-access",
     ]:
-        assert f'"{alias}"' not in body
+        assert f'"{retired_alias}"' not in source
 
 
 def test_appeal_verdict_parser_has_one_exact_v1_spelling_per_value() -> None:

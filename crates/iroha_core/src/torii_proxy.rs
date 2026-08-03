@@ -1185,16 +1185,6 @@ pub enum ToriiReadEndpointV1 {
     ContractViewPost,
     /// `POST /v1/contracts/view/batch`
     ContractViewBatchPost,
-    /// `GET /v1/musubi/packages`
-    MusubiPackagesSearch,
-    /// `GET /v1/musubi/release`
-    MusubiReleaseGet,
-    /// `GET /v1/musubi/releases`
-    MusubiPackageReleases,
-    /// `GET /v1/musubi/versions`
-    MusubiPackageVersions,
-    /// `GET /v1/musubi/aliases/{alias}`
-    MusubiAliasResolve,
     /// `GET /v1/accounts/{account_id}/history`
     AccountHistoryGet,
     /// `GET /v1/internal/accounts/{account_id}`
@@ -2072,7 +2062,7 @@ mod tests {
     }
 
     #[test]
-    fn torii_read_endpoint_wire_indexes_are_append_only() {
+    fn torii_read_endpoint_wire_indexes_match_first_release_schema() {
         assert_eq!(
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::AccountTransactionsGet),
             5
@@ -2082,28 +2072,24 @@ mod tests {
             6
         );
         assert_eq!(
-            torii_read_endpoint_wire_index(ToriiReadEndpointV1::MusubiAliasResolve),
-            44
-        );
-        assert_eq!(
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::AccountHistoryGet),
-            45
+            40
         );
         assert_eq!(
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::InternalAccountGet),
-            46
+            41
         );
         assert_eq!(
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::InternalAccountTransactionGet),
-            47
+            42
         );
         assert_eq!(
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::InternalAccountAssetGet),
-            48
+            43
         );
         assert_eq!(
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::ContractDeploymentState),
-            49
+            44
         );
     }
 

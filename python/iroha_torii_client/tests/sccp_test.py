@@ -208,6 +208,28 @@ def _finality_anchor() -> Dict[str, Any]:
     }
 
 
+def test_finality_anchor_accepts_historical_v3_and_current_v4() -> None:
+    current = _finality_anchor()
+    current_hash, current_roles = sccp._sora_finality_anchor(  # noqa: SLF001
+        current, "current anchor"
+    )
+    assert len(current_roles) == 4
+    assert current_hash.hex().upper() == (
+        "4410EE4CCFD06F2D0E3A658615D516AC8CF65255D8A8716CE511EA95E135C8C3"
+    )
+
+    historical = copy.deepcopy(current)
+    historical["protocol_version"] = 3
+    historical_hash, historical_roles = sccp._sora_finality_anchor(  # noqa: SLF001
+        historical, "historical anchor"
+    )
+    assert historical_roles == current_roles
+    assert historical_hash.hex().upper() == (
+        "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA"
+    )
+    assert historical_hash != current_hash
+
+
 def _outbound_policy() -> Dict[str, Any]:
     return {
         "version": 1,
@@ -870,7 +892,8 @@ def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> 
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     (
-        (lambda anchor: anchor.update(protocol_version=3), "protocol_version"),
+        (lambda anchor: anchor.update(protocol_version=1), "protocol_version"),
+        (lambda anchor: anchor.update(protocol_version=5), "protocol_version"),
         (lambda anchor: anchor.update(protocol_version=True), "integer"),
         (lambda anchor: anchor.update(checkpoint_context_id=UPPER(0, 32)), "nonzero"),
         (

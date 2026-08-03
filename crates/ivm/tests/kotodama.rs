@@ -1829,7 +1829,6 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
             .expect("parse encoded account literal");
     let asset_def =
         AssetDefinitionId::parse_address_literal(asset_literal).expect("parse canonical asset");
-    assert!(asset_def.is_opaque_canonical());
     let asset_id = AssetId::of(asset_def.clone(), account.clone());
 
     assert!(hints.read_keys.contains(&format!("account:{account}")));
@@ -1839,7 +1838,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     assert!(hints.write_keys.contains(&format!("asset:{asset_id}")));
     assert!(
         !hints.read_keys.iter().any(|key| key.starts_with("domain:")),
-        "opaque canonical asset definitions should not synthesize domain hints",
+        "canonical asset-definition ids must not synthesize domain hints",
     );
 
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");

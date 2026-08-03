@@ -41,6 +41,7 @@ fn byte_tree_root_and_proof_equivalence() {
     // Canonical tree from iroha_crypto
     let canonical = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
     let canonical_root = canonical.root().expect("root");
+    let canonical_commitment = canonical.commitment().expect("non-empty commitment");
 
     // IVM byte-chunk helper
     let ivm_tree = ByteMerkleTree::from_bytes(&data, chunk);
@@ -60,7 +61,7 @@ fn byte_tree_root_and_proof_equivalence() {
             .leaves()
             .nth(idx)
             .expect("leaf must exist for valid index");
-        assert!(proof.clone().verify_sha256(&leaf, &canonical_root, 16));
+        assert!(proof.verify_sha256(&leaf, &canonical_commitment));
 
         // Now produce a canonical proof and compare with IVM path byte-wise.
         let canon_proof = canonical.get_proof(idx as u32).expect("proof");

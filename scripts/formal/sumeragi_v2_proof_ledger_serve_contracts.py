@@ -25,6 +25,11 @@ SERVE_LIFECYCLE_REQUIRED_OPERATORS = {
         "AsyncServeLifecycleTypeInvariant",
         "AsyncServeTombstoneOutputMatchesIdentity",
         "AsyncServeTombstoneOutputBindingInvariant",
+        "AsyncRetransmitLifecyclePhysicalCut",
+        "AsyncRetransmitLifecyclePhysicalCutForStep",
+        "AsyncEffectiveRetransmitLifecyclePhysicalCut",
+        "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
+        "AsyncRetransmitPriorityPrecedesCandidate",
     ),
     "SumeragiV2ExactDecisionStageServiceClosureProofs": (
         "ExactDecisionRequestLifecycleFrozenPredecessorSet",
@@ -47,6 +52,9 @@ SERVE_LIFECYCLE_REQUIRED_OPERATORS = {
         "ExactDecisionRequestLifecycleRankDescentProperty",
         "ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty",
         "ExactDecisionRequestIngressRankReplenishmentResidual",
+        "ExactDecisionRequestRuntimePrefixSnapshot",
+        "ExactDecisionRequestClockPrefixSnapshotBinding",
+        "ExactDecisionRequestOwnedRuntimeAtRank",
     ),
     "SumeragiV2AdequateLeaderServiceClosureProofs": (
         "AdequateLeaderFrozenTargetCandidateRole",
@@ -81,6 +89,24 @@ SERVE_LIFECYCLE_REQUIRED_OPERATORS = {
         "AdequateLeaderTargetLiveCandidateOwnerIdentitySet",
         "AdequateLeaderTargetLiveWireOwnerIdentitySet",
         "AdequateLeaderTargetLiveOwnerIdentitySet",
+        "AdequateLeaderPeriodicLifecyclePredecessorOwned",
+        "AdequateLeaderProtectedPeriodicLifecycleOwned",
+        "AdequateLeaderProtectedPeriodicOwnerIdentity",
+        "AdequateLeaderProtectedPeriodicSnapshotIdentity",
+        "AdequateLeaderProtectedPeriodicIdentityActive",
+        "AdequateLeaderProtectedPeriodicSnapshot",
+        "AdequateLeaderProtectedPeriodicRetirementReceipt",
+        "AdequateLeaderProtectedPeriodicSnapshotRetired",
+        "AdequateLeaderProtectedPeriodicSnapshotDrained",
+        "AdequateLeaderProtectedPeriodicIdentityStage",
+        "AdequateLeaderProtectedPeriodicSnapshotTokens",
+        "AdequateLeaderProtectedPeriodicSnapshotBudget",
+        "AdequateLeaderProtectedPeriodicEpisodeResidual",
+        "AdequateLeaderProtectedPeriodicEpisodeGoal",
+        "AdequateLeaderProtectedPeriodicEpisodeClosureProperty",
+        "AdequateLeaderTargetOccurrenceAwaitingFiniteEpisode",
+        "AdequateLeaderTargetOccurrenceFiniteEpisodeOrExitGoal",
+        "AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty",
         "AdequateLeaderCandidateProducerContinuationRetirementMemory",
         "AdequateLeaderTargetProducerContinuationRetiredOwnerIdentitySet",
         "AdequateLeaderTargetDurablyRetiredOwnerIdentitySet",
@@ -157,6 +183,8 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "ReserveExactServeCapacityVia",
     ): (
         "AsyncServeSourceAttemptRecords",
+        "ReserveExactServeCapacityVia",
+        "candidate.item.source",
         "AsyncServeOffQueueReservations",
         "AsyncServeIngressPredecessorCounts",
         "asyncNextServeAdmissionOrdinal",
@@ -171,6 +199,8 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "AdvanceExactServeCapacityVia",
     ): (
         "AsyncServeSourceAttemptRecords",
+        "AdvanceExactServeCapacityVia",
+        "candidate.item.source",
         "AsyncServeOffQueueReservations",
         "AsyncServeFamilyTombstoneRecords",
         "AsyncServeIngressPredecessorCounts",
@@ -211,6 +241,43 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "AsyncServeLifecycleTypeInvariant",
     ): ("AsyncServeSingularOffQueueBarrierInvariant",),
     (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecyclePhysicalCut",
+    ): ("asyncControlServiceState.retransmitLifecyclePhysicalCut",),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecyclePhysicalCutForStep",
+    ): (
+        "state.retransmitLifecyclePhysicalCut",
+        "AsyncNextIngressPhysicalOrdinal",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncEffectiveRetransmitLifecyclePhysicalCut",
+    ): (
+        "AsyncRetransmitLifecycleOwned",
+        "AsyncRetransmitLifecyclePhysicalCut",
+        "AsyncNextIngressPhysicalOrdinal",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
+    ): (
+        "record.sourcePhysicalOrdinal",
+        "AsyncRetransmitLifecyclePhysicalCut",
+        "record.ordinal",
+        "AsyncRetransmitLifecycleOrdinal",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitPriorityPrecedesCandidate",
+    ): (
+        "AsyncRetransmitLifecyclePhysicalCut",
+        "AsyncCandidateLifecycleSourcePhysicalOrdinal",
+        "AsyncRetransmitLifecycleOrdinal",
+        "AsyncCandidateLifecycleOrdinal",
+    ),
+    (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionRequestLifecycleFrozenPredecessorSet",
     ): (
@@ -218,6 +285,37 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "AsyncServeIngressAdmissionPredecessorDebtSlots",
         "AsyncServePreexistingIngressOwnerPredecessorDebtSet",
         "AsyncServePreexistingIngressBarrierPredecessorDebtSet",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestRuntimePrefixSnapshot",
+    ): (
+        "schedulerCeiling",
+        "physicalCut",
+        "ExactDecisionRequestRuntimeCandidateOriginsAt",
+        "ExactDecisionRequestRuntimeServeSourcesAt",
+        "ExactDecisionRequestRuntimeContinuationSourcesAt",
+        "ExactDecisionRequestRuntimeLeaderWireIdentitiesAt",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestClockPrefixSnapshotBinding",
+    ): (
+        'kind = "Owned"',
+        "snapshot.schedulerCeiling",
+        "ownerOrdinal",
+        "snapshot.physicalCut",
+        "AsyncRetransmitLifecyclePhysicalCut",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestOwnedRuntimeAtRank",
+    ): (
+        "ExactDecisionRequestOwnedRetransmitEpisode",
+        "ExactDecisionRequestClockPrefixSnapshotBinding",
+        '"Owned"',
+        "ExactDecisionRequestRuntimeFrozenPrefixDrained",
+        "ExactDecisionRequestOwnedRuntimeRank",
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -375,8 +473,69 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderPeriodicLifecyclePredecessorOwned",
+    ): (
+        "AsyncTimeoutLifecycleOwned",
+        "AsyncOlderRetransmitLifecycleBlocksTimeout",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicLifecycleOwned",
+    ): (
+        "AdequateLeaderPeriodicLifecyclePredecessorOwned",
+        "AsyncOlderCandidateLifecycleBlocksRetransmit",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicOwnerIdentity",
+    ): (
+        "AdequateLeaderCorridorAuthorityReceipt",
+        "retransmitOrdinal",
+        "timeoutOrdinalCeiling",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicSnapshot",
+    ): (
+        "AdequateLeaderProtectedPeriodicOwnerIdentity",
+        "AdequateLeaderPeriodicLifecyclePredecessorOwned",
+        "AsyncRetransmitLifecycleOrdinal",
+        "AsyncTimeoutLifecycleOrdinal",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicRetirementReceipt",
+    ): (
+        "AsyncRetransmitLifecycleOwned",
+        "AsyncRetransmitLifecycleOrdinal",
+        "AsyncNextCandidateLifecycleOrdinal",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicSnapshotDrained",
+    ): (
+        "AdequateLeaderProtectedPeriodicSnapshotRetired",
+        "AdequateLeaderProtectedPeriodicSnapshot",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicEpisodeGoal",
+    ): (
+        "AdequateLeaderTargetOccurrenceRankServiceExitGoal",
+        "AdequateLeaderProtectedPeriodicSnapshotDrained",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty",
+    ): (
+        "AdequateLeaderTargetOccurrenceAwaitingFiniteEpisode",
+        "AdequateLeaderTargetOccurrenceFiniteEpisodeOrExitGoal",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetComposedRankDescentProperty",
     ): (
+        "AdequateLeaderProtectedPeriodicEpisodeClosureProperty",
         "AdequateLeaderTargetOccurrenceRankServiceProperty",
         "AdequateLeaderTargetProducerTransportOccurrenceClosureProperty",
         "AdequateLeaderTargetNonDescentKnownAdvanceProperty",
@@ -524,6 +683,113 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
     ),
 }
 SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKEN_SEQUENCES = {
+    (
+        "SumeragiV2AsyncNetwork",
+        "ReserveExactServeCapacityVia",
+    ): (
+        "AsyncServeSourceAttemptRecords(node, identity) = {}",
+        "~AsyncServeIngressAdmissionOwned(node, identity)",
+        "AsyncServeIngressLifecycleOwnerIdentities(node) = {}",
+        "AsyncServeOffQueueReservations(node) = {}",
+        (
+            "asyncNextServeAdmissionOrdinal' = "
+            "[asyncNextServeAdmissionOrdinal EXCEPT ![node] = @ + 1]"
+        ),
+        "AsyncServeIngressPredecessorCounts(node)",
+        (
+            "AsyncServeAttemptForRequestAtStage( "
+            'node, candidate.item, authenticatedSource, ordinal, "Ingress")'
+        ),
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AdvanceExactServeCapacityVia",
+    ): (
+        "AsyncServeSourceAttemptRecords(node, identity) = {}",
+        "~AsyncServeIngressAdmissionOwned(node, identity)",
+        "AsyncServeIngressLifecycleOwnerIdentities(node) = {}",
+        "AsyncServeOffQueueReservations(node) = {}",
+        "AsyncServeFamilyTombstoneRecords(node, family) # {}",
+        "roundView > AsyncServeFamilyHighWatermark(node, family)",
+        (
+            "asyncNextServeAdmissionOrdinal' = "
+            "[asyncNextServeAdmissionOrdinal EXCEPT ![node] = @ + 1]"
+        ),
+        "AsyncServeIngressPredecessorCounts(node)",
+        "AsyncServeTombstonesWithoutFamily(node, family)",
+        (
+            "AsyncServeAttemptForRequestAtStage( "
+            'node, candidate.item, authenticatedSource, ordinal, "Ingress")'
+        ),
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecyclePhysicalCutForStep",
+    ): ("ELSE AsyncNextIngressPhysicalOrdinal(node)'",),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
+    ): (
+        (
+            "record.sourcePhysicalOrdinal < "
+            "AsyncRetransmitLifecyclePhysicalCut(node)"
+        ),
+        "record.ordinal < AsyncRetransmitLifecycleOrdinal(node)",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitPriorityPrecedesCandidate",
+    ): (
+        (
+            "AsyncRetransmitLifecyclePhysicalCut(node) <= "
+            "AsyncCandidateLifecycleSourcePhysicalOrdinal(candidate)"
+        ),
+        (
+            "AsyncCandidateLifecycleSourcePhysicalOrdinal(candidate) < "
+            "AsyncRetransmitLifecyclePhysicalCut(node)"
+        ),
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestRuntimePrefixSnapshot",
+    ): (
+        "physicalCut |-> physicalCut",
+        (
+            "ExactDecisionRequestRuntimeCandidateOriginsAt( "
+            "node, schedulerCeiling, physicalCut)"
+        ),
+        (
+            "ExactDecisionRequestRuntimeServeSourcesAt( "
+            "node, schedulerCeiling, physicalCut)"
+        ),
+        (
+            "ExactDecisionRequestRuntimeContinuationSourcesAt( "
+            "node, schedulerCeiling, physicalCut)"
+        ),
+        (
+            "ExactDecisionRequestRuntimeLeaderWireIdentitiesAt( "
+            "node, schedulerCeiling, physicalCut)"
+        ),
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestClockPrefixSnapshotBinding",
+    ): (
+        "snapshot.schedulerCeiling = ownerOrdinal",
+        (
+            "snapshot.physicalCut = "
+            "AsyncRetransmitLifecyclePhysicalCut(node)"
+        ),
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestOwnedRuntimeAtRank",
+    ): (
+        (
+            "ExactDecisionRequestClockPrefixSnapshotBinding( "
+            '"Owned", snapshot, node, ownerOrdinal)'
+        ),
+    ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionRequestLifecycleConcreteFairAction",

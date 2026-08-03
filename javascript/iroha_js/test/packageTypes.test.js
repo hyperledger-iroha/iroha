@@ -61,6 +61,9 @@ function createPackedLayout({ includeNodeTypes }) {
   fs.cpSync(path.join(PACKAGE_ROOT, "dist"), path.join(packagePath, "dist"), {
     recursive: true,
   });
+  fs.cpSync(path.join(PACKAGE_ROOT, "src"), path.join(packagePath, "src"), {
+    recursive: true,
+  });
   fs.symlinkSync(
     path.join(PACKAGE_ROOT, "node_modules", "buffer"),
     path.join(nodeModules, "buffer"),
@@ -99,6 +102,32 @@ function compileFixture(tempRoot, tsconfig) {
     encoding: "utf8",
   });
 }
+
+test("UnshieldInstructionInput exposes the exact output-free first-release shape", () => {
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const source = ts.createSourceFile(
+    declarationPath,
+    fs.readFileSync(declarationPath, "utf8"),
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declaration = source.statements.find(
+    (statement) =>
+      ts.isInterfaceDeclaration(statement) &&
+      statement.name.text === "UnshieldInstructionInput",
+  );
+  assert.ok(declaration, "UnshieldInstructionInput declaration is missing");
+  const fields = declaration.members.map((member) => member.name?.getText(source)).sort();
+  assert.deepEqual(fields, [
+    "assetDefinitionId",
+    "destinationAccountId",
+    "inputs",
+    "proof",
+    "publicAmount",
+    "rootHint",
+  ]);
+});
 
 test("every public export has a safe runtime target and an explicit declaration target", () => {
   const packageJson = readPackageJson();
@@ -391,7 +420,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       [
         ...imports,
         `import * as RootSdk from ${JSON.stringify(PACKAGE_NAME)};`,
-        `import { Crypto, Norito, NumericV1, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { Crypto, Norito, NumericV1, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
         `import { getPrivacyCapabilitiesV1, parsePrivacyCapabilitySnapshotV1, type PrivacyCapabilitySnapshotV1 } from ${JSON.stringify(`${PACKAGE_NAME}/privacy-capabilities`)};`,
         'const algorithm: CryptoAlgorithm = "ed25519";',
         "const cancelAssetLockMaxLockIdUtf8BytesV1: 4096 = CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1;",
@@ -419,6 +448,20 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "const privacyCommittedHeight: bigint = privacySnapshot.committed_height;",
         "const privacyNodeResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'));",
         "const privacyBrowserResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiBrowserClient('https://torii.example'));",
+        'const privacyProofSystems: PrivacyProofSystemIdV1[] = ["stark-fri-sha256-goldilocks", "anonymous-pgc-p256", "iroha-verange-p256", "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512", "vega-neutron-nova-spartan-hyrax-t256", "jindo-polynomial-commitment", "lantern-lnp22-module-linear-norm", "halo2-ipa-pasta", "fcmp-plus-plus-curve-tree-bulletproofs"];',
+        'const privacyEngines: PrivacyEngineIdV1[] = ["native-goldilocks-stark-fri", "native-anonymous-pgc-p256", "native-verange-p256", "native-zk-ams-masked-relaxed-spartan-t256-ristretto255", "native-vega", "native-jindo", "native-lantern-lnp22", "native-halo2-orchard", "native-fcmp-plus-plus"];',
+        "// @ts-expect-error retired SIS-with-hints proof systems fail closed.",
+        'const retiredPrivacyProofSystem: PrivacyProofSystemIdV1 = "sis-with-hints";',
+        "// @ts-expect-error proof-system labels are case-sensitive.",
+        'const caseShiftedPrivacyProofSystem: PrivacyProofSystemIdV1 = "HALO2-IPA-PASTA";',
+        "// @ts-expect-error proof-system labels reject surrounding whitespace.",
+        'const paddedPrivacyProofSystem: PrivacyProofSystemIdV1 = " halo2-ipa-pasta";',
+        "// @ts-expect-error retired SIS-with-hints engines fail closed.",
+        'const retiredPrivacyEngine: PrivacyEngineIdV1 = "native-sis-with-hints";',
+        "// @ts-expect-error engine labels are case-sensitive.",
+        'const caseShiftedPrivacyEngine: PrivacyEngineIdV1 = "NATIVE-JINDO";',
+        "// @ts-expect-error engine labels reject Unicode confusables.",
+        'const confusablePrivacyEngine: PrivacyEngineIdV1 = "native-jindо";',
         "declare const repoAgreement: ToriiRepoAgreement;",
         "const repoLifecycle: [string, string, number | null, 'active' | 'settled'] = [repoAgreement.cashSource, repoAgreement.collateralCustodyAsset, repoAgreement.settlementTimestampMs, repoAgreement.status];",
         'const verifierBackend: ToriiVerifierBackendLabelV1 = "halo2/ipa";',
@@ -464,7 +507,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
         `void [${bindings.join(", ")}];`,
-        "void algorithm; void cancelAssetLock; void toriiConstructor; void encodeInstruction; void validateFrame; void exact12Decoder; void generateKeyPair; void privacySnapshot; void privacyNodeResult; void privacyBrowserResult; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
+        "void algorithm; void cancelAssetLock; void toriiConstructor; void encodeInstruction; void validateFrame; void exact12Decoder; void generateKeyPair; void privacySnapshot; void privacyNodeResult; void privacyBrowserResult; void privacyProofSystems; void privacyEngines; void retiredPrivacyProofSystem; void caseShiftedPrivacyProofSystem; void paddedPrivacyProofSystem; void retiredPrivacyEngine; void caseShiftedPrivacyEngine; void confusablePrivacyEngine; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
       ].join("\n"),
       "utf8",
     );

@@ -150,6 +150,12 @@ cryptographic verification of its standalone IPA diagnostic format and is docume
 as non-ledger-equivalent. Attachment storage and the background prover worker remain
 report-only and do not return a ledger-acceptance result.
 
+The standalone IPA envelope no longer accepts inline commitment bases. Its
+`IpaParams` field is only a `(version, curve, n)` selector; the verifier derives
+the sole V1 generator set for that selector and binds the complete derived
+parameter fingerprint into the transcript before producing challenges. Retired
+wire layouts carrying `g`, `h`, or `u` are non-canonical.
+
 Regression coverage: `zk_subrouter_smoke` asserts that both retired routes return
 `404 Not Found`; the existing `zk_verify_batch_*` integration suites cover the
 remaining bounded diagnostic verifier.

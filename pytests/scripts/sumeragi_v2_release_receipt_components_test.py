@@ -46,6 +46,7 @@ def test_run_writer_copies_declared_components_and_fails_closed(
     receipt_components = receipt.release_receipt_writer_components(source_root)
     assert receipt_components == (
         Path("scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"),
+        Path("scripts/write_sumeragi_v2_release_receipt_corridor_log.py"),
     )
     receipt_component = source_root / receipt_components[0]
     receipt_component_bytes = receipt_component.read_bytes()

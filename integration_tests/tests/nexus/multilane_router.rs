@@ -336,7 +336,10 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         vec![InstructionBox::from(Mint::asset_quantity(
             1_u32,
             AssetId::new(
-                AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),
+                AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("nexus", "zk")?,
+                    "xor".parse()?,
+                ),
                 authority.clone(),
             ),
         ))],
@@ -346,10 +349,15 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(AssetDefinitionId::new(
-                DomainId::try_new("nexus", "universal")?,
-                "xor".parse()?,
-            )),
+            AssetDefinition::numeric(
+                AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("nexus", "universal")?,
+                    "xor".parse()?,
+                ),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ),
         ))],
     );
 
@@ -407,7 +415,10 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
         vec![InstructionBox::from(Mint::asset_quantity(
             1_u32,
             AssetId::new(
-                AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),
+                AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("nexus", "zk")?,
+                    "xor".parse()?,
+                ),
                 authority.clone(),
             ),
         ))],

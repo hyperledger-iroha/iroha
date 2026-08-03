@@ -1,4 +1,27 @@
-    // Durable block publication and atomic sidecar persistence primitives.
+// Durable block publication and atomic sidecar persistence primitives.
+
+impl Kura {
+    fn blocks_root_debug_file_bytes(root: &Path) -> Result<u64> {
+        let path = root.join("blocks.jsonl");
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(Error::IO(error, path)),
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || !Self::sidecar_is_single_link(&metadata)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "debug block dump is not a single-link regular file",
+                ),
+                path,
+            ));
+        }
+        Ok(metadata.len())
+    }
 
     fn read_durable_hash_at_height(
         block_store: &mut BlockStore,
@@ -34,42 +57,143 @@
         }
     }
 
+    /// Append a debug dump while the caller holds prune and canonical-chain
+    /// locks. Pending canonical bytes are captured before the lower-order
+    /// geometry/sidecar capacity locks.
     fn append_debug_block_dump(&self, block: &Arc<SignedBlock>) {
-        let Some(path) = self.block_plain_text_path.lock().clone() else {
+        let path_guard = self.block_plain_text_path.lock();
+        let Some(path) = path_guard.clone() else {
             return;
         };
+        let mut bytes = Vec::new();
+        if let Err(error) = norito::json::to_writer(&mut bytes, block.as_ref()) {
+            warn!(?error, path = %path.display(), "Failed to encode debug block dump");
+            return;
+        }
+        bytes.push(b'\n');
+        let pending_canonical_bytes =
+            match self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards() {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    debug!(
+                        ?error,
+                        path = %path.display(),
+                        "skipping debug block dump because pending canonical capacity is unavailable"
+                    );
+                    return;
+                }
+            };
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        if let Err(error) = self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            false,
+            false,
+            &path,
+        ) {
+            debug!(
+                ?error,
+                path = %path.display(),
+                "skipping debug block dump to preserve reserved Kura capacity"
+            );
+            return;
+        }
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let debug_before = match Self::file_len_or_zero(&path) {
-            Ok(bytes) => Some(bytes),
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %path.display(),
-                    "failed to measure debug block dump before append"
-                );
-                None
+        match self.append_bound_debug_block_dump(&path, &bytes) {
+            Ok((before, after)) => {
+                self.update_disk_usage_delta(before, after);
+                accounting_mutation.finish();
             }
-        };
-        if let Err(error) = Self::append_blocks_jsonl(&path, std::slice::from_ref(block)) {
-            warn!(
+            Err(error) => warn!(
                 ?error,
                 path = %path.display(),
                 "Failed to append debug block dump"
-            );
+            ),
         }
-        if let Some(debug_before) = debug_before {
-            match Self::file_len_or_zero(&path) {
-                Ok(debug_after) => {
-                    self.update_disk_usage_delta(debug_before, debug_after);
-                    accounting_mutation.finish();
-                }
-                Err(err) => warn!(
-                    ?err,
-                    path = %path.display(),
-                    "failed to measure debug block dump after append"
-                ),
+    }
+
+    fn append_bound_debug_block_dump(&self, path: &Path, bytes: &[u8]) -> Result<(u64, u64)> {
+        let parent = path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, "debug block dump has no parent"),
+                path.to_path_buf(),
+            )
+        })?;
+        let directory = Self::open_bound_progress_directory(&self.store_root, parent)?;
+        let namespace = BoundProgressNamespace {
+            data_path: path.to_path_buf(),
+            index_path: path.to_path_buf(),
+            directories: vec![directory],
+        };
+        let Some(expected) = Self::regular_sidecar_metadata_for(&self.store_root, path, parent)?
+        else {
+            if !Self::progress_mutation_namespace_unchanged(&namespace)
+                || !self.write_atomic_synced_noclobber(path, bytes)?
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::AlreadyExists,
+                        "debug block dump appeared while proving no-clobber creation",
+                    ),
+                    path.to_path_buf(),
+                ));
             }
+            let created = Self::regular_sidecar_metadata_for(&self.store_root, path, parent)?
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "debug block dump disappeared after no-clobber creation",
+                        ),
+                        path.to_path_buf(),
+                    )
+                })?;
+            if created.file.len() != u64::try_from(bytes.len())?
+                || !Self::progress_mutation_namespace_unchanged(&namespace)
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "debug block dump identity changed after no-clobber creation",
+                    ),
+                    path.to_path_buf(),
+                ));
+            }
+            return Ok((0, created.file.len()));
+        };
+        let before = expected.file.len();
+        let mut file = Self::open_bound_progress_file(&namespace, path, &expected)?;
+        file.seek(SeekFrom::End(0))
+            .and_then(|_| file.write_all(bytes))
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let after = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let current = Self::regular_sidecar_metadata_for(&self.store_root, path, parent)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "debug block dump disappeared after bound append",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+        if !Self::sidecar_metadata_same_object(&expected.file, &after)
+            || !Self::sidecar_metadata_same_object(&after, &current.file)
+            || !Self::sidecar_is_single_link(&after)
+            || !Self::progress_mutation_namespace_unchanged(&namespace)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "debug block dump identity changed during bound append",
+                ),
+                path.to_path_buf(),
+            ));
         }
+        Ok((before, after.len()))
     }
 
     #[cfg(test)]
@@ -259,6 +383,17 @@
                         false,
                     );
                     self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
+                    self.ensure_post_wsv_lane_artifact_budget_reservation_under_prune_and_canonical_guards(
+                        entry,
+                        actual_height,
+                        block_hash,
+                    )
+                    .map_err(|error| {
+                        self.committed_recovery_failure(
+                            "post-WSV lane artifact budget reservation",
+                            &error,
+                        )
+                    })?;
                 } else {
                     self.set_transaction_entrypoint_index_entry(
                         actual_height_usize,
@@ -324,6 +459,17 @@
                     false,
                 );
                 self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
+                self.ensure_post_wsv_lane_artifact_budget_reservation_under_prune_and_canonical_guards(
+                    entry,
+                    actual_height,
+                    block_hash,
+                )
+                .map_err(|error| {
+                    self.committed_recovery_failure(
+                        "post-WSV lane artifact budget reservation",
+                        &error,
+                    )
+                })?;
             } else {
                 self.set_transaction_entrypoint_index_entry(
                     actual_height_usize,
@@ -398,6 +544,19 @@
                 "committed canonical association recovery",
                 &association_error,
             ));
+        }
+        if let Some(entry) = merge_entry {
+            self.ensure_post_wsv_lane_artifact_budget_reservation_under_prune_and_canonical_guards(
+                entry,
+                actual_height,
+                block_hash,
+            )
+            .map_err(|error| {
+                self.committed_recovery_failure(
+                    "post-WSV lane artifact budget reservation",
+                    &error,
+                )
+            })?;
         }
         self.append_debug_block_dump(block);
 
@@ -578,6 +737,21 @@
             .as_file()
             .sync_all()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        #[cfg(test)]
+        if self
+            .fail_next_atomic_write_after_temporary_sync
+            .swap(false, Ordering::Relaxed)
+        {
+            let (_temporary_file, temporary_path) = temporary
+                .keep()
+                .map_err(|error| Error::IO(error.error, path.to_path_buf()))?;
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "injected atomic publication failure after temporary fsync and before rename",
+                ),
+                temporary_path,
+            ));
+        }
         let (_, directory_before_persist) =
             self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
                 Error::IO(
@@ -643,3 +817,10 @@
         sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
         Ok(true)
     }
+
+    #[cfg(test)]
+    fn fail_next_atomic_write_after_temporary_sync_for_test(&self) {
+        self.fail_next_atomic_write_after_temporary_sync
+            .store(true, Ordering::Relaxed);
+    }
+}

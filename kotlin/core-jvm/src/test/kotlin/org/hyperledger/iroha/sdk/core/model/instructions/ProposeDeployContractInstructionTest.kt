@@ -32,7 +32,7 @@ class ProposeDeployContractInstructionTest {
     fun `fromArguments parses address selector`() {
         val args = linkedMapOf(
             "action" to "ProposeDeployContract",
-            "contract_address" to "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            "contract_address" to "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             "code_hash_hex" to "cc".repeat(32),
             "abi_hash_hex" to "dd".repeat(32),
             "abi_version" to "1",
@@ -40,7 +40,7 @@ class ProposeDeployContractInstructionTest {
 
         val instruction = ProposeDeployContractInstruction.fromArguments(args)
 
-        assertEquals("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7", instruction.contractAddress)
+        assertEquals("irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw", instruction.contractAddress)
         assertNull(instruction.contractAlias)
         assertEquals(args["contract_address"], instruction.arguments["contract_address"])
     }
@@ -51,7 +51,7 @@ class ProposeDeployContractInstructionTest {
             ProposeDeployContractInstruction.fromArguments(
                 linkedMapOf(
                     "action" to "ProposeDeployContract",
-                    "contract_address" to "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                    "contract_address" to "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                     "contract_alias" to "router::universal",
                     "code_hash_hex" to "ee".repeat(32),
                     "abi_hash_hex" to "ff".repeat(32),

@@ -1,3 +1,4 @@
+#[test]
 fn scan_and_report_single_attachment() {
     configure_test_cfg(Vec::new());
     let _env = TestDataDirGuard::new();

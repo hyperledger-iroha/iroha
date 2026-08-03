@@ -295,7 +295,8 @@ impl KuraReplicaAdvertRefreshOwner {
             state.next_cycle_at = now;
         }
         debug_assert!(
-            u64::try_from(state.urgent_heights.len()).is_ok_and(|count| count <= active_window.len())
+            u64::try_from(state.urgent_heights.len())
+                .is_ok_and(|count| count <= active_window.len())
         );
         Ok(scheduled)
     }

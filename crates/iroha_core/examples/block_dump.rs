@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn mixed_batch_mints_contribute_to_requested_asset_sum() {
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain"),
             "rose".parse().expect("valid asset name"),
         );

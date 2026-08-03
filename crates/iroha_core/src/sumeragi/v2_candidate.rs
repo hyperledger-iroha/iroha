@@ -105,6 +105,12 @@ impl CandidateLimits {
 /// immutable inputs by the height runner.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CandidateAttachments {
+    /// An enabled time trigger requires the ledger clock to advance.
+    ///
+    /// This is proposal work rather than serialized block metadata: advancing
+    /// signed header time keeps future schedules reachable, and block
+    /// execution derives any event which is due at that header.
+    pub(crate) time_trigger_clock_progress_required: bool,
     /// DA commitments available for this height.
     pub(crate) da_commitments: Option<DaCommitmentBundle>,
     /// DA pin intents available for this height.
@@ -310,6 +316,8 @@ pub(crate) struct CandidateRequest<'request, Work> {
     pub(crate) output_guard: &'request ConsensusOutputGuard,
     /// Immutable subsystem attachments for this height.
     pub(crate) attachments: CandidateAttachments,
+    /// Whether this exact recovery path may deliberately build an empty body.
+    pub(crate) allow_empty_recovery_heartbeat: bool,
     /// Frozen readiness adapter for lane-local and Native AMX work.
     pub(crate) work_provider: Work,
 }
@@ -331,6 +339,16 @@ pub(crate) struct CandidateScanReport {
     pub(crate) carrier_excluded: usize,
     /// External transactions included in the final body.
     pub(crate) selected: usize,
+}
+
+/// Result of one bounded fresh-candidate assembly attempt.
+#[derive(Debug)]
+pub(crate) enum CandidateAssemblyOutcome {
+    /// A signed body carrying ordinary, autonomous, internal, or explicitly
+    /// armed recovery-heartbeat work.
+    Assembled(AssembledV2Candidate),
+    /// The queue snapshot and internal providers contained no proposal work.
+    NoProposalWork(CandidateScanReport),
 }
 
 /// A canonical successor body and its deterministic v2 dispersal plan.
@@ -423,9 +441,9 @@ impl V2CandidateAssembler {
     /// successor body.
     ///
     /// The queue is never mutated. An empty queue, an entirely unavailable
-    /// lane/AMX snapshot, or a batch whose transactions do not fit produces a
-    /// valid empty heartbeat body as long as the body-level size limit permits
-    /// it.
+    /// lane/AMX snapshot, or a batch whose transactions do not fit returns
+    /// [`CandidateAssemblyOutcome::NoProposalWork`] unless genuine internal
+    /// work exists or the caller explicitly armed a recovery heartbeat.
     ///
     /// # Errors
     ///
@@ -435,7 +453,7 @@ impl V2CandidateAssembler {
     pub(crate) fn assemble<Work: CandidateWorkProvider>(
         &self,
         mut request: CandidateRequest<'_, Work>,
-    ) -> Result<AssembledV2Candidate, CandidateError> {
+    ) -> Result<CandidateAssemblyOutcome, CandidateError> {
         validate_request(&request)?;
         if request.queue.transaction_selection_durability_faulted() {
             return Err(CandidateError::RestartRequired);
@@ -453,7 +471,7 @@ impl V2CandidateAssembler {
             .bounded_pending_snapshot(&state_view, self.limits.max_queue_scan)
             .ok_or(CandidateError::RestartRequired)?;
         drop(state_view);
-        let mut pool = self.snapshot_routable_candidates(
+        let pool = self.snapshot_routable_candidates(
             request.queue,
             request.state,
             &request.attachments,
@@ -461,8 +479,6 @@ impl V2CandidateAssembler {
             exact_payload_limit,
             &mut report,
         )?;
-        canonicalize_records(&mut pool);
-
         let mut reserve = VecDeque::from(pool);
         let mut selected = Vec::with_capacity(self.limits.max_transactions.get());
         fill_selection(
@@ -477,6 +493,10 @@ impl V2CandidateAssembler {
         // of the at-most `max_queue_scan` inspected records.
         let max_attempts = self.limits.max_queue_scan.get().saturating_add(1);
         for _ in 0..max_attempts {
+            // Freeze FIFO membership before adopting the same canonical payload
+            // order used by `BlockBuilder`; routing contexts and work receipts
+            // are positional and must be prepared against that exact order.
+            canonicalize_records(&mut selected);
             let descriptors = selected
                 .iter()
                 .map(CandidateRecord::descriptor)
@@ -500,6 +520,17 @@ impl V2CandidateAssembler {
                     }
                 };
             validate_prepared_work(request.context, view, &descriptors, &prepared_work)?;
+
+            report.selected = selected.len();
+            if !request.allow_empty_recovery_heartbeat
+                && !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work)
+            {
+                if request.queue.transaction_selection_durability_faulted() {
+                    return Err(CandidateError::RestartRequired);
+                }
+                validate_request(&request)?;
+                return Ok(CandidateAssemblyOutcome::NoProposalWork(report));
+            }
 
             let signing = request
                 .output_guard
@@ -565,7 +596,7 @@ impl V2CandidateAssembler {
                 return Err(CandidateError::RestartRequired);
             }
             signing.complete();
-            return Ok(AssembledV2Candidate {
+            return Ok(CandidateAssemblyOutcome::Assembled(AssembledV2Candidate {
                 tag,
                 block,
                 canonical_wire,
@@ -573,7 +604,7 @@ impl V2CandidateAssembler {
                 events,
                 scan_report: report,
                 _selection_lease: selection_lease,
-            });
+            }));
         }
 
         Err(CandidateError::AssemblyDidNotConverge)
@@ -776,6 +807,23 @@ impl V2CandidateAssembler {
     }
 }
 
+fn candidate_has_proposal_work(
+    selected: &[CandidateRecord],
+    attachments: &CandidateAttachments,
+    prepared_work: &PreparedCandidateWork,
+) -> bool {
+    !selected.is_empty()
+        || !prepared_work.autonomous_lane_payloads.is_empty()
+        || attachments.time_trigger_clock_progress_required
+        || attachments.da_commitments.is_some()
+        || attachments.da_pin_intents.is_some()
+        || attachments.previous_roster_evidence.is_some()
+        || attachments.npos_consensus_effects.is_some()
+        || attachments.sccp_commitment_root.is_some()
+        || attachments.certified_merge_carrier_header.is_some()
+        || attachments.certified_merge_entry.is_some()
+}
+
 fn stripped_carrier_context_matches(
     built_header: &BlockHeader,
     certified_header: &BlockHeader,
@@ -896,9 +944,9 @@ fn validate_candidate_parent(
 
 fn canonicalize_records(records: &mut [CandidateRecord]) {
     records.sort_by(|left, right| {
-        left.source_ordinal
-            .cmp(&right.source_ordinal)
-            .then_with(|| left.entrypoint_hash.cmp(&right.entrypoint_hash))
+        left.entrypoint_hash
+            .cmp(&right.entrypoint_hash)
+            .then_with(|| left.source_ordinal.cmp(&right.source_ordinal))
     });
 }
 
@@ -1154,7 +1202,7 @@ fn encoded_chunk_count(
     }
     let data_chunks = payload_len.div_ceil(chunk_size);
     match layout.encoding {
-        wire::PayloadEncoding::Plain => Ok(data_chunks),
+        wire::PayloadEncoding::Plain => Err(CandidateError::InvalidDataAvailabilityLayout),
         wire::PayloadEncoding::ReedSolomon16 => {
             let data_shards = usize::from(layout.data_shards);
             let parity_shards = usize::from(layout.parity_shards);
@@ -1383,6 +1431,7 @@ mod tests {
         borrow::Cow,
         num::{NonZeroU64, NonZeroUsize},
         sync::Arc,
+        time::Duration,
     };
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -1390,7 +1439,7 @@ mod tests {
         ChainId,
         account::AccountId,
         block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        consensus::{VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
         nexus::{DataSpaceId, LaneId},
         peer::PeerId,
         transaction::TransactionBuilder,
@@ -1554,7 +1603,14 @@ mod tests {
         let key = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::BlsNormal)
             .expect("deterministic validator key");
         let peer = PeerId::new(key.public_key().clone());
-        let topology = Topology::new(vec![peer.clone()]);
+        let mut voters = vec![peer];
+        voters.extend((0xA8_u8..=0xAA).map(|seed| {
+            let voter = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic validator key");
+            PeerId::new(voter.public_key().clone())
+        }));
+        voters.sort();
+        let topology = Topology::new(voters.clone());
         let kura = Kura::blank_kura_for_testing();
         let state = State::new_with_chain_for_testing(
             World::new(),
@@ -1583,10 +1639,13 @@ mod tests {
             snapshot_block_creation_time_ms: 2,
             snapshot_state_hash: Hash::new(b"candidate snapshot state"),
         };
-        let roster = vec![wire::ValidatorPower {
-            validator: peer,
-            power: 1,
-        }];
+        let roster = voters
+            .into_iter()
+            .map(|validator| wire::ValidatorPower {
+                validator,
+                power: 1,
+            })
+            .collect::<Vec<_>>();
         let context = wire::HeightContext {
             chain_id: state.chain_id_ref().clone(),
             protocol_version: wire::PROTOCOL_VERSION,
@@ -1602,17 +1661,146 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"candidate snapshot Nexus/AMX"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x43; 32],
         };
         context.validate().expect("fixture snapshot context");
         (state, context, anchor, key)
+    }
+
+    fn assemble_empty_snapshot_candidate(
+        allow_empty_recovery_heartbeat: bool,
+        attachments: CandidateAttachments,
+    ) -> CandidateAssemblyOutcome {
+        let (state, mut context, anchor, key) = snapshot_parent_fixture();
+        context.da_layout.max_payload_size_bytes = 64 * 1024;
+        context.da_layout.max_chunk_count = 128;
+        context.validate().expect("expanded fixture DA limits");
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(
+            anchor.snapshot_block_creation_time_ms + 1,
+        ));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let output_guard = ConsensusOutputGuard::isolated();
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let local_validator = context.leader(tag.view());
+        let directive = LocalProposalDirective::for_test(tag, local_validator, None, None, None);
+        V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8))
+                .expect("fixture candidate limits"),
+            time_source,
+        )
+        .assemble(CandidateRequest {
+            context: &context,
+            directive,
+            local_validator,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &output_guard,
+            attachments,
+            allow_empty_recovery_heartbeat,
+            work_provider: SingleRouteWorkProvider,
+        })
+        .expect("empty snapshot candidate assembly")
+    }
+
+    #[test]
+    fn proposal_work_gate_defers_idle_candidate() {
+        let outcome = assemble_empty_snapshot_candidate(false, CandidateAttachments::default());
+        let CandidateAssemblyOutcome::NoProposalWork(report) = outcome else {
+            panic!("an idle height must not manufacture an empty candidate");
+        };
+        assert_eq!(report, CandidateScanReport::default());
+    }
+
+    #[test]
+    fn proposal_work_gate_preserves_armed_recovery_heartbeat() {
+        let outcome = assemble_empty_snapshot_candidate(true, CandidateAttachments::default());
+        let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
+            panic!("an explicitly armed recovery heartbeat must remain available");
+        };
+        assert_eq!(candidate.scan_report(), CandidateScanReport::default());
+        assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
+    }
+
+    #[test]
+    fn proposal_work_gate_preserves_time_trigger_work() {
+        let outcome = assemble_empty_snapshot_candidate(
+            false,
+            CandidateAttachments {
+                time_trigger_clock_progress_required: true,
+                ..CandidateAttachments::default()
+            },
+        );
+        let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
+            panic!("due time-trigger work must produce a candidate");
+        };
+        assert_eq!(candidate.scan_report(), CandidateScanReport::default());
+        assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
+    }
+
+    #[test]
+    fn proposal_work_gate_accepts_external_and_control_work() {
+        let attachments = CandidateAttachments::default();
+        let prepared = PreparedCandidateWork::default();
+        assert!(!candidate_has_proposal_work(&[], &attachments, &prepared));
+
+        let external = vec![record(39, "proposal-work", 0)];
+        assert!(candidate_has_proposal_work(
+            &external,
+            &attachments,
+            &prepared
+        ));
+
+        let control = CandidateAttachments {
+            sccp_commitment_root: Some([0x5A; 32]),
+            ..CandidateAttachments::default()
+        };
+        assert!(candidate_has_proposal_work(&[], &control, &prepared));
+
+        let parent_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
+        let validator_key = KeyPair::try_from_seed(vec![40; 32], Algorithm::Ed25519)
+            .expect("deterministic validator key");
+        let roster_evidence = CandidateAttachments {
+            previous_roster_evidence: Some(PreviousRosterEvidence {
+                height: 1,
+                block_hash: parent_hash,
+                validator_checkpoint: ValidatorSetCheckpoint::new(
+                    1,
+                    0,
+                    parent_hash,
+                    Hash::prehashed([0x12; 32]),
+                    Hash::prehashed([0x34; 32]),
+                    vec![PeerId::from(validator_key.public_key().clone())],
+                    vec![1],
+                    Vec::new(),
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    None,
+                ),
+                stake_snapshot: None,
+            }),
+            ..CandidateAttachments::default()
+        };
+        assert!(candidate_has_proposal_work(
+            &[],
+            &roster_evidence,
+            &prepared
+        ));
     }
 
     #[test]
@@ -1670,16 +1858,40 @@ mod tests {
     }
 
     #[test]
-    fn canonical_order_preserves_fifo_before_hash_tiebreak() {
+    fn canonical_order_matches_block_builder_hash_order() {
         let mut records = vec![
             record(1, "third", 2),
             record(3, "first", 0),
             record(2, "second", 1),
         ];
-        canonicalize_records(&mut records);
-        assert!(records.windows(2).all(|window| {
-            (window[0].source_ordinal, window[0].entrypoint_hash)
-                <= (window[1].source_ordinal, window[1].entrypoint_hash)
+        records.sort_by(|left, right| right.entrypoint_hash.cmp(&left.entrypoint_hash));
+        for (source_ordinal, record) in records.iter_mut().enumerate() {
+            record.source_ordinal = source_ordinal;
+        }
+        let fifo_hashes = records
+            .iter()
+            .take(2)
+            .map(|record| record.entrypoint_hash)
+            .collect::<BTreeSet<_>>();
+        let mut reserve = VecDeque::from(records);
+        let mut selected = Vec::new();
+        let mut report = CandidateScanReport::default();
+        fill_selection(&mut selected, &mut reserve, 2, usize::MAX, &mut report);
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|record| record.entrypoint_hash)
+                .collect::<BTreeSet<_>>(),
+            fifo_hashes,
+            "canonical payload order must not change FIFO batch membership"
+        );
+        assert!(selected[0].entrypoint_hash > selected[1].entrypoint_hash);
+
+        canonicalize_records(&mut selected);
+        assert!(selected.windows(2).all(|window| {
+            (window[0].entrypoint_hash, window[0].source_ordinal)
+                <= (window[1].entrypoint_hash, window[1].source_ordinal)
         }));
     }
 
@@ -1928,7 +2140,7 @@ mod tests {
     }
 
     #[test]
-    fn chunk_count_matches_plain_and_rs16_stripes() {
+    fn chunk_count_rejects_plain_and_matches_rs16_stripes() {
         let plain = wire::DataAvailabilityLayout {
             encoding: wire::PayloadEncoding::Plain,
             chunk_size_bytes: 8,
@@ -1937,7 +2149,10 @@ mod tests {
             max_payload_size_bytes: 1024,
             max_chunk_count: 1024,
         };
-        assert_eq!(encoded_chunk_count(plain, 17).expect("plain count"), 3);
+        assert!(matches!(
+            encoded_chunk_count(plain, 17),
+            Err(CandidateError::InvalidDataAvailabilityLayout)
+        ));
 
         let rs = wire::DataAvailabilityLayout {
             encoding: wire::PayloadEncoding::ReedSolomon16,

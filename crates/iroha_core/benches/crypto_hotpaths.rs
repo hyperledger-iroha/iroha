@@ -18,7 +18,7 @@ fn sample_transfer_delta() -> TransferDeltaTranscript {
     TransferDeltaTranscript {
         from_account: (*ALICE_ID).clone(),
         to_account: (*BOB_ID).clone(),
-        asset_definition: AssetDefinitionId::new(
+        asset_definition: AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain"),
             "rose".parse().expect("valid asset name"),
         ),

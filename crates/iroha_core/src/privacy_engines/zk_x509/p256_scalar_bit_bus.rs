@@ -1220,6 +1220,7 @@ impl P256ScalarBitBusBoundSourceV1 {
     ) -> Result<P256ScalarBitBusStarkBaseRowProviderV1<'_>, P256ScalarBitBusErrorV1> {
         P256ScalarBitBusStarkBaseRowProviderV1::new_v1(self.material_v1()?)
     }
+
     /// Mint deterministic auxiliary replay under the bound X5B1 challenges.
     pub(crate) fn aux_source_v1(
         &self,

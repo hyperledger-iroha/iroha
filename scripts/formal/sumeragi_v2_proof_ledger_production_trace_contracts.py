@@ -1,5 +1,29 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+# The production multilane trace theorem depends on safety, durability, and
+# deterministic-execution obligations only. Generic partial-synchrony and
+# leader-progress liveness obligations remain part of the strict whole-
+# Sumeragi release ledger, but must not make this independently scoped theorem
+# impossible to certify. Keep this dependency list exact and source ordered.
+PRODUCTION_TRACE_EXTRACTION_LEDGER_DEPENDENCIES = (
+    ("dual-quorum-definition", "tlaps_proved"),
+    ("quorum-honest-intersection", "tlaps_proved"),
+    ("durable-vote-append-kernel", "tlaps_proved"),
+    ("validity-availability-kernel", "tlaps_proved"),
+    ("durable-vote-uniqueness", "tlaps_proved"),
+    ("external-validity", "tlaps_proved"),
+    ("certified-body-availability", "tlaps_proved"),
+    ("certificate-uniqueness", "tlaps_proved"),
+    ("agreement", "tlaps_proved"),
+    ("no-conflicting-commit-qcs", "tlaps_proved"),
+    ("chain-prefix", "tlaps_proved"),
+    ("crash-restart", "tlaps_proved"),
+    ("epoch-boundary", "tlaps_proved"),
+    ("cryptography", "trusted_contract"),
+    ("durability-system-call", "trusted_contract"),
+    ("deterministic-execution", "trusted_contract"),
+)
+
 PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
     {
         "id": "queue_plan_selection_and_reservation_fsync",
@@ -53,16 +77,30 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "additional_tokens": (
             "forget_commit",
             "remove_plan_journal_for_reservation_commit",
-            "canonical_lane_queue_reservation_group_identity_projection",
+            "LaneQueueReservationGroupIdentityV1::from_key",
+            "cleanup_gate.authenticates_applied_group",
         ),
         "commit_sink": {
-            "path": "crates/iroha_core/src/queue.rs",
+            "path": "crates/iroha_core/src/queue/canonical_terminal_cleanup.rs",
             "impl": "Queue",
-            "symbol": "commit_lane_reservation_group_prefix",
+            "symbol": "commit_prepared_lane_reservation_carriers",
             "required_tokens": (
-                "lane_queue_reservation_group_binding_from_ordered_keys",
+                "validate_lane_queue_carrier_cleanup_batch_bounds",
+                "LaneQueueReservationGroupIdentityV1::from_key",
+                "cleanup_gate.authenticates_applied_group",
                 "begin_durability_transition_locked",
+                "preflight_lane_reservation_plan_journal",
                 "commit_lane_reservation",
+            ),
+            "ordered_tokens": (
+                "validate_lane_queue_carrier_cleanup_batch_bounds(",
+                "for group in carriers.iter().flatten()",
+                "cleanup_gate.authenticates_applied_group(group.group_binding)",
+                "begin_durability_transition_locked(",
+                "preflight_lane_reservation_plan_journal(&journal_preflight)",
+                "for group in carriers.into_iter().flatten()",
+                "self.commit_lane_reservation(",
+                "drop(durability_transition)",
             ),
         },
     },
@@ -124,7 +162,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "symbol": "complete_autonomous_lifecycle_bootstrap",
             "required_tokens": (
                 "refresh_autonomous_lifecycle_bootstrap_authority",
-                "persist_lane_executable_payload",
+                "persist_lane_executable_payload_impl",
                 "AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable",
                 "AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
                 "delete_completed_autonomous_lifecycle_bootstrap",
@@ -132,9 +170,9 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue",
             ),
             "ordered_tokens": (
-                "persist_lane_executable_payload",
-                "autonomous lifecycle bootstrap Prepared cursor lacks exact readback",
-                "autonomous lifecycle bootstrap Live cursor lacks exact readback",
+                "persist_lane_executable_payload_impl",
+                "if !matches!(authority.stage, AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable | AutonomousLifecycleBootstrapRecoveryStage::LiveDurable)",
+                "if authority.stage != AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
                 "delete_completed_autonomous_lifecycle_bootstrap",
                 "let cursor_read = self.read_autonomous_lifecycle_cursor",
             ),
@@ -214,11 +252,11 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "RecoveredAutonomousLifecycleStartup",
             ),
             "ordered_tokens": (
-                "into_reconciliation_receipt()",
+                "let receipt = if let Some(recovery) = recovery_authorization { recovery.into_reconciliation_receipt()",
                 "let mut recovered_attempts = 0_usize",
                 "if recover_one_attempt(",
                 "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
-                "Ok(RecoveredAutonomousLifecycleStartup {",
+                "Ok(RecoveredAutonomousLifecycleStartup { snapshot, receipt, deferred_terminal_recovery, completed_bootstraps, recovered_attempts, })",
             ),
         },
         "checked_transition_consumer": {
@@ -329,11 +367,11 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "RecoveredAutonomousLifecycleStartup",
             ),
             "ordered_tokens": (
-                "into_reconciliation_receipt()",
+                "let receipt = if let Some(recovery) = recovery_authorization { recovery.into_reconciliation_receipt()",
                 "let mut recovered_attempts = 0_usize",
                 "if recover_one_attempt(",
                 "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
-                "Ok(RecoveredAutonomousLifecycleStartup {",
+                "Ok(RecoveredAutonomousLifecycleStartup { snapshot, receipt, deferred_terminal_recovery, completed_bootstraps, recovered_attempts, })",
             ),
         },
         "checked_transition_consumer": {
@@ -343,15 +381,13 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "required_tokens": (
                 "AutonomousLifecycleCursorPhaseKindV2::Crashed",
                 "check_production_in_flight_first_release_recover_transition",
-                "AutonomousLifecycleCursorPhaseV2::prepared",
-                "Recover preparation failed",
+                "AutonomousLifecycleCursorPhaseV2::prepared(current_generation, recover)",
                 "compare_and_swap_phase",
             ),
             "ordered_tokens": (
                 "AutonomousLifecycleCursorPhaseKindV2::Crashed =>",
                 "check_production_in_flight_first_release_recover_transition",
-                "AutonomousLifecycleCursorPhaseV2::prepared(",
-                '"Recover preparation failed"',
+                "let phase = AutonomousLifecycleCursorPhaseV2::prepared(current_generation, recover).map_err(|reason| lifecycle_error(\"\", reason))?; let _ = compare_and_swap_phase(kura, key_pair, local_peer, payload, read, phase)",
             ),
         },
         "commit_sink": {
@@ -415,12 +451,68 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         },
         "supporting_sources": (
             {
+                "role": "configured-role lifecycle process-generation claim",
+                "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                "impl": None,
+                "symbol": "claim_runner_lifecycle_process_generation",
+                "required_tokens": (
+                    "match role",
+                    "NodeRole::Observer => Ok(None)",
+                    "NodeRole::Validator =>",
+                    "context.chain_id.clone().into_inner",
+                    "kura.claim_autonomous_lifecycle_process_generation",
+                    "Hash::new(lifecycle_chain_id.as_bytes())",
+                    "local_peer",
+                    ".map(Some)",
+                ),
+                "forbidden_tokens": (
+                    "context.roster",
+                    "local_validator_index",
+                    "_initial_local_validator",
+                ),
+                "ordered_tokens": (
+                    "match role",
+                    "NodeRole::Observer => Ok(None)",
+                    "NodeRole::Validator =>",
+                    "let lifecycle_chain_id = context.chain_id.clone().into_inner()",
+                    "kura.claim_autonomous_lifecycle_process_generation(",
+                    "Hash::new(lifecycle_chain_id.as_bytes())",
+                    "local_peer,",
+                    ".map(Some)",
+                ),
+            },
+            {
+                "role": "runner lifecycle process-generation claim handoff",
+                "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                "impl": None,
+                "symbol": "run_inner",
+                "required_tokens": (
+                    "claim_runner_lifecycle_process_generation",
+                    "reconcile_autonomous_lifecycle_startup",
+                    "_lifecycle_process_generation.as_ref",
+                    "V2LaneWorkAdapter::new_with_output_guard_and_transport",
+                    "_lifecycle_process_generation.clone",
+                ),
+                "ordered_tokens": (
+                    "let _initial_local_validator = local_validator_index(verified_context.context(), &local_peer, config.role)?",
+                    "let _lifecycle_process_generation = claim_runner_lifecycle_process_generation(",
+                    "config.role, kura.as_ref(), verified_context.context(), &local_peer,",
+                    "reconcile_autonomous_lifecycle_startup(",
+                    "_lifecycle_process_generation.as_ref(),",
+                    "V2LaneWorkAdapter::new_with_output_guard_and_transport(",
+                    "_lifecycle_process_generation.clone(),",
+                ),
+            },
+            {
                 "role": "signed startup lifecycle recovery coordinator",
                 "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
                 "impl": None,
                 "symbol": "reconcile_autonomous_lifecycle_startup",
                 "required_tokens": (
                     "authorize_lane_reservation_snapshot_recovery",
+                    "paired_lifecycle_group_identities",
+                    "observer_retirement_lifecycle_projections",
+                    "let Some(process_generation) = process_generation else",
                     "authorize_recovered_producer_queue_lifecycle_bootstrap",
                     "authenticate_autonomous_lifecycle_bootstrap_recovery",
                     "complete_autonomous_lifecycle_bootstrap",
@@ -429,11 +521,15 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                     "revalidate_lane_reservation_startup_reconciliation_receipt",
                 ),
                 "ordered_tokens": (
-                    "authorize_lane_reservation_snapshot_recovery(",
+                    "let Some(process_generation) = process_generation else",
+                    "let recovery = queue.authorize_lane_reservation_snapshot_recovery(",
+                    "let receipt = recovery.into_reconciliation_receipt()",
+                    "let mut recovery_authorization = if snapshot.is_empty()",
+                    "Some(queue.authorize_lane_reservation_snapshot_recovery(",
                     "authorize_recovered_producer_queue_lifecycle_bootstrap(",
                     "authenticate_autonomous_lifecycle_bootstrap_recovery(",
                     "complete_autonomous_lifecycle_bootstrap(permit)",
-                    "into_reconciliation_receipt()",
+                    "let receipt = if let Some(recovery) = recovery_authorization { recovery.into_reconciliation_receipt()",
                     "if recover_one_attempt(",
                     "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
                 ),
@@ -466,18 +562,29 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "symbol": "authorize_lane_reservation_snapshot_recovery",
             "required_tokens": (
                 "revalidate_lane_reservation_startup_reconciliation_receipt",
+                "planner_group.requires_lifecycle_pair",
                 "lane_reservation_recovery_phase_map",
                 "lane_reservation_snapshot_group_phase_agrees",
+                "paired_lifecycle_by_group",
+                "lane_reservation_snapshot_release_retirement_hash",
+                "anchor.actor_indices",
                 "check_production_in_flight_first_release_recover_reservation_snapshot_transition",
                 "accepted.before != accepted.after",
                 "covered_owners.len() != phases.len()",
                 "checked_by_group.into_values().collect()",
+                "checked_planner_groups",
             ),
             "ordered_tokens": (
                 "revalidate_lane_reservation_startup_reconciliation_receipt(",
                 "lane_reservation_recovery_phase_map(&snapshot)",
-                "lane_reservation_snapshot_group_phase_agrees(",
-                "check_production_in_flight_first_release_recover_reservation_snapshot_transition(",
+                "let mut paired_lifecycle_by_group = BTreeMap::new()",
+                "for lifecycle in lifecycle_projections",
+                "let group_coverage = lane_reservation_snapshot_group_phase_agrees(&snapshot, &phases, lifecycle.reservation_group, &lifecycle.ordered_keys, lifecycle.recovered_state,)?",
+                "let checked = check_production_in_flight_first_release_recover_reservation_snapshot_transition(lifecycle.recovered_state,)",
+                "for planner_group in planner_groups",
+                "let group_coverage = lane_reservation_snapshot_group_phase_agrees(&snapshot, &phases, reservation_group, &ordered_keys, recovered_state,)?",
+                "let checked = check_production_in_flight_first_release_recover_reservation_snapshot_transition(recovered_state,)",
+                "if !paired_lifecycle_by_group.is_empty()",
                 "covered_owners.len() != phases.len()",
                 "checked_by_group.into_values().collect()",
             ),
@@ -493,12 +600,15 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "accepted.target != 0",
                 "accepted.before != accepted.after",
                 "checked_group.lifecycle.recovered_state",
+                "for checked_group in self.checked_planner_groups",
+                "checked_group.recovered_state",
                 "self.reconciliation_receipt",
             ),
             "ordered_tokens": (
-                "checked_group.checked.into_projection()",
-                "accepted.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+                "for checked_group in self.checked_groups { let accepted = checked_group.checked.into_projection(); if accepted.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
                 "accepted.before != checked_group.lifecycle.recovered_state",
+                "for checked_group in self.checked_planner_groups { let accepted = checked_group.checked.into_projection(); if accepted.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+                "accepted.before != checked_group.recovered_state",
                 "Ok(self.reconciliation_receipt)",
             ),
         },
@@ -508,16 +618,20 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "symbol": "apply_lane_reservation_reconciliation_plan",
             "required_tokens": (
                 "revalidate_lane_reservation_startup_reconciliation_receipt",
-                "commit_lane_reservation_groups_with_authorization",
-                "release_lane_reservations_in_order",
+                "let mut authorized_commit_groups = Vec::new()",
+                "finalize_startup_committed_canonical_carriers",
+                "release_strictly_absent_lane_reservations_in_order",
                 "lane_reservation_reconciliation_snapshot",
+                "complete_deferred_autonomous_lifecycle_terminal_outcomes_after_queue_actions",
                 "complete_lane_reservation_startup_reconciliation",
             ),
             "ordered_tokens": (
                 "revalidate_lane_reservation_startup_reconciliation_receipt",
-                "commit_lane_reservation_groups_with_authorization",
-                "release_lane_reservations_in_order",
+                "let mut authorized_commit_groups = Vec::new()",
+                "finalize_startup_committed_canonical_carriers(",
+                "release_strictly_absent_lane_reservations_in_order",
                 "lane_reservation_reconciliation_snapshot",
+                "complete_deferred_autonomous_lifecycle_terminal_outcomes_after_queue_actions(",
                 "complete_lane_reservation_startup_reconciliation(replay_receipt)",
             ),
         },
@@ -597,11 +711,11 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "RecoveredAutonomousLifecycleStartup",
             ),
             "ordered_tokens": (
-                "into_reconciliation_receipt()",
+                "let receipt = if let Some(recovery) = recovery_authorization { recovery.into_reconciliation_receipt()",
                 "let mut recovered_attempts = 0_usize",
                 "if recover_one_attempt(",
                 "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
-                "Ok(RecoveredAutonomousLifecycleStartup {",
+                "Ok(RecoveredAutonomousLifecycleStartup { snapshot, receipt, deferred_terminal_recovery, completed_bootstraps, recovered_attempts, })",
             ),
         },
         "checked_transition_consumer": {
@@ -612,14 +726,14 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "AutonomousLifecycleCursorPhaseKindV2::Live",
                 "before.session.bodies & local_actor",
                 "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
-                "rehydration preparation failed",
+                "AutonomousLifecycleCursorPhaseV2::prepared(current_generation, rehydrate)",
                 "compare_and_swap_phase",
             ),
             "ordered_tokens": (
                 "AutonomousLifecycleCursorPhaseKindV2::Live =>",
                 "before.session.bodies & local_actor != 0",
                 "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(",
-                '"rehydration preparation failed"',
+                "let phase = AutonomousLifecycleCursorPhaseV2::prepared(current_generation, rehydrate).map_err(|reason| { lifecycle_error(\"\", reason) })?; let _ = compare_and_swap_phase(kura, key_pair, local_peer, payload, read, phase)",
             ),
         },
         "commit_sink": {
@@ -1188,7 +1302,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "id": "lane_commit_persistence",
         "path": "crates/iroha_core/src/kura.rs",
         "impl": "Kura",
-        "symbol": "write_certified_lane_block_artifact_with_authority",
+        "symbol": "write_certified_lane_block_artifact_with_authority_under_prune_guard",
         "model_actions": ("LaneCommit",),
         "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT",),
         "checked_transition_count": 1,
@@ -1196,7 +1310,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "AutonomousLaneCommitPersistenceAuthorization",
             "consume_for_persistence",
             "existing_exact",
-            "publish_latest_certified_lane_block_frontier_locked",
+            "publish_certified_frontier_and_consume_capacity_locked",
             "append_indexed_progress_sidecar",
         ),
         "authorization_source": {
@@ -1214,13 +1328,14 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             ),
         },
         "commit_sink": {
-            "path": "crates/iroha_core/src/kura.rs",
+            "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
             "impl": "Kura",
-            "symbol": "publish_latest_certified_lane_block_frontier_locked",
+            "symbol": "publish_certified_frontier_and_consume_capacity_locked",
             "required_tokens": (
-                "promote_bound_progress_temp",
-                "sync_bound_progress_intent_directories",
-                "read_regular_sidecar_snapshot",
+                "publish_latest_certified_lane_block_frontier_locked",
+                "read_latest_certified_lane_block_frontier_structural_locked",
+                "confirm_latest_certified_lane_block_frontier_read_locked",
+                "consume_certified_bundle_frontier_capacity",
             ),
         },
     },
@@ -1341,7 +1456,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "claims_fully_released",
         ),
         "authorization_source": {
-            "path": "crates/iroha_core/src/kura.rs",
+            "path": "crates/iroha_core/src/kura/autonomous_release_authority.rs",
             "impl": "Kura",
             "symbol": "authorize_autonomous_lane_queue_release_preparation",
             "required_tokens": (
@@ -1393,7 +1508,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "journal.forget_release(completion.barrier.clone())",
         ),
         "authorization_source": {
-            "path": "crates/iroha_core/src/kura.rs",
+            "path": "crates/iroha_core/src/kura/autonomous_release_authority.rs",
             "impl": "Kura",
             "symbol": "finalize_autonomous_lane_slot_release_inner",
             "required_tokens": (
@@ -2095,8 +2210,8 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         ),
         "ordered_tokens": (
             "persist_lane_executable_payload_impl",
-            '"autonomous lifecycle bootstrap Prepared cursor lacks exact readback"',
-            '"autonomous lifecycle bootstrap Live cursor lacks exact readback"',
+            "if !matches!(authority.stage, AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable | AutonomousLifecycleBootstrapRecoveryStage::LiveDurable)",
+            "if authority.stage != AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
             "delete_completed_autonomous_lifecycle_bootstrap",
             "let cursor_read = self.read_autonomous_lifecycle_cursor",
         ),
@@ -2112,12 +2227,15 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "accepted.target != 0",
             "accepted.before != accepted.after",
             "checked_group.lifecycle.recovered_state",
+            "for checked_group in self.checked_planner_groups",
+            "checked_group.recovered_state",
             "self.reconciliation_receipt",
         ),
         "ordered_tokens": (
-            "checked_group.checked.into_projection()",
-            "accepted.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+            "for checked_group in self.checked_groups { let accepted = checked_group.checked.into_projection(); if accepted.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
             "accepted.before != checked_group.lifecycle.recovered_state",
+            "for checked_group in self.checked_planner_groups { let accepted = checked_group.checked.into_projection(); if accepted.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+            "accepted.before != checked_group.recovered_state",
             "Ok(self.reconciliation_receipt)",
         ),
     },
@@ -2194,6 +2312,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "lane_reservation_reconciliation_snapshot",
             "bind_lane_reservation_startup_reconciliation_receipt",
             "authorize_lane_reservation_snapshot_recovery",
+            "observer_retirement_lifecycle_projections",
             "authorize_recovered_producer_queue_lifecycle_bootstrap",
             "authenticate_autonomous_lifecycle_bootstrap_recovery",
             "complete_autonomous_lifecycle_bootstrap",
@@ -2206,16 +2325,20 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         "ordered_tokens": (
             "lane_reservation_reconciliation_snapshot()",
             "bind_lane_reservation_startup_reconciliation_receipt(&snapshot)",
-            "authorize_lane_reservation_snapshot_recovery(",
+            "let Some(process_generation) = process_generation else",
+            "let recovery = queue.authorize_lane_reservation_snapshot_recovery(",
+            "let receipt = recovery.into_reconciliation_receipt()",
+            "let mut recovery_authorization = if snapshot.is_empty()",
+            "Some(queue.authorize_lane_reservation_snapshot_recovery(",
             "authorize_recovered_producer_queue_lifecycle_bootstrap(",
             "authenticate_autonomous_lifecycle_bootstrap_recovery(",
             "complete_autonomous_lifecycle_bootstrap(permit)",
             "completion.cursor() != &expected_live",
-            "into_reconciliation_receipt()",
+            "let receipt = if let Some(recovery) = recovery_authorization { recovery.into_reconciliation_receipt()",
             "let mut recovered_attempts = 0_usize",
             "if recover_one_attempt(",
             "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
-            "Ok(RecoveredAutonomousLifecycleStartup {",
+            "Ok(RecoveredAutonomousLifecycleStartup { snapshot, receipt, deferred_terminal_recovery, completed_bootstraps, recovered_attempts, })",
         ),
     },
     {
@@ -2225,13 +2348,16 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         "required_tokens": (
             "LaneQueueReservationReconciliationSnapshotV1",
             "LaneReservationStartupReconciliationReceipt",
+            "AutonomousLifecycleDeferredTerminalRecoveryHandoff",
             "self.snapshot",
             "self.receipt",
+            "self.deferred_terminal_recovery",
         ),
         "ordered_tokens": (
             "LaneQueueReservationReconciliationSnapshotV1",
             "LaneReservationStartupReconciliationReceipt",
-            "(self.snapshot, self.receipt)",
+            "AutonomousLifecycleDeferredTerminalRecoveryHandoff",
+            "(self.snapshot, self.receipt, self.deferred_terminal_recovery)",
         ),
     },
     {
@@ -2245,14 +2371,16 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "bind_lane_reservation_startup_reconciliation_receipt",
             "LaneReservationReconciliationPlan",
             "recovered_receipt",
+            "deferred_terminal_recovery",
             "replay_receipt",
         ),
         "ordered_tokens": (
             "let current_snapshot = queue.lane_reservation_reconciliation_snapshot()",
+            "let (snapshot, recovered_receipt, deferred_terminal_recovery) = match lifecycle_handoff",
             "Some(handoff) =>",
-            "handoff.into_queue_handoff()",
+            "let (snapshot, receipt, deferred_terminal_recovery) = handoff.into_queue_handoff()",
             "revalidate_lane_reservation_startup_reconciliation_receipt(",
-            "(snapshot, Some(receipt))",
+            "(snapshot, Some(receipt), deferred_terminal_recovery)",
         ),
     },
     {
@@ -2261,12 +2389,16 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         "symbol": "apply_lane_reservation_reconciliation_plan",
         "required_tokens": (
             "revalidate_lane_reservation_startup_reconciliation_receipt",
-            "commit_lane_reservation_groups_with_authorization",
+            "finalize_startup_committed_canonical_carriers",
+            "release_strictly_absent_lane_reservations_in_order",
+            "complete_deferred_autonomous_lifecycle_terminal_outcomes_after_queue_actions",
             "complete_lane_reservation_startup_reconciliation",
         ),
         "ordered_tokens": (
             "revalidate_lane_reservation_startup_reconciliation_receipt",
-            "commit_lane_reservation_groups_with_authorization",
+            "finalize_startup_committed_canonical_carriers(",
+            "release_strictly_absent_lane_reservations_in_order",
+            "complete_deferred_autonomous_lifecycle_terminal_outcomes_after_queue_actions(",
             "complete_lane_reservation_startup_reconciliation(replay_receipt)",
         ),
     },
@@ -2276,9 +2408,13 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         "symbol": "run_inner",
         "required_tokens": (
             "reservation_reconciliation_pending",
+            "reconcile_lifecycle_terminal_outcomes_before_queue_planning",
             "plan_lane_reservation_ownership",
-            "drop(pre_lifecycle_plan)",
+            "LaneReservationReconciliationPlanning::Ready(pre_lifecycle_plan)",
+            "pre_lifecycle_plan.startup_snapshot_recovery_evidence",
+            "planner_evidence",
             "reconcile_autonomous_lifecycle_startup",
+            "deferred_terminal_recovery",
             "Some(lifecycle)",
             "apply_lane_reservation_reconciliation_plan",
             "construct_after_pending_tip_application_recovery",
@@ -2286,10 +2422,13 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "activate_after_lane_drain_queue_install",
         ),
         "ordered_tokens": (
-            "if reservation_reconciliation_pending",
+            "if reservation_reconciliation_pending { let summary = loop {",
+            "let deferred_terminal_recovery = reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
             "let planning = plan_lane_reservation_ownership(state.as_ref(), queue.as_ref(), kura.as_ref(), &verified_context, None,)?",
-            "drop(pre_lifecycle_plan)",
-            "reconcile_autonomous_lifecycle_startup(",
+            "LaneReservationReconciliationPlanning::Ready(pre_lifecycle_plan) =>",
+            "let planner_evidence = pre_lifecycle_plan.startup_snapshot_recovery_evidence()?",
+            "let lifecycle = reconcile_autonomous_lifecycle_startup(",
+            "planner_evidence, deferred_terminal_recovery,",
             "let replanned = plan_lane_reservation_ownership(state.as_ref(), queue.as_ref(), kura.as_ref(), &verified_context, Some(lifecycle),)?",
             "apply_lane_reservation_reconciliation_plan(",
             "let mut lane_work = construct_after_pending_tip_application_recovery(",
@@ -3340,6 +3479,11 @@ def _production_trace_extraction_source_snapshot(
                 for token in supporting_source["required_tokens"]
                 if _token_sequence_count(supporting_tokens, rust_code_tokens(token)) == 0
             ]
+            forbidden_supporting_tokens = [
+                token
+                for token in supporting_source.get("forbidden_tokens", ())
+                if _token_sequence_count(supporting_tokens, rust_code_tokens(token)) != 0
+            ]
             supporting_order_error = _production_trace_ordered_token_sequence_error(
                 supporting_tokens,
                 supporting_source.get("ordered_tokens", ()),
@@ -3349,11 +3493,20 @@ def _production_trace_extraction_source_snapshot(
                 if supporting_source["impl"] is None
                 else f"{supporting_source['impl']}::{supporting_source['symbol']}"
             )
-            if missing_supporting_tokens or supporting_order_error is not None:
+            if (
+                missing_supporting_tokens
+                or forbidden_supporting_tokens
+                or supporting_order_error is not None
+            ):
                 detail = []
                 if missing_supporting_tokens:
                     detail.append(
                         f"missing exact code tokens {missing_supporting_tokens!r}"
+                    )
+                if forbidden_supporting_tokens:
+                    detail.append(
+                        "contains forbidden exact code tokens "
+                        f"{forbidden_supporting_tokens!r}"
                     )
                 if supporting_order_error is not None:
                     detail.append(supporting_order_error)
@@ -3734,23 +3887,66 @@ def _production_trace_extraction_action_partition_errors() -> list[str]:
     return errors
 
 
+def _production_trace_extraction_ledger_dependency_snapshot(
+    ledger: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Return the exact proved/trusted ledger slice used by this theorem."""
+
+    obligations = ledger.get("obligations")
+    if not isinstance(obligations, list):
+        raise ValueError(
+            "production trace-extraction evidence requires a proof obligation array"
+        )
+    by_id: dict[str, dict[str, Any]] = {}
+    for obligation in obligations:
+        if not isinstance(obligation, dict):
+            continue
+        obligation_id = obligation.get("id")
+        if not _nonempty_string(obligation_id):
+            continue
+        if obligation_id in by_id:
+            raise ValueError(
+                "production trace-extraction ledger dependency inventory contains "
+                f"duplicate obligation {obligation_id}"
+            )
+        by_id[obligation_id] = obligation
+
+    snapshot: list[dict[str, str]] = []
+    for obligation_id, expected_status in (
+        PRODUCTION_TRACE_EXTRACTION_LEDGER_DEPENDENCIES
+    ):
+        obligation = by_id.get(obligation_id)
+        if obligation is None:
+            raise ValueError(
+                "production trace-extraction ledger dependency is missing: "
+                f"{obligation_id}"
+            )
+        observed_status = obligation.get("status")
+        if observed_status != expected_status:
+            raise ValueError(
+                "production trace-extraction ledger dependency status drifted: "
+                f"{obligation_id} expected {expected_status}, found "
+                f"{observed_status!r}"
+            )
+        snapshot.append({"id": obligation_id, "status": expected_status})
+    return snapshot
+
+
 def build_production_trace_extraction_evidence(
     ledger: dict[str, Any],
     *,
     tlaps_evidence: dict[str, Any],
     verus_evidence: dict[str, Any],
-    cross_tool_evidence: dict[str, Any],
+    cross_tool_evidence: dict[str, Any] | None,
     artifacts: ProductionTraceExtractionArtifactPaths,
     root_dir: Path = ROOT_DIR,
     formal_dir: Path = FORMAL_DIR,
 ) -> dict[str, Any]:
     """Build the exact source- and backend-bound production theorem certificate."""
 
-    if ledger.get("machine_checked_completion") is not True:
-        raise ValueError(
-            "production trace-extraction evidence requires "
-            "machine_checked_completion=true"
-        )
+    ledger_dependencies = _production_trace_extraction_ledger_dependency_snapshot(
+        ledger
+    )
     partition_errors = _production_trace_extraction_action_partition_errors()
     if partition_errors:
         raise ValueError("\n".join(partition_errors))
@@ -3761,12 +3957,11 @@ def build_production_trace_extraction_evidence(
             + ", ".join(PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS)
         )
     if not all(
-        isinstance(value, dict)
-        for value in (tlaps_evidence, verus_evidence, cross_tool_evidence)
+        isinstance(value, dict) for value in (tlaps_evidence, verus_evidence)
     ):
         raise ValueError(
-            "production trace-extraction evidence requires TLAPS, Verus, and "
-            "cross-tool evidence objects"
+            "production trace-extraction evidence requires TLAPS and Verus "
+            "evidence objects"
         )
     formal_manifest = tlaps_evidence.get("source_manifest")
     if not isinstance(formal_manifest, dict) or not _nonempty_string(
@@ -3776,23 +3971,32 @@ def build_production_trace_extraction_evidence(
     workspace_manifest = verus_evidence.get("source_manifest_sha256")
     if not _nonempty_string(workspace_manifest):
         raise ValueError("Verus evidence lacks its workspace source manifest")
-    source_manifests = cross_tool_evidence.get("source_manifests")
-    if source_manifests != {
-        "formal_sha256": formal_manifest["sha256"],
-        "workspace_sha256": workspace_manifest,
-    }:
-        raise ValueError(
-            "cross-tool evidence does not link the exact formal and workspace "
-            "manifests"
-        )
-    if cross_tool_evidence.get("ledger_sha256") != _canonical_json_sha256(ledger):
-        raise ValueError("cross-tool evidence does not link the exact proof ledger")
-    component_evidence = cross_tool_evidence.get("component_evidence")
-    if component_evidence != {
+    component_evidence = {
         "tlaps_sha256": _canonical_json_sha256(tlaps_evidence),
         "verus_sha256": _canonical_json_sha256(verus_evidence),
-    }:
-        raise ValueError("cross-tool evidence does not link the exact backend evidence")
+    }
+    if cross_tool_evidence is not None:
+        if not isinstance(cross_tool_evidence, dict):
+            raise ValueError("cross-tool evidence must be an object when supplied")
+        source_manifests = cross_tool_evidence.get("source_manifests")
+        if source_manifests != {
+            "formal_sha256": formal_manifest["sha256"],
+            "workspace_sha256": workspace_manifest,
+        }:
+            raise ValueError(
+                "cross-tool evidence does not link the exact formal and workspace "
+                "manifests"
+            )
+        if cross_tool_evidence.get("ledger_sha256") != _canonical_json_sha256(
+            ledger
+        ):
+            raise ValueError(
+                "cross-tool evidence does not link the exact proof ledger"
+            )
+        if cross_tool_evidence.get("component_evidence") != component_evidence:
+            raise ValueError(
+                "cross-tool evidence does not link the exact backend evidence"
+            )
 
     source_snapshot = _production_trace_extraction_source_snapshot(
         root_dir=root_dir, formal_dir=formal_dir
@@ -3802,10 +4006,13 @@ def build_production_trace_extraction_evidence(
         _production_trace_artifact_entry("tlaps_evidence", artifacts.evidence),
         _production_trace_artifact_entry("verus_evidence", artifacts.verus_evidence),
         _production_trace_artifact_entry("verus_log", artifacts.verus_log),
-        _production_trace_artifact_entry(
-            "cross_tool_evidence", artifacts.cross_tool_evidence
-        ),
     ]
+    if artifacts.cross_tool_evidence is not None:
+        artifact_entries.append(
+            _production_trace_artifact_entry(
+                "cross_tool_evidence", artifacts.cross_tool_evidence
+            )
+        )
     return {
         "schema_version": PRODUCTION_TRACE_EXTRACTION_EVIDENCE_SCHEMA_VERSION,
         "certificate_type": "production_trace_extraction_theorem",
@@ -3828,13 +4035,23 @@ def build_production_trace_extraction_evidence(
             "ledger_document_sha256": _canonical_json_sha256(ledger),
             "tlaps_document_sha256": _canonical_json_sha256(tlaps_evidence),
             "verus_document_sha256": _canonical_json_sha256(verus_evidence),
-            "cross_tool_document_sha256": _canonical_json_sha256(
-                cross_tool_evidence
+            "cross_tool_document_sha256": (
+                None
+                if cross_tool_evidence is None
+                else _canonical_json_sha256(cross_tool_evidence)
             ),
-            "cross_tool_ledger_sha256": cross_tool_evidence["ledger_sha256"],
-            "cross_tool_component_evidence": component_evidence,
+            "cross_tool_ledger_sha256": (
+                None
+                if cross_tool_evidence is None
+                else cross_tool_evidence["ledger_sha256"]
+            ),
+            "component_evidence": component_evidence,
             "verus_log_sha256": verus_evidence.get("log_sha256"),
-            "machine_checked_completion": True,
+            "multilane_dependency_completion": True,
+            "multilane_ledger_dependencies": ledger_dependencies,
+            "global_machine_checked_completion": ledger.get(
+                "machine_checked_completion"
+            ),
         },
     }
 
@@ -3857,12 +4074,11 @@ def _production_trace_extraction_evidence_errors(
     if artifacts is None:
         return ["production trace-extraction evidence lacks exact artifact paths"]
     if not all(
-        isinstance(value, dict)
-        for value in (tlaps_evidence, verus_evidence, cross_tool_evidence)
+        isinstance(value, dict) for value in (tlaps_evidence, verus_evidence)
     ):
         return [
-            "production trace-extraction evidence requires linked TLAPS, Verus, "
-            "and cross-tool evidence"
+            "production trace-extraction evidence requires linked TLAPS and "
+            "Verus evidence"
         ]
     try:
         expected = build_production_trace_extraction_evidence(

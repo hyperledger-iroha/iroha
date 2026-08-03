@@ -20,7 +20,7 @@ use iroha::data_model::{
     prelude::*,
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
-use iroha_data_model::account::{AccountDomainSelector, address::AccountAddress};
+use iroha_data_model::account::address::AccountAddress;
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::prelude::RepoInstructionBox;
 use iroha_primitives::json::Json;
@@ -357,12 +357,7 @@ fn local8_literal() -> String {
         .expect("canonical hex encoding");
     let canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
 
-    let domain: DomainId =
-        DomainId::try_new("wonderland", "universal").expect("wonderland domain parses");
-    let digest = match AccountDomainSelector::from_domain(&domain).expect("selector") {
-        AccountDomainSelector::LocalDigest12(bytes) => bytes,
-        other => panic!("expected LocalDigest12 selector for legacy local8 fixture, got {other:?}"),
-    };
+    let digest = [0xA5; 12];
 
     // Construct a legacy Local-12 layout and then truncate it to Local-8 to emulate
     // a pre-cutover payload shape that must be rejected by the parser.
@@ -1772,11 +1767,11 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     init_instruction_registry();
     // Reuse pre-existing asset definitions from the test genesis to avoid permission issues when
     // registering new definitions in the wonderland domain.
-    let cash_def_id: AssetDefinitionId = AssetDefinitionId::new(
+    let cash_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "rose".parse()?,
     );
-    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::new(
+    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "camomile".parse()?,
     );

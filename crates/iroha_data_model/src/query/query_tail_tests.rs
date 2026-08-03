@@ -169,6 +169,20 @@ mod certified_merge_inclusion_tests {
             "a one-leaf proof must not be rebound to a two-leaf certified count"
         );
 
+        let oversized_leaf_count = (1_u64 << u32::BITS) + 1;
+        let mut oversized_reference = reference.clone();
+        oversized_reference.entrypoint_count = Some(oversized_leaf_count);
+        let mut oversized = committed.clone();
+        oversized
+            .merge_inclusion
+            .as_mut()
+            .expect("merge inclusion")
+            .entrypoint_count = oversized_leaf_count;
+        assert!(
+            !oversized.verify_certified_merge_inclusion(&oversized_reference),
+            "certified merge proofs must reject counts outside the u32 block-proof index space"
+        );
+
         let mut wrong_version = reference.clone();
         wrong_version.version = 2;
         assert!(!committed.verify_certified_merge_inclusion(&wrong_version));
@@ -323,7 +337,7 @@ mod fault_injection_tests {
                 proof: vec![1, 2, 3],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
@@ -418,7 +432,7 @@ mod fault_injection_tests {
             leg_index: 0,
             leg_id: "fault-injection-leg".to_owned(),
             asset: AssetId::new(
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("rose").expect("asset name"),
                 ),
@@ -509,7 +523,7 @@ mod tests {
                 proof: vec![1, 2, 3],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),

@@ -213,6 +213,13 @@ canonical per-phase virtual-region breakpoints. Runtime rejects malformed or
 shape-incompatible breakpoints and builds only a witness-generation circuit
 from them, so it does not retain the key-generation constraint graph beside a
 processed proving key.
+Generation obtains the two inline-profile inputs from
+`kagami kagemusha prepare-release-circuit-params-v4`. That command uses the
+central reviewed first-release constructor and atomically publishes a closed,
+owner-private directory containing canonical Eq and Ep Norito files; hand-built
+release profiles are not an operator interface. Eq and Ep share the exact
+parameter bytes while retaining distinct circuit identities, proving keys, and
+verifying keys.
 Candidate verifier- and proving-key generation extracts or validates those
 breakpoints after synthesis and drops the populated circuit before key
 assembly. The reciprocal point audit no longer allocates the generic
@@ -482,9 +489,16 @@ independent cryptographic review, complete signed physical-device evidence for
 every platform slot required by the selected policy, signed role-threshold
 approval, and the production corridor. Any proof-code change after the
 reviewed closure invalidates that evidence and requires regeneration. A
-candidate built from a dirty tree is admissible only when the dirty state and
-the complete reviewed closure are explicit and hash-bound throughout the
-candidate, native build, device transcript, and signed evidence.
+first-release candidate is admissible only from that exact commit with one SSH
+signature trusted by the reviewer's owner-controlled user-level
+`gpg.ssh.allowedSignersFile`. Repository-local signature configuration is
+ignored and every verifier/policy setting is overridden. The index must equal
+`HEAD`; every mandatory worktree path must match the index blob and Git mode
+through descriptor-rooted, no-symlink traversal; there must be zero untracked
+files; and the separately bound root `Cargo.lock` must be exact. The complete
+clean closure is hash-bound throughout the candidate, native build, device
+transcript, and signed evidence. Dirty closures have no compatibility
+admission path.
 
 The Taira artifact exporter also runs a candidate-bound release-key regression
 before publishing a catalog. One parsed installed prover creates an

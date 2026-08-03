@@ -262,11 +262,11 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
     let client = network.client();
 
     let metadata = Metadata::default();
-    let cash_def_id: AssetDefinitionId = AssetDefinitionId::new(
+    let cash_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "usd".parse()?,
     );
-    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::new(
+    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "bond".parse()?,
     );
@@ -275,14 +275,22 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
     let setup_instructions: Vec<InstructionBox> = vec![
         Register::asset_definition({
             let __asset_definition_id = cash_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Register::asset_definition({
             let __asset_definition_id = collateral_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "bond".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Mint::asset_quantity(
@@ -519,11 +527,11 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
     let client = network.client();
 
     let metadata = Metadata::default();
-    let cash_def_id: AssetDefinitionId = AssetDefinitionId::new(
+    let cash_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "usd".parse()?,
     );
-    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::new(
+    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "bond".parse()?,
     );
@@ -535,14 +543,22 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         Register::account(Account::new(outsider_id.clone())).into(),
         Register::asset_definition({
             let __asset_definition_id = cash_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Register::asset_definition({
             let __asset_definition_id = collateral_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "bond".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Mint::asset_quantity(
@@ -655,11 +671,11 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     let metadata = Metadata::default();
     let custodian_keypair = KeyPair::random();
     let custodian_id = AccountId::new(custodian_keypair.public_key().clone());
-    let cash_def_id: AssetDefinitionId = AssetDefinitionId::new(
+    let cash_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "usd".parse()?,
     );
-    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::new(
+    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "bond".parse()?,
     );
@@ -668,14 +684,22 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         Register::account(Account::new(custodian_id.clone())).into(),
         Register::asset_definition({
             let __asset_definition_id = cash_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "usd".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Register::asset_definition({
             let __asset_definition_id = collateral_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "bond".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Mint::asset_quantity(

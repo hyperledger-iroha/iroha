@@ -98,6 +98,7 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     timeout-minutes: 90
     env:
+      CARGO_BUILD_JOBS: "1"
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}/target-kotodama-perf
       RUSTUP_TOOLCHAIN: "1.93.1"
@@ -186,9 +187,9 @@ jobs:
       - name: Measure base revision
         working-directory: baseline
         run: |
-          cargo bench --locked -p ivm --bench bench_kotodama -- --save-baseline base
-          cargo bench --locked -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
-          cargo bench --locked -p iroha_core --bench queries -- typed_core_query_ --save-baseline base
+          cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama -- --save-baseline base
+          cargo bench --locked --jobs 1 -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+          cargo bench --locked --jobs 1 -p iroha_core --bench queries -- typed_core_query_ --save-baseline base
 
       # Criterion writes a `new` sample even while saving the named `base`.
       # Delete those current slots so a benchmark omitted by the candidate
@@ -209,9 +210,9 @@ jobs:
       - name: Measure candidate revision
         working-directory: candidate
         run: |
-          cargo bench --locked -p ivm --bench bench_kotodama -- --save-baseline candidate
-          cargo bench --locked -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
-          cargo bench --locked -p iroha_core --bench queries -- typed_core_query_ --save-baseline candidate
+          cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama -- --save-baseline candidate
+          cargo bench --locked --jobs 1 -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
+          cargo bench --locked --jobs 1 -p iroha_core --bench queries -- typed_core_query_ --save-baseline candidate
 
       - name: Enforce five-percent ceiling
         working-directory: candidate

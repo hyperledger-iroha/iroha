@@ -81,24 +81,39 @@ impl RuntimeProviderBrokerLifecycleV1 {
     where
         R: FnOnce(),
     {
+        match self.publish_ready_fallible(|| {
+            on_ready();
+            Ok::<(), std::convert::Infallible>(())
+        }) {
+            Ok(published) => published,
+            Err(never) => match never {},
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn publish_ready_fallible<R, E>(&self, on_ready: R) -> Result<bool, E>
+    where
+        R: FnOnce() -> Result<(), E>,
+    {
         let _publication = self
             .readiness_publication_gate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self
-            .state
-            .compare_exchange(
-                BROKER_LIFECYCLE_STARTING_V1,
-                BROKER_LIFECYCLE_READY_V1,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_err()
-        {
-            return false;
+        if self.state.load(std::sync::atomic::Ordering::SeqCst) != BROKER_LIFECYCLE_STARTING_V1 {
+            return Ok(false);
         }
-        on_ready();
-        true
+        if let Err(error) = on_ready() {
+            self.state.store(
+                BROKER_LIFECYCLE_STOPPING_V1,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            return Err(error);
+        }
+        self.state.store(
+            BROKER_LIFECYCLE_READY_V1,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        Ok(true)
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -184,7 +199,7 @@ impl StockRuntimeProviderBrokerRegistryV1 {
 const fn stock_runtime_provider_slot_is_supported(slot: IrohaRuntimeProviderSlotV1) -> bool {
     let wire_id = slot.wire_id();
     wire_id >= IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()
-        && wire_id <= IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()
+        && wire_id <= IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id()
 }
 
 impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
@@ -400,6 +415,105 @@ mod governance_service_registry_tests {
     }
 }
 
+/// Stable redacted failure from the private Bootle/Lantern issuer boundary.
+///
+/// The broker deliberately exposes no backend-specific diagnostics, key
+/// identifiers, or randomness details to its same-UID client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootleLanternIssuanceBrokerBackendErrorV1 {
+    /// The canonical request or one of its public bindings was invalid.
+    InvalidRequest,
+    /// The injected issuer key does not match the governed active policy.
+    PolicyMismatch,
+    /// The issuer key service or cryptographic randomness was unavailable.
+    Unavailable,
+}
+
+/// Deployment-owned pure cryptographic boundary for brokered Bootle/Lantern issuance.
+///
+/// Implementations hold the issuer trapdoor (or its HSM boundary) and opaque
+/// authenticator. They must not hold or mutate an issuance replay store. Torii
+/// remains the sole authority for authorization registration, preflight,
+/// claim, completion, and terminal failure.
+pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
+    /// Exact stable production handle served by this backend.
+    fn handle(&self) -> &str;
+
+    /// Return the current independently administered public qualification.
+    fn qualification(
+        &self,
+    ) -> Result<
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderQualificationV1,
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
+    >;
+
+    /// Return the exact current public issuer, policy, and lifetime bindings.
+    fn bindings(
+        &self,
+    ) -> Result<
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
+    >;
+
+    /// Authenticate opaque bearer bytes for one exact action/body/height binding.
+    fn authenticate(
+        &self,
+        opaque_credential: &[u8],
+        action: iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1,
+        request_binding: [u8; 32],
+        committed_height: u64,
+    ) -> Result<
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticatedPrincipalV1,
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticationErrorV1,
+    >;
+
+    /// Prepare one native canonical `ILA1` candidate without replay-state mutation.
+    fn prepare_authorization(
+        &self,
+        context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+        canonical_genesis_hash: [u8; 32],
+        policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+        requester_authorization_digest: [u8; 32],
+        issued_at_height: u64,
+        expires_at_height: u64,
+    ) -> Result<
+        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
+        BootleLanternIssuanceBrokerBackendErrorV1,
+    >;
+
+    /// Verify one canonical `ILQ1` against the injected issuer key without randomness or state mutation.
+    ///
+    /// Native implementations use core's
+    /// `issuer_validate_blind_issuance_request_for_issuer_encoded_v1`; a
+    /// public-only validation is not a sufficient HSM/key-bound readiness
+    /// check for this operation.
+    fn validate_request(
+        &self,
+        context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+        canonical_genesis_hash: [u8; 32],
+        policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+        authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+            BootleLanternIssuanceAuthorizationV1,
+        request_bytes: &[u8],
+        current_height: u64,
+    ) -> Result<[u8; 32], BootleLanternIssuanceBrokerBackendErrorV1>;
+
+    /// Repeat validation and issue one canonical response after Torii's exact claim.
+    fn issue_validated(
+        &self,
+        context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+        canonical_genesis_hash: [u8; 32],
+        policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+        authorization: &iroha_core::privacy_engines::bootle_lantern::issuer::
+            BootleLanternIssuanceAuthorizationV1,
+        request_bytes: &[u8],
+        current_height: u64,
+    ) -> Result<
+        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternBlindIssuanceResponseV1,
+        BootleLanternIssuanceBrokerBackendErrorV1,
+    >;
+}
+
 /// Runtime-only backends injected into the stock local broker server.
 ///
 /// The value contains no credential loader, key material, endpoint discovery,
@@ -408,6 +522,8 @@ mod governance_service_registry_tests {
 /// extra, substituted, stale, revoked, and test-marked bindings.
 #[derive(Clone, Default)]
 pub struct RuntimeProviderBrokerBackendsV1 {
+    pub(super) bootle_lantern_issuance:
+        Option<Arc<dyn BootleLanternIssuanceBrokerBackendV1>>,
     pub(super) moderation_quarantine_key_wrapper:
         Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     pub(super) privacy_cycle_prf_provider:
@@ -567,6 +683,10 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeProviderBrokerBackendsV1")
+            .field(
+                "bootle_lantern_issuance",
+                &self.bootle_lantern_issuance.is_some(),
+            )
             .field(
                 "moderation_quarantine_key_wrapper",
                 &self.moderation_quarantine_key_wrapper.is_some(),
@@ -785,6 +905,7 @@ impl RuntimeProviderBrokerBackendsV1 {
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            bootle_lantern_issuance: None,
             moderation_quarantine_key_wrapper: None,
             privacy_cycle_prf_provider: None,
             privacy_release_anchor: None,
@@ -840,6 +961,16 @@ impl RuntimeProviderBrokerBackendsV1 {
             soracloud_runtime_mutation_signer: None,
             soracloud_hf_inference_credential_provider: None,
         }
+    }
+
+    /// Attach the deployment-owned native Bootle/Lantern issuer and authenticator.
+    #[must_use]
+    pub fn with_bootle_lantern_issuance(
+        mut self,
+        backend: Arc<dyn BootleLanternIssuanceBrokerBackendV1>,
+    ) -> Self {
+        self.bootle_lantern_issuance = Some(backend);
+        self
     }
 
     /// Attach the deployment-owned Soracloud transaction and provenance signer.
@@ -1435,6 +1566,8 @@ pub enum RuntimeProviderBrokerServerErrorV1 {
     EndpointCleanupFailed,
     /// A canonical protocol or authenticated peer invariant failed.
     Protocol,
+    /// The supervisor readiness publication boundary rejected the transition.
+    ReadinessUnavailable,
     /// This platform lacks the authenticated V1 local transport.
     UnsupportedPlatform,
 }
@@ -1450,6 +1583,9 @@ impl fmt::Display for RuntimeProviderBrokerServerErrorV1 {
                 "runtime-provider broker endpoint cleanup could not be completed safely"
             }
             Self::Protocol => "runtime-provider broker protocol failed",
+            Self::ReadinessUnavailable => {
+                "runtime-provider broker readiness publication is unavailable"
+            }
             Self::UnsupportedPlatform => {
                 "runtime-provider broker transport is unsupported on this platform"
             }
@@ -1458,6 +1594,22 @@ impl fmt::Display for RuntimeProviderBrokerServerErrorV1 {
 }
 
 impl std::error::Error for RuntimeProviderBrokerServerErrorV1 {}
+
+/// Fixed failure returned by a supervisor readiness callback.
+///
+/// The callback retains transport-specific diagnostics inside the deployment
+/// boundary. The broker accepts only this payload-free marker and maps it to
+/// [`RuntimeProviderBrokerServerErrorV1::ReadinessUnavailable`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeProviderBrokerReadinessErrorV1;
+
+impl fmt::Display for RuntimeProviderBrokerReadinessErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("runtime-provider broker readiness publication failed")
+    }
+}
+
+impl std::error::Error for RuntimeProviderBrokerReadinessErrorV1 {}
 
 /// Serve the exact qualified catalog on the platform-fixed
 /// service-UID-owned endpoint.
@@ -1502,9 +1654,12 @@ pub fn serve_runtime_provider_broker_v1(
 /// shutdown that wins suppresses the callback, while a shutdown that loses
 /// waits for the callback to finish before returning.
 ///
-/// The callback must be bounded and infallible, and it must not call
-/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`] reentrantly. If it
-/// panics, endpoint cleanup is attempted while the panic unwinds.
+/// The callback must be bounded and must not call
+/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`] reentrantly. The
+/// lifecycle remains in its starting state while the callback runs and becomes
+/// ready only after it returns `Ok(())`. A payload-free callback failure moves
+/// the lifecycle to stopping, removes the endpoint, and returns before the
+/// accept loop is entered.
 ///
 /// After shutdown, the server closes every accepted transport and joins every
 /// session before returning. Synchronous deployment-owned provider methods do
@@ -1534,8 +1689,41 @@ pub fn serve_runtime_provider_broker_v1(
 /// # Errors
 ///
 /// Fails before readiness if the catalog/backend set is incomplete, any live
-/// public binding is missing, substituted, stale, revoked, or test-marked, or
-/// the fixed endpoint cannot be created with the required ownership and mode.
+/// public binding is missing, substituted, stale, revoked, or test-marked, the
+/// fixed endpoint cannot be created with the required ownership and mode, or
+/// the readiness callback returns
+/// [`RuntimeProviderBrokerReadinessErrorV1`].
+pub fn serve_runtime_provider_broker_with_fallible_readiness_v1<R>(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    backends: RuntimeProviderBrokerBackendsV1,
+    lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+    on_ready: R,
+) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+where
+    R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
+{
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        protocol::serve_with_fallible_readiness(bindings, backends, lifecycle, on_ready)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        lifecycle.request_shutdown();
+        let _ = (bindings, backends, on_ready);
+        Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
+    }
+}
+
+/// Serve the exact catalog with an infallible caller-owned readiness callback.
+///
+/// This preserves the original callback contract as a wrapper around
+/// [`serve_runtime_provider_broker_with_fallible_readiness_v1`]. Use the
+/// fallible variant for supervisor transports such as systemd where readiness
+/// publication itself can fail.
+///
+/// # Errors
+///
+/// Preserves every fail-closed server error from the fallible variant.
 pub fn serve_runtime_provider_broker_with_lifecycle_v1<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
@@ -1545,14 +1733,8 @@ pub fn serve_runtime_provider_broker_with_lifecycle_v1<R>(
 where
     R: FnOnce(),
 {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        protocol::serve_with_lifecycle(bindings, backends, lifecycle, on_ready)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        lifecycle.request_shutdown();
-        let _ = (bindings, backends, on_ready);
-        Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
-    }
+    serve_runtime_provider_broker_with_fallible_readiness_v1(bindings, backends, lifecycle, || {
+        on_ready();
+        Ok(())
+    })
 }

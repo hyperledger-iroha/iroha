@@ -5929,6 +5929,28 @@ mod tests {
     }
 
     #[test]
+    fn unshield_parser_registry_has_no_guest_output_parameter() {
+        let source = SourceFile::new(SourceId(11), "unshield-parameters.ko", String::new());
+        let parser = CstAstLowerer::new(&[], &source, false);
+        assert_eq!(
+            parser.call_parameter_names("crypto::zk::build_unshield", false),
+            Some(
+                [
+                    "asset_definition",
+                    "destination",
+                    "amount",
+                    "inputs",
+                    "backend",
+                    "proof",
+                    "verification_key",
+                ]
+                .map(str::to_owned)
+                .to_vec()
+            )
+        );
+    }
+
+    #[test]
     fn mixed_call_fixes_use_the_declared_parameter_mapping_in_both_directions() {
         for (id, call, original, replacement) in [
             (7, "target(1, second: 2)", "1", "first: 1"),
@@ -6452,7 +6474,7 @@ mod tests {
     }
 
     fn sample_asset_definition_literal() -> String {
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         )
@@ -6550,35 +6572,5 @@ mod tests {
         assert_eq!(func.modifiers.test_fixture.as_deref(), Some("seeded"));
     }
 
-    #[test]
-    fn fixture_actions_accept_formatter_trailing_commas() {
-        let src = r#"
-            module FixtureTrailingComma {
-                koto_test { target: "target.ko" }
-                fixture actors {
-                    actor(
-                        "issuer",
-                        AccountId::parse("issuer"),
-                        "0x00",
-                    );
-                }
-            }
-        "#;
-        let program = parse(src).expect("fixture action with a trailing comma must parse");
-        assert_eq!(program.fixtures.len(), 1);
-        assert_eq!(program.fixtures[0].actions.len(), 1);
-        assert_eq!(program.fixtures[0].actions[0].args.len(), 3);
-    }
-
-    #[test]
-    fn rejects_unregistered_unicode_attributes() {
-        let src = r#"
-        module ContractTests {
-            #[テスト]
-            fn smoke() {}
-        }
-        "#;
-        let error = parse(src).expect_err("unregistered Unicode attributes are invalid");
-        assert!(error.contains("non-ASCII"), "{error}");
-    }
+    include!("parser/tests/tail_fixtures.rs");
 }

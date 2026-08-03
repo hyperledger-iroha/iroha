@@ -165,6 +165,8 @@ def test_fixture_regen_delegates_exactly_to_the_canonical_owner(
         "--locked",
         "-p",
         "xtask",
+        "--features",
+        "dev-tools",
         "--bin",
         "xtask",
         "--",

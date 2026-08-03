@@ -7865,6 +7865,43 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
     pub async fn start_with_crypto(
         key_pair: KeyPair,
+        config: Config,
+        chain_id: ChainId,
+        consensus_caps: Option<crate::ConsensusHandshakeCaps>,
+        confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
+        crypto_caps: Option<crate::CryptoHandshakeCaps>,
+        shutdown_signal: ShutdownSignal,
+    ) -> Result<(Self, Child), Error> {
+        Self::start_with_crypto_and_initial_trusted_sources(
+            key_pair,
+            config,
+            chain_id,
+            consensus_caps,
+            confidential_caps,
+            crypto_caps,
+            HashSet::new(),
+            shutdown_signal,
+        )
+        .await
+    }
+
+    /// Launch the P2P runtime with a source-authority projection installed
+    /// before any listener can accept an authenticated peer.
+    ///
+    /// `initial_trusted_sources` is resource-allocation authority, not a
+    /// substitute for topology, ACL, or handshake authorization. Irohad passes
+    /// its configured remote trusted peers here so a zero-delay localnet cannot
+    /// race the later actor update and reject valid consensus traffic.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as [`Self::start_with_crypto`],
+    /// and when the initial protected-source projection exceeds
+    /// `network.max_total_connections`.
+    #[log(skip(key_pair, shutdown_signal))]
+    #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
+    pub async fn start_with_crypto_and_initial_trusted_sources(
+        key_pair: KeyPair,
         Config {
             address: listen_addr,
             public_address,
@@ -7952,6 +7989,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
+        mut initial_trusted_sources: HashSet<PeerId>,
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
         // This is the first startup preflight because QUIC and TCP listener setup below may bind
@@ -8061,6 +8099,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         let network_actor_low_byte_budget =
             NetworkActorByteBudget::new(p2p_outbound_frame_queue_max_low_bytes.get(), 0)
                 .expect("zero-reserve low actor byte geometry cannot overflow");
+        let self_id = PeerId::from(key_pair.public_key().clone());
+        initial_trusted_sources.remove(&self_id);
         let authenticated_source_geometry =
             crate::peer::AuthenticatedSourceGeometry::new(max_total_connections);
         let inbound_frame_byte_budgets =
@@ -8071,6 +8111,11 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 authenticated_source_geometry.clone(),
             )
             .expect("validated inbound source budgets must fit");
+        if !inbound_frame_byte_budgets.install_protected_sources(initial_trusted_sources) {
+            return Err(invalid_transport_geometry(format!(
+                "initial trusted peer count exceeds network.max_total_connections ({max_total_connections})"
+            )));
+        }
         let inbound_dispatch_byte_budgets = crate::peer::InboundDispatchByteBudgets::new(
             p2p_outbound_frame_queue_max_high_bytes.get(),
             p2p_outbound_frame_queue_max_low_bytes.get(),
@@ -8094,7 +8139,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             authenticated_source_geometry,
         )
         .expect("validated process-wide outbound byte geometry must fit");
-        let self_id = PeerId::from(key_pair.public_key().clone());
         let trust_gossip_config = trust_gossip;
         let trust_gossip = trust_gossip_config && soranet_handshake.trust_gossip;
         let soranet_runtime = runtime_from_handshake(soranet_handshake)?;
@@ -30653,52 +30697,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn subscriber_unrouted_counts_increment_by_topic() {
-        let before = subscriber_unrouted_count();
-        let before_safety = subscriber_unrouted_consensus_safety_count();
-        let before_peer = subscriber_unrouted_peer_gossip_count();
-        let before_chunks = subscriber_unrouted_consensus_chunk_count();
-        inc_subscriber_unrouted_for_test(message::Topic::ConsensusSafety, 1);
-        inc_subscriber_unrouted_for_test(message::Topic::TrustGossip, 3);
-        inc_subscriber_unrouted_for_test(message::Topic::ConsensusChunk, 1);
-        let after = subscriber_unrouted_count();
-        let after_safety = subscriber_unrouted_consensus_safety_count();
-        let after_peer = subscriber_unrouted_peer_gossip_count();
-        let after_chunks = subscriber_unrouted_consensus_chunk_count();
-
-        assert!(
-            after >= before + 5,
-            "increment helper should increase subscriber unrouted count"
-        );
-        assert!(
-            after_safety >= before_safety + 1,
-            "unrouted safety traffic must have a distinct counter"
-        );
-        assert!(
-            after_peer >= before_peer + 3,
-            "trust-gossip should be grouped under peer gossip counters"
-        );
-        assert!(
-            after_chunks >= before_chunks + 1,
-            "consensus chunk drops should be tracked separately"
-        );
-    }
-
-    #[test]
-    fn network_queue_depth_tracks_updates() {
-        let _guard = queue_depth_test_guard();
-        set_network_safety_queue_depth_for_test(0);
-        set_network_queue_depth_for_test(true, 0);
-        set_network_queue_depth_for_test(false, 0);
-        set_network_safety_queue_depth_for_test(3);
-        set_network_queue_depth_for_test(true, 12);
-        set_network_queue_depth_for_test(false, 7);
-
-        assert_eq!(network_queue_depth_safety(), 3);
-        assert_eq!(network_queue_depth_high(), 12);
-        assert_eq!(network_queue_depth_low(), 7);
-    }
+    include!("network/queue_depth_tests.rs");
 
     #[test]
     fn pending_connects_drop_outside_topology() {

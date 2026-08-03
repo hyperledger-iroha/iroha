@@ -124,14 +124,14 @@ fn account(seed: u8) -> (AccountId, KeyPair) {
 }
 
 fn fee_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "paynet").expect("domain id"),
         "fee_token".parse().expect("asset name"),
     )
 }
 
 fn xor_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "paynet").expect("domain id"),
         "xor".parse().expect("asset name"),
     )
@@ -139,7 +139,7 @@ fn xor_asset_definition_id() -> AssetDefinitionId {
 
 fn payout_contract_address() -> ContractAddress {
     ContractAddress::derive(
-        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &account(1).0,
         42,
         DataSpaceId::UNIVERSAL,
@@ -149,7 +149,7 @@ fn payout_contract_address() -> ContractAddress {
 
 fn pool_contract_address() -> ContractAddress {
     ContractAddress::derive(
-        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &account(2).0,
         43,
         DataSpaceId::UNIVERSAL,
@@ -327,12 +327,18 @@ fn test_state() -> (
     let treasury = payout_contract_address().subject_id();
     let asset_definition = AssetDefinition::new(
         fee_asset.clone(),
+        "fee_token".to_owned(),
         NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
     .build(&user);
     let xor_asset_definition = AssetDefinition::new(
         xor_asset_definition_id(),
+        "xor".to_owned(),
         NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
     .build(&user);
     let user_asset = Asset::new(
@@ -2040,7 +2046,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         "batch-amount payload mutation must fail signature admission, got {signature_error}"
     );
 
-    let wrong_batch_asset = AssetDefinitionId::new(
+    let wrong_batch_asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "paynet").expect("domain id"),
         "wrong_batch_token".parse().expect("asset name"),
     );
@@ -2106,7 +2112,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         "fee-amount payload mutation must fail signature admission, got {signature_error}"
     );
 
-    let wrong_fee_asset = AssetDefinitionId::new(
+    let wrong_fee_asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "paynet").expect("domain id"),
         "wrong_fee_token".parse().expect("asset name"),
     );

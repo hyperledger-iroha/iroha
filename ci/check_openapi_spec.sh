@@ -307,6 +307,14 @@ only the detached-signature requirement; it never permits generator_dirty.
 EOF
 }
 
+# Reject a stale first-release Musubi route/model contract before paying for
+# two complete Cargo generator replays. This check is read-only and does not
+# relax the clean-provenance or byte-for-byte replay requirements below.
+(
+  cd "${REPO_ROOT}"
+  node tools/openapi/scripts/verify-musubi-v1-contract.mjs
+)
+
 require_clean_checkout
 REPLAY_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify "HEAD^{commit}")"
 

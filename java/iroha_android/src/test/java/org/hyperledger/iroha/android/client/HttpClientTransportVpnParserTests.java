@@ -53,15 +53,26 @@ final class HttpClientTransportVpnParserTests {
             + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
             + "\"mtu_bytes\":1280,"
             + "\"display_billing_label\":\"standard XOR\","
-            + "\"fee_asset_id\":\"xor#universal.universal\","
-            + "\"escrow_account_id\":\"sorauEscrow\","
-            + "\"operator_account_id\":\"sorauOperator\","
+            + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
             + "\"lease_fee\":\"1000000.25\","
             + "\"settlement_grace_secs\":120,"
             + "\"flow_label_bits\":24,"
             + "\"padding_budget_ms\":15,"
+            + "\"relay_id_hex\":\""
+            + VALID_ED25519_PUBLIC_KEY_HEX
+            + "\","
+            + "\"descriptor_commit_hex\":\""
+            + "cd".repeat(32)
+            + "\","
+            + "\"tls_server_name\":\"relay.example\","
             + "\"relay_tls_spki_sha256_hex\":\""
             + "ab".repeat(32)
+            + "\","
+            + "\"relay_certificate_sha256_hex\":\""
+            + "ef".repeat(32)
+            + "\","
+            + "\"directory_snapshot_digest_hex\":\""
+            + "42".repeat(32)
             + "\""
             + "}";
     final StubResponseExecutor executor =
@@ -74,13 +85,19 @@ final class HttpClientTransportVpnParserTests {
     final VpnProfile profile = transport.getVpnProfile().join();
 
     assert profile.available() : "VPN profile should be available";
-    assert "xor#universal.universal".equals(profile.feeAssetId()) : "VPN fee asset mismatch";
-    assert "sorauEscrow".equals(profile.escrowAccountId()) : "VPN escrow account mismatch";
-    assert "sorauOperator".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
+    assert "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
     assert "1000000.25".equals(profile.leaseFee()) : "VPN lease fee mismatch";
     assert profile.dnsPushIntervalSecs() == 60L : "VPN DNS push interval mismatch";
     assert profile.settlementGraceSecs() == 120L : "VPN settlement grace mismatch";
+    assert VALID_ED25519_PUBLIC_KEY_HEX.equals(profile.relayIdHex()) : "VPN relay id mismatch";
+    assert "cd".repeat(32).equals(profile.descriptorCommitHex())
+        : "VPN descriptor digest mismatch";
+    assert "relay.example".equals(profile.tlsServerName()) : "VPN TLS SNI mismatch";
     assert "ab".repeat(32).equals(profile.relayTlsSpkiSha256Hex()) : "VPN TLS pin mismatch";
+    assert "ef".repeat(32).equals(profile.relayCertificateSha256Hex())
+        : "VPN certificate digest mismatch";
+    assert "42".repeat(32).equals(profile.directorySnapshotDigestHex())
+        : "VPN directory snapshot digest mismatch";
     assert "GET".equals(executor.lastRequest().method()) : "VPN profile must use GET";
     assert executor.lastRequest().uri().toString().equals("https://torii.example/v1/vpn/profile")
         : "VPN profile URI mismatch";
@@ -243,7 +260,6 @@ final class HttpClientTransportVpnParserTests {
                     vpnJsonWithoutField(profile, "relay_tls_spki_sha256_hex")),
             () ->
                 VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "open_lease_instruction")),
-            () -> VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "tx_instructions")),
             () -> VpnJsonParser.parseSession(vpnJsonWithoutField(session, "route_pushes")),
             () ->
                 VpnJsonParser.parseReceipt(
@@ -280,7 +296,7 @@ final class HttpClientTransportVpnParserTests {
         List.of(Collections.emptyList(), List.of(instruction, instruction))) {
       expectRuntimeException(
           () -> VpnJsonParser.parseQuote(vpnJsonWithField(quote, "tx_instructions", instructions)),
-          "VPN quote parser must require exactly one transaction instruction");
+          "VPN quote parser must reject the retired tx_instructions field");
     }
     expectRuntimeException(
         () -> VpnJsonParser.parseSession(vpnJsonWithField(session, "status", "settled")),
@@ -300,7 +316,7 @@ final class HttpClientTransportVpnParserTests {
                     receipt,
                     "tx_instructions",
                     List.of(receiptInstruction, receiptInstruction))),
-        "VPN receipt parser must allow at most one transaction instruction");
+        "VPN receipt parser must reject the retired tx_instructions field");
 
     final Map<String, Object> receiptObject = vpnJsonObject(receipt);
     expectRuntimeException(

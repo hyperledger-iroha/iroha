@@ -1178,9 +1178,9 @@ public static class SccpV1
 
     private static byte[] CanonicalFinalityAnchorBytes(SccpSoraFinalityAnchorV1 anchor)
     {
-        if (anchor.ProtocolVersion != 4 || anchor.CheckpointHeight == 0)
+        if (anchor.ProtocolVersion is < 3 or > 4 || anchor.CheckpointHeight == 0)
         {
-            throw new ArgumentException("SCCP finality anchor must bind protocol version 4 and a nonzero height.");
+            throw new ArgumentException("SCCP finality anchor must bind protocol version 3 or 4 and a nonzero height.");
         }
         foreach (var (value, name) in new[]
         {

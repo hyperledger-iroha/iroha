@@ -40,7 +40,7 @@ const batchInput: BrowserExecutableBatchInput = {
     { kind: "instruction", instruction: { Log: { level: "INFO", message: "before" } } },
     {
       kind: "contractCall",
-      contractAddress: "sorac1example",
+      contractAddress: "irohac1example",
       expectedCodeHash: new Uint8Array(32),
       entrypoint: "run",
       arguments: new Uint8Array([1, 2, 3]),

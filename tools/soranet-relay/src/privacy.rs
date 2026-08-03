@@ -259,6 +259,15 @@ impl PrivacyEventBuffer {
         body
     }
 
+    /// Return the number of buffered privacy events without draining them.
+    pub fn queue_depth(&self) -> usize {
+        let guard = self
+            .events
+            .lock()
+            .expect("privacy event buffer mutex poisoned");
+        guard.len()
+    }
+
     fn push(&self, event: SoranetPrivacyEventV1) {
         let mut guard = self
             .events
@@ -1091,6 +1100,8 @@ mod tests {
         buffer.record_throttle(mode, when, SoranetPrivacyThrottleScopeV1::Congestion);
         buffer.record_throttle(mode, when, SoranetPrivacyThrottleScopeV1::Emergency);
 
+        assert_eq!(buffer.queue_depth(), 4, "queue depth must not drain events");
+
         let body = buffer.drain_ndjson();
         let lines: Vec<&str> = body.trim_end().split('\n').collect();
         assert_eq!(lines.len(), 4, "expected four NDJSON entries: {body}");
@@ -1116,6 +1127,7 @@ mod tests {
             "emergency throttle scope should be encoded explicitly: {body}"
         );
         assert!(buffer.drain_ndjson().is_empty(), "buffer should drain");
+        assert_eq!(buffer.queue_depth(), 0, "drain must empty the queue");
     }
 
     #[test]

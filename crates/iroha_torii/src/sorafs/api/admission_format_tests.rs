@@ -20,6 +20,10 @@ fn formats_admission_error_reasons() {
         "signature_policy_disabled"
     );
     assert_eq!(
+        admission_error_reason(&AdvertError::ValidationPolicyChanged),
+        "validation_policy_changed"
+    );
+    assert_eq!(
         admission_error_reason(&AdvertError::NonMonotonicIssuedAt {
             provider_id,
             current_issued_at: 11,

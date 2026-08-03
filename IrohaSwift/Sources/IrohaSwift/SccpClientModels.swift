@@ -379,7 +379,14 @@ enum SccpSubmitValidation {
                 )
             }
         }
-        try requireAbsentCompactOption(timeToLive, field: "time_to_live_ms")
+        guard let exactTimeToLiveMs = try requireCanonicalPositiveUInt64Option(
+            timeToLive,
+            field: "time_to_live_ms"
+        ), exactTimeToLiveMs == 100_000 else {
+            throw SccpV1Error.invalid(
+                "SCCP transaction time_to_live_ms must use the exact Some(100_000) encoding"
+            )
+        }
         try requireAbsentCompactOption(nonce, field: "nonce")
         try requireAbsentCompactOption(attachments, field: "attachments")
         let payloadFeeBinding = try requireCanonicalSccpFeePayment(feePayment)

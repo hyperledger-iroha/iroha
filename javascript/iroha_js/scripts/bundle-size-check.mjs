@@ -20,11 +20,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
     // protected pre-reset tree measured 945,975 bytes on the same pinned runner;
-    // current V1 is 1,006,517 bytes (+6.40%). Canonical ProofAttachment handling
-    // accounts for 5,215 bytes and one module in the shared transaction graph;
-    // strict lossless integer parsing and the associated wire hardening bring the
-    // complete Torii delta from the prior 1,000,409-byte/61-module baseline to
-    // 6,108 bytes and one module. The minimal 983 KiB ceiling leaves 75 bytes.
+    // current V1 is 1,005,947 bytes (+6.34%). Required proof, cursor, VPN, and
+    // executed-block APIs stay under the unchanged ceiling by interning each
+    // canonical instruction wire ID once. The minimal 983 KiB ceiling leaves
+    // 645 bytes.
     limitKb: 983,
   }),
   Object.freeze({
@@ -35,7 +34,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
     // pre-reset tree measured 290,498 bytes. Canonical ProofAttachment handling
-    // adds one required module and brings current V1 to 303,764 bytes (+4.57%).
+    // and the shared asset-definition builder bring current V1 to 301,649 bytes
+    // (+3.84%).
     // The 297 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 297,
     forbidNodeInputs: true,
@@ -47,9 +47,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree. Canonical ProofAttachment handling adds one required module
-    // and brings current V1 to 383,534 bytes (+3.27%). The 380 KiB ceiling remains
-    // below a 5% predecessor regression.
+    // pre-reset tree. Canonical ProofAttachment handling and the shared
+    // asset-definition builder bring current V1 to 381,439 bytes (+2.70%). The
+    // 380 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -94,8 +94,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner; named Norito imports keep current V1 at 473,390 bytes
-    // (+3.34%). The 469 KiB ceiling remains below a 5% predecessor regression.
+    // same pinned runner. The complete V1 surface, including the strict
+    // Bootle/Lantern client, is 479,732 bytes (+4.73%) after shared validation
+    // paths are interned. The 469 KiB ceiling leaves 524 bytes and remains below
+    // a 5% predecessor regression.
     limitKb: 469,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,

@@ -6,8 +6,8 @@ package org.hyperledger.iroha.sdk.crypto
 /**
  * Pure Kotlin implementation of the BLAKE3 hash function.
  *
- * Supports inputs up to the largest Solana AccountLtHash preimage used by the Kotlin SDK,
- * and exposes BLAKE3 XOF output for Agave-compatible 2048-byte account contributions.
+ * Supports any JVM byte-array input and exposes BLAKE3 XOF output for
+ * Agave-compatible account contributions and protocol-bounded Musubi graphs.
  *
  * Reference: [BLAKE3 Specification](https://github.com/BLAKE3-team/BLAKE3-specs)
  */
@@ -16,8 +16,6 @@ object Blake3 {
     private const val BLOCK_LEN = 64
     private const val CHUNK_LEN = 1024
     private const val OUT_LEN = 32
-    private const val MAX_INPUT_LEN = 8 + 65_536 + 1 + 32 + 32
-
     private const val CHUNK_START = 1
     private const val CHUNK_END = 2
     private const val PARENT = 4
@@ -37,7 +35,6 @@ object Blake3 {
      *
      * @param input the data to hash
      * @return the 32-byte BLAKE3 hash
-     * @throws IllegalArgumentException if input exceeds the SDK helper limit
      */
     @JvmStatic
     fun hash(input: ByteArray): ByteArray = derive(input, OUT_LEN)
@@ -48,13 +45,10 @@ object Blake3 {
      * @param input the data to hash
      * @param outputLength number of output bytes to derive
      * @return BLAKE3 XOF bytes
-     * @throws IllegalArgumentException if input or output length exceeds SDK helper bounds
+     * @throws IllegalArgumentException if output length is negative
      */
     @JvmStatic
     fun derive(input: ByteArray, outputLength: Int): ByteArray {
-        require(input.size <= MAX_INPUT_LEN) {
-            "Input too large for Blake3 helper: ${input.size} bytes (max $MAX_INPUT_LEN)"
-        }
         require(outputLength >= 0) { "outputLength must not be negative" }
         val rootOutput = rootOutput(input)
         val output = ByteArray(outputLength)
@@ -78,7 +72,7 @@ object Blake3 {
     }
 
     private fun rootOutput(input: ByteArray): Output {
-        val chunkCount = maxOf(1, (input.size + CHUNK_LEN - 1) / CHUNK_LEN)
+        val chunkCount = if (input.isEmpty()) 1 else 1 + (input.size - 1) / CHUNK_LEN
         return subtreeOutput(input, 0, chunkCount)
     }
 

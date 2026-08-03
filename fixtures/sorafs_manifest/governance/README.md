@@ -52,7 +52,11 @@ cargo run -p sorafs_manifest --features dev-tools --bin generate_por_fixtures --
 `node_v1` carries a deterministic Dilithium3/ML-DSA publisher signature so
 reference validators can exercise non-Ed25519 governance key verification. The
 DAG nodes, blocks, and head use one deterministic Ed25519 fixture key and peer
-identity. SDK parity tests
+identity. Because the fixture is an internally produced PoR proof, its signed
+`submission_provenance` is `null`; externally authenticated finance vectors are
+covered by focused schema/CID/signature tests. The first-release provenance
+field is a hard schema cut, so all binary and JSON fixtures must be regenerated
+together. SDK parity tests
 compare the complete accepted block/head and exact CID, ordering, predecessor,
 signature, and noncanonical-byte `ValidationOutcomeV1` objects against these
 shared goldens. Verify the inventory without Cargo or network access with:

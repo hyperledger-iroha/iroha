@@ -13,7 +13,7 @@ import org.hyperledger.iroha.android.model.instructions.UnshieldInstruction;
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 21;
-  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 1;
+  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 2;
   private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -193,7 +193,6 @@ public final class NativeSignerBridge {
     final byte[] toBytes = textBytes(instruction.to(), "to");
     final byte[] amountBytes = textBytes(instruction.publicAmount(), "publicAmount");
     final byte[] inputsBytes = flattenFixed32(instruction.inputs());
-    final byte[] outputsBytes = flattenFixed32(instruction.outputs());
     final byte[] proofJsonBytes = instruction.proof().toNativeJson().getBytes(StandardCharsets.UTF_8);
     final byte[] rootHintBytes = optionalBytes(instruction.rootHint());
     final byte[] feePaymentJson = feePaymentJson(feePayment);
@@ -213,7 +212,6 @@ public final class NativeSignerBridge {
             toBytes,
             amountBytes,
             inputsBytes,
-            outputsBytes,
             proofJsonBytes,
             rootHintBytes,
             key,
@@ -436,7 +434,6 @@ public final class NativeSignerBridge {
       byte[] to,
       byte[] publicAmount,
       byte[] inputs,
-      byte[] outputs,
       byte[] proofJson,
       byte[] rootHint,
       byte[] privateKey,

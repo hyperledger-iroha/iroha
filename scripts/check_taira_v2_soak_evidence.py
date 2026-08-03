@@ -111,6 +111,7 @@ LIVENESS_CLASSIFICATIONS = frozenset(
         "timeout_certificate_missing",
         "scheduler_starvation",
         "application_pending",
+        "successor_activation_pending",
         "local_control_pending",
     }
 )

@@ -121,8 +121,8 @@ public final class Ed25519RouteAdmissionTests {
         + "\"lease_secs\":600,"
         + "\"quote_expires_at_ms\":1700000600000,"
         + "\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"route_pushes\":[\"0.0.0.0/0\"],"
         + "\"excluded_routes\":[],"
@@ -132,16 +132,26 @@ public final class Ed25519RouteAdmissionTests {
         + "\"meter_family\":\"soranet.vpn.standard\","
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
+        + "\"relay_id_hex\":\""
+        + VALID_PUBLIC_KEY_HEX
+        + "\","
+        + "\"descriptor_commit_hex\":\""
+        + "cd".repeat(32)
+        + "\","
+        + "\"tls_server_name\":\"relay.example\","
         + "\"relay_tls_spki_sha256_hex\":\""
         + "ab".repeat(32)
+        + "\","
+        + "\"relay_certificate_sha256_hex\":\""
+        + "ef".repeat(32)
+        + "\","
+        + "\"directory_snapshot_digest_hex\":\""
+        + "42".repeat(32)
         + "\",\"metering_public_key_hex\":\""
         + meteringKey
         + "\",\"open_lease_instruction\":{"
         + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
-        + "\"payload_hex\":\"cafe\"},"
-        + "\"tx_instructions\":[{"
-        + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
-        + "\"payload_hex\":\"cafe\"}]"
+        + "\"payload_hex\":\"cafe\"}"
         + "}";
   }
 }

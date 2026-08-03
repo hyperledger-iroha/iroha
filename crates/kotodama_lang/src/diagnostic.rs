@@ -812,8 +812,8 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     explanation!(
         "E_QUERY_OFFSET",
         Semantic,
-        "a typed query page offset is negative",
-        "Use a non-negative canonical-order offset."
+        "a typed query page window is outside the non-negative signed 64-bit range",
+        "Use an offset in 0..=i64::MAX and ensure offset plus limit fits i64."
     ),
     explanation!(
         "E_QUERY_LIMIT",

@@ -35,7 +35,10 @@ fn account(public_key: &str) -> AccountId {
 fn setup_asset(name: &str) -> (AccountId, AssetDefinitionId, MockWorldStateView) {
     let caller = account("ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774");
     let domain = DomainId::try_new("domain", "universal").expect("domain id");
-    let asset = AssetDefinitionId::new(domain.clone(), name.parse().expect("asset name"));
+    let asset = AssetDefinitionId::derive_from_components(
+        domain.clone(),
+        name.parse().expect("asset name"),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);

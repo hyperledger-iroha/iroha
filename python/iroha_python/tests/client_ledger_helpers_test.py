@@ -633,35 +633,20 @@ def test_account_exists_falls_back_to_listing_on_route_unavailable() -> None:
     ]
 
 
-def test_asset_balance_tries_taira_prefix_variant_after_prefix_error() -> None:
-    session = FakeSession(
-        [
-            response(400, text="ERR_UNEXPECTED_NETWORK_PREFIX"),
-            response(
-                200,
-                {
-                    "items": [
-                        {
-                            "asset_id": "canonical-ds-id#sorau123",
-                            "asset_alias": "ds#wonderland.is",
-                            "quantity": "42.5",
-                        }
-                    ],
-                    "total": 1,
-                },
-            ),
-        ]
-    )
+def test_asset_balance_rejects_wrong_network_prefix_without_retry() -> None:
+    taira_account = account_address(0x6A, discriminant=369)
+    session = FakeSession([response(400, text="ERR_UNEXPECTED_NETWORK_PREFIX")])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    assert client.asset_balance(
-        "testu123",
-        "ds#wonderland.is",
-        include_taira_prefix_variant=True,
-    ) == Decimal("42.5")
-    assert [call["path"] for call in session.calls] == [
-        "/v1/accounts/testu123/assets",
-        "/v1/accounts/sorau123/assets",
+    with pytest.raises(RuntimeError, match="unexpected status 400"):
+        client.asset_balance(taira_account, "ds#wonderland.is")
+    assert session.calls == [
+        {
+            "method": "GET",
+            "path": f"/v1/accounts/{quote(taira_account, safe='')}/assets",
+            "params": None,
+            "data": None,
+        }
     ]
 
 
@@ -813,31 +798,6 @@ def test_typed_quantity_readback_rejects_oversized_alternate_before_bigint_parsi
                 "quantity": "1." + "0" * 10_000,
             }
         )
-
-
-@pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, None])
-def test_asset_balance_rejects_noncanonical_or_untyped_quantities(quantity: object) -> None:
-    session = FakeSession(
-        [
-            response(
-                200,
-                {
-                    "items": [
-                        {
-                            "asset_id": "canonical-ds-id#adult@is",
-                            "asset_alias": "ds#wonderland.is",
-                            "quantity": quantity,
-                        }
-                    ],
-                    "total": 1,
-                },
-            )
-        ]
-    )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    with pytest.raises((TypeError, ValueError)):
-        client.asset_balance("adult@is", "ds#wonderland.is")
 
 
 def test_get_asset_definition_returns_none_for_missing_definition() -> None:
@@ -2691,7 +2651,6 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
             "18446744073709551616.25",
             ["dd" * 32],
             proof,
-            outputs=["ee" * 32],
             root_hint="ff" * 32,
         ),
         Instruction.verify_proof(proof),
@@ -3044,11 +3003,11 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
                 "1",
                 ["aa" * 32],
                 canonical_proof_attachment(vk_name="vk_unshield"),
-                outputs=["bb" * 32, "bb" * 32],
+                outputs=["bb" * 32],
             ),
-            ValueError,
-            "duplicates",
-            id="unshield-duplicate-output",
+            TypeError,
+            "unexpected keyword argument.*outputs",
+            id="unshield-retired-output-field",
         ),
     ],
 )
@@ -3134,6 +3093,19 @@ def test_zk_instruction_helpers_reject_adversarial_inputs(
             "public_amount",
             id="unshield-negative-public-amount",
         ),
+        pytest.param(
+            lambda draft, asset, account, proof: draft.unshield_prepared(
+                asset,
+                account,
+                "1",
+                inputs=["aa" * 32],
+                proof=canonical_proof_attachment(vk_name="vk_unshield"),
+                outputs=["bb" * 32],
+            ),
+            TypeError,
+            "unexpected keyword argument.*outputs",
+            id="unshield-retired-output-field",
+        ),
     ],
 )
 def test_zk_transaction_draft_rejects_invalid_inputs(
@@ -3213,7 +3185,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         to_account_id=destination,
         public_amount="3",
         inputs=["dd" * 32],
-        outputs=["ee" * 32],
         proof=proof,
         root_hint="ff" * 32,
     ) == {"hash": "zk-4"}
@@ -3336,6 +3307,20 @@ def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
             ValueError,
             "backend",
             id="unshield-missing-proof-backend",
+        ),
+        pytest.param(
+            "unshield_prepared_and_wait",
+            {
+                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "to_account_id": account_address(0x6A),
+                "public_amount": "1",
+                "inputs": ["aa" * 32],
+                "proof": canonical_proof_attachment(vk_name="vk_unshield"),
+                "outputs": ["bb" * 32],
+            },
+            TypeError,
+            "unexpected keyword argument.*outputs",
+            id="unshield-retired-output-field",
         ),
     ],
 )

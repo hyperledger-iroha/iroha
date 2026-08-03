@@ -208,7 +208,7 @@ mod tests {
         use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
 
         let contract_address: iroha::data_model::smart_contract::ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let code = [0x11u8; 32];

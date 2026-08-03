@@ -35,6 +35,9 @@ pub const PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_NAME_V1: &str =
 pub const PRIVACY_PROOF_SCHEMA_NAME_V1: &str = "iroha.privacy.proof.v1";
 /// Permanent Norito schema identity for the cross-SDK privacy proof envelope.
 pub const PRIVACY_PROOF_ENVELOPE_SCHEMA_NAME_V1: &str = "iroha.privacy.proof-envelope.v1";
+/// Permanent Norito schema identity for local compiled-profile build metadata.
+pub const PRIVACY_COMPILED_PROFILE_CATALOG_SCHEMA_NAME_V1: &str =
+    "iroha.privacy.compiled-profile-catalog.v1";
 /// Permanent Norito schema identity for the concrete ZK-ACE authorization statement.
 pub const ZK_ACE_AUTHORIZATION_STATEMENT_SCHEMA_NAME_V1: &str =
     "iroha.privacy.zk-ace.authorization-statement.v1";

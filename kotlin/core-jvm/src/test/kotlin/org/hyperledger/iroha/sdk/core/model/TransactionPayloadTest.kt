@@ -350,6 +350,6 @@ class TransactionPayloadTest {
 
     companion object {
         private const val CONTRACT_ADDRESS =
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
     }
 }

@@ -8,6 +8,7 @@ final class ContractAddressValidator {
   private static final int BECH32M_CHECKSUM = 0x2BC830A3;
   private static final int CONTRACT_ADDRESS_VERSION_V1 = 1;
   private static final int CONTRACT_ADDRESS_PAYLOAD_BYTES_V1 = 29;
+  private static final String CONTRACT_ADDRESS_HRP = "irohac";
   private static final int CHECKSUM_WORDS = 6;
   private static final int MAX_BECH32_LENGTH = 90;
   private static final int MAX_HRP_LENGTH = 83;
@@ -43,6 +44,9 @@ final class ContractAddressValidator {
       throw invalid("contractAddress must contain a valid Bech32m human-readable prefix");
     }
     final String hrp = nonNull.substring(0, separator);
+    if (!CONTRACT_ADDRESS_HRP.equals(hrp)) {
+      throw invalid("contractAddress must use the canonical " + CONTRACT_ADDRESS_HRP + " prefix");
+    }
     final int[] data = new int[nonNull.length() - separator - 1];
     for (int index = 0; index < data.length; index++) {
       data[index] = BECH32_CHARSET.indexOf(nonNull.charAt(separator + 1 + index));

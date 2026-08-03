@@ -46,7 +46,10 @@ def test_inflight_composed_contract_rejects_verus_rehydrate_tamper_proof_removal
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    path = (
+        tmp_path
+        / "crates/iroha_sumeragi_core/src/verus_proofs/in_flight_first_release_proofs.rs"
+    )
     replace_once(
         path,
         "pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_volatile_drift(",
@@ -94,7 +97,10 @@ def test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    path = (
+        tmp_path
+        / "crates/iroha_sumeragi_core/src/verus_proofs/in_flight_first_release_proofs.rs"
+    )
     replace_once(
         path,
         "pub proof fn production_in_flight_first_release_snapshot_recovery_is_stutter(",
@@ -196,19 +202,15 @@ def test_inflight_layout_contract_rejects_terminal_fifo_ownership_weakening(
     path = tmp_path / "crates/iroha_core/src/queue.rs"
     replace_once(
         path,
-        "for key in &barrier.ordered_keys {\n"
-        "            let hash = key.signed_transaction_hash;\n"
-        "            if !self.txs.contains_key(&hash)",
-        "for key in &barrier.ordered_keys {\n"
-        "            let hash = key.signed_transaction_hash;\n"
-        "            if false",
+        "let Some(tx) = self.txs.get(&hash) else",
+        "let Some(tx) = self.txs.iter().next() else",
     )
 
     errors = validate_fixture(tmp_path, module, contract)
 
     assert any(
         "Queue::release_barrier_has_exact_fifo_ownership_locked" in error
-        and "self.txs.contains_key(&hash)" in error
+        and "let Some(tx) = self.txs.get(&hash) else" in error
         for error in errors
     ), errors
 

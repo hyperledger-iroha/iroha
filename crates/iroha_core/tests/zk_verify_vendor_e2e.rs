@@ -161,7 +161,7 @@ seiyaku VendorBridgeGate {
     .execute(&authority, &mut stx)
     .expect("register vendor-bridge contract manifest");
     let contract_address = ContractAddress::derive(
-        iroha_data_model::account::address::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &authority,
         0,
         DataSpaceId::UNIVERSAL,

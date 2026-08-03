@@ -958,16 +958,16 @@ IndexedHistoricalCertificateCommandFor(
        initialContext, node, qc, candidate)
 
 THEOREM IndexedHistoricalCertificateCommandHasPhysicalOwner ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, candidate:
-    IndexedHistoricalCertificateCommandFor(
-      initialContext, node, qc, candidate)
-      => /\ IndexedHistoricalRecoveryTargetOwned(initialContext, node)
-         /\ IndexedAsync(initialContext)!CandidateConsumerCurrent(candidate)
-         /\ IndexedDecisionWitness(initialContext)!
-              ProtectedCandidateOwned(candidate)
-         /\ IndexedHistoricalCertificateCommandLineage(
-              initialContext, node, qc, candidate)
+  \A node, qc, candidate:
+    \A initialContext \in AdmissibleContextRecords:
+      IndexedHistoricalCertificateCommandFor(
+        initialContext, node, qc, candidate)
+        => /\ IndexedHistoricalRecoveryTargetOwned(initialContext, node)
+           /\ IndexedAsync(initialContext)!CandidateConsumerCurrent(candidate)
+           /\ IndexedDecisionWitness(initialContext)!
+                ProtectedCandidateOwned(candidate)
+           /\ IndexedHistoricalCertificateCommandLineage(
+                initialContext, node, qc, candidate)
 BY DEF IndexedHistoricalCertificateCommandFor,
        IndexedHistoricalCertificateLineageCandidateFor
 
@@ -1052,24 +1052,26 @@ IndexedHistoricalCertificateDecisionWalLineageSource(
        \in IndexedCore(initialContext, 39)
 
 IndexedHistoricalCertificateReceivedQcLineageInvariantAt(initialContext) ==
-  \A node \in Responsive, qc:
-    IndexedHistoricalCertificateReceivedQcLineageSource(
-      initialContext, node, qc)
-      => \/ IndexedDecisionWitness(initialContext)!NodeHasDecision(node)
-         \/ IndexedDecisionWitness(initialContext)!NodeHasApplication(node)
-         \/ \E candidate:
-              IndexedHistoricalCertificateLineageCandidateFor(
-                initialContext, node, qc, candidate)
+  \A qc:
+    \A node \in Responsive:
+      IndexedHistoricalCertificateReceivedQcLineageSource(
+        initialContext, node, qc)
+        => \/ IndexedDecisionWitness(initialContext)!NodeHasDecision(node)
+           \/ IndexedDecisionWitness(initialContext)!NodeHasApplication(node)
+           \/ \E candidate:
+                IndexedHistoricalCertificateLineageCandidateFor(
+                  initialContext, node, qc, candidate)
 
 IndexedHistoricalCertificateDecisionWalLineageInvariantAt(initialContext) ==
-  \A node \in Responsive, qc:
-    IndexedHistoricalCertificateDecisionWalLineageSource(
-      initialContext, node, qc)
-      => \/ IndexedDecisionWitness(initialContext)!NodeHasDecision(node)
-         \/ IndexedDecisionWitness(initialContext)!NodeHasApplication(node)
-         \/ \E candidate:
-              IndexedHistoricalCertificateLineageCandidateFor(
-                initialContext, node, qc, candidate)
+  \A qc:
+    \A node \in Responsive:
+      IndexedHistoricalCertificateDecisionWalLineageSource(
+        initialContext, node, qc)
+        => \/ IndexedDecisionWitness(initialContext)!NodeHasDecision(node)
+           \/ IndexedDecisionWitness(initialContext)!NodeHasApplication(node)
+           \/ \E candidate:
+                IndexedHistoricalCertificateLineageCandidateFor(
+                  initialContext, node, qc, candidate)
 
 (***************************************************************************
 The execution guard is fail-closed only for unreachable malformed states; it
@@ -1106,32 +1108,33 @@ IndexedHistoricalCertificateLocalLineageInvariant ==
     IndexedHistoricalCertificateLocalLineageInvariantAt(initialContext)
 
 THEOREM IndexedHistoricalCertificateScheduledImportOwnersHaveExactProvenance ==
-  \A initialContext \in AdmissibleContextRecords, candidate:
-    /\ IndexedHistoricalCertificateLocalLineageInvariantAt(initialContext)
-    /\ candidate \in
-         IndexedDecisionWitness(initialContext)!AsyncCandidateSet
-    /\ IndexedDecisionWitness(initialContext)!
-         CandidateConsumerCurrent(candidate)
-    /\ IndexedDecisionWitness(initialContext)!CandidateScheduled(candidate)
-    /\ IndexedDecisionWitness(initialContext)!
-         AsyncCommitImportExecutionNeedsLineage(candidate)
-    => IndexedDecisionWitness(initialContext)!
-         AsyncCommitImportExecutionProvenance(candidate)
+  \A candidate:
+    \A initialContext \in AdmissibleContextRecords:
+      /\ IndexedHistoricalCertificateLocalLineageInvariantAt(initialContext)
+      /\ candidate \in
+           IndexedDecisionWitness(initialContext)!AsyncCandidateSet
+      /\ IndexedDecisionWitness(initialContext)!
+           CandidateConsumerCurrent(candidate)
+      /\ IndexedDecisionWitness(initialContext)!CandidateScheduled(candidate)
+      /\ IndexedDecisionWitness(initialContext)!
+           AsyncCommitImportExecutionNeedsLineage(candidate)
+      => IndexedDecisionWitness(initialContext)!
+           AsyncCommitImportExecutionProvenance(candidate)
 BY DEF IndexedHistoricalCertificateLocalLineageInvariantAt,
        IndexedHistoricalCertificateScheduledImportProvenanceInvariantAt
 
 THEOREM IndexedAsyncCommitImportLineageRefinesHistoricalCertificateLineage ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, candidate:
-    /\ candidate.node = node
-    /\ candidate.consumerContext = initialContext
-    /\ IndexedAsync(initialContext)!
-         AsyncCommitImportCandidateLineage(candidate, qc)
-    /\ IndexedAsync(initialContext)!CandidateConsumerCurrent(candidate)
-    /\ IndexedDecisionWitness(initialContext)!
-         ProtectedCandidateOwned(candidate)
-    => IndexedHistoricalCertificateLineageCandidateFor(
-         initialContext, node, qc, candidate)
+  \A node, qc, candidate:
+    \A initialContext \in AdmissibleContextRecords:
+      /\ candidate.node = node
+      /\ candidate.consumerContext = initialContext
+      /\ IndexedAsync(initialContext)!
+           AsyncCommitImportCandidateLineage(candidate, qc)
+      /\ IndexedAsync(initialContext)!CandidateConsumerCurrent(candidate)
+      /\ IndexedDecisionWitness(initialContext)!
+           ProtectedCandidateOwned(candidate)
+      => IndexedHistoricalCertificateLineageCandidateFor(
+           initialContext, node, qc, candidate)
 BY Isa
    DEF IndexedHistoricalCertificateLineageCandidateFor,
        IndexedHistoricalCertificateCommandLineage,
@@ -2650,18 +2653,18 @@ BY IndexedHistoricalDecisionOwnerHasExactRecoveryStage,
        IndexedCompositionInvariant
 
 THEOREM IndexedHistoricalDecisionTransportOutcomeDropsRankFive ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in Responsive,
-     qc:
-    /\ IndexedCompositionInvariant
-    /\ IndexedDecisionWitnessSupportAt(initialContext)
-    /\ IndexedHistoricalDecisionTransportOwnedOutcome(
-         initialContext, node, qc)
-    /\ IndexedHistoricalDecisionRecord(initialContext, node, qc)
-    => \/ IndexedHistoricalExactApplication(initialContext, node)
-       \/ \E lower \in SetLessThan(5, OpToRel(<, Nat), Nat):
-            IndexedHistoricalDecisionStageAt(
-              initialContext, node, lower)
+  \A qc:
+    \A initialContext \in AdmissibleContextRecords,
+       node \in Responsive:
+      /\ IndexedCompositionInvariant
+      /\ IndexedDecisionWitnessSupportAt(initialContext)
+      /\ IndexedHistoricalDecisionTransportOwnedOutcome(
+           initialContext, node, qc)
+      /\ IndexedHistoricalDecisionRecord(initialContext, node, qc)
+      => \/ IndexedHistoricalExactApplication(initialContext, node)
+         \/ \E lower \in SetLessThan(5, OpToRel(<, Nat), Nat):
+              IndexedHistoricalDecisionStageAt(
+                initialContext, node, lower)
 BY IsaT(900)
    DEF IndexedHistoricalDecisionTransportOwnedOutcome,
        IndexedHistoricalDecisionStageAt,

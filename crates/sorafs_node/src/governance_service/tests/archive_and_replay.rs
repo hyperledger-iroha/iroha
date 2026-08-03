@@ -245,9 +245,35 @@ fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
     );
 
     let index_path = config.source_dir.join("runtime-dag-index.json");
-    let mut index: JsonValue =
-        json::from_slice(&fs::read(&index_path).expect("read publisher runtime index"))
-            .expect("decode publisher runtime index");
+    let original_index_bytes = fs::read(&index_path).expect("read publisher runtime index");
+    let mut provenance_tampered_index: JsonValue = json::from_slice(&original_index_bytes)
+        .expect("decode publisher runtime index for provenance tamper");
+    provenance_tampered_index
+        .get_mut("blocks")
+        .and_then(JsonValue::as_array_mut)
+        .and_then(|blocks| blocks.first_mut())
+        .and_then(JsonValue::as_object_mut)
+        .expect("first publisher runtime index entry")
+        .insert(
+            "submission_publisher_account_digest_hex".into(),
+            JsonValue::from(hex::encode([0xA5; 32])),
+        );
+    let provenance_tampered_bytes = json::to_json_pretty(&provenance_tampered_index)
+        .expect("encode provenance-tampered runtime index")
+        .into_bytes();
+    write_test_sidecar_file(&index_path, &provenance_tampered_bytes);
+    let provenance_error = load_source_snapshot(&config)
+        .expect_err("unsigned runtime-index provenance must not override the signed node");
+    assert!(
+        provenance_error
+            .to_string()
+            .contains("submission provenance does not match its signed governance node"),
+        "unexpected provenance substitution error: {provenance_error}"
+    );
+    write_test_sidecar_file(&index_path, &original_index_bytes);
+
+    let mut index: JsonValue = json::from_slice(&original_index_bytes)
+        .expect("decode publisher runtime index for source substitution");
     let first_entry = index
         .get_mut("blocks")
         .and_then(JsonValue::as_array_mut)

@@ -56,10 +56,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "genesis",
         "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
     );
-    let debt_asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal")?,
-        "stable".parse()?,
-    );
+    let debt_asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal")?,
+            "stable".parse()?,
+        );
 
     // Seed the canonical accounts and asset definition with zero balances, then
     // grant permission for the user to mint through the host.

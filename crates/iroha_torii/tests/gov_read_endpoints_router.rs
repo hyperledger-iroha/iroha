@@ -66,7 +66,7 @@ async fn gov_proposal_get_router_mapping() {
     let rec = iroha_core::state::GovernanceProposalRecord {
         proposer,
         kind: ProposalKind::DeployContract(DeployContractProposal {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
             code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
@@ -125,6 +125,6 @@ async fn gov_proposal_get_router_mapping() {
         deploy_payload
             .get("contract_address")
             .and_then(norito::json::Value::as_str),
-        Some("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
+        Some("irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw")
     );
 }

@@ -56,6 +56,19 @@ class RunLocalSwarmSafetyTest(unittest.TestCase):
             stop_body,
         )
 
+    def test_genesis_hash_is_exported_and_bound_into_every_peer_config(self) -> None:
+        text = _script_text()
+
+        self.assertIn(
+            '--expected-hash-out "$BASE/genesis.expected_hash"',
+            text,
+        )
+        self.assertIn(
+            '[[ ! "$GENESIS_EXPECTED_HASH" =~ ^[0-9a-f]{63}[13579bdf]$ ]]',
+            text,
+        )
+        self.assertIn('expected_hash = "$GENESIS_EXPECTED_HASH"', text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -33,6 +33,110 @@ use crate::sumeragi::{
 
 static COMMIT_ROSTER_PUBLICATION_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
+/// Exact durable publication shape for truncating one commit-roster journal.
+///
+/// The projection is intentionally serializable because canonical-prune recovery
+/// authenticates the pre-publication identity and the exact remaining allocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub(crate) struct CommitRosterJournalPruneProjectionV2 {
+    /// Whether truncation removes at least one journal row.
+    pub(crate) required: bool,
+    /// Digest selected by `current` before truncation, if the journal is published.
+    pub(crate) current_digest: Option<[u8; 32]>,
+    /// Digest selected after truncation, or the unchanged current digest for a no-op.
+    pub(crate) retained_digest: Option<[u8; 32]>,
+    /// Exact canonical retained generation length.
+    pub(crate) retained_payload_bytes: u64,
+    /// New physical generation bytes required before pointer publication.
+    pub(crate) generation_allocation_bytes: u64,
+    /// Exact deterministic pointer temporary allocated during publication.
+    pub(crate) pointer_temporary_bytes: u64,
+    /// Stable pointer growth retained after publication when `current` was absent.
+    pub(crate) current_pointer_growth_bytes: u64,
+}
+
+impl CommitRosterJournalPruneProjectionV2 {
+    /// Canonical projection for an absent in-memory-only journal.
+    #[must_use]
+    pub(crate) const fn none() -> Self {
+        Self {
+            required: false,
+            current_digest: None,
+            retained_digest: None,
+            retained_payload_bytes: 0,
+            generation_allocation_bytes: 0,
+            pointer_temporary_bytes: 0,
+            current_pointer_growth_bytes: 0,
+        }
+    }
+
+    /// Return whether every encoded byte count and identity has canonical shape.
+    #[must_use]
+    pub(crate) fn is_canonical(self) -> bool {
+        if self.required {
+            self.retained_digest.is_some()
+                && self.retained_payload_bytes > 0
+                && self.retained_payload_bytes <= CommitRosterJournal::MAX_PAYLOAD_BYTES
+                && (self.generation_allocation_bytes == 0
+                    || self.generation_allocation_bytes == self.retained_payload_bytes)
+                && self.pointer_temporary_bytes == CommitRosterJournal::POINTER_BYTES
+                && self.current_pointer_growth_bytes
+                    == if self.current_digest.is_none() {
+                        CommitRosterJournal::POINTER_BYTES
+                    } else {
+                        0
+                    }
+                && self.current_digest != self.retained_digest
+        } else {
+            self.current_digest == self.retained_digest
+                && self.generation_allocation_bytes == 0
+                && self.pointer_temporary_bytes == 0
+                && self.current_pointer_growth_bytes == 0
+                && ((self.retained_digest.is_none() && self.retained_payload_bytes == 0)
+                    || (self.retained_digest.is_some()
+                        && self.retained_payload_bytes > 0
+                        && self.retained_payload_bytes <= CommitRosterJournal::MAX_PAYLOAD_BYTES))
+        }
+    }
+
+    /// Return whether a recovery-time projection is an authorized pre- or post-publication state.
+    #[must_use]
+    pub(crate) fn authorizes(self, remaining: Self) -> bool {
+        if !self.is_canonical() || !remaining.is_canonical() {
+            return false;
+        }
+        if !self.required {
+            return remaining == self;
+        }
+        if remaining.required {
+            remaining.current_digest == self.current_digest
+                && remaining.retained_digest == self.retained_digest
+                && remaining.retained_payload_bytes == self.retained_payload_bytes
+                && remaining.generation_allocation_bytes <= self.generation_allocation_bytes
+                && remaining.pointer_temporary_bytes == self.pointer_temporary_bytes
+                && remaining.current_pointer_growth_bytes == self.current_pointer_growth_bytes
+        } else {
+            remaining.current_digest == self.retained_digest
+                && remaining.retained_digest == self.retained_digest
+                && remaining.retained_payload_bytes == self.retained_payload_bytes
+        }
+    }
+
+    /// Exact additional physical peak for this publication followed by a sidecar rewrite.
+    pub(crate) fn allocation_peak_with_sidecar(self, sidecar_peak_bytes: u64) -> Option<u64> {
+        if !self.required {
+            return Some(sidecar_peak_bytes);
+        }
+        self.current_pointer_growth_bytes
+            .checked_add(sidecar_peak_bytes)
+            .map(|post_pointer| self.pointer_temporary_bytes.max(post_pointer))
+            .and_then(|publication_peak| {
+                self.generation_allocation_bytes
+                    .checked_add(publication_peak)
+            })
+    }
+}
+
 /// Persisted commit-roster journal payload.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct PersistedCommitRosters {
@@ -180,9 +284,11 @@ impl CommitRosterJournal {
     pub const JOURNAL_FILE: &'static str = "commit-rosters";
     const LEGACY_JOURNAL_FILE: &'static str = "commit-rosters.norito";
     const CURRENT_FILE: &'static str = "current";
+    const CURRENT_TEMP_FILE: &'static str = "current.tmp";
     const GENERATIONS_DIR: &'static str = "generations";
     const MAX_PAYLOAD_BYTES: u64 = 16 * 1024 * 1024;
     const MAX_GENERATIONS: usize = 4096;
+    const POINTER_BYTES: u64 = 65;
     const JOURNAL_VERSION: u32 = 2;
 
     /// Build the canonical journal path under the provided root.
@@ -260,6 +366,7 @@ impl CommitRosterJournal {
         if path.as_os_str().is_empty() {
             return Ok(journal);
         }
+        let _publication_guard = COMMIT_ROSTER_PUBLICATION_LOCK.lock();
         let legacy = path
             .parent()
             .unwrap_or_else(|| Path::new(""))
@@ -287,6 +394,13 @@ impl CommitRosterJournal {
             });
         }
         let root_identity = direct_roster_directory_identity(&path).map_err(|source| {
+            CommitRosterJournalError::Read {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        Self::reconcile_publication_residues(&path)?;
+        verify_roster_directory_identity(&path, root_identity).map_err(|source| {
             CommitRosterJournalError::Read {
                 path: path.clone(),
                 source,
@@ -506,6 +620,377 @@ impl CommitRosterJournal {
             });
         }
         Ok(digest.to_owned())
+    }
+
+    fn digest_bytes(digest: &str) -> Option<[u8; 32]> {
+        let bytes = hex::decode(digest).ok()?;
+        bytes.try_into().ok()
+    }
+
+    fn digest_text(digest: [u8; 32]) -> String {
+        hex::encode(digest)
+    }
+
+    fn generation_path_for_digest(&self, digest: [u8; 32]) -> PathBuf {
+        self.path
+            .join(Self::GENERATIONS_DIR)
+            .join(format!("{}.norito", Self::digest_text(digest)))
+    }
+
+    fn generation_temp_path_for_digest(&self, digest: [u8; 32]) -> PathBuf {
+        self.path
+            .join(Self::GENERATIONS_DIR)
+            .join(format!("{}.norito.tmp", Self::digest_text(digest)))
+    }
+
+    fn current_digest_bytes(&self) -> Result<Option<[u8; 32]>, CommitRosterJournalError> {
+        let path = self.path.join(Self::CURRENT_FILE);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
+                let digest = Self::read_current_digest(&path)?;
+                Self::digest_bytes(&digest).map(Some).ok_or(
+                    CommitRosterJournalError::InvalidStorage {
+                        path,
+                        reason: "current pointer digest cannot be represented canonically",
+                    },
+                )
+            }
+            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(CommitRosterJournalError::Read { path, source }),
+        }
+    }
+
+    fn reconcile_publication_residues(path: &Path) -> Result<(), CommitRosterJournalError> {
+        let root_identity = direct_roster_directory_identity(path).map_err(|source| {
+            CommitRosterJournalError::Read {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        let generations = path.join(Self::GENERATIONS_DIR);
+        let generations_metadata = match fs::symlink_metadata(&generations) {
+            Ok(metadata) => metadata,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                let current_temp = path.join(Self::CURRENT_TEMP_FILE);
+                if fs::symlink_metadata(&current_temp).is_ok() {
+                    return Err(CommitRosterJournalError::InvalidStorage {
+                        path: current_temp,
+                        reason: "current-pointer temp exists without a generations directory",
+                    });
+                }
+                return Ok(());
+            }
+            Err(source) => {
+                return Err(CommitRosterJournalError::Read {
+                    path: generations,
+                    source,
+                });
+            }
+        };
+        if generations_metadata.file_type().is_symlink() || !generations_metadata.is_dir() {
+            return Err(CommitRosterJournalError::InvalidStorage {
+                path: generations,
+                reason: "commit-roster generations must be a direct directory",
+            });
+        }
+        let generations_identity =
+            direct_roster_directory_identity(&generations).map_err(|source| {
+                CommitRosterJournalError::Read {
+                    path: generations.clone(),
+                    source,
+                }
+            })?;
+        let mut generation_temp = None;
+        let mut scanned = 0_usize;
+        for entry in
+            fs::read_dir(&generations).map_err(|source| CommitRosterJournalError::Read {
+                path: generations.clone(),
+                source,
+            })?
+        {
+            let entry = entry.map_err(|source| CommitRosterJournalError::Read {
+                path: generations.clone(),
+                source,
+            })?;
+            scanned = scanned.saturating_add(1);
+            if scanned > Self::MAX_GENERATIONS {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: generations,
+                    reason: "commit-roster generation count exceeds the hard scan bound",
+                });
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: entry.path(),
+                    reason: "commit-roster generation name is not UTF-8",
+                });
+            };
+            let Some(digest) = name.strip_suffix(".norito.tmp") else {
+                continue;
+            };
+            if digest.len() != 64
+                || Self::digest_bytes(digest).is_none_or(|bytes| Self::digest_text(bytes) != digest)
+            {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: entry.path(),
+                    reason: "generation temp name is not a canonical digest",
+                });
+            }
+            if generation_temp
+                .replace((entry.path(), digest.to_owned()))
+                .is_some()
+            {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: generations,
+                    reason: "multiple commit-roster generation temps are unresolved",
+                });
+            }
+        }
+        if let Some((temporary, digest)) = generation_temp {
+            let bytes =
+                read_bound_roster_file(&temporary, Self::MAX_PAYLOAD_BYTES).map_err(|source| {
+                    CommitRosterJournalError::Read {
+                        path: temporary.clone(),
+                        source,
+                    }
+                })?;
+            if hex::encode(Sha256::digest(&bytes)) != digest {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: temporary,
+                    reason: "generation temp payload does not match its digest name",
+                });
+            }
+            Self::decode_canonical_payload(&temporary, &bytes)?;
+            let stable = generations.join(format!("{digest}.norito"));
+            match fs::symlink_metadata(&stable) {
+                Ok(_) => {
+                    let existing = read_bound_roster_file(&stable, Self::MAX_PAYLOAD_BYTES)
+                        .map_err(|source| CommitRosterJournalError::Read {
+                            path: stable.clone(),
+                            source,
+                        })?;
+                    if existing != bytes {
+                        return Err(CommitRosterJournalError::InvalidStorage {
+                            path: stable,
+                            reason: "generation temp conflicts with the stable digest path",
+                        });
+                    }
+                    fs::remove_file(&temporary).map_err(|source| {
+                        CommitRosterJournalError::Write {
+                            path: temporary,
+                            source,
+                        }
+                    })?;
+                }
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                    fs::rename(&temporary, &stable).map_err(|source| {
+                        CommitRosterJournalError::Write {
+                            path: stable.clone(),
+                            source,
+                        }
+                    })?;
+                    let readback = read_bound_roster_file(&stable, Self::MAX_PAYLOAD_BYTES)
+                        .map_err(|source| CommitRosterJournalError::Read {
+                            path: stable.clone(),
+                            source,
+                        })?;
+                    if readback != bytes {
+                        return Err(CommitRosterJournalError::InvalidStorage {
+                            path: stable,
+                            reason: "recovered generation differs from its synced temp",
+                        });
+                    }
+                }
+                Err(source) => {
+                    return Err(CommitRosterJournalError::Read {
+                        path: stable,
+                        source,
+                    });
+                }
+            }
+            sync_dir(&generations).map_err(|source| CommitRosterJournalError::NamespaceSync {
+                path: generations.clone(),
+                source,
+            })?;
+        }
+
+        let current_temp = path.join(Self::CURRENT_TEMP_FILE);
+        match fs::symlink_metadata(&current_temp) {
+            Ok(_) => {
+                let bytes = read_bound_roster_file(&current_temp, Self::POINTER_BYTES).map_err(
+                    |source| CommitRosterJournalError::Read {
+                        path: current_temp.clone(),
+                        source,
+                    },
+                )?;
+                let text = std::str::from_utf8(&bytes).map_err(|_| {
+                    CommitRosterJournalError::InvalidStorage {
+                        path: current_temp.clone(),
+                        reason: "current-pointer temp is not UTF-8",
+                    }
+                })?;
+                let Some(digest) = text.strip_suffix('\n') else {
+                    return Err(CommitRosterJournalError::InvalidStorage {
+                        path: current_temp,
+                        reason: "current-pointer temp is not canonical",
+                    });
+                };
+                let Some(digest_bytes) = Self::digest_bytes(digest) else {
+                    return Err(CommitRosterJournalError::InvalidStorage {
+                        path: current_temp,
+                        reason: "current-pointer temp digest is invalid",
+                    });
+                };
+                if Self::digest_text(digest_bytes) != digest {
+                    return Err(CommitRosterJournalError::InvalidStorage {
+                        path: current_temp,
+                        reason: "current-pointer temp digest is non-canonical",
+                    });
+                }
+                let generation = generations.join(format!("{digest}.norito"));
+                let generation_bytes = read_bound_roster_file(&generation, Self::MAX_PAYLOAD_BYTES)
+                    .map_err(|source| CommitRosterJournalError::Read {
+                        path: generation.clone(),
+                        source,
+                    })?;
+                if hex::encode(Sha256::digest(&generation_bytes)) != digest {
+                    return Err(CommitRosterJournalError::InvalidStorage {
+                        path: generation,
+                        reason: "current-pointer temp names an invalid generation",
+                    });
+                }
+                Self::decode_canonical_payload(&generation, &generation_bytes)?;
+                let current = path.join(Self::CURRENT_FILE);
+                fs::rename(&current_temp, &current).map_err(|source| {
+                    CommitRosterJournalError::Write {
+                        path: current.clone(),
+                        source,
+                    }
+                })?;
+                sync_dir(path).map_err(|source| CommitRosterJournalError::NamespaceSync {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+                if Self::read_current_digest(&current)? != digest {
+                    return Err(CommitRosterJournalError::InvalidStorage {
+                        path: current,
+                        reason: "recovered current pointer differs from its synced temp",
+                    });
+                }
+            }
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(CommitRosterJournalError::Read {
+                    path: current_temp,
+                    source,
+                });
+            }
+        }
+        verify_roster_directory_identity(path, root_identity).map_err(|source| {
+            CommitRosterJournalError::Read {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        verify_roster_directory_identity(&generations, generations_identity).map_err(|source| {
+            CommitRosterJournalError::Read {
+                path: generations,
+                source,
+            }
+        })
+    }
+
+    fn validate_publication_namespace_is_clean(&self) -> Result<(), CommitRosterJournalError> {
+        let root = match fs::symlink_metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(CommitRosterJournalError::Read {
+                    path: self.path.clone(),
+                    source,
+                });
+            }
+        };
+        if root.file_type().is_symlink() || !root.is_dir() {
+            return Err(CommitRosterJournalError::InvalidStorage {
+                path: self.path.clone(),
+                reason: "commit-roster root must be a direct directory",
+            });
+        }
+        for entry in fs::read_dir(&self.path).map_err(|source| CommitRosterJournalError::Read {
+            path: self.path.clone(),
+            source,
+        })? {
+            let entry = entry.map_err(|source| CommitRosterJournalError::Read {
+                path: self.path.clone(),
+                source,
+            })?;
+            let name = entry.file_name();
+            if name != Self::CURRENT_FILE && name != Self::GENERATIONS_DIR {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: entry.path(),
+                    reason: "unexpected commit-roster publication artifact",
+                });
+            }
+        }
+        let generations = self.path.join(Self::GENERATIONS_DIR);
+        match fs::symlink_metadata(&generations) {
+            Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() => {}
+            Ok(_) => {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: generations,
+                    reason: "commit-roster generations must be a direct directory",
+                });
+            }
+            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(CommitRosterJournalError::Read {
+                    path: generations,
+                    source,
+                });
+            }
+        }
+        let mut count = 0_usize;
+        for entry in
+            fs::read_dir(&generations).map_err(|source| CommitRosterJournalError::Read {
+                path: generations.clone(),
+                source,
+            })?
+        {
+            let entry = entry.map_err(|source| CommitRosterJournalError::Read {
+                path: generations.clone(),
+                source,
+            })?;
+            count = count.saturating_add(1);
+            if count > Self::MAX_GENERATIONS {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: generations,
+                    reason: "commit-roster generation count exceeds the hard scan bound",
+                });
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: entry.path(),
+                    reason: "commit-roster generation name is not UTF-8",
+                });
+            };
+            let Some(digest) = name.strip_suffix(".norito") else {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: entry.path(),
+                    reason: "unexpected commit-roster generation artifact",
+                });
+            };
+            if digest.len() != 64
+                || Self::digest_bytes(digest).is_none_or(|bytes| Self::digest_text(bytes) != digest)
+            {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: entry.path(),
+                    reason: "commit-roster generation name is not a canonical digest",
+                });
+            }
+        }
+        Ok(())
     }
 
     fn gc_generations(
@@ -817,30 +1302,8 @@ impl CommitRosterJournal {
         self.dirty
     }
 
-    /// Persist the journal to disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CommitRosterJournalError::Write`] when the journal cannot be written,
-    /// [`CommitRosterJournalError::Encode`] when encoding fails,
-    /// [`CommitRosterJournalError::NamespaceSync`] when a published rename is not acknowledged,
-    /// or [`CommitRosterJournalError::StorageUnknown`] after an ambiguous namespace replacement.
-    pub fn persist(&mut self) -> Result<(), CommitRosterJournalError> {
-        self.persist_durable()
-    }
-
-    fn persist_durable(&mut self) -> Result<(), CommitRosterJournalError> {
-        let _publication_guard = COMMIT_ROSTER_PUBLICATION_LOCK.lock();
-        if self.storage_unknown {
-            return Err(CommitRosterJournalError::StorageUnknown {
-                path: self.path.clone(),
-            });
-        }
-        if self.path.as_os_str().is_empty() {
-            self.dirty = false;
-            return Ok(());
-        }
-        // Ensure persisted payload honours the configured retention window.
+    fn canonical_payload_bytes(&mut self) -> Result<Vec<u8>, CommitRosterJournalError> {
+        // Ensure the persisted payload honours the configured retention window.
         self.enforce_retention();
         let mut stake_snapshots = Vec::new();
         let mut entries = Vec::with_capacity(self.entries.len());
@@ -883,6 +1346,133 @@ impl CommitRosterJournal {
                 reason: "canonical payload exceeds the commit-roster hard size bound",
             });
         }
+        Ok(bytes)
+    }
+
+    /// Project an exact truncate publication without mutating journal memory or storage.
+    pub(crate) fn project_truncate_to_height(
+        &self,
+        height: u64,
+    ) -> Result<CommitRosterJournalPruneProjectionV2, CommitRosterJournalError> {
+        if self.storage_unknown {
+            return Err(CommitRosterJournalError::StorageUnknown {
+                path: self.path.clone(),
+            });
+        }
+        if self.path.as_os_str().is_empty() {
+            return Ok(CommitRosterJournalPruneProjectionV2::none());
+        }
+        self.validate_publication_namespace_is_clean()?;
+        let current_digest = self.current_digest_bytes()?;
+        let required = self.has_entries_above(height);
+        if !required {
+            let retained_payload_bytes = if let Some(digest) = current_digest {
+                let path = self.generation_path_for_digest(digest);
+                u64::try_from(
+                    read_bound_roster_file(&path, Self::MAX_PAYLOAD_BYTES)
+                        .map_err(|source| CommitRosterJournalError::Read { path, source })?
+                        .len(),
+                )
+                .unwrap_or(u64::MAX)
+            } else {
+                0
+            };
+            let projection = CommitRosterJournalPruneProjectionV2 {
+                required: false,
+                current_digest,
+                retained_digest: current_digest,
+                retained_payload_bytes,
+                generation_allocation_bytes: 0,
+                pointer_temporary_bytes: 0,
+                current_pointer_growth_bytes: 0,
+            };
+            if !projection.is_canonical() {
+                return Err(CommitRosterJournalError::InvalidStorage {
+                    path: self.path.clone(),
+                    reason: "current commit-roster identity has a non-canonical projection",
+                });
+            }
+            return Ok(projection);
+        }
+
+        let mut retained = self.clone();
+        retained
+            .entries
+            .retain(|(entry_height, _), _| *entry_height <= height);
+        retained.dirty = true;
+        let bytes = retained.canonical_payload_bytes()?;
+        let retained_payload_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        let retained_digest = Sha256::digest(&bytes).into();
+        let generation_path = self.generation_path_for_digest(retained_digest);
+        let generation_allocation_bytes = match fs::symlink_metadata(&generation_path) {
+            Ok(_) => {
+                let existing = read_bound_roster_file(&generation_path, Self::MAX_PAYLOAD_BYTES)
+                    .map_err(|source| CommitRosterJournalError::Read {
+                        path: generation_path.clone(),
+                        source,
+                    })?;
+                if existing != bytes {
+                    return Err(CommitRosterJournalError::InvalidStorage {
+                        path: generation_path,
+                        reason: "retained digest path conflicts with its canonical payload",
+                    });
+                }
+                0
+            }
+            Err(source) if source.kind() == io::ErrorKind::NotFound => retained_payload_bytes,
+            Err(source) => {
+                return Err(CommitRosterJournalError::Read {
+                    path: generation_path,
+                    source,
+                });
+            }
+        };
+        let projection = CommitRosterJournalPruneProjectionV2 {
+            required: true,
+            current_digest,
+            retained_digest: Some(retained_digest),
+            retained_payload_bytes,
+            generation_allocation_bytes,
+            pointer_temporary_bytes: Self::POINTER_BYTES,
+            current_pointer_growth_bytes: if current_digest.is_none() {
+                Self::POINTER_BYTES
+            } else {
+                0
+            },
+        };
+        if !projection.is_canonical() {
+            return Err(CommitRosterJournalError::InvalidStorage {
+                path: self.path.clone(),
+                reason: "commit-roster truncate projection is not canonical",
+            });
+        }
+        Ok(projection)
+    }
+
+    /// Persist the journal to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::Write`] when the journal cannot be written,
+    /// [`CommitRosterJournalError::Encode`] when encoding fails,
+    /// [`CommitRosterJournalError::NamespaceSync`] when a published rename is not acknowledged,
+    /// or [`CommitRosterJournalError::StorageUnknown`] after an ambiguous namespace replacement.
+    pub fn persist(&mut self) -> Result<(), CommitRosterJournalError> {
+        self.persist_durable()
+    }
+
+    fn persist_durable(&mut self) -> Result<(), CommitRosterJournalError> {
+        let _publication_guard = COMMIT_ROSTER_PUBLICATION_LOCK.lock();
+        if self.storage_unknown {
+            return Err(CommitRosterJournalError::StorageUnknown {
+                path: self.path.clone(),
+            });
+        }
+        if self.path.as_os_str().is_empty() {
+            self.dirty = false;
+            return Ok(());
+        }
+        let bytes = self.canonical_payload_bytes()?;
         let legacy = self
             .path
             .parent()
@@ -939,6 +1529,8 @@ impl CommitRosterJournal {
                     source,
                 }
             })?;
+        Self::reconcile_publication_residues(&self.path)?;
+        self.validate_publication_namespace_is_clean()?;
         let mut generation_count = 0_usize;
         for entry in
             fs::read_dir(&generations).map_err(|source| CommitRosterJournalError::Read {
@@ -958,8 +1550,10 @@ impl CommitRosterJournal {
                 });
             }
         }
-        let digest = hex::encode(Sha256::digest(&bytes));
-        let generation_path = generations.join(format!("{digest}.norito"));
+        let digest_bytes: [u8; 32] = Sha256::digest(&bytes).into();
+        let digest = Self::digest_text(digest_bytes);
+        let generation_path = self.generation_path_for_digest(digest_bytes);
+        let generation_temp_path = self.generation_temp_path_for_digest(digest_bytes);
         if generation_count == Self::MAX_GENERATIONS {
             match fs::symlink_metadata(&generation_path) {
                 Ok(_) => {}
@@ -977,21 +1571,8 @@ impl CommitRosterJournal {
                 }
             }
         }
-        match fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&generation_path)
-        {
-            Ok(mut file) => {
-                file.write_all(&bytes)
-                    .and_then(|()| file.flush())
-                    .and_then(|()| file.sync_all())
-                    .map_err(|source| CommitRosterJournalError::Write {
-                        path: generation_path.clone(),
-                        source,
-                    })?;
-            }
-            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+        match fs::symlink_metadata(&generation_path) {
+            Ok(_) => {
                 let existing = read_bound_roster_file(&generation_path, Self::MAX_PAYLOAD_BYTES)
                     .map_err(|source| CommitRosterJournalError::Read {
                         path: generation_path.clone(),
@@ -1004,8 +1585,58 @@ impl CommitRosterJournal {
                     });
                 }
             }
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                let mut temporary = fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&generation_temp_path)
+                    .map_err(|source| CommitRosterJournalError::Write {
+                        path: generation_temp_path.clone(),
+                        source,
+                    })?;
+                temporary
+                    .write_all(&bytes)
+                    .and_then(|()| temporary.flush())
+                    .and_then(|()| temporary.sync_all())
+                    .map_err(|source| CommitRosterJournalError::Write {
+                        path: generation_temp_path.clone(),
+                        source,
+                    })?;
+                verify_roster_directory_identity(&self.path, root_identity).map_err(|source| {
+                    CommitRosterJournalError::Read {
+                        path: self.path.clone(),
+                        source,
+                    }
+                })?;
+                verify_roster_directory_identity(&generations, generations_identity).map_err(
+                    |source| CommitRosterJournalError::Read {
+                        path: generations.clone(),
+                        source,
+                    },
+                )?;
+                if fs::symlink_metadata(&generation_path).is_ok() {
+                    return Err(CommitRosterJournalError::InvalidStorage {
+                        path: generation_path,
+                        reason: "generation target appeared during deterministic publication",
+                    });
+                }
+                fs::rename(&generation_temp_path, &generation_path).map_err(|source| {
+                    self.storage_unknown = true;
+                    CommitRosterJournalError::Write {
+                        path: generation_path.clone(),
+                        source,
+                    }
+                })?;
+                sync_dir(&generations).map_err(|source| {
+                    self.storage_unknown = true;
+                    CommitRosterJournalError::NamespaceSync {
+                        path: generations.clone(),
+                        source,
+                    }
+                })?;
+            }
             Err(source) => {
-                return Err(CommitRosterJournalError::Write {
+                return Err(CommitRosterJournalError::Read {
                     path: generation_path,
                     source,
                 });
@@ -1051,11 +1682,13 @@ impl CommitRosterJournal {
             }
         };
         let pointer_bytes = format!("{digest}\n");
-        let mut pointer_file = tempfile::Builder::new()
-            .prefix(".commit-roster-current-")
-            .tempfile_in(&self.path)
+        let pointer_temp_path = self.path.join(Self::CURRENT_TEMP_FILE);
+        let mut pointer_file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&pointer_temp_path)
             .map_err(|source| CommitRosterJournalError::Write {
-                path: self.path.clone(),
+                path: pointer_temp_path.clone(),
                 source,
             })?;
         verify_roster_directory_identity(&self.path, root_identity).map_err(|source| {
@@ -1065,32 +1698,28 @@ impl CommitRosterJournal {
             }
         })?;
         pointer_file
-            .as_file_mut()
             .write_all(pointer_bytes.as_bytes())
-            .and_then(|()| pointer_file.as_file_mut().flush())
-            .and_then(|()| pointer_file.as_file().sync_all())
+            .and_then(|()| pointer_file.flush())
+            .and_then(|()| pointer_file.sync_all())
             .map_err(|source| CommitRosterJournalError::Write {
-                path: pointer_file.path().to_path_buf(),
+                path: pointer_temp_path.clone(),
                 source,
             })?;
         let pointer_metadata =
             pointer_file
-                .as_file()
                 .metadata()
                 .map_err(|source| CommitRosterJournalError::Read {
-                    path: pointer_file.path().to_path_buf(),
+                    path: pointer_temp_path.clone(),
                     source,
                 })?;
-        let pointer_readback =
-            read_bound_roster_file(pointer_file.path(), 65).map_err(|source| {
-                CommitRosterJournalError::Read {
-                    path: pointer_file.path().to_path_buf(),
-                    source,
-                }
+        let pointer_readback = read_bound_roster_file(&pointer_temp_path, Self::POINTER_BYTES)
+            .map_err(|source| CommitRosterJournalError::Read {
+                path: pointer_temp_path.clone(),
+                source,
             })?;
         if pointer_readback != pointer_bytes.as_bytes() {
             return Err(CommitRosterJournalError::InvalidStorage {
-                path: pointer_file.path().to_path_buf(),
+                path: pointer_temp_path,
                 reason: "synced current-pointer stage differs from the intended digest",
             });
         }
@@ -1109,27 +1738,21 @@ impl CommitRosterJournal {
                 source: io::Error::other("injected atomic pointer-persist boundary failure"),
             });
         }
-        let persisted_pointer = match pointer_file.persist(&current_path) {
-            Ok(pointer) => pointer,
-            Err(error) => {
-                // `persist` is intended to fail before replacement on supported platforms, but
-                // the journal must not infer durable namespace state from an OS rename error.
-                // Fence every failure at this commit boundary until restart and exact readback.
-                self.storage_unknown = true;
-                return Err(CommitRosterJournalError::Write {
-                    path: current_path.clone(),
-                    source: error.error,
-                });
-            }
-        };
-        if let Err(source) = persisted_pointer.sync_all() {
+        if let Err(source) = fs::rename(&pointer_temp_path, &current_path) {
+            self.storage_unknown = true;
+            return Err(CommitRosterJournalError::Write {
+                path: current_path.clone(),
+                source,
+            });
+        }
+        if let Err(source) = pointer_file.sync_all() {
             self.storage_unknown = true;
             return Err(CommitRosterJournalError::NamespaceSync {
                 path: current_path.clone(),
                 source,
             });
         }
-        let persisted_metadata = match persisted_pointer.metadata() {
+        let persisted_metadata = match pointer_file.metadata() {
             Ok(metadata) => metadata,
             Err(source) => {
                 self.storage_unknown = true;
@@ -1247,6 +1870,36 @@ impl CommitRosterJournal {
         }
         self.dirty = true;
         self.persist()
+    }
+
+    /// Apply one prune-authorized truncation and require exact durable projection readback.
+    pub(crate) fn truncate_to_height_with_projection(
+        &mut self,
+        height: u64,
+        authorized: CommitRosterJournalPruneProjectionV2,
+    ) -> Result<(), CommitRosterJournalError> {
+        let before = self.project_truncate_to_height(height)?;
+        if !authorized.authorizes(before) {
+            return Err(CommitRosterJournalError::InvalidStorage {
+                path: self.path.clone(),
+                reason: "commit-roster state exceeds the authenticated prune projection",
+            });
+        }
+        if before.required {
+            self.entries
+                .retain(|(entry_height, _), _| *entry_height <= height);
+            self.dirty = true;
+            self.persist()?;
+        }
+        let after = self.project_truncate_to_height(height)?;
+        if after.required || !authorized.authorizes(after) {
+            self.storage_unknown = true;
+            return Err(CommitRosterJournalError::InvalidStorage {
+                path: self.path.clone(),
+                reason: "commit-roster prune publication failed exact durable readback",
+            });
+        }
+        Ok(())
     }
 
     /// Retrieve the structurally validated archival projection for `height`/`block_hash`.

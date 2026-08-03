@@ -216,7 +216,7 @@ fn tracker_requires_proof_for_success_but_allows_failure_without_one() {
 }
 
 #[test]
-fn tracker_callback_failure_is_atomic_and_retryable() {
+fn failed_verdict_commits_before_repair_handoff_and_remains_pending() {
     let tracker = PorTracker::default();
     let challenge = sample_challenge();
     let proof = sample_proof(&challenge);
@@ -229,29 +229,20 @@ fn tracker_callback_failure_is_atomic_and_retryable() {
     verdict.failure_reason = Some("proof verification failed".to_owned());
     resign_sample_verdict(&mut verdict);
 
-    let error = tracker
-        .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
-            Err(PorRepairHandoffError(
-                "injected durable-handoff failure".to_owned(),
-            ))
-        })
-        .expect_err("injected callback failure must abort transition");
-    assert!(matches!(error, PorTrackerError::RepairHandoff(_)));
-    assert!(tracker.contains_challenge(&challenge.challenge_id));
-    assert_eq!(
-        tracker.proof_digest(&challenge.challenge_id),
-        Some(proof.proof_digest())
-    );
-
-    tracker
-        .record_verdict(&verdict, &sample_auditor_keys(), 1)
-        .expect("verdict must succeed after durable store recovers");
+    let transition = tracker
+        .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
+        .expect("verdict commits independently of repair admission");
+    assert!(!tracker.contains_challenge(&challenge.challenge_id));
+    let pending = tracker
+        .next_pending_repair_work()
+        .expect("read durable repair work")
+        .expect("failed verdict retains repair work");
+    assert_eq!(Some(pending.repair_task_id), transition.repair_task_id);
+    assert_eq!(pending.intent.challenge_id, challenge.challenge_id);
 }
 
 #[test]
-fn failed_verdict_exact_replay_reuses_native_task_without_handoff() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
+fn failed_verdict_exact_replay_reuses_durable_pending_task() {
     let tracker = PorTracker::default();
     let challenge = sample_challenge();
     tracker.record_challenge(&challenge).unwrap();
@@ -261,38 +252,35 @@ fn failed_verdict_exact_replay_reuses_native_task_without_handoff() {
     verdict.decided_at = challenge.deadline_at;
     verdict.failure_reason = Some("provider missed the challenge".to_owned());
     resign_sample_verdict(&mut verdict);
-    let handoff_calls = AtomicUsize::new(0);
-
     let first = tracker
-        .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |intent| {
-            handoff_calls.fetch_add(1, Ordering::Relaxed);
-            Ok(intent.repair_task_id())
-        })
+        .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
         .expect("initial failed verdict");
     let replay = tracker
-        .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
-            panic!("exact replay must not call the durable handoff")
-        })
+        .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
         .expect("exact failed verdict replay");
 
     assert!(first.newly_finalized);
     assert!(!replay.newly_finalized);
     assert_eq!(replay.repair_task_id, first.repair_task_id);
-    assert_eq!(handoff_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        tracker
+            .next_pending_repair_work()
+            .expect("read pending repair")
+            .map(|work| work.repair_task_id),
+        first.repair_task_id
+    );
 
     let mut conflicting = verdict.clone();
     conflicting.failure_reason = Some("different terminal reason".to_owned());
     resign_sample_verdict(&mut conflicting);
     assert!(matches!(
-        tracker.record_verdict_with(&conflicting, &sample_auditor_keys(), 1, |_| panic!(
-            "conflicting replay must not call the handoff"
-        ),),
+        tracker.record_verdict_durable(&conflicting, &sample_auditor_keys(), 1),
         Err(PorTrackerError::VerdictConflict)
     ));
 }
 
 #[test]
-fn failed_verdict_rejects_mismatched_handoff_task_id() {
+fn failed_verdict_rejects_mismatched_handoff_acknowledgement() {
     let tracker = PorTracker::default();
     let challenge = sample_challenge();
     tracker.record_challenge(&challenge).unwrap();
@@ -303,11 +291,58 @@ fn failed_verdict_rejects_mismatched_handoff_task_id() {
     verdict.failure_reason = Some("provider missed the challenge".to_owned());
     resign_sample_verdict(&mut verdict);
 
+    tracker
+        .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
+        .expect("failed verdict commits with pending repair work");
     assert!(matches!(
-        tracker.record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| Ok([0xFF; 32])),
+        tracker.acknowledge_repair_handoff(challenge.challenge_id, [0xFF; 32]),
         Err(PorTrackerError::RepairTaskIdMismatch)
     ));
-    assert!(tracker.contains_challenge(&challenge.challenge_id));
+    assert!(tracker.next_pending_repair_work().unwrap().is_some());
+}
+
+#[test]
+fn failed_verdict_cannot_compact_before_repair_handoff_acknowledgement() {
+    let tracker = PorTracker::default();
+    let challenge = sample_challenge();
+    tracker.record_challenge(&challenge).unwrap();
+    let mut verdict = sample_verdict(&challenge, [0x11; 32]);
+    verdict.outcome = AuditOutcomeV1::Failed;
+    verdict.proof_digest = None;
+    verdict.decided_at = challenge.deadline_at;
+    verdict.failure_reason = Some("provider missed the challenge".to_owned());
+    resign_sample_verdict(&mut verdict);
+    let transition = tracker
+        .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
+        .expect("commit failed verdict");
+    tracker
+        .acknowledge_reputation_terminal(
+            transition.reputation_work.sequence,
+            transition.reputation_work.work_digest,
+        )
+        .expect("acknowledge reputation terminal");
+    let archive = MemoryReplayArchive::new(0xA1);
+    assert!(matches!(
+        tracker.compact_acknowledged_with_replay_archive(&archive, archive.binding, 1),
+        Err(PorTrackerError::RepairHandoffPendingCompaction)
+    ));
+    let repair = tracker
+        .next_pending_repair_work()
+        .unwrap()
+        .expect("repair handoff remains pending");
+    tracker
+        .acknowledge_repair_handoff(challenge.challenge_id, repair.repair_task_id)
+        .expect("acknowledge exact repair handoff");
+    assert_eq!(
+        tracker
+            .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
+            .expect("compact after all handoffs are durable"),
+        1
+    );
+    let statuses = tracker.status_authority_snapshot().unwrap().statuses;
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(statuses[0].status, PorChallengeOutcome::Failed);
+    assert_eq!(statuses[0].repair_task_id, Some(repair.repair_task_id));
 }
 
 #[test]

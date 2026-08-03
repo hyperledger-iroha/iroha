@@ -122,17 +122,12 @@ pub proof fn production_reverse_push_front_refines_fifo(
 
 /// Stable first-owner filter used at the production/TLA+ projection boundary.
 ///
-/// Integers stand for exact projected causal-candidate identities. `owned`
-/// must be the union of every production scheduler owner (admitted, deferred,
-/// causal, outstanding I/O, ready, and local worker state). Consequently this
-/// function is deliberately conditional on faithful identity and ownership
-/// extraction; `drive_effects` itself does not perform scheduler-wide
-/// coalescing.
-///
-/// TODO: replace this conditional integer/set projection with the
-/// machine-checked production effect-to-TLA candidate identity/ownership map
-/// and its Completion-capacity product-rank proof before promoting the
-/// temporal liveness obligation.
+/// Integers stand for exact projected causal-candidate identities. The
+/// source-linked `ProductionEffectToCandidateTraceProjection` below checks
+/// that `owned` is extracted from every retained production scheduler owner
+/// and that each concrete adapter effect has the exact abstract candidate
+/// kind, lifecycle origin, and first-owner/coalesced-retry outcome before the
+/// batch is retained.
 pub open spec fn production_fresh_causal_successors(
     owned: Set<int>,
     successors: Seq<int>,
@@ -362,9 +357,10 @@ pub open spec fn production_async_causal_fifo_after_batch(
     old_queue.add(production_fresh_causal_successors(owned, emitted))
 }
 
-/// Under a faithful scheduler-owner projection, a batch preserves the old
+/// With the checked effect-to-candidate projection, a batch preserves the old
 /// causal prefix and appends a disjoint, unique, stable first-owner suffix.
-/// This theorem does not identify concrete `Effect` values with TLA+ values.
+/// The concrete `Effect` mapping is discharged by
+/// `production_effect_to_candidate_trace_refines_async_ownership` below.
 pub proof fn production_async_causal_fifo_after_batch_preserves_fresh_tail(
     old_queue: Seq<int>,
     owned: Set<int>,
@@ -410,6 +406,46 @@ pub proof fn production_async_causal_fifo_after_batch_preserves_fresh_tail(
             .skip(old_queue.len() as int)
             == fresh
     );
+}
+
+/// Product rank for Completion capacity after exact first-owner coalescing.
+///
+/// The successor residual is bounded by three, so radix four makes one strict
+/// root-position descent dominate resetting that residual to its maximum.
+pub open spec fn production_completion_capacity_product_rank(
+    root_remaining: nat,
+    successor_remaining: nat,
+) -> nat {
+    root_remaining * 4 + successor_remaining
+}
+
+/// Completion-capacity service strictly descends either by consuming one
+/// successor under the same root, or by consuming a root while permitting the
+/// bounded successor component to reset. Equal-owner retries are absent from
+/// this rank: the checked projection retains them as a finite producer episode
+/// without minting another candidate owner.
+pub proof fn production_completion_capacity_product_rank_descends(
+    root_before: nat,
+    successor_before: nat,
+    root_after: nat,
+    successor_after: nat,
+)
+    requires
+        successor_before <= 3,
+        successor_after <= 3,
+        (root_after == root_before && successor_after < successor_before)
+            || root_after < root_before,
+    ensures
+        production_completion_capacity_product_rank(root_after, successor_after)
+            < production_completion_capacity_product_rank(root_before, successor_before),
+{
+    if root_after == root_before {
+        assert(successor_after < successor_before);
+    } else {
+        assert(root_after + 1 <= root_before) by(nonlinear_arith);
+        assert(root_after * 4 + successor_after < root_before * 4 + successor_before)
+            by(nonlinear_arith);
+    }
 }
 
 /// Deliberately inverted owner predicate used only by the concrete mutation
@@ -3783,6 +3819,41 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub ordinal_minted: bool,
 }
 
+/// Verus-side lossless observation of one concrete adapter effect and the
+/// exact causal-candidate owner retained for it by production.
+#[derive(Copy, Clone)]
+pub struct ProductionEffectToCandidateTraceProjection {
+    pub incoming_effect_kind: u8,
+    pub stored_effect_kind: u8,
+    pub incoming_candidate_kind: u8,
+    pub stored_candidate_kind: u8,
+    pub causality: u8,
+    pub fresh_root_kind: u8,
+    pub incoming_effect_position: u8,
+    pub stored_effect_position: u8,
+    pub incoming_effect_count: u8,
+    pub stored_effect_count: u8,
+    pub incoming_candidate_position: u8,
+    pub stored_candidate_position: u8,
+    pub incoming_candidate_count: u8,
+    pub stored_candidate_count: u8,
+    pub incoming_lifecycle_ordinal: u128,
+    pub stored_lifecycle_ordinal: u128,
+    pub incoming_effect_identity: CanonicalIdentityProjection,
+    pub stored_effect_identity: CanonicalIdentityProjection,
+    pub incoming_owner_identity: CanonicalIdentityProjection,
+    pub stored_owner_identity: CanonicalIdentityProjection,
+    pub parent_owner_identity: CanonicalIdentityProjection,
+    pub incoming_candidate_semantic_identity: CanonicalIdentityProjection,
+    pub stored_candidate_semantic_identity: CanonicalIdentityProjection,
+    pub incoming_candidate_identity: CanonicalIdentityProjection,
+    pub stored_candidate_identity: CanonicalIdentityProjection,
+    pub candidate_owner_count_before: u8,
+    pub candidate_owner_count_after: u8,
+    pub candidate_owner_admitted: bool,
+    pub producer_episode_retained: bool,
+}
+
 /// Verus-side exact replacement of one unpublished reservation by its
 /// reducer-visible command.
 #[derive(Copy, Clone)]
@@ -4408,6 +4479,18 @@ pub closed spec fn check_production_ingress_transition(
     }
 }
 
+/// Total effect-to-candidate ownership gate mirrored by production before it
+/// retains an adapter-effect batch or publishes an asynchronous owner.
+pub closed spec fn check_production_effect_to_candidate_transition(
+    projection: ProductionEffectToCandidateTraceProjection,
+) -> Option<ProductionEffectToCandidateTraceProjection> {
+    if production_effect_to_candidate_refines_async_ownership_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
 /// Total exact reservation-materialization gate mirrored by production.
 pub closed spec fn check_production_ingress_reservation_materialization_transition(
     projection: ProductionIngressReservationMaterializationTraceProjection,
@@ -4639,6 +4722,13 @@ pub closed spec fn production_ingress_identity_and_class_trace_refines_protected
     projection: ProductionIngressIdentityAndClassTraceProjection,
 ) -> bool {
     production_ingress_identity_and_class_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the concrete effect-to-candidate ownership kernel.
+pub closed spec fn production_effect_to_candidate_refines_async_ownership_kernel(
+    projection: ProductionEffectToCandidateTraceProjection,
+) -> bool {
+    production_effect_to_candidate_trace_body!(projection)
 }
 
 /// Exact Verus mirror of the reservation-materialization ownership kernel.
@@ -5023,6 +5113,49 @@ pub proof fn production_ingress_identity_and_class_trace_refines_protected_owner
 {
     reveal(check_production_ingress_transition);
     reveal(production_ingress_identity_and_class_trace_refines_protected_ownership_kernel);
+}
+
+/// One checked concrete adapter effect preserves exact identity and causal
+/// origin, maps to its closed candidate kind, and either installs the unique
+/// owner or retains a finite coalesced producer episode.
+pub proof fn production_effect_to_candidate_trace_refines_async_ownership(
+    projection: ProductionEffectToCandidateTraceProjection,
+)
+    ensures
+        check_production_effect_to_candidate_transition(projection) == Some(projection) ==> (
+            production_effect_to_candidate_refines_async_ownership_kernel(projection)
+            && projection.incoming_effect_kind == projection.stored_effect_kind
+            && projection.incoming_effect_count >= 1u8
+            && projection.incoming_effect_count <= 8u8
+            && projection.incoming_effect_position >= 1u8
+            && projection.incoming_effect_position <= projection.incoming_effect_count
+            && projection.incoming_candidate_count <= 3u8
+            && projection.incoming_lifecycle_ordinal > 0u128
+            && projection.incoming_lifecycle_ordinal
+                == projection.stored_lifecycle_ordinal
+            && projection.producer_episode_retained
+            && (
+                projection.incoming_candidate_kind == 0u8 ==> (
+                    projection.candidate_owner_count_before == 0u8
+                    && projection.candidate_owner_count_after == 0u8
+                    && !projection.candidate_owner_admitted
+                )
+            )
+            && (
+                projection.incoming_candidate_kind != 0u8 ==> (
+                    projection.incoming_candidate_position >= 1u8
+                    && projection.incoming_candidate_position
+                        <= projection.incoming_candidate_count
+                    && projection.candidate_owner_count_before <= 1u8
+                    && projection.candidate_owner_count_after == 1u8
+                    && projection.candidate_owner_admitted
+                        == (projection.candidate_owner_count_before == 0u8)
+                )
+            )
+        ),
+{
+    reveal(check_production_effect_to_candidate_transition);
+    reveal(production_effect_to_candidate_refines_async_ownership_kernel);
 }
 
 /// One exact reservation materialization preserves source and effective
@@ -6711,171 +6844,9 @@ pub open spec fn production_effect_order_relation(
 }
 
 /// Complete fixed-vector effect relation.
-pub open spec fn production_effect_trace_relation(
-    trace: ProductionEffectTraceProjection,
-    event_kind: u8,
-) -> bool {
-    production_effect_slots_authorized(trace)
-        && production_effect_order_relation(trace, event_kind)
-}
-
-/// Branch relation after the exact effect trace has passed its independent
-/// authorization and ordering check.
-pub open spec fn production_transition_branch_constraints(
-    facts: ProductionTransitionFactsProjection,
-    persist_count: u64,
-    fetch_count: u64,
-    sign_count: u64,
-    apply_count: u64,
-    enter_count: u64,
-) -> bool {
-    transition_branch_constraints_body!(
-        facts,
-        persist_count,
-        fetch_count,
-        sign_count,
-        apply_count,
-        enter_count,
-    )
-}
-
-/// Branch relation after the exact effect trace has passed its independent
-/// authorization and ordering check.
-pub open spec fn production_transition_branch_relation(
-    facts: ProductionTransitionFactsProjection,
-) -> bool {
-    production_transition_branch_constraints(
-        facts,
-        production_effect_count(facts.effects, 1),
-        production_effect_count(facts.effects, 2),
-        production_effect_count(facts.effects, 5),
-        production_effect_count(facts.effects, 7),
-        production_effect_count(facts.effects, 8),
-    )
-}
-
-pub closed spec fn production_transition_action_relation(
-    facts: ProductionTransitionFactsProjection,
-) -> bool {
-    production_transition_gate_body!(
-        facts,
-        production_volatile_summary_well_formed,
-        production_named_action_relation,
-        production_effect_trace_relation,
-        production_transition_branch_relation,
-    )
-}
-
-/// Every accepted production action has an explicit TLA+ macro-step name and
-/// its durable-boundary name permits exactly the projected state delta.
-pub proof fn production_action_has_named_tla_mapping(
-    facts: ProductionTransitionFactsProjection,
-)
-    requires
-        production_transition_action_relation(facts),
-    ensures
-        production_tla_boundary_delta(
-            facts,
-            production_tla_macro_step(facts).boundary,
-        ),
-        production_tla_macro_step(facts).boundary
-                == TlaActionNameProjection::NoAction
-            ==> facts.action_kind == 3 || facts.action_kind == 4 || facts.action_kind == 6,
-        facts.action_kind == 6 && facts.replay_effect_kind != 0
-            ==> production_tla_macro_step(facts).source
-                != TlaActionNameProjection::NoAction,
-{
-    reveal(production_transition_action_relation);
-    reveal(production_named_action_relation);
-    reveal(production_action_kind_relation);
-    reveal(production_stutter_action_relation);
-    reveal(production_begin_wal_action_relation);
-    reveal(production_acknowledge_wal_action_relation);
-    reveal(production_body_progress_action_relation);
-    reveal(production_volatile_protocol_action_relation);
-    reveal(production_complete_application_action_relation);
-    reveal(production_resume_after_replay_action_relation);
-    match facts.action_kind {
-        0 => {},
-        1 | 2 => {
-            match facts.wal_record_kind {
-                1 | 2 | 3 | 4 | 5 | 6 | 7 => {},
-                _ => {},
-            }
-        },
-        3 | 4 | 5 => {},
-        6 => {
-            match facts.replay_effect_kind {
-                0 | 1 | 2 | 3 | 4 | 5 => {},
-                _ => {},
-            }
-        },
-        _ => {},
-    }
-}
-
-/// The executable gate bounds the safety-relevant volatile structures on both
-/// sides of every committed step and makes bounded persisted-TC retention explicit.
-pub proof fn production_action_preserves_volatile_bounds(
-    facts: ProductionTransitionFactsProjection,
-)
-    requires
-        production_transition_action_relation(facts),
-    ensures
-        facts.volatile_after.vote_pools <= 2,
-        facts.volatile_after.vote_entries <= facts.validator_count * 2,
-        facts.volatile_after.timeout_vote_pools <= 2,
-        facts.volatile_after.timeout_vote_entries <= facts.validator_count * 2,
-        facts.volatile_after.formed_certificates <= 2,
-        facts.volatile_after.formed_timeouts <= 2,
-        facts.volatile_after.outbound_control <= 7,
-        facts.volatile_after.pending_prepare <= facts.volatile_after.known_prepare,
-        facts.volatile_after.known_prepare - facts.volatile_after.pending_prepare <= 2,
-        facts.volatile_after.signature_queue
-            <= facts.volatile_after.durable_signable_limit,
-        facts.volatile_after.awaiting_signature
-            ==> facts.volatile_after.signature_queue
-                < facts.volatile_after.durable_signable_limit,
-        facts.action_kind == 2 && facts.wal_record_kind == 6
-            ==> !facts.volatile_after.candidate_present
-                && facts.volatile_after.body_work <= 1
-                && facts.volatile_after.pending_prepare == 0
-                && facts.volatile_after.vote_pools == 0
-                && facts.volatile_after.vote_entries == 0
-                && (if facts.install_view_unchanged {
-                    facts.timeout_vote_pool_unchanged
-                        && facts.volatile_after.timeout_vote_pools
-                            == facts.volatile_before.timeout_vote_pools
-                        && facts.volatile_after.timeout_vote_entries
-                            == facts.volatile_before.timeout_vote_entries
-                } else {
-                    facts.timeout_evidence_after_in_installed_window
-                        && facts.volatile_after.timeout_vote_pools
-                            <= facts.volatile_before.timeout_vote_pools
-                        && facts.volatile_after.timeout_vote_entries
-                            <= facts.volatile_before.timeout_vote_entries
-                })
-                && facts.volatile_after.formed_certificates == 0
-                && (if facts.install_view_unchanged {
-                    facts.formed_timeouts_unchanged
-                        && facts.volatile_after.formed_timeouts
-                            == facts.volatile_before.formed_timeouts
-                } else {
-                    facts.volatile_after.formed_timeouts
-                        <= facts.volatile_before.formed_timeouts
-                })
-                && (if facts.install_view_unchanged {
-                    facts.timeout_control_unchanged
-                } else {
-                    facts.timeout_control_after_absent
-                })
-                && facts.volatile_after.known_prepare <= 2
-                && facts.volatile_after.outbound_control <= 4,
-{
-    reveal(production_transition_action_relation);
-}
-
 } // verus!
+
+include!("verus_proofs/production_transition_contracts.rs");
 
 // The in-flight reservation/first-release proofs remain in this lexical module.
 include!("verus_proofs/in_flight_first_release_proofs.rs");

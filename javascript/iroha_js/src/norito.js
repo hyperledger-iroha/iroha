@@ -2,6 +2,7 @@ import { Buffer } from "buffer";
 import { blake3 } from "@noble/hashes/blake3";
 import { sha256 } from "@noble/hashes/sha2";
 import { blake2b256 } from "./blake2b.js";
+import { createBlockProofVerification } from "./blockProofVerification.js";
 import {
   AccountAddress,
   canonicalizeDomainLabel,
@@ -233,7 +234,6 @@ const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
 );
 const BLOCK_PROOFS_TYPE_NAME =
   "iroha_data_model::block::proofs::BlockProofs";
-const BLOCK_MERKLE_MAX_HEIGHT = 32;
 const REGISTER_SMART_CONTRACT_CODE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode";
 const REGISTER_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes";
 const DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance";
@@ -243,6 +243,31 @@ const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = "iroha_data_model::isi::smart_c
 const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload";
 const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload";
 const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes";
+const CREATE_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::CreateKaigi";
+const JOIN_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::JoinKaigi";
+const LEAVE_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::LeaveKaigi";
+const END_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::EndKaigi";
+const RECORD_KAIGI_USAGE_WIRE_ID = "iroha_data_model::isi::kaigi::RecordKaigiUsage";
+const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha_data_model::isi::kaigi::SetKaigiRelayManifest";
+const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha_data_model::isi::kaigi::RegisterKaigiRelay";
+const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
+const CAST_ZK_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastZkBallot";
+const CAST_PLAIN_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastPlainBallot";
+const ENACT_REFERENDUM_WIRE_ID = "iroha_data_model::isi::governance::EnactReferendum";
+const FINALIZE_REFERENDUM_WIRE_ID = "iroha_data_model::isi::governance::FinalizeReferendum";
+const PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID = "iroha_data_model::isi::governance::PersistCouncilForEpoch";
+const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha_data_model::isi::social::ClaimTwitterFollowReward";
+const SEND_TO_TWITTER_WIRE_ID = "iroha_data_model::isi::social::SendToTwitter";
+const CANCEL_TWITTER_ESCROW_WIRE_ID = "iroha_data_model::isi::social::CancelTwitterEscrow";
+const REGISTER_ZK_ASSET_WIRE_ID = "iroha_data_model::isi::zk::RegisterZkAsset";
+const SHIELD_WIRE_ID = "iroha_data_model::isi::zk::Shield";
+const ZK_TRANSFER_WIRE_ID = "iroha_data_model::isi::zk::ZkTransfer";
+const UNSHIELD_WIRE_ID = "iroha_data_model::isi::zk::Unshield";
+const CREATE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::CreateElection";
+const SUBMIT_BALLOT_WIRE_ID = "iroha_data_model::isi::zk::SubmitBallot";
+const FINALIZE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::FinalizeElection";
+const REGISTER_VERIFYING_KEY_WIRE_ID = "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey";
+const UPDATE_VERIFYING_KEY_WIRE_ID = "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey";
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
   "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
@@ -258,38 +283,22 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
   [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
   [EXPIRE_REPLICATION_ORDER_WIRE_ID]: EXPIRE_REPLICATION_ORDER_WIRE_ID,
-  "iroha_data_model::isi::kaigi::CreateKaigi":
-    "iroha_data_model::isi::kaigi::CreateKaigi",
-  "iroha_data_model::isi::kaigi::JoinKaigi":
-    "iroha_data_model::isi::kaigi::JoinKaigi",
-  "iroha_data_model::isi::kaigi::LeaveKaigi":
-    "iroha_data_model::isi::kaigi::LeaveKaigi",
-  "iroha_data_model::isi::kaigi::EndKaigi":
-    "iroha_data_model::isi::kaigi::EndKaigi",
-  "iroha_data_model::isi::kaigi::RecordKaigiUsage":
-    "iroha_data_model::isi::kaigi::RecordKaigiUsage",
-  "iroha_data_model::isi::kaigi::SetKaigiRelayManifest":
-    "iroha_data_model::isi::kaigi::SetKaigiRelayManifest",
-  "iroha_data_model::isi::kaigi::RegisterKaigiRelay":
-    "iroha_data_model::isi::kaigi::RegisterKaigiRelay",
-  "iroha_data_model::isi::governance::ProposeDeployContract":
-    "iroha_data_model::isi::governance::ProposeDeployContract",
-  "iroha_data_model::isi::governance::CastZkBallot":
-    "iroha_data_model::isi::governance::CastZkBallot",
-  "iroha_data_model::isi::governance::CastPlainBallot":
-    "iroha_data_model::isi::governance::CastPlainBallot",
-  "iroha_data_model::isi::governance::EnactReferendum":
-    "iroha_data_model::isi::governance::EnactReferendum",
-  "iroha_data_model::isi::governance::FinalizeReferendum":
-    "iroha_data_model::isi::governance::FinalizeReferendum",
-  "iroha_data_model::isi::governance::PersistCouncilForEpoch":
-    "iroha_data_model::isi::governance::PersistCouncilForEpoch",
-  "iroha_data_model::isi::social::ClaimTwitterFollowReward":
-    "iroha_data_model::isi::social::ClaimTwitterFollowReward",
-  "iroha_data_model::isi::social::SendToTwitter":
-    "iroha_data_model::isi::social::SendToTwitter",
-  "iroha_data_model::isi::social::CancelTwitterEscrow":
-    "iroha_data_model::isi::social::CancelTwitterEscrow",
+  [CREATE_KAIGI_WIRE_ID]: CREATE_KAIGI_WIRE_ID,
+  [JOIN_KAIGI_WIRE_ID]: JOIN_KAIGI_WIRE_ID,
+  [LEAVE_KAIGI_WIRE_ID]: LEAVE_KAIGI_WIRE_ID,
+  [END_KAIGI_WIRE_ID]: END_KAIGI_WIRE_ID,
+  [RECORD_KAIGI_USAGE_WIRE_ID]: RECORD_KAIGI_USAGE_WIRE_ID,
+  [SET_KAIGI_RELAY_MANIFEST_WIRE_ID]: SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
+  [REGISTER_KAIGI_RELAY_WIRE_ID]: REGISTER_KAIGI_RELAY_WIRE_ID,
+  [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]: PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
+  [CAST_ZK_BALLOT_WIRE_ID]: CAST_ZK_BALLOT_WIRE_ID,
+  [CAST_PLAIN_BALLOT_WIRE_ID]: CAST_PLAIN_BALLOT_WIRE_ID,
+  [ENACT_REFERENDUM_WIRE_ID]: ENACT_REFERENDUM_WIRE_ID,
+  [FINALIZE_REFERENDUM_WIRE_ID]: FINALIZE_REFERENDUM_WIRE_ID,
+  [PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID]: PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
+  [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]: CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID,
+  [SEND_TO_TWITTER_WIRE_ID]: SEND_TO_TWITTER_WIRE_ID,
+  [CANCEL_TWITTER_ESCROW_WIRE_ID]: CANCEL_TWITTER_ESCROW_WIRE_ID,
   [REGISTER_SMART_CONTRACT_CODE_WIRE_ID]: REGISTER_SMART_CONTRACT_CODE_WIRE_ID,
   [REGISTER_SMART_CONTRACT_BYTES_WIRE_ID]: REGISTER_SMART_CONTRACT_BYTES_WIRE_ID,
   [DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID]: DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
@@ -299,28 +308,19 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]: FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
   [CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]: CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
   [REMOVE_SMART_CONTRACT_BYTES_WIRE_ID]: REMOVE_SMART_CONTRACT_BYTES_WIRE_ID,
-  "iroha_data_model::isi::zk::RegisterZkAsset":
-    "iroha_data_model::isi::zk::RegisterZkAsset",
+  [REGISTER_ZK_ASSET_WIRE_ID]: REGISTER_ZK_ASSET_WIRE_ID,
   "zk::ScheduleConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   "zk::CancelConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition",
-  "iroha_data_model::isi::zk::Shield":
-    "iroha_data_model::isi::zk::Shield",
-  "iroha_data_model::isi::zk::ZkTransfer":
-    "iroha_data_model::isi::zk::ZkTransfer",
-  "iroha_data_model::isi::zk::Unshield":
-    "iroha_data_model::isi::zk::Unshield",
-  "iroha_data_model::isi::zk::CreateElection":
-    "iroha_data_model::isi::zk::CreateElection",
-  "iroha_data_model::isi::zk::SubmitBallot":
-    "iroha_data_model::isi::zk::SubmitBallot",
-  "iroha_data_model::isi::zk::FinalizeElection":
-    "iroha_data_model::isi::zk::FinalizeElection",
-  "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey":
-    "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
-  "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey":
-    "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+  [SHIELD_WIRE_ID]: SHIELD_WIRE_ID,
+  [ZK_TRANSFER_WIRE_ID]: ZK_TRANSFER_WIRE_ID,
+  [UNSHIELD_WIRE_ID]: UNSHIELD_WIRE_ID,
+  [CREATE_ELECTION_WIRE_ID]: CREATE_ELECTION_WIRE_ID,
+  [SUBMIT_BALLOT_WIRE_ID]: SUBMIT_BALLOT_WIRE_ID,
+  [FINALIZE_ELECTION_WIRE_ID]: FINALIZE_ELECTION_WIRE_ID,
+  [REGISTER_VERIFYING_KEY_WIRE_ID]: REGISTER_VERIFYING_KEY_WIRE_ID,
+  [UPDATE_VERIFYING_KEY_WIRE_ID]: UPDATE_VERIFYING_KEY_WIRE_ID,
 });
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
   Object.fromEntries(
@@ -331,8 +331,8 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
   ),
 );
 const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({
-  "iroha_data_model::isi::zk::Shield": 8,
-  "iroha_data_model::isi::zk::Unshield": 8,
+  [SHIELD_WIRE_ID]: 8,
+  [UNSHIELD_WIRE_ID]: 8,
 });
 
 const CRC64_TABLE = (() => {
@@ -1476,6 +1476,13 @@ function validateDecodedInstructionProofAttachments(instruction) {
     if (!isPlainObject(payload)) {
       continue;
     }
+    if (variant === "Unshield") {
+      assertOnlyObjectKeys(
+        payload,
+        ["asset", "to", "public_amount", "inputs", "proof", "root_hint"],
+        "zk.Unshield",
+      );
+    }
     if (!Object.prototype.hasOwnProperty.call(payload, field)) {
       throw new TypeError(`zk.${variant}.${field} is required`);
     }
@@ -1534,6 +1541,18 @@ function decodeBlockMerkleProofValue(payload, context) {
         ),
       `${context}.audit_path`,
     ),
+  };
+}
+
+function decodeBlockMerkleCommitmentValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["root", "leaf_count"]);
+  const leafCount = decodeU64Value(fields.leaf_count, `${context}.leaf_count`);
+  if (leafCount === "0") {
+    throw new Error(`${context}.leaf_count must be non-zero`);
+  }
+  return {
+    root: decodeHashValue(fields.root, `${context}.root`),
+    leaf_count: leafCount,
   };
 }
 
@@ -1704,10 +1723,12 @@ export function noritoDecodeBlockProofs(bytes) {
   return withNoritoLengthFlags(frame.flags & COMPACT_LEN_FLAG, () => {
     const fields = decodeStructFields(frame.payload, "BlockProofs", [
       "block_height",
+      "block_hash",
+      "executed_block_wire_hash",
       "entry_hash",
-      "entry_root",
+      "entry_commitment",
       "entry_proof",
-      "result_root",
+      "result_commitment",
       "result_proof",
       "fastpq_transcripts",
     ]);
@@ -1715,22 +1736,33 @@ export function noritoDecodeBlockProofs(bytes) {
     if (blockHeight === "0") {
       throw new Error("BlockProofs.block_height must be non-zero");
     }
+    const entryCommitment = decodeBlockMerkleCommitmentValue(
+      fields.entry_commitment,
+      "BlockProofs.entry_commitment",
+    );
+    const resultCommitment = decodeBlockMerkleCommitmentValue(
+      fields.result_commitment,
+      "BlockProofs.result_commitment",
+    );
+    if (entryCommitment.leaf_count !== resultCommitment.leaf_count) {
+      throw new Error("BlockProofs entry/result commitment leaf counts must match");
+    }
     return {
       block_height: blockHeight,
+      block_hash: decodeHashValue(fields.block_hash, "BlockProofs.block_hash"),
+      executed_block_wire_hash: decodeHashValue(
+        fields.executed_block_wire_hash,
+        "BlockProofs.executed_block_wire_hash",
+      ),
       entry_hash: decodeHashValue(fields.entry_hash, "BlockProofs.entry_hash"),
-      entry_root: decodeHashValue(fields.entry_root, "BlockProofs.entry_root"),
+      entry_commitment: entryCommitment,
       entry_proof: decodeBlockReceiptProofValue(
         fields.entry_proof,
         "BlockProofs.entry_proof",
       ),
-      result_root: decodeOptionValue(
-        fields.result_root,
-        decodeHashValue,
-        "BlockProofs.result_root",
-      ),
-      result_proof: decodeOptionValue(
+      result_commitment: resultCommitment,
+      result_proof: decodeBlockReceiptProofValue(
         fields.result_proof,
-        decodeBlockReceiptProofValue,
         "BlockProofs.result_proof",
       ),
       fastpq_transcripts: decodeFastpqTranscriptMap(
@@ -1741,113 +1773,9 @@ export function noritoDecodeBlockProofs(bytes) {
   });
 }
 
-function blockProofHashBytes(value, context) {
-  const bytes = encodeHashLiteralBytes(value, context);
-  if ((bytes[bytes.length - 1] & 1) !== 1) {
-    throw new Error(`${context} does not carry Iroha's hash marker bit`);
-  }
-  return bytes;
-}
-
-function blockProofHashesEqual(left, right, context) {
-  return blockProofHashBytes(left, `${context}.left`).equals(
-    blockProofHashBytes(right, `${context}.right`),
-  );
-}
-
-/** Verify one Iroha block Merkle audit path locally. */
-export function verifyBlockMerkleProof(leaf, proof, root) {
-  try {
-    const leafBytes = blockProofHashBytes(leaf, "Merkle proof leaf");
-    const rootBytes = blockProofHashBytes(root, "Merkle proof root");
-    if (!isPlainObject(proof)) return false;
-    const leafIndex = proof.leaf_index;
-    const auditPath = proof.audit_path;
-    if (
-      !Number.isInteger(leafIndex) ||
-      leafIndex < 0 ||
-      leafIndex > 0xffff_ffff ||
-      !Array.isArray(auditPath) ||
-      auditPath.length > BLOCK_MERKLE_MAX_HEIGHT
-    ) {
-      return false;
-    }
-    if (leafIndex >= 2 ** auditPath.length) return false;
-
-    let index = 2 ** auditPath.length - 1 + leafIndex;
-    let accumulator = leafBytes;
-    for (let level = 0; level < auditPath.length; level += 1) {
-      const rawSibling = auditPath[level];
-      const sibling = rawSibling === null
-        ? null
-        : blockProofHashBytes(rawSibling, `Merkle proof audit_path[${level}]`);
-      const currentIsRight = index % 2 === 0;
-      if (currentIsRight && sibling === null) return false;
-      if (!currentIsRight && sibling === null) {
-        index = Math.max(0, index - 1) >> 1;
-        continue;
-      }
-      const parentInput = currentIsRight
-        ? Buffer.concat([sibling, accumulator])
-        : Buffer.concat([accumulator, sibling]);
-      accumulator = Buffer.from(blake2b256(parentInput));
-      accumulator[31] |= 1;
-      index = Math.max(0, index - 1) >> 1;
-    }
-    return accumulator.equals(rootBytes);
-  } catch {
-    return false;
-  }
-}
-
-/** Verify the locally-checkable entry and execution paths in `BlockProofs`. */
-export function verifyBlockProofs(proofs) {
-  const invalid = {
-    valid: false,
-    entry_hash_matches: false,
-    entry_proof_valid: false,
-    result_pair_consistent: false,
-    result_proof_valid: null,
-  };
-  if (!isPlainObject(proofs) || !isPlainObject(proofs.entry_proof)) return invalid;
-  try {
-    const entryHashMatches = blockProofHashesEqual(
-      proofs.entry_hash,
-      proofs.entry_proof.leaf,
-      "BlockProofs entry hash",
-    );
-    const entryProofValid = verifyBlockMerkleProof(
-      proofs.entry_proof.leaf,
-      proofs.entry_proof.proof,
-      proofs.entry_root,
-    );
-    const hasResultRoot = proofs.result_root !== null && proofs.result_root !== undefined;
-    const hasResultProof = proofs.result_proof !== null && proofs.result_proof !== undefined;
-    const resultPairConsistent = hasResultRoot === hasResultProof;
-    const resultProofValid = !hasResultRoot && !hasResultProof
-      ? null
-      : resultPairConsistent && isPlainObject(proofs.result_proof)
-        ? verifyBlockMerkleProof(
-            proofs.result_proof.leaf,
-            proofs.result_proof.proof,
-            proofs.result_root,
-          )
-        : false;
-    return {
-      valid:
-        entryHashMatches &&
-        entryProofValid &&
-        resultPairConsistent &&
-        resultProofValid !== false,
-      entry_hash_matches: entryHashMatches,
-      entry_proof_valid: entryProofValid,
-      result_pair_consistent: resultPairConsistent,
-      result_proof_valid: resultProofValid,
-    };
-  } catch {
-    return invalid;
-  }
-}
+const { verifyBlockMerkleProof, verifyBlockProofs } =
+  createBlockProofVerification(encodeHashLiteralBytes);
+export { verifyBlockMerkleProof, verifyBlockProofs };
 
 /**
  * Encode an `iroha_data_model::zk::OpenVerifyEnvelope` as standalone Norito bytes.
@@ -2920,16 +2848,16 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
       return {
         RecordSccpMessage: decodeRecordSccpMessagePayload(payload, innerFlags),
       };
-    case "iroha_data_model::isi::governance::ProposeDeployContract":
-    case "iroha_data_model::isi::governance::CastZkBallot":
-    case "iroha_data_model::isi::governance::CastPlainBallot":
-    case "iroha_data_model::isi::governance::EnactReferendum":
-    case "iroha_data_model::isi::governance::FinalizeReferendum":
-    case "iroha_data_model::isi::governance::PersistCouncilForEpoch":
+    case PROPOSE_DEPLOY_CONTRACT_WIRE_ID:
+    case CAST_ZK_BALLOT_WIRE_ID:
+    case CAST_PLAIN_BALLOT_WIRE_ID:
+    case ENACT_REFERENDUM_WIRE_ID:
+    case FINALIZE_REFERENDUM_WIRE_ID:
+    case PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID:
       return decodeGovernanceInstructionPayload(wireId, payload);
-    case "iroha_data_model::isi::social::ClaimTwitterFollowReward":
-    case "iroha_data_model::isi::social::SendToTwitter":
-    case "iroha_data_model::isi::social::CancelTwitterEscrow":
+    case CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID:
+    case SEND_TO_TWITTER_WIRE_ID:
+    case CANCEL_TWITTER_ESCROW_WIRE_ID:
       return decodeSocialInstructionPayload(wireId, payload);
     case REGISTER_SMART_CONTRACT_CODE_WIRE_ID:
     case REGISTER_SMART_CONTRACT_BYTES_WIRE_ID:
@@ -2941,26 +2869,26 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID:
     case REMOVE_SMART_CONTRACT_BYTES_WIRE_ID:
       return decodeSmartContractInstructionPayload(wireId, payload);
-    case "iroha_data_model::isi::kaigi::CreateKaigi":
-    case "iroha_data_model::isi::kaigi::JoinKaigi":
-    case "iroha_data_model::isi::kaigi::LeaveKaigi":
-    case "iroha_data_model::isi::kaigi::EndKaigi":
-    case "iroha_data_model::isi::kaigi::RecordKaigiUsage":
-    case "iroha_data_model::isi::kaigi::SetKaigiRelayManifest":
-    case "iroha_data_model::isi::kaigi::RegisterKaigiRelay":
+    case CREATE_KAIGI_WIRE_ID:
+    case JOIN_KAIGI_WIRE_ID:
+    case LEAVE_KAIGI_WIRE_ID:
+    case END_KAIGI_WIRE_ID:
+    case RECORD_KAIGI_USAGE_WIRE_ID:
+    case SET_KAIGI_RELAY_MANIFEST_WIRE_ID:
+    case REGISTER_KAIGI_RELAY_WIRE_ID:
       return decodeKaigiInstructionPayload(wireId, payload);
-    case "iroha_data_model::isi::zk::RegisterZkAsset":
+    case REGISTER_ZK_ASSET_WIRE_ID:
     case "zk::ScheduleConfidentialPolicyTransition":
     case "zk::CancelConfidentialPolicyTransition":
-    case "iroha_data_model::isi::zk::Shield":
-    case "iroha_data_model::isi::zk::ZkTransfer":
-    case "iroha_data_model::isi::zk::Unshield":
-    case "iroha_data_model::isi::zk::CreateElection":
-    case "iroha_data_model::isi::zk::SubmitBallot":
-    case "iroha_data_model::isi::zk::FinalizeElection":
+    case SHIELD_WIRE_ID:
+    case ZK_TRANSFER_WIRE_ID:
+    case UNSHIELD_WIRE_ID:
+    case CREATE_ELECTION_WIRE_ID:
+    case SUBMIT_BALLOT_WIRE_ID:
+    case FINALIZE_ELECTION_WIRE_ID:
       return decodeZkInstructionPayload(wireId, payload);
-    case "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey":
-    case "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey":
+    case REGISTER_VERIFYING_KEY_WIRE_ID:
+    case UPDATE_VERIFYING_KEY_WIRE_ID:
       return decodeVerifyingKeyInstructionPayload(wireId, payload);
     default:
       const cached = getCachedInstruction(framedInstruction);
@@ -3643,7 +3571,7 @@ function unwrapStructBody(payload, context) {
 
 function decodeGovernanceInstructionPayload(wireId, payload) {
   switch (wireId) {
-    case "iroha_data_model::isi::governance::ProposeDeployContract": {
+    case PROPOSE_DEPLOY_CONTRACT_WIRE_ID: {
       const fields = decodeStructFields(payload, "ProposeDeployContract", [
         "contract_address",
         "code_hash_hex",
@@ -3676,7 +3604,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
       }
       return { ProposeDeployContract: decoded };
     }
-    case "iroha_data_model::isi::governance::CastZkBallot": {
+    case CAST_ZK_BALLOT_WIRE_ID: {
       const fields = decodeStructFields(payload, "CastZkBallot", [
         "election_id",
         "proof_b64",
@@ -3693,7 +3621,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::governance::CastPlainBallot": {
+    case CAST_PLAIN_BALLOT_WIRE_ID: {
       const fields = decodeStructFields(payload, "CastPlainBallot", [
         "referendum_id",
         "owner",
@@ -3714,7 +3642,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::governance::EnactReferendum": {
+    case ENACT_REFERENDUM_WIRE_ID: {
       const fields = decodeStructFields(payload, "EnactReferendum", [
         "referendum_id",
         "preimage_hash",
@@ -3732,7 +3660,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::governance::FinalizeReferendum": {
+    case FINALIZE_REFERENDUM_WIRE_ID: {
       const fields = decodeStructFields(payload, "FinalizeReferendum", [
         "referendum_id",
         "proposal_id",
@@ -3746,7 +3674,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::governance::PersistCouncilForEpoch": {
+    case PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID: {
       const fields = decodeStructFields(payload, "PersistCouncilForEpoch", [
         "epoch",
         "members",
@@ -3777,7 +3705,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
 
 function decodeSocialInstructionPayload(wireId, payload) {
   switch (wireId) {
-    case "iroha_data_model::isi::social::ClaimTwitterFollowReward": {
+    case CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID: {
       const fields = decodeStructFields(payload, "ClaimTwitterFollowReward", ["binding_hash"]);
       return {
         ClaimTwitterFollowReward: {
@@ -3788,7 +3716,7 @@ function decodeSocialInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::social::SendToTwitter": {
+    case SEND_TO_TWITTER_WIRE_ID: {
       const fields = decodeStructFields(payload, "SendToTwitter", ["binding_hash", "amount"]);
       return {
         SendToTwitter: {
@@ -3797,7 +3725,7 @@ function decodeSocialInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::social::CancelTwitterEscrow": {
+    case CANCEL_TWITTER_ESCROW_WIRE_ID: {
       const fields = decodeStructFields(payload, "CancelTwitterEscrow", ["binding_hash"]);
       return {
         CancelTwitterEscrow: {
@@ -4004,7 +3932,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
 
 function decodeKaigiInstructionPayload(wireId, payload) {
   switch (wireId) {
-    case "iroha_data_model::isi::kaigi::CreateKaigi": {
+    case CREATE_KAIGI_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.CreateKaigi", [
         "call",
         "commitment",
@@ -4040,8 +3968,8 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::JoinKaigi":
-    case "iroha_data_model::isi::kaigi::LeaveKaigi": {
+    case JOIN_KAIGI_WIRE_ID:
+    case LEAVE_KAIGI_WIRE_ID: {
       const fields = decodeStructFields(payload, `Kaigi.${wireId}`, [
         "call_id",
         "participant",
@@ -4083,7 +4011,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::EndKaigi": {
+    case END_KAIGI_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.EndKaigi", [
         "call_id",
         "ended_at_ms",
@@ -4125,7 +4053,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::RecordKaigiUsage": {
+    case RECORD_KAIGI_USAGE_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.RecordKaigiUsage", [
         "call_id",
         "duration_ms",
@@ -4159,7 +4087,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::SetKaigiRelayManifest": {
+    case SET_KAIGI_RELAY_MANIFEST_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.SetKaigiRelayManifest", [
         "call_id",
         "relay_manifest",
@@ -4180,7 +4108,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::RegisterKaigiRelay": {
+    case REGISTER_KAIGI_RELAY_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.RegisterKaigiRelay", ["relay"]);
       return {
         Kaigi: {
@@ -4200,7 +4128,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
 
 function decodeZkInstructionPayload(wireId, payload) {
   switch (wireId) {
-    case "iroha_data_model::isi::zk::RegisterZkAsset": {
+    case REGISTER_ZK_ASSET_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.RegisterZkAsset", [
         "asset",
         "mode",
@@ -4298,7 +4226,7 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::Shield": {
+    case SHIELD_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.Shield", [
         "asset",
         "from",
@@ -4323,7 +4251,7 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::ZkTransfer": {
+    case ZK_TRANSFER_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.ZkTransfer", [
         "asset",
         "inputs",
@@ -4370,29 +4298,15 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::Unshield": {
-      let fields;
-      try {
-        fields = decodeStructFields(payload, "zk.Unshield", [
-          "asset",
-          "to",
-          "public_amount",
-          "inputs",
-          "outputs",
-          "proof",
-          "root_hint",
-        ]);
-      } catch (_error) {
-        fields = decodeStructFields(payload, "zk.Unshield", [
-          "asset",
-          "to",
-          "public_amount",
-          "inputs",
-          "proof",
-          "root_hint",
-        ]);
-        fields.outputs = encodeNoritoVec([], (entry) => entry);
-      }
+    case UNSHIELD_WIRE_ID: {
+      const fields = decodeStructFields(payload, "zk.Unshield", [
+        "asset",
+        "to",
+        "public_amount",
+        "inputs",
+        "proof",
+        "root_hint",
+      ]);
       return {
         zk: {
           Unshield: {
@@ -4414,18 +4328,6 @@ function decodeZkInstructionPayload(wireId, payload) {
                 ),
               "zk.Unshield.inputs",
             ),
-            outputs: decodeNoritoVec(
-              fields.outputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.Unshield.outputs[${index}]`,
-                  ),
-                ),
-              "zk.Unshield.outputs",
-            ),
             proof: decodeProofAttachmentValue(fields.proof, "zk.Unshield.proof"),
             root_hint: decodeOptionValue(
               fields.root_hint,
@@ -4437,7 +4339,7 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::CreateElection": {
+    case CREATE_ELECTION_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.CreateElection", [
         "election_id",
         "options",
@@ -4471,7 +4373,7 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::SubmitBallot": {
+    case SUBMIT_BALLOT_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.SubmitBallot", [
         "election_id",
         "ciphertext",
@@ -4496,7 +4398,7 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::FinalizeElection": {
+    case FINALIZE_ELECTION_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.FinalizeElection", [
         "election_id",
         "tally",
@@ -5050,6 +4952,50 @@ function encodeNewAssetDefinitionValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  const hasOwningDomain = Object.prototype.hasOwnProperty.call(value, "owning_domain");
+  const hasCamelOwningDomain = Object.prototype.hasOwnProperty.call(value, "owningDomain");
+  if (!hasOwningDomain && !hasCamelOwningDomain) {
+    throw new TypeError(
+      `${context}.owning_domain is required; use null for an intentionally unowned global definition`,
+    );
+  }
+  if (
+    hasOwningDomain &&
+    hasCamelOwningDomain &&
+    value.owning_domain !== value.owningDomain
+  ) {
+    throw new TypeError(`${context} ownership aliases disagree`);
+  }
+  const owningDomain = hasOwningDomain ? value.owning_domain : value.owningDomain;
+  if (owningDomain === undefined) {
+    throw new TypeError(`${context}.owning_domain must be a domain identifier or null`);
+  }
+  const hasBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    value,
+    "balance_scope_policy",
+  );
+  const hasCamelBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    value,
+    "balanceScopePolicy",
+  );
+  if (!hasBalanceScopePolicy && !hasCamelBalanceScopePolicy) {
+    throw new TypeError(`${context}.balance_scope_policy is required`);
+  }
+  if (
+    hasBalanceScopePolicy &&
+    hasCamelBalanceScopePolicy &&
+    value.balance_scope_policy !== value.balanceScopePolicy
+  ) {
+    throw new TypeError(`${context} balance-scope policy aliases disagree`);
+  }
+  const balanceScopePolicy = hasBalanceScopePolicy
+    ? value.balance_scope_policy
+    : value.balanceScopePolicy;
+  if (balanceScopePolicy === "DataspaceRestricted" && owningDomain === null) {
+    throw new TypeError(
+      `${context}.owning_domain is required for DataspaceRestricted balances`,
+    );
+  }
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.id, `${context}.id`)],
     [encodeStringValue(value.name ?? "", `${context}.name`)],
@@ -5067,10 +5013,11 @@ function encodeNewAssetDefinitionValue(value, context) {
     [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
     [
       encodeAssetBalancePolicyValue(
-        value.balance_scope_policy ?? value.balanceScopePolicy ?? "Global",
+        balanceScopePolicy,
         `${context}.balance_scope_policy`,
       ),
     ],
+    [encodeOptionValue(owningDomain, encodeDomainIdValue, `${context}.owning_domain`)],
     [
       encodeAssetConfidentialPolicyValue(
         value.confidential_policy ?? value.confidentialPolicy ?? defaultAssetConfidentialPolicy(),
@@ -5091,6 +5038,7 @@ function decodeNewAssetDefinitionValue(payload, context) {
     "logo",
     "metadata",
     "balance_scope_policy",
+    "owning_domain",
     "confidential_policy",
   ]);
   return {
@@ -5109,6 +5057,11 @@ function decodeNewAssetDefinitionValue(payload, context) {
     balance_scope_policy: decodeAssetBalancePolicyValue(
       fields.balance_scope_policy,
       `${context}.balance_scope_policy`,
+    ),
+    owning_domain: decodeOptionValue(
+      fields.owning_domain,
+      decodeDomainIdValue,
+      `${context}.owning_domain`,
     ),
     confidential_policy: decodeAssetConfidentialPolicyValue(
       fields.confidential_policy,
@@ -5792,37 +5745,37 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
 function encodeGovernanceInstruction(instruction) {
   if (isPlainObject(instruction.ProposeDeployContract)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::ProposeDeployContract",
+      PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
       encodeProposeDeployContractPayload(instruction.ProposeDeployContract),
     );
   }
   if (isPlainObject(instruction.CastZkBallot)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::CastZkBallot",
+      CAST_ZK_BALLOT_WIRE_ID,
       encodeCastZkBallotPayload(instruction.CastZkBallot),
     );
   }
   if (isPlainObject(instruction.CastPlainBallot)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::CastPlainBallot",
+      CAST_PLAIN_BALLOT_WIRE_ID,
       encodeCastPlainBallotPayload(instruction.CastPlainBallot),
     );
   }
   if (isPlainObject(instruction.EnactReferendum)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::EnactReferendum",
+      ENACT_REFERENDUM_WIRE_ID,
       encodeEnactReferendumPayload(instruction.EnactReferendum),
     );
   }
   if (isPlainObject(instruction.FinalizeReferendum)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::FinalizeReferendum",
+      FINALIZE_REFERENDUM_WIRE_ID,
       encodeFinalizeReferendumPayload(instruction.FinalizeReferendum),
     );
   }
   if (isPlainObject(instruction.PersistCouncilForEpoch)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::PersistCouncilForEpoch",
+      PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
       encodePersistCouncilForEpochPayload(instruction.PersistCouncilForEpoch),
     );
   }
@@ -5834,7 +5787,7 @@ function encodeGovernanceInstruction(instruction) {
 function encodeSocialInstruction(instruction) {
   if (isPlainObject(instruction.ClaimTwitterFollowReward)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::social::ClaimTwitterFollowReward",
+      CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID,
       encodeStructValue([
         [encodeKeyedHashValue(
           instruction.ClaimTwitterFollowReward.binding_hash,
@@ -5845,7 +5798,7 @@ function encodeSocialInstruction(instruction) {
   }
   if (isPlainObject(instruction.SendToTwitter)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::social::SendToTwitter",
+      SEND_TO_TWITTER_WIRE_ID,
       encodeStructValue([
         [encodeKeyedHashValue(instruction.SendToTwitter.binding_hash, "SendToTwitter.binding_hash")],
         [encodeQuantityValue(instruction.SendToTwitter.amount, "SendToTwitter.amount")],
@@ -5854,7 +5807,7 @@ function encodeSocialInstruction(instruction) {
   }
   if (isPlainObject(instruction.CancelTwitterEscrow)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::social::CancelTwitterEscrow",
+      CANCEL_TWITTER_ESCROW_WIRE_ID,
       encodeStructValue([
         [encodeKeyedHashValue(
           instruction.CancelTwitterEscrow.binding_hash,
@@ -6124,43 +6077,43 @@ function decodeAtWindowValue(payload, context) {
 function encodeKaigiInstruction(instruction) {
   if (isPlainObject(instruction.CreateKaigi)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::CreateKaigi",
+      CREATE_KAIGI_WIRE_ID,
       encodeCreateKaigiPayload(instruction.CreateKaigi),
     );
   }
   if (isPlainObject(instruction.JoinKaigi)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::JoinKaigi",
+      JOIN_KAIGI_WIRE_ID,
       encodeJoinLeaveKaigiPayload(instruction.JoinKaigi, "JoinKaigi"),
     );
   }
   if (isPlainObject(instruction.LeaveKaigi)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::LeaveKaigi",
+      LEAVE_KAIGI_WIRE_ID,
       encodeJoinLeaveKaigiPayload(instruction.LeaveKaigi, "LeaveKaigi"),
     );
   }
   if (isPlainObject(instruction.EndKaigi)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::EndKaigi",
+      END_KAIGI_WIRE_ID,
       encodeEndKaigiPayload(instruction.EndKaigi),
     );
   }
   if (isPlainObject(instruction.RecordKaigiUsage)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::RecordKaigiUsage",
+      RECORD_KAIGI_USAGE_WIRE_ID,
       encodeRecordKaigiUsagePayload(instruction.RecordKaigiUsage),
     );
   }
   if (isPlainObject(instruction.SetKaigiRelayManifest)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::SetKaigiRelayManifest",
+      SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
       encodeSetKaigiRelayManifestPayload(instruction.SetKaigiRelayManifest),
     );
   }
   if (isPlainObject(instruction.RegisterKaigiRelay)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::RegisterKaigiRelay",
+      REGISTER_KAIGI_RELAY_WIRE_ID,
       encodeRegisterKaigiRelayPayload(instruction.RegisterKaigiRelay),
     );
   }
@@ -6228,12 +6181,12 @@ function encodeVerifyingKeyInstruction(instruction) {
   const entries = [
     [
       "RegisterVerifyingKey",
-      "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+      REGISTER_VERIFYING_KEY_WIRE_ID,
       encodeVerifyingKeyInstructionPayload,
     ],
     [
       "UpdateVerifyingKey",
-      "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+      UPDATE_VERIFYING_KEY_WIRE_ID,
       encodeVerifyingKeyInstructionPayload,
     ],
   ];
@@ -6259,7 +6212,7 @@ function encodeVerifyingKeyInstructionPayload(value, context) {
 
 function decodeVerifyingKeyInstructionPayload(wireId, payload) {
   const variant =
-    wireId === "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey"
+    wireId === REGISTER_VERIFYING_KEY_WIRE_ID
       ? "RegisterVerifyingKey"
       : "UpdateVerifyingKey";
   const fields = decodeStructFields(payload, `verifying_keys.${variant}`, [
@@ -6281,15 +6234,15 @@ function decodeVerifyingKeyInstructionPayload(wireId, payload) {
 
 function encodeZkInstruction(instruction) {
   const entries = [
-    ["RegisterZkAsset", "iroha_data_model::isi::zk::RegisterZkAsset", encodeRegisterZkAssetPayload],
+    ["RegisterZkAsset", REGISTER_ZK_ASSET_WIRE_ID, encodeRegisterZkAssetPayload],
     ["ScheduleConfidentialPolicyTransition", "zk::ScheduleConfidentialPolicyTransition", encodeScheduleConfidentialPolicyTransitionPayload],
     ["CancelConfidentialPolicyTransition", "zk::CancelConfidentialPolicyTransition", encodeCancelConfidentialPolicyTransitionPayload],
-    ["Shield", "iroha_data_model::isi::zk::Shield", encodeShieldPayload],
-    ["ZkTransfer", "iroha_data_model::isi::zk::ZkTransfer", encodeZkTransferPayload],
-    ["Unshield", "iroha_data_model::isi::zk::Unshield", encodeUnshieldPayload],
-    ["CreateElection", "iroha_data_model::isi::zk::CreateElection", encodeCreateElectionPayload],
-    ["SubmitBallot", "iroha_data_model::isi::zk::SubmitBallot", encodeSubmitBallotPayload],
-    ["FinalizeElection", "iroha_data_model::isi::zk::FinalizeElection", encodeFinalizeElectionPayload],
+    ["Shield", SHIELD_WIRE_ID, encodeShieldPayload],
+    ["ZkTransfer", ZK_TRANSFER_WIRE_ID, encodeZkTransferPayload],
+    ["Unshield", UNSHIELD_WIRE_ID, encodeUnshieldPayload],
+    ["CreateElection", CREATE_ELECTION_WIRE_ID, encodeCreateElectionPayload],
+    ["SubmitBallot", SUBMIT_BALLOT_WIRE_ID, encodeSubmitBallotPayload],
+    ["FinalizeElection", FINALIZE_ELECTION_WIRE_ID, encodeFinalizeElectionPayload],
   ];
   for (const [key, wireId, encode] of entries) {
     if (isPlainObject(instruction[key])) {
@@ -6361,15 +6314,17 @@ function encodeZkTransferPayload(value) {
 }
 
 function encodeUnshieldPayload(value) {
+  assertOnlyObjectKeys(
+    value,
+    ["asset", "to", "public_amount", "inputs", "proof", "root_hint"],
+    "zk.Unshield",
+  );
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.asset, "zk.Unshield.asset")],
     [encodeAccountIdValue(value.to, "zk.Unshield.to")],
     [encodeQuantityValue(value.public_amount, "zk.Unshield.public_amount")],
     [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
       encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.inputs[${index}]`),
-    )],
-    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.outputs[${index}]`),
     )],
     [encodeProofAttachmentValue(value.proof, "zk.Unshield.proof")],
     [

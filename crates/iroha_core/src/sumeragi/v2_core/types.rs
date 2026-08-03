@@ -4,8 +4,14 @@ use super::{Quorum, QuorumError};
 
 /// Wire protocol version implemented by this crate.
 pub const PROTOCOL_VERSION_V4: u16 = 4;
+/// Minimum Byzantine fault tolerance supported by a production committee.
+pub const MIN_FAULT_TOLERANCE: usize = 1;
+/// Minimum voting validators accepted by a frozen v2 height context.
+pub const MIN_VOTING_ROSTER_LEN: usize = 3 * MIN_FAULT_TOLERANCE + 1;
+/// Maximum Byzantine validators tolerated by one production committee.
+pub const MAX_FAULT_TOLERANCE: usize = 10;
 /// Maximum voting validators accepted by a frozen v2 height context.
-pub const MAX_VOTING_ROSTER_LEN: usize = 128;
+pub const MAX_VOTING_ROSTER_LEN: usize = 3 * MAX_FAULT_TOLERANCE + 1;
 /// Adjacent future timeout rounds retained for bounded pacemaker catch-up.
 pub(crate) const FUTURE_TIMEOUT_VOTE_LOOKAHEAD: u64 = 1;
 
@@ -121,7 +127,7 @@ impl Validator {
 pub enum VotingMode {
     /// Every voting validator has power one.
     Permissioned,
-    /// Voting powers come from an epoch-frozen stake snapshot.
+    /// Stake selects the epoch-frozen committee; every member has one vote.
     Npos,
 }
 
@@ -454,8 +460,14 @@ impl HeightContext {
         if roster.is_empty() {
             return Err(HeightContextError::EmptyRoster);
         }
+        if roster.len() < MIN_VOTING_ROSTER_LEN {
+            return Err(HeightContextError::RosterTooSmall);
+        }
         if roster.len() > MAX_VOTING_ROSTER_LEN {
             return Err(HeightContextError::RosterTooLarge);
+        }
+        if (roster.len() - 1) % 3 != 0 {
+            return Err(HeightContextError::InvalidCommitteeGeometry);
         }
         let mut total = 0_u64;
         let mut previous = None;
@@ -467,8 +479,8 @@ impl HeightContext {
             if validator.power.get() == 0 {
                 return Err(HeightContextError::ZeroVotingPower(validator.id));
             }
-            if mode == VotingMode::Permissioned && validator.power.get() != 1 {
-                return Err(HeightContextError::PermissionedPowerNotOne(validator.id));
+            if validator.power.get() != 1 {
+                return Err(HeightContextError::VotingPowerNotOne(validator.id));
             }
             total = total
                 .checked_add(validator.power.get())
@@ -629,14 +641,18 @@ impl HeightContext {
 pub enum HeightContextError {
     /// A height context cannot operate without voting validators.
     EmptyRoster,
+    /// A height context must tolerate at least one Byzantine validator.
+    RosterTooSmall,
     /// The voting roster exceeds the first-release protocol bound.
     RosterTooLarge,
+    /// The voting roster does not have exact `3f + 1` geometry.
+    InvalidCommitteeGeometry,
     /// The roster contains duplicates or is not canonically ordered.
     RosterNotStrictlyOrdered,
     /// A voting validator has zero power.
     ZeroVotingPower(ValidatorId),
-    /// Permissioned contexts require power one for every validator.
-    PermissionedPowerNotOne(ValidatorId),
+    /// Every consensus validator must have exactly one vote.
+    VotingPowerNotOne(ValidatorId),
     /// The total voting power overflowed `u64`.
     VotingPowerOverflow,
     /// The parent reference is not a `CommitQC` for the preceding height.
@@ -647,18 +663,24 @@ impl fmt::Display for HeightContextError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyRoster => formatter.write_str("height context has an empty roster"),
+            Self::RosterTooSmall => {
+                formatter.write_str("height context must contain at least four validators")
+            }
             Self::RosterTooLarge => write!(
                 formatter,
                 "height context voting roster exceeds the protocol limit of {MAX_VOTING_ROSTER_LEN}"
             ),
+            Self::InvalidCommitteeGeometry => {
+                formatter.write_str("height context roster must contain exactly 3f + 1 validators")
+            }
             Self::RosterNotStrictlyOrdered => {
                 formatter.write_str("validator roster is not strictly ordered")
             }
             Self::ZeroVotingPower(id) => write!(formatter, "validator {id} has zero power"),
-            Self::PermissionedPowerNotOne(id) => {
+            Self::VotingPowerNotOne(id) => {
                 write!(
                     formatter,
-                    "permissioned validator {id} does not have power one"
+                    "consensus validator {id} does not have power one"
                 )
             }
             Self::VotingPowerOverflow => formatter.write_str("total voting power overflow"),
@@ -1256,7 +1278,7 @@ impl TimeoutSignatureGroup {
     }
 }
 
-/// Certificate proving that a dual quorum timed out one view.
+/// Certificate proving that an equal-vote quorum timed out one view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TimeoutCertificate {
     context_id: ContextId,
@@ -1303,7 +1325,7 @@ impl TimeoutCertificate {
     }
 
     /// Validates nested `PrepareQC`s, canonical group ordering, signer
-    /// disjointness, and the union's dual quorum.
+    /// disjointness, and the union's equal-vote quorum.
     ///
     /// # Errors
     ///

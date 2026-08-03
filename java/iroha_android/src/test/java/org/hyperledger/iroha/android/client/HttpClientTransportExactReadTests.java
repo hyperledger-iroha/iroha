@@ -1,0 +1,428 @@
+package org.hyperledger.iroha.android.client;
+
+import java.math.BigInteger;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import org.hyperledger.iroha.android.client.transport.TransportRequest;
+import org.hyperledger.iroha.android.client.transport.TransportResponse;
+
+/** Exact, bounded read-route contract tests split from the general transport harness. */
+public final class HttpClientTransportExactReadTests {
+  private HttpClientTransportExactReadTests() {}
+
+  public static void main(final String[] args) {
+    retryPolicyRecognizesRetryableStatus();
+    ledgerExecutedBlockWireIsExactBoundedAndFailClosed();
+    privacyCapabilitiesAreTypedAndExact();
+  }
+
+  static String noncanonicalStandardBase64PadBitAlias(final String encoded) {
+    if (!encoded.endsWith("==")) {
+      throw new AssertionError("64-byte signatures encode with == padding");
+    }
+    final String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    final char[] chars = encoded.toCharArray();
+    final int index = chars.length - 3;
+    final int value = alphabet.indexOf(chars[index]);
+    if (value < 0) {
+      throw new AssertionError("standard base64 alphabet");
+    }
+    chars[index] = alphabet.charAt(value ^ 0x01);
+    return new String(chars);
+  }
+
+  static String canonicalSignatureBase64Fixture() {
+    final byte[] signature = new byte[64];
+    for (int i = 0; i < signature.length; i++) {
+      signature[i] = 0x01;
+    }
+    return Base64.getEncoder().encodeToString(signature);
+  }
+
+  private static void retryPolicyRecognizesRetryableStatus() {
+    final RetryPolicy defaultPolicy = RetryPolicy.builder().setMaxAttempts(1).build();
+    assert defaultPolicy.isRetryableStatus(503) : "Server errors should be retryable by default";
+    assert defaultPolicy.isRetryableStatus(429) : "Too many requests should be retryable by default";
+    assert !defaultPolicy.isRetryableStatus(400) : "Client errors should not be retryable";
+
+    final RetryPolicy custom =
+        RetryPolicy.builder()
+            .setMaxAttempts(1)
+            .setRetryOnServerError(false)
+            .setRetryOnTooManyRequests(false)
+            .addRetryStatusCode(418)
+            .build();
+    assert !custom.isRetryableStatus(503) : "Server errors must be disabled by policy";
+    assert !custom.isRetryableStatus(429) : "429 must be disabled by policy";
+    assert custom.isRetryableStatus(418) : "Custom retry codes must be honored";
+  }
+
+  private static void ledgerExecutedBlockWireIsExactBoundedAndFailClosed() {
+    final byte[] canonical = new byte[] {0x4e, 0x52, 0x54, 0x30};
+    final OneResponseExecutor success =
+        new OneResponseExecutor(
+            new TransportResponse(
+                200,
+                canonical,
+                "ok",
+                Map.of(
+                    "Content-Type", List.of("application/x-norito"),
+                    "Content-Length", List.of(Integer.toString(canonical.length)))));
+    final HttpClientTransport client =
+        HttpClientTransport.withExecutor(
+            success,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .build());
+    final byte[] received =
+        client
+            .getLedgerExecutedBlockWire(new BigInteger("18446744073709551615"))
+            .join();
+    assert Arrays.equals(canonical, received);
+    assert success.requestCount == 1;
+    assert "GET".equals(success.lastRequest.method());
+    assert "/v1/ledger/block/18446744073709551615".equals(success.lastRequest.uri().getRawPath());
+    assert List.of("application/x-norito").equals(success.lastRequest.headers().get("Accept"));
+    assert Long.valueOf(32L * 1024L * 1024L).equals(success.lastRequest.maximumResponseBytes());
+
+    for (final BigInteger height :
+        List.of(BigInteger.ZERO, BigInteger.valueOf(-1L), BigInteger.ONE.shiftLeft(64))) {
+      boolean rejected = false;
+      try {
+        client.getLedgerExecutedBlockWire(height);
+      } catch (final IllegalArgumentException expected) {
+        rejected = true;
+      }
+      assert rejected : "invalid ledger height must fail before dispatch";
+    }
+    assert success.requestCount == 1 : "invalid heights must not dispatch";
+
+    final List<TransportResponse> hostile =
+        List.of(
+            new TransportResponse(
+                201, canonical, "", Map.of("Content-Type", List.of("application/x-norito"))),
+            new TransportResponse(
+                200,
+                canonical,
+                "",
+                Map.of("Content-Type", List.of("application/x-norito; charset=binary"))),
+            new TransportResponse(
+                200,
+                canonical,
+                "",
+                Map.of("Content-Type", List.of("application/x-norito", "application/x-norito"))),
+            new TransportResponse(
+                200,
+                canonical,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/x-norito"),
+                    "Content-Length", List.of("04"))),
+            new TransportResponse(
+                200,
+                canonical,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/x-norito"),
+                    "Content-Length", List.of("5"))),
+            new TransportResponse(
+                200,
+                new byte[0],
+                "",
+                Map.of("Content-Type", List.of("application/x-norito"))));
+    for (final TransportResponse response : hostile) {
+      boolean rejected = false;
+      try {
+        HttpClientTransport.withExecutor(
+                new OneResponseExecutor(response),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build())
+            .getLedgerExecutedBlockWire(1L)
+            .join();
+      } catch (final CompletionException expected) {
+        rejected = true;
+      }
+      assert rejected : "hostile executed-block response must fail closed";
+    }
+
+    final byte[] oversized = new byte[32 * 1024 * 1024 + 1];
+    boolean oversizedRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(
+                  new TransportResponse(
+                      200,
+                      oversized,
+                      "",
+                      Map.of("Content-Type", List.of("application/x-norito")))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .getLedgerExecutedBlockWire(1L)
+          .join();
+    } catch (final CompletionException expected) {
+      oversizedRejected = true;
+    }
+    assert oversizedRejected : "oversized executed-block wire must fail closed";
+  }
+
+  private static void privacyCapabilitiesAreTypedAndExact() {
+    final byte[] body = privacyCapabilitySnapshotJson().getBytes(StandardCharsets.UTF_8);
+    final OneResponseExecutor executor =
+        new OneResponseExecutor(
+            new TransportResponse(
+                200,
+                body,
+                "ok",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of(Integer.toString(body.length)))));
+    final HttpClientTransport client =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .build());
+    final org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1 snapshot =
+        client.getPrivacyCapabilities().join();
+    assert snapshot.committedHeight.equals(BigInteger.valueOf(42L));
+    assert snapshot.protocols.size() == 12;
+    assert "GET".equals(executor.lastRequest.method());
+    assert "/v1/privacy/capabilities".equals(executor.lastRequest.uri().getRawPath());
+    final List<String> requestAccepts = new ArrayList<>();
+    for (final Map.Entry<String, List<String>> entry :
+        executor.lastRequest.headers().entrySet()) {
+      if (entry.getKey().equalsIgnoreCase("Accept")) {
+        requestAccepts.addAll(entry.getValue());
+      }
+    }
+    assert List.of("application/json").equals(requestAccepts)
+        : "privacy capability request must contain exactly one canonical Accept value";
+    assert Long.valueOf(256L * 1024L).equals(executor.lastRequest.maximumResponseBytes());
+
+    final org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1 withoutContentLength =
+        HttpClientTransport.withExecutor(
+                new OneResponseExecutor(
+                    new TransportResponse(
+                        200,
+                        body,
+                        "ok",
+                        Map.of("Content-Type", List.of("application/json")))),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build())
+            .getPrivacyCapabilities()
+            .join();
+    assert withoutContentLength.committedHeight.equals(BigInteger.valueOf(42L))
+        : "Content-Length is optional when the remaining response is exact";
+
+    for (final String defaultAcceptName : List.of("Accept", "aCcEpT")) {
+      final OneResponseExecutor blockedExecutor =
+          new OneResponseExecutor(
+              new TransportResponse(
+                  200,
+                  body,
+                  "ok",
+                  Map.of("Content-Type", List.of("application/json"))));
+      boolean overrideRejected = false;
+      try {
+        HttpClientTransport.withExecutor(
+                blockedExecutor,
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .putDefaultHeader(defaultAcceptName, "application/json")
+                    .build())
+            .getPrivacyCapabilities();
+      } catch (final IllegalArgumentException expected) {
+        overrideRejected = true;
+      }
+      assert overrideRejected : "default Accept must be rejected case-insensitively";
+      assert blockedExecutor.requestCount == 0 : "invalid default Accept must not dispatch";
+    }
+
+    final String retired =
+        privacyCapabilitySnapshotJson()
+            .replace("zk-ace-pq-authorization-v0", "sis-with-hints");
+    boolean retiredRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(
+                  new TransportResponse(
+                      200,
+                      retired.getBytes(StandardCharsets.UTF_8),
+                      "",
+                      Map.of("Content-Type", List.of("application/json")))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .getPrivacyCapabilities()
+          .join();
+    } catch (final CompletionException expected) {
+      retiredRejected = true;
+    }
+    assert retiredRejected : "retired privacy labels must fail closed";
+
+    final String bodyLength = Integer.toString(body.length);
+    final Map<String, List<String>> caseFoldedDuplicateContentType = new LinkedHashMap<>();
+    caseFoldedDuplicateContentType.put("Content-Type", List.of("application/json"));
+    caseFoldedDuplicateContentType.put("content-type", List.of("application/json"));
+    final Map<String, List<String>> caseFoldedDuplicateContentLength = new LinkedHashMap<>();
+    caseFoldedDuplicateContentLength.put("Content-Type", List.of("application/json"));
+    caseFoldedDuplicateContentLength.put("Content-Length", List.of(bodyLength));
+    caseFoldedDuplicateContentLength.put("content-length", List.of(bodyLength));
+    final List<TransportResponse> hostileResponses =
+        List.of(
+            new TransportResponse(
+                201, body, "", Map.of("Content-Type", List.of("application/json"))),
+            new TransportResponse(200, body, "", Map.of()),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of("Content-Type", List.of("application/json; charset=utf-8"))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of("Content-Type", List.of("Application/Json"))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json", "application/json"))),
+            new TransportResponse(200, body, "", caseFoldedDuplicateContentType),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of(bodyLength, bodyLength))),
+            new TransportResponse(200, body, "", caseFoldedDuplicateContentLength),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("0"))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("0" + bodyLength))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("+" + bodyLength))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of(bodyLength + " "))),
+            new TransportResponse(
+                200,
+                body,
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("9".repeat(4096)))),
+            new TransportResponse(
+                200,
+                new byte[0],
+                "",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of("0"))));
+    for (final TransportResponse hostileResponse : hostileResponses) {
+      assertPrivacyCapabilitiesResponseRejected(hostileResponse);
+    }
+
+    assertPrivacyCapabilitiesResponseRejected(
+        new TransportResponse(
+            200,
+            new byte[256 * 1024 + 1],
+            "",
+            Map.of("Content-Type", List.of("application/json"))));
+  }
+
+  private static void assertPrivacyCapabilitiesResponseRejected(
+      final TransportResponse response) {
+    boolean rejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(response),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .getPrivacyCapabilities()
+          .join();
+    } catch (final CompletionException expected) {
+      rejected = true;
+    }
+    assert rejected : "hostile privacy capability response must fail closed";
+  }
+
+  private static String privacyCapabilitySnapshotJson() {
+    final StringBuilder rows = new StringBuilder();
+    for (final org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 protocol :
+        org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.values()) {
+      if (rows.length() != 0) {
+        rows.append(',');
+      }
+      rows.append("{\"protocol_id\":{\"protocol\":\"")
+          .append(protocol.getCanonicalLabel())
+          .append(
+              "\",\"value\":null},\"compiled_profile\":{\"status\":\"unavailable\","
+                  + "\"value\":{\"reason\":\"engine-unavailable\",\"detail\":null}},"
+                  + "\"activation\":null}");
+    }
+    return "{\"version\":1,\"committed_height\":42,\"consensus_policy\":{"
+        + "\"current_limits\":{"
+        + "\"max_actions_per_transaction\":1,\"max_actions_per_block\":2,"
+        + "\"max_proof_bytes_per_action\":9437184,\"max_action_bytes\":9437184,"
+        + "\"max_privacy_bytes_per_transaction\":9437184,"
+        + "\"max_privacy_bytes_per_block\":18874368,"
+        + "\"max_statement_and_encrypted_output_bytes_per_transaction\":262144,"
+        + "\"max_nullifiers_per_action\":8,\"max_commitments_per_action\":8,"
+        + "\"retained_root_count\":2048},\"pending_tightening\":null},"
+        + "\"protocols\":["
+        + rows
+        + "]}";
+  }
+
+  private static final class OneResponseExecutor implements HttpTransportExecutor {
+    private final TransportResponse response;
+    private TransportRequest lastRequest;
+    private int requestCount;
+
+    private OneResponseExecutor(final TransportResponse response) {
+      this.response = Objects.requireNonNull(response, "response");
+    }
+
+    @Override
+    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      lastRequest = Objects.requireNonNull(request, "request");
+      requestCount++;
+      return CompletableFuture.completedFuture(response);
+    }
+  }
+}

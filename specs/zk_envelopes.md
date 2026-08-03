@@ -32,13 +32,15 @@ General notes
 
 Wire types (as implemented in `crates/iroha_zkp_halo2`)
 
-- `IpaParams` (transparent parameters)
+- `IpaParams` (canonical transparent-parameter selector)
   - `version: u16` — format version, currently 1
-  - `curve_id: u16` — backend identifier (`1 = Pallas`, `2 = Goldilocks`)
+  - `curve_id: u16` — backend identifier (`1 = Pallas`, `2 = Goldilocks`, `20 = BN254`)
   - `n: u32` — vector length (power of two)
-  - `g: Vec<[u8; 32]>` — generator vector encoded as compressed curve points
-  - `h: Vec<[u8; 32]>` — generator vector encoded as compressed curve points
-  - `u: [u8; 32]` — generator encoding as compressed curve point
+
+  Generator vectors are not part of the wire format. V1 defines exactly one
+  transparent parameter set for each `(curve_id, n)`, derived under the fixed
+  crate DST. This prevents a prover from choosing bases with known discrete-log
+  relationships and avoids transmitting `O(n)` redundant point encodings.
 
 - `IpaProofData`
   - `version: u16` — format version, currently 1
@@ -66,9 +68,12 @@ Wire types (as implemented in `crates/iroha_zkp_halo2`)
 
 Verifier behavior (native IPA)
 - Re-derives the public vector b = [1, z, z^2, …, z^{n-1}].
+- Derives the canonical `g`, `h`, and `u` generators from the advertised curve
+  and `n`; there is no wire representation for alternate bases.
 - Binds the claimed statement before the first Fiat-Shamir challenge:
-  `transcript_label`, backend/`n`, `z`, `t`, `p_g`, and any present optional
-  metadata fields (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`).
+  `transcript_label`, backend/`n`, the complete derived parameter fingerprint,
+  `z`, `t`, `p_g`, and any present optional metadata fields (`vk_commitment`,
+  `public_inputs_schema_hash`, `domain_tag`).
 - Replays transcript rounds to fold generators and update Q.
 - Checks the final relation holds with `(a_final, b_final)`.
 - Deterministic transcript over SHA3-256 under crate-defined DST.
@@ -119,10 +124,7 @@ Example (JSON-like, annotated)
   "params": {
     "version": 1,
     "curve_id": 1,           // backend (Pallas)
-    "n": 8,
-    "g": ["0x...", "0x..."],        // compressed curve points
-    "h": ["0x...", "0x..."],
-    "u": "0x..."
+    "n": 8                   // selects the canonical derived generators
   },
   "public": {
     "version": 1,

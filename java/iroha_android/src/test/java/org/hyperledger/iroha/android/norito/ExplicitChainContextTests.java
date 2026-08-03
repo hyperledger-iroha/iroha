@@ -193,6 +193,8 @@ public final class ExplicitChainContextTests {
         NativeSignerBridge.class, "nativeEncodeShieldSignedTransaction", 2);
     assertMethodHasIntParameter(
         NativeSignerBridge.class, "nativeEncodeUnshieldSignedTransaction", 2);
+    assertMethodHasParameterCount(
+        NativeSignerBridge.class, "nativeEncodeUnshieldSignedTransaction", 15);
     assertMethodHasIntParameter(
         NativeSignerBridge.class, "nativeEncodeRegisterZkAssetSignedTransaction", 2);
 
@@ -383,6 +385,16 @@ public final class ExplicitChainContextTests {
             .orElseThrow(() -> new AssertionError("missing method " + type.getName() + "." + name));
     assertTrue(method.getParameterCount() > parameterIndex);
     assertEquals(int.class, method.getParameterTypes()[parameterIndex]);
+  }
+
+  private static void assertMethodHasParameterCount(
+      final Class<?> type, final String name, final int parameterCount) {
+    final Method method =
+        Arrays.stream(type.getDeclaredMethods())
+            .filter(candidate -> candidate.getName().equals(name))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("missing method " + type.getName() + "." + name));
+    assertEquals(parameterCount, method.getParameterCount());
   }
 
   private static void await(final CountDownLatch latch) {

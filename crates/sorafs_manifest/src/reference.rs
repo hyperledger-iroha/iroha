@@ -1761,6 +1761,16 @@ fn governance_log_node_context(node: &GovernanceLogNodeV1) -> Vec<ValidationCont
             prev_cid.len().to_string(),
         ));
     }
+    if let Some(provenance) = &node.submission_provenance {
+        context.push(ValidationContextFieldV1::new(
+            "submission_publisher_account_digest_hex",
+            hex::encode(provenance.publisher_account_digest),
+        ));
+        context.push(ValidationContextFieldV1::new(
+            "submission_origin",
+            provenance.origin.label(),
+        ));
+    }
     context
 }
 
@@ -2450,7 +2460,10 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         | GovernanceLogValidationError::InvalidNodeCidLength { .. }
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId
-        | GovernanceLogValidationError::PublisherPeerIdTooLong { .. } => "SFS-GOV-001",
+        | GovernanceLogValidationError::PublisherPeerIdTooLong { .. }
+        | GovernanceLogValidationError::MissingSubmissionProvenance { .. }
+        | GovernanceLogValidationError::UnexpectedSubmissionProvenance { .. }
+        | GovernanceLogValidationError::SubmissionOriginMismatch { .. } => "SFS-GOV-001",
     }
 }
 
@@ -2487,6 +2500,9 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId
         | GovernanceLogValidationError::PublisherPeerIdTooLong { .. }
+        | GovernanceLogValidationError::MissingSubmissionProvenance { .. }
+        | GovernanceLogValidationError::UnexpectedSubmissionProvenance { .. }
+        | GovernanceLogValidationError::SubmissionOriginMismatch { .. }
         | GovernanceLogValidationError::InvalidNodeCid => CATEGORY_VALIDATION,
     }
 }
@@ -7883,6 +7899,29 @@ mod tests {
     }
 
     #[test]
+    fn governance_log_node_context_exposes_signed_submission_provenance() {
+        let mut node = governance_node();
+        node.submission_provenance = Some(crate::GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: crate::governance_dag_submission_account_digest_v1(
+                b"canonical-norito-reference-publisher",
+            ),
+            origin: crate::GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+        });
+
+        let context = governance_log_node_context(&node);
+        assert!(context.iter().any(|field| {
+            field.key == "submission_publisher_account_digest_hex"
+                && field.value
+                    == hex::encode(crate::governance_dag_submission_account_digest_v1(
+                        b"canonical-norito-reference-publisher",
+                    ))
+        }));
+        assert!(context.iter().any(|field| {
+            field.key == "submission_origin" && field.value == "appeal_finance_report"
+        }));
+    }
+
+    #[test]
     fn validate_governance_log_node_bytes_verifies_ed25519_publisher_signature() {
         let node = ed25519_signed_governance_node();
         let bytes = to_bytes(&node).expect("encode governance node");
@@ -8012,6 +8051,32 @@ mod tests {
             GovernanceLogValidationError::PdpArchiveDecisionAfterNode {
                 decided_at: 2,
                 node_timestamp: 1,
+            },
+        ];
+
+        for error in errors {
+            assert_eq!(governance_log_validation_code(&error), "SFS-GOV-001");
+            assert_eq!(
+                governance_log_validation_category(&error),
+                CATEGORY_VALIDATION
+            );
+        }
+    }
+
+    #[test]
+    fn submission_provenance_errors_have_stable_reference_mappings() {
+        use crate::GovernanceDagSubmissionOriginV1;
+
+        let errors = [
+            GovernanceLogValidationError::MissingSubmissionProvenance {
+                expected: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+            },
+            GovernanceLogValidationError::UnexpectedSubmissionProvenance {
+                found: GovernanceDagSubmissionOriginV1::TransparencyTokenIssuance,
+            },
+            GovernanceLogValidationError::SubmissionOriginMismatch {
+                expected: GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup,
+                found: GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue,
             },
         ];
 
@@ -9514,112 +9579,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn validate_appeal_finance_cancel_asset_lock_bytes_rejects_trailing_bytes() {
-        let mut bytes = fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
-        ))
-        .expect("read canonical CancelAssetLock fixture");
-        bytes.push(0);
-        let outcome = validate_appeal_finance_cancel_asset_lock_bytes(&bytes, "trailing.to", 42);
-
-        assert!(!outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
-    }
-
-    #[test]
-    fn validate_appeal_finance_cancel_asset_lock_bytes_rejects_zero_quantity() {
-        let bytes = fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
-        ))
-        .expect("read zero-quantity CancelAssetLock fixture");
-        let outcome =
-            validate_appeal_finance_cancel_asset_lock_bytes(&bytes, "zero-quantity.to", 43);
-
-        assert!(!outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-VAL-001");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
-    }
-
-    #[test]
-    fn validate_signed_replication_order_bytes_accepts_signed_order() {
-        let envelope = signed_replication_order();
-        let bytes = to_bytes(&envelope).expect("encode signed order");
-        let outcome = validate_signed_replication_order_bytes(&bytes, "signed-order.to", 7);
-
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert!(
-            outcome
-                .context
-                .iter()
-                .any(|field| field.key == "signature_algorithm" && field.value == "ed25519"),
-            "{outcome:?}"
-        );
-    }
-
-    #[test]
-    fn validate_signed_replication_order_bytes_rejects_bad_signature() {
-        let mut envelope = signed_replication_order();
-        envelope.order.deadline_at += 1;
-        let bytes = to_bytes(&envelope).expect("encode tampered signed order");
-        let outcome = validate_signed_replication_order_bytes(&bytes, "bad-signed-order.to", 8);
-
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-SIG-006", "{outcome:?}");
-        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
-    }
-
-    #[test]
-    fn validate_replication_order_bytes_rejects_malformed_norito() {
-        let outcome = validate_replication_order_bytes(b"not norito", "bad.to", 2);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-NORITO-001");
-        assert_eq!(outcome.category, CATEGORY_NORITO);
-    }
-
-    #[test]
-    fn validate_replication_order_bytes_rejects_manifest_digest_failure() {
-        let mut order = replication_order();
-        order.manifest_digest = [0; 32];
-        let bytes = to_bytes(&order).expect("encode order");
-        let outcome = validate_replication_order_bytes(&bytes, "bad-digest.to", 3);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-VAL-001");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
-    }
-
-    #[test]
-    fn validate_replication_order_bytes_rejects_chunker_failure() {
-        let mut order = replication_order();
-        order.chunking_profile = "sorafs-sf1".to_owned();
-        let bytes = to_bytes(&order).expect("encode order");
-        let outcome = validate_replication_order_bytes(&bytes, "bad-chunker.to", 4);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-VAL-003");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
-    }
-
-    #[test]
-    fn validate_replication_order_bytes_rejects_policy_failure() {
-        let mut order = replication_order();
-        order.deadline_at = order.issued_at;
-        let bytes = to_bytes(&order).expect("encode order");
-        let outcome = validate_replication_order_bytes(&bytes, "bad-deadline.to", 5);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-POL-003");
-        assert_eq!(outcome.category, CATEGORY_POLICY);
-    }
-
-    #[test]
-    fn validate_replication_order_bytes_rejects_structural_failure() {
-        let mut order = replication_order();
-        order.assignments.clear();
-        let bytes = to_bytes(&order).expect("encode order");
-        let outcome = validate_replication_order_bytes(&bytes, "bad-assignments.to", 6);
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-VAL-005");
-        assert_eq!(outcome.category, CATEGORY_VALIDATION);
-    }
+    include!("reference/tests/replication_and_cancel_validation.rs");
 }

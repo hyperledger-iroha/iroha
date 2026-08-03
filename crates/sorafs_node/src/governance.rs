@@ -3,7 +3,7 @@ use std::{
     ffi::{OsStr, OsString},
     fmt,
     fs::{self, File},
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard,
@@ -12,18 +12,17 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(test)]
-use std::io::Write as _;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ed25519_dalek::VerifyingKey as DalekVerifyingKey;
 use hex::ToHex;
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
+#[cfg(test)]
+use iroha_data_model::account::AccountId;
 use norito::json::{self, Map as JsonMap, Value as JsonValue};
 use norito::{
     core::DecodeLimits,
@@ -31,12 +30,15 @@ use norito::{
 };
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
 use sorafs_manifest::{
-    GOVERNANCE_DAG_BLOCK_ENVELOPE_MAX_BYTES_V1, GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
-    GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1,
-    GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
-    GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1,
+    GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1, GOVERNANCE_DAG_BLOCK_ENVELOPE_MAX_BYTES_V1,
+    GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1, GOVERNANCE_DAG_BLOCK_VERSION_V1,
+    GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
+    GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1, GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1,
     GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1, GOVERNANCE_LOG_VERSION_V1,
-    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceExternalPayloadV1, GovernanceLogNodeV1,
+    GOVERNANCE_PUBLICATION_LABEL_KEY_MAX_BYTES_V1, GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1,
+    GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1,
+    GOVERNANCE_PUBLICATION_LABEL_TOTAL_MAX_BYTES_V1, GovernanceDagBlockV1, GovernanceDagHeadV1,
+    GovernanceDagSubmissionProvenanceV1, GovernanceExternalPayloadV1, GovernanceLogNodeV1,
     GovernanceLogPayloadV1, GovernanceLogSignatureV1, GovernanceSignatureAlgorithm,
     MAX_REPUTATION_TRUST_EDGES, ModerationLedgerCyclePublicationV1,
     PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, SignedReputationSnapshotV1,
@@ -44,7 +46,7 @@ use sorafs_manifest::{
     SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
     SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
-    governance_dag_block_cid_v1,
+    governance_dag_block_cid_v1, governance_publication_source_pair_id_v1,
     por::{PorChallengePublicationV1, PorWeeklyReportV1},
     repair::GcAuditEventV1,
     validate_governance_dag_head_against_rotatable_chain_v1,
@@ -56,23 +58,71 @@ use crate::{
     FencedPrivacyPublicationRequestV1, FencedTransparencyHeadAncestryProofV1,
     FencedTransparencyPublicationInclusionV1, FencedTransparencyPublishErrorV1,
     FencedTransparencyPublisherV1, FencedTransparencyTargetHeadV1, GovernancePublishError,
-    GovernancePublisher, PdpGovernanceArchiveV1, PdpRejectionReasonV1, PdpTerminalDecisionV1,
-    PrivacyPublicationAuthorizationV1, governance_rooted_fs,
+    GovernancePublisher, GovernanceSubmissionProvenanceV1, PdpGovernanceArchiveV1,
+    PdpRejectionReasonV1, PdpTerminalDecisionV1, PrivacyPublicationAuthorizationV1,
+    governance_rooted_fs,
 };
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct GovernanceCarBuffer {
+    bytes: Vec<u8>,
+}
+
+impl GovernanceCarBuffer {
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl Write for GovernanceCarBuffer {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let next_len = self
+            .bytes
+            .len()
+            .checked_add(buffer.len())
+            .ok_or_else(|| io::Error::other("governance CAR archive length overflowed"))?;
+        if next_len > GOVERNANCE_CAR_ARCHIVE_MAX_BYTES {
+            return Err(io::Error::other(format!(
+                "governance CAR archive exceeds {GOVERNANCE_CAR_ARCHIVE_MAX_BYTES} bytes"
+            )));
+        }
+        self.bytes.try_reserve(buffer.len()).map_err(|_| {
+            io::Error::other("failed to reserve bounded governance CAR archive bytes")
+        })?;
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 #[cfg(unix)]
 unsafe extern "C" {
     fn geteuid() -> std::os::raw::c_uint;
 }
 const GOVERNANCE_DAG_SINK_FILESYSTEM: &str = "filesystem";
+const GOVERNANCE_PUBLICATION_STATE_FILE: &str = "governance-publication-state-v1.json";
+const GOVERNANCE_PUBLICATION_INITIALIZED_FILE: &str = ".governance-publication-initialized-v1";
+const GOVERNANCE_PUBLICATION_INITIALIZED_BODY: &[u8] =
+    b"sorafs.governance_dag.publication_initialized.v1\n";
+const GOVERNANCE_PUBLICATION_STATE_SCHEMA: &str =
+    "sorafs.governance_dag.local_publication_state.v1";
 const GOVERNANCE_PUBLISH_INDEX_FILE: &str = "publish-index.json";
 const GOVERNANCE_PUBLISH_INDEX_SCHEMA: &str = "sorafs.governance_dag.local_publish_index.v1";
+// Public index metadata is root-relative; the retained descriptor is the filesystem authority.
+const GOVERNANCE_DAG_LOGICAL_ROOT: &str = ".";
 const GOVERNANCE_CAR_QUEUE_FILE: &str = "car-queue.json";
 const GOVERNANCE_CAR_QUEUE_SCHEMA: &str = "sorafs.governance_dag.local_car_queue.v1";
 const GOVERNANCE_CAR_SEGMENT_SCHEMA: &str = "sorafs.governance_dag.local_car_segment.v1";
 const GOVERNANCE_CAR_PLAN_SCHEMA: &str = "sorafs.governance_dag.local_car_plan.v1";
+const GOVERNANCE_PUBLICATION_SOURCES_DIR: &str = "publication-sources";
 const GOVERNANCE_CAR_SEGMENTS_DIR: &str = "car-segments";
 const GOVERNANCE_RUNTIME_DAG_INDEX_FILE: &str = "runtime-dag-index.json";
 const GOVERNANCE_RUNTIME_DAG_INDEX_SCHEMA: &str = "sorafs.governance_dag.runtime_signed_index.v1";
@@ -95,6 +145,23 @@ const GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_VERSION_V1: u8 = 1;
 const GOVERNANCE_FENCED_PRIVACY_PENDING_VERSION_V1: u8 = 1;
 const GOVERNANCE_PUBLISHER_LOCK_FILE: &str = ".governance-publisher.lock";
 const GOVERNANCE_MUTABLE_INDEX_MAX_BYTES: usize = 64 * 1024 * 1024;
+const GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES: usize =
+    GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1;
+const GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES: usize = 64 * 1024 * 1024;
+const GOVERNANCE_DIGEST_SIDECAR_BYTES: usize = 65;
+const GOVERNANCE_CAR_SOURCE_TOTAL_MAX_BYTES: usize = GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES
+    + GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES
+    + 2 * GOVERNANCE_DIGEST_SIDECAR_BYTES;
+const GOVERNANCE_CAR_ARCHIVE_MAX_BYTES: usize = 160 * 1024 * 1024;
+const GOVERNANCE_PUBLICATION_STATE_MAX_BYTES: usize = 160 * 1024 * 1024;
+const GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP: usize = 131_072;
+const GOVERNANCE_PUBLICATION_ORPHAN_SOURCE_KIND_SLACK: usize = 1;
+const GOVERNANCE_PUBLICATION_ORPHAN_SOURCE_PAIR_SLACK: usize = 1;
+const GOVERNANCE_PUBLICATION_ORPHAN_CAR_FILE_SLACK: usize = 6;
+const GOVERNANCE_PUBLICATION_ORPHAN_ATOMIC_TEMP_SLACK: usize = 1;
+const GOVERNANCE_RELATIVE_PATH_MAX_BYTES: usize = 4_096;
+const GOVERNANCE_RELATIVE_PATH_MAX_COMPONENTS: usize = 64;
+const GOVERNANCE_RELATIVE_PATH_COMPONENT_MAX_BYTES: usize = 255;
 const GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES: usize = GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1;
 const GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES: usize =
     GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1;
@@ -1670,11 +1737,24 @@ pub trait FencedTransparencyAuthoritativeHeadReaderV1: Send + Sync + fmt::Debug 
 #[derive(Debug, Clone)]
 struct PublishIndexEntryForCar {
     position: usize,
+    newly_inserted: bool,
     payload_kind: String,
     encoded_path: String,
     json_path: String,
     encoded_blake3: String,
     encoded_len: usize,
+    json_blake3: String,
+    json_len: usize,
+}
+
+struct PreparedGovernanceCarSegment {
+    segment: JsonMap,
+    car_path: PathBuf,
+    plan_path: PathBuf,
+    manifest_path: PathBuf,
+    car_bytes: Vec<u8>,
+    plan_body: String,
+    manifest_body: String,
 }
 
 /// One weekly rollup recovered from the fully authenticated runtime DAG.
@@ -2049,6 +2129,49 @@ impl FilesystemGovernancePublisher {
         validate_atomic_output_path(&root.join(".governance-root-probe"))?;
         let root_lock = acquire_governance_publisher_lock(&root)?;
         root_guard.revalidate()?;
+        root_guard
+            .rooted_directory()
+            .remove_atomic_temps_for(GOVERNANCE_PUBLICATION_STATE_FILE)?;
+        root_guard
+            .rooted_directory()
+            .remove_atomic_temps_for(GOVERNANCE_PUBLICATION_INITIALIZED_FILE)?;
+        root_guard.revalidate()?;
+        let marker_present =
+            initialize_governance_publication_authority_if_pristine(&root, &root_guard).map_err(
+                |error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid governance publication initialization: {error}"),
+                    )
+                },
+            )?;
+        let (publication_state, _) = read_governance_publication_state(&root, &root_guard)
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid authoritative governance publication state: {error}"),
+                )
+            })?;
+        reconcile_governance_publication_artifacts(&root_guard, &publication_state).map_err(
+            |error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid governance publication artifact inventory: {error}"),
+                )
+            },
+        )?;
+        if !marker_present {
+            write_governance_publication_initialization_marker(&root, &root_guard).map_err(
+                |error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "failed to finalize governance publication initialization: {error}"
+                        ),
+                    )
+                },
+            )?;
+        }
         Ok(Self {
             root,
             root_guard,
@@ -2504,76 +2627,142 @@ impl FilesystemGovernancePublisher {
         Ok(self)
     }
 
-    fn settlements_root(&self) -> PathBuf {
-        self.root.join("settlements")
-    }
-
-    fn pdp_archive_root(&self) -> PathBuf {
-        self.root.join("pdp").join("archives")
-    }
-
-    fn por_challenge_root(&self) -> PathBuf {
-        self.root.join("por").join("challenges")
-    }
-
-    fn por_report_root(&self) -> PathBuf {
-        self.root.join("por").join("reports")
-    }
-
-    fn gc_audit_root(&self) -> PathBuf {
-        self.root.join("gc").join("audit")
-    }
-
-    fn reconciliation_root(&self) -> PathBuf {
-        self.root.join("reconciliation")
-    }
-
-    fn reputation_root(&self) -> PathBuf {
-        self.root.join("reputation")
-    }
-
-    fn reputation_snapshot_root(&self) -> PathBuf {
-        self.reputation_root().join("snapshots")
-    }
-
-    fn moderation_ballot_root(&self) -> PathBuf {
-        self.root.join("moderation").join("ballots")
-    }
-
-    fn transparency_ledger_root(&self) -> PathBuf {
-        self.root.join("transparency").join("ledger")
-    }
-
-    fn proof_token_issuance_root(&self) -> PathBuf {
-        self.root.join("transparency").join("proof-tokens")
-    }
-
-    fn appeal_finance_root(&self) -> PathBuf {
-        self.root.join("appeals").join("finance")
-    }
-
     fn record_publish_index(
         &self,
         payload_kind: &str,
-        encoded_path: &Path,
-        json_path: &Path,
-        digest_hex: &str,
-        encoded_len: usize,
+        encoded: &[u8],
+        json_bytes: &[u8],
         labels: JsonMap,
-    ) -> Result<(), GovernancePublishError> {
-        let entry = update_publish_index(
-            &self.root,
-            &self.root_guard,
-            PublishIndexUpdate {
-                payload_kind,
-                encoded_path,
-                json_path,
-                digest_hex,
-                encoded_len,
-                labels,
-            },
+    ) -> Result<(PathBuf, PathBuf), GovernancePublishError> {
+        validate_governance_car_source_lengths(encoded.len(), json_bytes.len())?;
+        let digest_hex = blake3::hash(encoded).to_hex().to_string();
+        let json_blake3 = blake3::hash(json_bytes).to_hex().to_string();
+        let encoded_len_u64 = u64::try_from(encoded.len()).map_err(|_| {
+            GovernancePublishError::other("governance encoded source length exceeds u64")
+        })?;
+        let json_len_u64 = u64::try_from(json_bytes.len()).map_err(|_| {
+            GovernancePublishError::other("governance JSON source length exceeds u64")
+        })?;
+        let (encoded_relative, json_relative) = governance_source_pair_relative_paths(
+            payload_kind,
+            encoded_len_u64,
+            &digest_hex,
+            json_len_u64,
+            &json_blake3,
         )?;
-        ensure_governance_car_segment(&self.root, &self.root_guard, &entry)
+        let encoded_path = resolve_index_path(&self.root, &encoded_relative)?;
+        let json_path = resolve_index_path(&self.root, &json_relative)?;
+
+        let (mut publication_state, _current_state_bytes) =
+            read_governance_publication_state(&self.root, &self.root_guard)?;
+        let publish_index = match publication_state.remove("publish_index") {
+            Some(JsonValue::Object(index)) => index,
+            _ => {
+                return Err(GovernancePublishError::other(
+                    "governance publication state is missing its publish index",
+                ));
+            }
+        };
+        let car_queue = match publication_state.remove("car_queue") {
+            Some(JsonValue::Object(queue)) => queue,
+            _ => {
+                return Err(GovernancePublishError::other(
+                    "governance publication state is missing its CAR queue",
+                ));
+            }
+        };
+        let (publish_index, entry) = update_publish_index(
+            &self.root,
+            publish_index,
+            payload_kind,
+            &encoded_path,
+            &json_path,
+            &digest_hex,
+            encoded.len(),
+            &json_blake3,
+            json_bytes.len(),
+            labels,
+        )?;
+        if !entry.newly_inserted {
+            let persisted = persist_governance_source_pair(
+                &self.root,
+                &self.root_guard,
+                payload_kind,
+                encoded,
+                json_bytes,
+            )?;
+            if persisted != (encoded_path.clone(), json_path.clone()) {
+                return Err(GovernancePublishError::other(
+                    "persisted duplicate governance source pair diverged from its identity",
+                ));
+            }
+            let mut canonical_segment =
+                assemble_governance_car_segment(&self.root, &self.root_guard, &entry)?;
+            canonical_segment.insert(
+                "queue_position".into(),
+                JsonValue::from(u64::try_from(entry.position).map_err(|_| {
+                    GovernancePublishError::other("duplicate CAR queue position exceeds u64")
+                })?),
+            );
+            let existing_segment = car_queue
+                .get("segments")
+                .and_then(JsonValue::as_array)
+                .and_then(|segments| segments.get(entry.position))
+                .and_then(JsonValue::as_object)
+                .ok_or_else(|| {
+                    GovernancePublishError::other(
+                        "duplicate governance publication lost its committed CAR segment",
+                    )
+                })?;
+            if existing_segment != &canonical_segment {
+                return Err(GovernancePublishError::other(
+                    "duplicate governance publication CAR segment diverges from its canonical immutable artifacts",
+                ));
+            }
+            return Ok((encoded_path, json_path));
+        }
+        let (car_files, car_file_records) =
+            governance_car_segment_files_from_source_bytes(&entry, encoded, json_bytes)?;
+        let prepared_segment =
+            prepare_governance_car_segment(&self.root, &entry, car_files, car_file_records)?;
+        let car_queue =
+            install_governance_car_segment(car_queue, &entry, prepared_segment.segment.clone())?;
+        publication_state.insert("publish_index".into(), JsonValue::Object(publish_index));
+        publication_state.insert("car_queue".into(), JsonValue::Object(car_queue));
+        let prepared_state = prepare_governance_publication_state(publication_state)?;
+
+        let persistence = (|| -> Result<(), GovernancePublishError> {
+            let persisted = persist_governance_source_pair(
+                &self.root,
+                &self.root_guard,
+                payload_kind,
+                encoded,
+                json_bytes,
+            )?;
+            if persisted != (encoded_path.clone(), json_path.clone()) {
+                return Err(GovernancePublishError::other(
+                    "persisted governance source pair diverged from its preflight identity",
+                ));
+            }
+            persist_prepared_governance_car_segment(&self.root_guard, &prepared_segment)?;
+            write_prepared_governance_publication_state(
+                &self.root,
+                &self.root_guard,
+                &prepared_state,
+                write_atomic,
+            )
+        })();
+        if let Err(error) = persistence {
+            if let Err(reconcile_error) =
+                reconcile_current_governance_publication_artifacts(&self.root, &self.root_guard)
+            {
+                return Err(GovernancePublishError::other(format!(
+                    "governance publication failed ({error}); bounded orphan reconciliation also failed ({reconcile_error})"
+                )));
+            }
+            return Err(error);
+        }
+        Ok((encoded_path, json_path))
     }
 
     fn record_runtime_signed_payload(
@@ -2584,6 +2773,28 @@ impl FilesystemGovernancePublisher {
         json_path: &Path,
         digest_hex: &str,
         encoded_len: usize,
+    ) -> Result<(), GovernancePublishError> {
+        self.record_runtime_signed_payload_with_provenance(
+            payload_kind,
+            payload,
+            encoded_path,
+            json_path,
+            digest_hex,
+            encoded_len,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_runtime_signed_payload_with_provenance(
+        &self,
+        payload_kind: &str,
+        payload: GovernanceLogPayloadV1,
+        encoded_path: &Path,
+        json_path: &Path,
+        digest_hex: &str,
+        encoded_len: usize,
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
     ) -> Result<(), GovernancePublishError> {
         let Some(signer) = &self.runtime_dag_signer else {
             return Ok(());
@@ -2605,6 +2816,7 @@ impl FilesystemGovernancePublisher {
                 test_timestamp
             }
         };
+        let provenance = provenance.map(GovernanceSubmissionProvenanceV1::to_dag_provenance);
         append_runtime_signed_dag_payload(
             &self.root,
             &self.root_guard,
@@ -2617,6 +2829,7 @@ impl FilesystemGovernancePublisher {
             digest_hex,
             encoded_len,
             observed_timestamp,
+            provenance,
         )
     }
 
@@ -2625,6 +2838,33 @@ impl FilesystemGovernancePublisher {
         payload: &GovernanceLogPayloadV1,
         source_payload_len: usize,
     ) -> Result<(), GovernancePublishError> {
+        let Some(signer) = &self.runtime_dag_signer else {
+            return Ok(());
+        };
+        let checkpoint_store = self.runtime_dag_checkpoint_store.as_ref().ok_or_else(|| {
+            GovernancePublishError::other(
+                "signed governance runtime DAG publication requires a sealed producer checkpoint store",
+            )
+        })?;
+        signer.assert_qualification()?;
+        checkpoint_store.assert_qualification()?;
+        preflight_runtime_signed_dag_payload(payload, source_payload_len)
+    }
+
+    fn preflight_runtime_signed_payload_with_provenance(
+        &self,
+        payload: &GovernanceLogPayloadV1,
+        source_payload_len: usize,
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
+    ) -> Result<(), GovernancePublishError> {
+        let provenance = provenance.map(GovernanceSubmissionProvenanceV1::to_dag_provenance);
+        payload
+            .validate_submission_provenance(provenance.as_ref())
+            .map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "invalid authenticated governance submission provenance: {error}"
+                ))
+            })?;
         let Some(signer) = &self.runtime_dag_signer else {
             return Ok(());
         };
@@ -2653,171 +2893,6 @@ impl FilesystemGovernancePublisher {
         })?;
         self.root_guard.revalidate()?;
         Ok(guard)
-    }
-
-    fn base_path(&self, settlement: &DealSettlementV1, digest_hex: &str) -> PathBuf {
-        let deal_hex = settlement.deal_id.encode_hex::<String>();
-        let status = status_label(settlement.status);
-        let digest_prefix = &digest_hex[..16];
-        let base = format!("{:020}_{}_{}", settlement.settled_at, status, digest_prefix);
-        self.settlements_root().join(deal_hex).join(base)
-    }
-
-    fn gc_audit_path(&self, event: &GcAuditEventV1, digest_hex: &str) -> PathBuf {
-        let sequence = format!("{:020}", event.header.sequence);
-        let reason = sanitize_label(event.payload.reason.as_str());
-        let manifest_hex = hex::encode(event.payload.manifest_digest);
-        let digest_prefix = &digest_hex[..16];
-        let base = format!("{sequence}_{reason}_{manifest_hex}_{digest_prefix}");
-        self.gc_audit_root().join(base)
-    }
-
-    fn reconciliation_path(
-        &self,
-        report: &SorafsReconciliationReportV1,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let provider_hex = hex::encode(report.provider_id);
-        let provider_prefix = &provider_hex[..16];
-        let digest_prefix = &digest_hex[..16];
-        let base = format!(
-            "{:020}_{}_{}",
-            report.generated_at_unix, provider_prefix, digest_prefix
-        );
-        self.reconciliation_root().join(base)
-    }
-
-    fn reputation_snapshot_path(
-        &self,
-        envelope: &SignedReputationSnapshotV1,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let snapshot = &envelope.snapshot;
-        let snapshot_hex = hex::encode(snapshot.snapshot_id);
-        let digest_prefix = &digest_hex[..16];
-        let base = format!(
-            "{:020}_{}_{}",
-            snapshot.generated_at_unix, snapshot_hex, digest_prefix
-        );
-        self.reputation_snapshot_root()
-            .join(snapshot_hex)
-            .join(base)
-    }
-
-    fn moderation_ballot_event_path(
-        &self,
-        event: &SoraFsModerationBallotGovernanceEventV1,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let case_id = sanitize_label(&event.case_id);
-        let round_id = sanitize_label(&event.round_id);
-        let digest_prefix = &digest_hex[..16];
-        let base = format!(
-            "{:020}_{}_{}",
-            event.sequence,
-            event.kind.as_str(),
-            digest_prefix
-        );
-        self.moderation_ballot_root()
-            .join(case_id)
-            .join(round_id)
-            .join(base)
-    }
-
-    fn appeal_finance_report_path(
-        &self,
-        report: &SoraFsAppealFinanceReportV1,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let case_id = sanitize_label(&report.case_id);
-        let round_id = report
-            .round_id
-            .as_deref()
-            .map(sanitize_label)
-            .unwrap_or_else(|| "no_round".to_string());
-        let digest_prefix = &digest_hex[..16];
-        let base = format!(
-            "{:020}_{}_{}_{}",
-            report.generated_at_unix_ms,
-            round_id,
-            report.outcome.as_str(),
-            digest_prefix
-        );
-        self.appeal_finance_root().join(case_id).join(base)
-    }
-
-    fn appeal_finance_weekly_rollup_path(
-        &self,
-        rollup: &SoraFsAppealFinanceWeeklyRollupV1,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let cycle = sanitize_label(&rollup.cycle.to_string());
-        let digest_prefix = &digest_hex[..16];
-        let base = format!(
-            "{:020}_reports-{}_{}",
-            rollup.generated_at_unix_ms, rollup.report_count, digest_prefix
-        );
-        self.appeal_finance_root()
-            .join("weekly")
-            .join(cycle)
-            .join(base)
-    }
-
-    fn appeal_finance_settlement_receipt_path(
-        &self,
-        receipt: &SoraFsAppealFinanceSettlementReceiptV1,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let case_id = sanitize_label(&receipt.case_id);
-        let round_id = receipt
-            .round_id
-            .as_deref()
-            .map(sanitize_label)
-            .unwrap_or_else(|| "no_round".to_string());
-        let digest_prefix = &digest_hex[..16];
-        let receipt_id = hex::encode(receipt.receipt_id);
-        let receipt_prefix = &receipt_id[..16];
-        let base = format!(
-            "{:020}_{}_{}_{}_{}",
-            receipt.generated_at_unix_ms,
-            round_id,
-            sanitize_label(&receipt.submitted_step),
-            receipt_prefix,
-            digest_prefix
-        );
-        self.appeal_finance_root()
-            .join("settlement-receipts")
-            .join(case_id)
-            .join(base)
-    }
-
-    fn transparency_ledger_publication_path(
-        &self,
-        publication: &ModerationLedgerCyclePublicationV1,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let cycle_id = hex::encode(publication.block.cycle_id);
-        let digest_prefix = &digest_hex[..16];
-        let base = format!(
-            "{:020}_entries-{:010}_{}",
-            publication.block.generated_at_unix, publication.block.entry_count, digest_prefix
-        );
-        self.transparency_ledger_root().join(cycle_id).join(base)
-    }
-
-    fn proof_token_issuance_path(
-        &self,
-        issuance: &ProofTokenIssuanceV1,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let token_id = hex::encode(issuance.token_id);
-        let token_prefix = &token_id[..16];
-        let digest_prefix = &digest_hex[..16];
-        let base = format!(
-            "{:020}_{}_{}",
-            issuance.issued_at_unix, token_prefix, digest_prefix
-        );
-        self.proof_token_issuance_root().join(token_id).join(base)
     }
 }
 
@@ -3294,24 +3369,200 @@ fn pdp_decision_label(decision: PdpTerminalDecisionV1) -> &'static str {
     }
 }
 
-fn sanitize_label(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-            out.push(ch);
-        } else {
-            out.push('_');
-        }
-    }
-    out
-}
-
 fn write_atomic(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
     data: &[u8],
 ) -> io::Result<()> {
     write_rooted_atomic(root_guard, path, data)
+}
+
+fn write_immutable_governance_file(
+    root_guard: &GovernanceFilesystemRootGuard,
+    path: &Path,
+    data: &[u8],
+    max_bytes: usize,
+) -> Result<(), GovernancePublishError> {
+    if data.is_empty() || data.len() > max_bytes {
+        return Err(GovernancePublishError::other(format!(
+            "immutable governance artifact `{}` is outside its {max_bytes}-byte bound",
+            path.display()
+        )));
+    }
+    match read_rooted_governance_state_file(root_guard, path, max_bytes) {
+        Ok(snapshot) => {
+            if snapshot.bytes() != data {
+                return Err(GovernancePublishError::other(format!(
+                    "immutable governance artifact path `{}` is already occupied by different bytes",
+                    path.display()
+                )));
+            }
+            snapshot.binding().verify()?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Err(write_error) = write_rooted_atomic_expected(
+                root_guard,
+                path,
+                data,
+                governance_rooted_fs::ExpectedFile::Missing,
+            ) {
+                if write_error.kind() != io::ErrorKind::WouldBlock {
+                    return Err(write_error.into());
+                }
+                let raced = read_rooted_governance_state_file(root_guard, path, max_bytes)
+                    .map_err(|read_error| {
+                        GovernancePublishError::other(format!(
+                            "immutable governance artifact `{}` raced with another writer ({write_error}) and could not be verified: {read_error}",
+                            path.display()
+                        ))
+                    })?;
+                if raced.bytes() != data {
+                    return Err(GovernancePublishError::other(format!(
+                        "immutable governance artifact path `{}` was concurrently occupied by different bytes",
+                        path.display()
+                    )));
+                }
+                raced.binding().verify()?;
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let readback = read_rooted_governance_state_file(root_guard, path, max_bytes)?;
+    if readback.bytes() != data {
+        return Err(GovernancePublishError::other(format!(
+            "immutable governance artifact `{}` durable readback diverged",
+            path.display()
+        )));
+    }
+    readback.binding().verify()?;
+    Ok(())
+}
+
+fn write_immutable_governance_artifact(
+    root_guard: &GovernanceFilesystemRootGuard,
+    path: &Path,
+    data: &[u8],
+    max_bytes: usize,
+) -> Result<(), GovernancePublishError> {
+    write_immutable_governance_file(root_guard, path, data, max_bytes)?;
+    let mut digest_body = blake3::hash(data).to_hex().to_string();
+    digest_body.push('\n');
+    write_immutable_governance_file(
+        root_guard,
+        &digest_sidecar_path_for(path),
+        digest_body.as_bytes(),
+        GOVERNANCE_DIGEST_SIDECAR_BYTES,
+    )?;
+    let readback = read_rooted_governance_state_file(root_guard, path, max_bytes)?;
+    if readback.bytes() != data {
+        return Err(GovernancePublishError::other(format!(
+            "immutable governance artifact `{}` changed while binding its digest sidecar",
+            path.display()
+        )));
+    }
+    verify_rooted_digest_sidecar(root_guard, path, readback.bytes())?;
+    readback.binding().verify()?;
+    Ok(())
+}
+
+fn governance_source_pair_id(
+    payload_kind: &str,
+    encoded_len: u64,
+    encoded_blake3: &str,
+    json_len: u64,
+    json_blake3: &str,
+) -> Result<String, GovernancePublishError> {
+    let encoded_blake3 = hex::decode(encoded_blake3)
+        .ok()
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .ok_or_else(|| GovernancePublishError::other("encoded source digest is noncanonical"))?;
+    let json_blake3 = hex::decode(json_blake3)
+        .ok()
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .ok_or_else(|| GovernancePublishError::other("JSON source digest is noncanonical"))?;
+    Ok(hex::encode(governance_publication_source_pair_id_v1(
+        payload_kind,
+        encoded_len,
+        encoded_blake3,
+        json_len,
+        json_blake3,
+    )))
+}
+
+fn governance_source_pair_relative_paths(
+    payload_kind: &str,
+    encoded_len: u64,
+    encoded_blake3: &str,
+    json_len: u64,
+    json_blake3: &str,
+) -> Result<(String, String), GovernancePublishError> {
+    validate_governance_publication_payload_kind(payload_kind)?;
+    let pair_id = governance_source_pair_id(
+        payload_kind,
+        encoded_len,
+        encoded_blake3,
+        json_len,
+        json_blake3,
+    )?;
+    let root = format!("{GOVERNANCE_PUBLICATION_SOURCES_DIR}/{payload_kind}/{pair_id}");
+    Ok((format!("{root}/payload.to"), format!("{root}/payload.json")))
+}
+
+fn validate_governance_publication_payload_kind(
+    payload_kind: &str,
+) -> Result<(), GovernancePublishError> {
+    if payload_kind.is_empty()
+        || matches!(payload_kind, "." | "..")
+        || payload_kind.len() > 128
+        || !payload_kind.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.')
+        })
+    {
+        return Err(GovernancePublishError::other(
+            "governance publication source kind is noncanonical",
+        ));
+    }
+    Ok(())
+}
+
+fn persist_governance_source_pair(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+    payload_kind: &str,
+    encoded: &[u8],
+    json_bytes: &[u8],
+) -> Result<(PathBuf, PathBuf), GovernancePublishError> {
+    validate_governance_car_source_lengths(encoded.len(), json_bytes.len())?;
+    validate_governance_publication_payload_kind(payload_kind)?;
+    let encoded_blake3 = blake3::hash(encoded).to_hex().to_string();
+    let json_blake3 = blake3::hash(json_bytes).to_hex().to_string();
+    let encoded_len = u64::try_from(encoded.len()).map_err(|_| {
+        GovernancePublishError::other("governance encoded source length exceeds u64")
+    })?;
+    let json_len = u64::try_from(json_bytes.len())
+        .map_err(|_| GovernancePublishError::other("governance JSON source length exceeds u64"))?;
+    let (encoded_relative, json_relative) = governance_source_pair_relative_paths(
+        payload_kind,
+        encoded_len,
+        &encoded_blake3,
+        json_len,
+        &json_blake3,
+    )?;
+    let encoded_path = resolve_index_path(root, &encoded_relative)?;
+    let json_path = resolve_index_path(root, &json_relative)?;
+    write_immutable_governance_artifact(
+        root_guard,
+        &encoded_path,
+        encoded,
+        GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES,
+    )?;
+    write_immutable_governance_artifact(
+        root_guard,
+        &json_path,
+        json_bytes,
+        GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES,
+    )?;
+    Ok((encoded_path, json_path))
 }
 
 fn rooted_target(
@@ -3388,7 +3639,7 @@ fn write_rooted_atomic_expected(
     root_guard.revalidate()
 }
 
-fn read_rooted_governance_state_file(
+pub(super) fn read_rooted_governance_state_file(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
     max_bytes: usize,
@@ -3414,12 +3665,10 @@ fn verify_rooted_digest_sidecar(
     path: &Path,
     data: &[u8],
 ) -> Result<(), GovernancePublishError> {
-    const DIGEST_SIDECAR_BYTES: usize = 65;
-
     let actual = read_rooted_governance_state_file(
         root_guard,
         &digest_sidecar_path_for(path),
-        DIGEST_SIDECAR_BYTES,
+        GOVERNANCE_DIGEST_SIDECAR_BYTES,
     )?;
     let mut expected = blake3::hash(data).to_hex().to_string();
     expected.push('\n');
@@ -3429,6 +3678,7 @@ fn verify_rooted_digest_sidecar(
             path.display()
         )));
     }
+    actual.binding().verify()?;
     Ok(())
 }
 
@@ -3488,10 +3738,8 @@ fn digest_sidecar_path_for(path: &Path) -> PathBuf {
 }
 
 fn verify_digest_sidecar(path: &Path, data: &[u8]) -> Result<(), GovernancePublishError> {
-    const DIGEST_SIDECAR_BYTES: usize = 65;
-
     let digest_path = digest_sidecar_path_for(path);
-    let actual = read_bounded_governance_state_file(&digest_path, DIGEST_SIDECAR_BYTES)?;
+    let actual = read_bounded_governance_state_file(&digest_path, GOVERNANCE_DIGEST_SIDECAR_BYTES)?;
     let mut expected = blake3::hash(data).to_hex().to_string();
     expected.push('\n');
     if actual != expected.as_bytes() {
@@ -4430,30 +4678,1515 @@ fn validate_governance_state_metadata(path: &Path, metadata: &fs::Metadata) -> i
     Ok(())
 }
 
-struct PublishIndexUpdate<'a> {
-    payload_kind: &'a str,
-    encoded_path: &'a Path,
-    json_path: &'a Path,
-    digest_hex: &'a str,
-    encoded_len: usize,
-    labels: JsonMap,
+fn empty_governance_publish_index() -> JsonMap {
+    let mut index = JsonMap::new();
+    index.insert(
+        "schema".into(),
+        JsonValue::from(GOVERNANCE_PUBLISH_INDEX_SCHEMA),
+    );
+    index.insert(
+        "source".into(),
+        JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
+    );
+    index.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
+    index.insert("generated_at".into(), JsonValue::from(0_u64));
+    index.insert("entry_count".into(), JsonValue::from(0_u64));
+    index.insert(
+        "payload_kind_counts".into(),
+        JsonValue::Object(JsonMap::new()),
+    );
+    index.insert(
+        "by_encoded_blake3".into(),
+        JsonValue::Object(JsonMap::new()),
+    );
+    index.insert("by_payload_kind".into(), JsonValue::Object(JsonMap::new()));
+    index.insert("entries".into(), JsonValue::Array(Vec::new()));
+    index
 }
 
-fn update_publish_index(
+fn empty_governance_car_queue() -> JsonMap {
+    let mut queue = JsonMap::new();
+    queue.insert(
+        "schema".into(),
+        JsonValue::from(GOVERNANCE_CAR_QUEUE_SCHEMA),
+    );
+    queue.insert(
+        "source".into(),
+        JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
+    );
+    queue.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
+    queue.insert("generated_at".into(), JsonValue::from(0_u64));
+    queue.insert("segment_count".into(), JsonValue::from(0_u64));
+    queue.insert("assembled_count".into(), JsonValue::from(0_u64));
+    queue.insert("pending_count".into(), JsonValue::from(0_u64));
+    queue.insert(
+        "by_encoded_blake3".into(),
+        JsonValue::Object(JsonMap::new()),
+    );
+    queue.insert("by_payload_kind".into(), JsonValue::Object(JsonMap::new()));
+    queue.insert(
+        "by_car_archive_blake3".into(),
+        JsonValue::Object(JsonMap::new()),
+    );
+    queue.insert("segments".into(), JsonValue::Array(Vec::new()));
+    queue
+}
+
+fn empty_governance_publication_state() -> JsonMap {
+    let mut state = JsonMap::new();
+    state.insert(
+        "schema".into(),
+        JsonValue::from(GOVERNANCE_PUBLICATION_STATE_SCHEMA),
+    );
+    state.insert(
+        "source".into(),
+        JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
+    );
+    state.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
+    state.insert("generation".into(), JsonValue::from(0_u64));
+    state.insert("generated_at".into(), JsonValue::from(0_u64));
+    state.insert(
+        "publish_index".into(),
+        JsonValue::Object(empty_governance_publish_index()),
+    );
+    state.insert(
+        "car_queue".into(),
+        JsonValue::Object(empty_governance_car_queue()),
+    );
+    state
+}
+
+fn read_governance_publication_initialization_marker(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
-    update: PublishIndexUpdate<'_>,
+) -> Result<bool, GovernancePublishError> {
+    let marker_path = root.join(GOVERNANCE_PUBLICATION_INITIALIZED_FILE);
+    let snapshot = match read_rooted_governance_state_file(
+        root_guard,
+        &marker_path,
+        GOVERNANCE_PUBLICATION_INITIALIZED_BODY.len(),
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if snapshot.bytes() != GOVERNANCE_PUBLICATION_INITIALIZED_BODY {
+        return Err(GovernancePublishError::other(
+            "governance publication initialization marker is malformed",
+        ));
+    }
+    snapshot.binding().verify()?;
+    Ok(true)
+}
+
+fn governance_publication_artifact_roots_present(
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<bool, GovernancePublishError> {
+    let root_directory = root_guard.rooted_directory();
+    for directory_name in [
+        GOVERNANCE_PUBLICATION_SOURCES_DIR,
+        GOVERNANCE_CAR_SEGMENTS_DIR,
+    ] {
+        match root_directory.open_directory(OsStr::new(directory_name)) {
+            Ok(directory) => {
+                drop(directory);
+                return Ok(true);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    root_guard.revalidate()?;
+    Ok(false)
+}
+
+fn initialize_governance_publication_authority_if_pristine(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<bool, GovernancePublishError> {
+    reject_legacy_governance_publication_authorities(root, root_guard)?;
+    let marker_present = read_governance_publication_initialization_marker(root, root_guard)?;
+    let authority_present = root_guard
+        .rooted_directory()
+        .file_identity(OsStr::new(GOVERNANCE_PUBLICATION_STATE_FILE))?
+        .is_some();
+    if authority_present {
+        return Ok(marker_present);
+    }
+    if marker_present || governance_publication_artifact_roots_present(root_guard)? {
+        return Err(GovernancePublishError::other(
+            "authoritative governance publication state is missing from an initialized root",
+        ));
+    }
+
+    let state = empty_governance_publication_state();
+    validate_governance_publication_state(&state)?;
+    let body = json::to_json_pretty(&JsonValue::Object(state)).map_err(|error| {
+        GovernancePublishError::other(format!(
+            "serialize initial governance publication state: {error}"
+        ))
+    })?;
+    write_prepared_governance_publication_state(
+        root,
+        root_guard,
+        body.as_bytes(),
+        |root_guard, path, body| {
+            write_rooted_atomic_expected(
+                root_guard,
+                path,
+                body,
+                governance_rooted_fs::ExpectedFile::Missing,
+            )
+        },
+    )?;
+    Ok(false)
+}
+
+fn write_governance_publication_initialization_marker(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<(), GovernancePublishError> {
+    let marker_path = root.join(GOVERNANCE_PUBLICATION_INITIALIZED_FILE);
+    write_rooted_atomic_expected(
+        root_guard,
+        &marker_path,
+        GOVERNANCE_PUBLICATION_INITIALIZED_BODY,
+        governance_rooted_fs::ExpectedFile::Missing,
+    )?;
+    if !read_governance_publication_initialization_marker(root, root_guard)? {
+        return Err(GovernancePublishError::other(
+            "governance publication initialization marker did not persist",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_legacy_governance_publication_authorities(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<(), GovernancePublishError> {
+    for file in [GOVERNANCE_PUBLISH_INDEX_FILE, GOVERNANCE_CAR_QUEUE_FILE] {
+        match read_rooted_governance_state_file(root_guard, &root.join(file), 1) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) | Err(_) => {
+                return Err(GovernancePublishError::other(format!(
+                    "legacy governance publication authority `{file}` is unsupported; remove it before first-release initialization"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_governance_publication_state(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<(JsonMap, usize), GovernancePublishError> {
+    reject_legacy_governance_publication_authorities(root, root_guard)?;
+    let path = root.join(GOVERNANCE_PUBLICATION_STATE_FILE);
+    let snapshot = match read_rooted_governance_state_file(
+        root_guard,
+        &path,
+        GOVERNANCE_PUBLICATION_STATE_MAX_BYTES,
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(GovernancePublishError::other(
+                "authoritative governance publication state is missing after initialization",
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let value: JsonValue = json::from_slice(snapshot.bytes()).map_err(|error| {
+        GovernancePublishError::other(format!(
+            "failed to parse authoritative governance publication state: {error}"
+        ))
+    })?;
+    let JsonValue::Object(state) = value else {
+        return Err(GovernancePublishError::other(
+            "authoritative governance publication state root is not an object",
+        ));
+    };
+    validate_governance_publication_state(&state)?;
+    snapshot.binding().verify()?;
+    Ok((state, snapshot.bytes().len()))
+}
+
+#[cfg(test)]
+fn commit_governance_publication_state(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+    state: JsonMap,
+) -> Result<(), GovernancePublishError> {
+    commit_governance_publication_state_with(root, root_guard, state, write_atomic)
+}
+
+#[cfg(test)]
+fn commit_governance_publication_state_with<F>(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+    state: JsonMap,
+    writer: F,
+) -> Result<(), GovernancePublishError>
+where
+    F: FnOnce(&GovernanceFilesystemRootGuard, &Path, &[u8]) -> io::Result<()>,
+{
+    let body = prepare_governance_publication_state(state)?;
+    write_prepared_governance_publication_state(root, root_guard, &body, writer)
+}
+
+fn prepare_governance_publication_state(
+    mut state: JsonMap,
+) -> Result<Vec<u8>, GovernancePublishError> {
+    let generation = state
+        .get("generation")
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "governance publication state generation is missing or invalid",
+            )
+        })?
+        .checked_add(1)
+        .ok_or_else(|| {
+            GovernancePublishError::other("governance publication state generation exhausted")
+        })?;
+    state.insert("generation".into(), JsonValue::from(generation));
+    state.insert(
+        "generated_at".into(),
+        JsonValue::from(current_unix_timestamp_seconds()),
+    );
+    validate_governance_publication_state(&state)?;
+    let body = json::to_json_pretty(&JsonValue::Object(state)).map_err(|error| {
+        GovernancePublishError::other(format!(
+            "serialize authoritative governance publication state: {error}"
+        ))
+    })?;
+    if body.is_empty() || body.len() > GOVERNANCE_PUBLICATION_STATE_MAX_BYTES {
+        return Err(GovernancePublishError::other(format!(
+            "authoritative governance publication state exceeds {GOVERNANCE_PUBLICATION_STATE_MAX_BYTES} bytes"
+        )));
+    }
+    Ok(body.into_bytes())
+}
+
+fn write_prepared_governance_publication_state<F>(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+    body: &[u8],
+    writer: F,
+) -> Result<(), GovernancePublishError>
+where
+    F: FnOnce(&GovernanceFilesystemRootGuard, &Path, &[u8]) -> io::Result<()>,
+{
+    if body.is_empty() || body.len() > GOVERNANCE_PUBLICATION_STATE_MAX_BYTES {
+        return Err(GovernancePublishError::other(format!(
+            "prepared authoritative governance publication state exceeds {GOVERNANCE_PUBLICATION_STATE_MAX_BYTES} bytes"
+        )));
+    }
+    let path = root.join(GOVERNANCE_PUBLICATION_STATE_FILE);
+    writer(root_guard, &path, body)?;
+    let readback = read_rooted_governance_state_file(
+        root_guard,
+        &path,
+        GOVERNANCE_PUBLICATION_STATE_MAX_BYTES,
+    )?;
+    if readback.bytes() != body {
+        return Err(GovernancePublishError::other(
+            "authoritative governance publication state readback diverged",
+        ));
+    }
+    readback.binding().verify()?;
+    Ok(())
+}
+
+fn require_exact_governance_fields(
+    map: &JsonMap,
+    expected: &[&str],
+    context: &str,
+) -> Result<(), GovernancePublishError> {
+    if map.len() != expected.len() || !expected.iter().all(|field| map.contains_key(*field)) {
+        return Err(GovernancePublishError::other(format!(
+            "{context} fields do not match the first-release schema"
+        )));
+    }
+    Ok(())
+}
+
+fn required_governance_string<'a>(
+    map: &'a JsonMap,
+    field: &str,
+    context: &str,
+) -> Result<&'a str, GovernancePublishError> {
+    map.get(field)
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| GovernancePublishError::other(format!("{context} is missing `{field}`")))
+}
+
+fn required_governance_u64(
+    map: &JsonMap,
+    field: &str,
+    context: &str,
+) -> Result<u64, GovernancePublishError> {
+    map.get(field)
+        .and_then(JsonValue::as_u64)
+        .ok_or_else(|| GovernancePublishError::other(format!("{context} is missing `{field}`")))
+}
+
+fn validate_governance_lower_hex(
+    value: &str,
+    bytes: usize,
+    context: &str,
+) -> Result<(), GovernancePublishError> {
+    if value.len() != bytes.saturating_mul(2)
+        || hex::decode(value)
+            .ok()
+            .is_none_or(|decoded| decoded.len() != bytes || hex::encode(decoded) != value)
+    {
+        return Err(GovernancePublishError::other(format!(
+            "{context} is not canonical lowercase hexadecimal"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_governance_publication_labels(
+    labels: &JsonMap,
+    context: &str,
+) -> Result<(), GovernancePublishError> {
+    if labels.len() > GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1 {
+        return Err(GovernancePublishError::other(format!(
+            "{context} exceeds the {GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1}-label hard cap"
+        )));
+    }
+    let mut compact_bytes = 2_usize;
+    for (position, (key, value)) in labels.iter().enumerate() {
+        if key.is_empty()
+            || key.len() > GOVERNANCE_PUBLICATION_LABEL_KEY_MAX_BYTES_V1
+            || !key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} contains a noncanonical label key"
+            )));
+        }
+        if value.as_object().is_some() || value.as_array().is_some() {
+            return Err(GovernancePublishError::other(format!(
+                "{context} label `{key}` must be a scalar"
+            )));
+        }
+        if value
+            .as_str()
+            .is_some_and(|string| string.len() > GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1)
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} label `{key}` exceeds the {GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1}-byte string bound"
+            )));
+        }
+        let encoded_value = json::to_json(value).map_err(|error| {
+            GovernancePublishError::other(format!(
+                "{context} label `{key}` is not canonical JSON: {error}"
+            ))
+        })?;
+        compact_bytes = compact_bytes
+            .checked_add(usize::from(position != 0))
+            .and_then(|bytes| bytes.checked_add(key.len()))
+            .and_then(|bytes| bytes.checked_add(3))
+            .and_then(|bytes| bytes.checked_add(encoded_value.len()))
+            .ok_or_else(|| GovernancePublishError::other("publication label size overflowed"))?;
+    }
+    if compact_bytes > GOVERNANCE_PUBLICATION_LABEL_TOTAL_MAX_BYTES_V1 {
+        return Err(GovernancePublishError::other(format!(
+            "{context} labels exceed the {GOVERNANCE_PUBLICATION_LABEL_TOTAL_MAX_BYTES_V1}-byte aggregate bound"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct GovernancePublishIdentity {
+    payload_kind: String,
+    encoded_path: String,
+    json_path: String,
+    encoded_blake3: String,
+    encoded_len: u64,
+    json_blake3: String,
+    json_len: u64,
+}
+
+fn validate_governance_publish_index_state(
+    index: &JsonMap,
+) -> Result<Vec<GovernancePublishIdentity>, GovernancePublishError> {
+    const INDEX_FIELDS: [&str; 9] = [
+        "schema",
+        "source",
+        "root",
+        "generated_at",
+        "entry_count",
+        "payload_kind_counts",
+        "by_encoded_blake3",
+        "by_payload_kind",
+        "entries",
+    ];
+    require_exact_governance_fields(index, &INDEX_FIELDS, "governance publish index")?;
+    if required_governance_string(index, "schema", "governance publish index")?
+        != GOVERNANCE_PUBLISH_INDEX_SCHEMA
+        || required_governance_string(index, "source", "governance publish index")?
+            != GOVERNANCE_DAG_SINK_FILESYSTEM
+        || required_governance_string(index, "root", "governance publish index")?
+            != GOVERNANCE_DAG_LOGICAL_ROOT
+    {
+        return Err(GovernancePublishError::other(
+            "governance publish index has an unsupported identity",
+        ));
+    }
+    required_governance_u64(index, "generated_at", "governance publish index")?;
+    let entries = index
+        .get("entries")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| GovernancePublishError::other("governance publish entries are missing"))?;
+    if entries.len() > GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP {
+        return Err(GovernancePublishError::other(
+            "governance publish index exceeds its entry hard cap",
+        ));
+    }
+    let mut identities = Vec::with_capacity(entries.len());
+    let mut payload_kind_counts = JsonMap::new();
+    let mut by_encoded_blake3 = JsonMap::new();
+    let mut by_payload_kind = JsonMap::new();
+    let mut path_identities = BTreeMap::<String, (&'static str, u64, String)>::new();
+    let mut source_pair_ids = BTreeSet::new();
+    for (position, value) in entries.iter().enumerate() {
+        let context = format!("governance publish entry {position}");
+        let entry = value
+            .as_object()
+            .ok_or_else(|| GovernancePublishError::other(format!("{context} is not an object")))?;
+        const ENTRY_FIELDS: [&str; 10] = [
+            "position",
+            "payload_kind",
+            "encoded_path",
+            "json_path",
+            "encoded_blake3",
+            "encoded_len",
+            "json_blake3",
+            "json_len",
+            "published_at_unix",
+            "labels",
+        ];
+        require_exact_governance_fields(entry, &ENTRY_FIELDS, &context)?;
+        if required_governance_u64(entry, "position", &context)?
+            != u64::try_from(position).map_err(|_| {
+                GovernancePublishError::other("governance publish position exceeds u64")
+            })?
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} position is noncanonical"
+            )));
+        }
+        let labels = entry
+            .get("labels")
+            .and_then(JsonValue::as_object)
+            .ok_or_else(|| {
+                GovernancePublishError::other(format!("{context} labels are noncanonical"))
+            })?;
+        validate_governance_publication_labels(labels, &context)?;
+        required_governance_u64(entry, "published_at_unix", &context)?;
+        let payload_kind = required_governance_string(entry, "payload_kind", &context)?;
+        if payload_kind.is_empty()
+            || matches!(payload_kind, "." | "..")
+            || payload_kind.len() > 128
+            || !payload_kind.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'_' | b'-' | b'.')
+            })
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} payload kind is noncanonical"
+            )));
+        }
+        let encoded_path = required_governance_string(entry, "encoded_path", &context)?;
+        let json_path = required_governance_string(entry, "json_path", &context)?;
+        index_path_components(encoded_path)?;
+        index_path_components(json_path)?;
+        if !encoded_path.ends_with(".to")
+            || !json_path.ends_with(".json")
+            || encoded_path == json_path
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} source paths are noncanonical"
+            )));
+        }
+        let encoded_blake3 = required_governance_string(entry, "encoded_blake3", &context)?;
+        let json_blake3 = required_governance_string(entry, "json_blake3", &context)?;
+        validate_governance_lower_hex(encoded_blake3, 32, "encoded publication digest")?;
+        validate_governance_lower_hex(json_blake3, 32, "JSON publication digest")?;
+        let encoded_len = required_governance_u64(entry, "encoded_len", &context)?;
+        let json_len = required_governance_u64(entry, "json_len", &context)?;
+        let encoded_len_usize = usize::try_from(encoded_len).map_err(|_| {
+            GovernancePublishError::other("encoded publication length exceeds host limits")
+        })?;
+        let json_len_usize = usize::try_from(json_len).map_err(|_| {
+            GovernancePublishError::other("JSON publication length exceeds host limits")
+        })?;
+        validate_governance_car_source_lengths(encoded_len_usize, json_len_usize)?;
+        let (expected_encoded_path, expected_json_path) = governance_source_pair_relative_paths(
+            payload_kind,
+            encoded_len,
+            encoded_blake3,
+            json_len,
+            json_blake3,
+        )?;
+        if encoded_path != expected_encoded_path || json_path != expected_json_path {
+            return Err(GovernancePublishError::other(format!(
+                "{context} source paths do not match their composite content identity"
+            )));
+        }
+        let pair_id = governance_source_pair_id(
+            payload_kind,
+            encoded_len,
+            encoded_blake3,
+            json_len,
+            json_blake3,
+        )?;
+        if !source_pair_ids.insert(pair_id) {
+            return Err(GovernancePublishError::other(format!(
+                "{context} duplicates a composite source-pair identity"
+            )));
+        }
+        for (path, role, bytes, digest) in [
+            (encoded_path, "encoded", encoded_len, encoded_blake3),
+            (json_path, "json", json_len, json_blake3),
+        ] {
+            let identity = (role, bytes, digest.to_owned());
+            if path_identities
+                .insert(path.to_owned(), identity.clone())
+                .is_some_and(|existing| existing != identity)
+            {
+                return Err(GovernancePublishError::other(format!(
+                    "{context} reuses source path `{path}` for a different identity"
+                )));
+            }
+        }
+
+        let count = payload_kind_counts
+            .get(payload_kind)
+            .and_then(JsonValue::as_u64)
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| GovernancePublishError::other("payload-kind count overflowed"))?;
+        payload_kind_counts.insert(payload_kind.to_owned(), JsonValue::from(count));
+        append_index_position(&mut by_encoded_blake3, encoded_blake3, position);
+        append_index_position(&mut by_payload_kind, payload_kind, position);
+        identities.push(GovernancePublishIdentity {
+            payload_kind: payload_kind.to_owned(),
+            encoded_path: encoded_path.to_owned(),
+            json_path: json_path.to_owned(),
+            encoded_blake3: encoded_blake3.to_owned(),
+            encoded_len,
+            json_blake3: json_blake3.to_owned(),
+            json_len,
+        });
+    }
+    if required_governance_u64(index, "entry_count", "governance publish index")?
+        != u64::try_from(entries.len()).unwrap_or(u64::MAX)
+        || index.get("payload_kind_counts") != Some(&JsonValue::Object(payload_kind_counts))
+        || index.get("by_encoded_blake3") != Some(&JsonValue::Object(by_encoded_blake3))
+        || index.get("by_payload_kind") != Some(&JsonValue::Object(by_payload_kind))
+    {
+        return Err(GovernancePublishError::other(
+            "governance publish index counters or lookups are stale",
+        ));
+    }
+    Ok(identities)
+}
+
+fn validate_governance_car_segment_source_files(
+    segment: &JsonMap,
+    identity: &GovernancePublishIdentity,
+    context: &str,
+) -> Result<(), GovernancePublishError> {
+    let files = segment
+        .get("files")
+        .and_then(JsonValue::as_array)
+        .filter(|files| files.len() == 4)
+        .ok_or_else(|| {
+            GovernancePublishError::other(format!("{context} source files are invalid"))
+        })?;
+    let mut roles = BTreeMap::new();
+    let mut total = 0_u64;
+    for (position, value) in files.iter().enumerate() {
+        let file_context = format!("{context} source file {position}");
+        let file = value.as_object().ok_or_else(|| {
+            GovernancePublishError::other(format!("{file_context} is not an object"))
+        })?;
+        const FILE_FIELDS: [&str; 4] = ["role", "path", "bytes", "blake3"];
+        require_exact_governance_fields(file, &FILE_FIELDS, &file_context)?;
+        let role = required_governance_string(file, "role", &file_context)?;
+        if roles.insert(role.to_owned(), file).is_some() {
+            return Err(GovernancePublishError::other(format!(
+                "{context} has duplicate source roles"
+            )));
+        }
+        index_path_components(required_governance_string(file, "path", &file_context)?)?;
+        validate_governance_lower_hex(
+            required_governance_string(file, "blake3", &file_context)?,
+            32,
+            "governance CAR source digest",
+        )?;
+        total = total
+            .checked_add(required_governance_u64(file, "bytes", &file_context)?)
+            .ok_or_else(|| GovernancePublishError::other("CAR source byte count overflowed"))?;
+    }
+    let expected = [
+        (
+            "encoded",
+            identity.encoded_path.clone(),
+            identity.encoded_len,
+            identity.encoded_blake3.as_str(),
+        ),
+        (
+            "encoded_blake3_sidecar",
+            format!("{}.blake3", identity.encoded_path),
+            GOVERNANCE_DIGEST_SIDECAR_BYTES as u64,
+            "",
+        ),
+        (
+            "json",
+            identity.json_path.clone(),
+            identity.json_len,
+            identity.json_blake3.as_str(),
+        ),
+        (
+            "json_blake3_sidecar",
+            format!("{}.blake3", identity.json_path),
+            GOVERNANCE_DIGEST_SIDECAR_BYTES as u64,
+            "",
+        ),
+    ];
+    for (role, expected_path, expected_bytes, expected_digest) in expected {
+        let file = roles.get(role).ok_or_else(|| {
+            GovernancePublishError::other(format!("{context} is missing source role `{role}`"))
+        })?;
+        if required_governance_string(file, "path", context)? != expected_path
+            || required_governance_u64(file, "bytes", context)? != expected_bytes
+            || (!expected_digest.is_empty()
+                && required_governance_string(file, "blake3", context)? != expected_digest)
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} source role `{role}` is not bound to its publish entry"
+            )));
+        }
+    }
+    if total > GOVERNANCE_CAR_SOURCE_TOTAL_MAX_BYTES as u64
+        || required_governance_u64(segment, "payload_bytes", context)? != total
+    {
+        return Err(GovernancePublishError::other(format!(
+            "{context} source aggregate is inconsistent"
+        )));
+    }
+    Ok(())
+}
+
+fn register_governance_artifact_owner(
+    owners: &mut BTreeMap<String, String>,
+    path: &str,
+    owner: &str,
+    context: &str,
+) -> Result<(), GovernancePublishError> {
+    index_path_components(path)?;
+    if owners
+        .insert(path.to_owned(), owner.to_owned())
+        .is_some_and(|existing| existing != owner)
+    {
+        return Err(GovernancePublishError::other(format!(
+            "{context} aliases governance artifact path `{path}` across distinct content identities"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_governance_car_queue_state(
+    queue: &JsonMap,
+    identities: &[GovernancePublishIdentity],
+) -> Result<(), GovernancePublishError> {
+    const QUEUE_FIELDS: [&str; 11] = [
+        "schema",
+        "source",
+        "root",
+        "generated_at",
+        "segment_count",
+        "assembled_count",
+        "pending_count",
+        "by_encoded_blake3",
+        "by_payload_kind",
+        "by_car_archive_blake3",
+        "segments",
+    ];
+    require_exact_governance_fields(queue, &QUEUE_FIELDS, "governance CAR queue")?;
+    if required_governance_string(queue, "schema", "governance CAR queue")?
+        != GOVERNANCE_CAR_QUEUE_SCHEMA
+        || required_governance_string(queue, "source", "governance CAR queue")?
+            != GOVERNANCE_DAG_SINK_FILESYSTEM
+        || required_governance_string(queue, "root", "governance CAR queue")?
+            != GOVERNANCE_DAG_LOGICAL_ROOT
+    {
+        return Err(GovernancePublishError::other(
+            "governance CAR queue has an unsupported identity",
+        ));
+    }
+    required_governance_u64(queue, "generated_at", "governance CAR queue")?;
+    let segments = queue
+        .get("segments")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| GovernancePublishError::other("governance CAR segments are missing"))?;
+    if segments.len() != identities.len() || segments.len() > GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP
+    {
+        return Err(GovernancePublishError::other(
+            "governance publish index and CAR queue are not one-to-one",
+        ));
+    }
+    let mut by_encoded_blake3 = JsonMap::new();
+    let mut by_payload_kind = JsonMap::new();
+    let mut by_car_archive_blake3 = JsonMap::new();
+    let mut artifact_owners = BTreeMap::<String, String>::new();
+    for (position, identity) in identities.iter().enumerate() {
+        let pair_id = governance_source_pair_id(
+            &identity.payload_kind,
+            identity.encoded_len,
+            &identity.encoded_blake3,
+            identity.json_len,
+            &identity.json_blake3,
+        )?;
+        let owner = format!("source-pair:{pair_id}");
+        for path in [
+            identity.encoded_path.clone(),
+            format!("{}.blake3", identity.encoded_path),
+            identity.json_path.clone(),
+            format!("{}.blake3", identity.json_path),
+        ] {
+            register_governance_artifact_owner(
+                &mut artifact_owners,
+                &path,
+                &owner,
+                &format!("governance publish entry {position}"),
+            )?;
+        }
+    }
+    let mut car_archive_owners = BTreeMap::<String, usize>::new();
+    for (position, (value, identity)) in segments.iter().zip(identities).enumerate() {
+        let context = format!("governance CAR segment {position}");
+        let segment = value
+            .as_object()
+            .ok_or_else(|| GovernancePublishError::other(format!("{context} is not an object")))?;
+        const SEGMENT_FIELDS: [&str; 23] = [
+            "schema",
+            "queue_position",
+            "status",
+            "source",
+            "source_publish_index_position",
+            "payload_kind",
+            "encoded_path",
+            "json_path",
+            "encoded_blake3",
+            "encoded_len",
+            "car_path",
+            "plan_path",
+            "manifest_path",
+            "car_size",
+            "car_archive_blake3",
+            "car_payload_blake3",
+            "car_cid_hex",
+            "root_cids_hex",
+            "dag_codec",
+            "chunk_count",
+            "payload_bytes",
+            "files",
+            "chunk_profile",
+        ];
+        require_exact_governance_fields(segment, &SEGMENT_FIELDS, &context)?;
+        let position_u64 = u64::try_from(position)
+            .map_err(|_| GovernancePublishError::other("CAR queue position exceeds u64"))?;
+        if required_governance_string(segment, "schema", &context)? != GOVERNANCE_CAR_SEGMENT_SCHEMA
+            || required_governance_string(segment, "status", &context)? != "assembled"
+            || required_governance_string(segment, "source", &context)?
+                != GOVERNANCE_DAG_SINK_FILESYSTEM
+            || required_governance_u64(segment, "queue_position", &context)? != position_u64
+            || required_governance_u64(segment, "source_publish_index_position", &context)?
+                != position_u64
+            || required_governance_string(segment, "payload_kind", &context)?
+                != identity.payload_kind
+            || required_governance_string(segment, "encoded_path", &context)?
+                != identity.encoded_path
+            || required_governance_string(segment, "json_path", &context)? != identity.json_path
+            || required_governance_string(segment, "encoded_blake3", &context)?
+                != identity.encoded_blake3
+            || required_governance_u64(segment, "encoded_len", &context)? != identity.encoded_len
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} is not bound one-to-one to its publish entry"
+            )));
+        }
+        let pair_id = governance_source_pair_id(
+            &identity.payload_kind,
+            identity.encoded_len,
+            &identity.encoded_blake3,
+            identity.json_len,
+            &identity.json_blake3,
+        )?;
+        let base = format!("{GOVERNANCE_CAR_SEGMENTS_DIR}/{position:020}_{pair_id}");
+        let artifact_owner = format!("car-segment:{position}:{pair_id}");
+        for (field, expected_path) in [
+            ("car_path", format!("{base}.car")),
+            ("plan_path", format!("{base}.plan.json")),
+            ("manifest_path", format!("{base}.json")),
+        ] {
+            let path = required_governance_string(segment, field, &context)?;
+            if path != expected_path {
+                return Err(GovernancePublishError::other(format!(
+                    "{context} `{field}` is not its canonical composite-identity path"
+                )));
+            }
+            register_governance_artifact_owner(
+                &mut artifact_owners,
+                path,
+                &artifact_owner,
+                &context,
+            )?;
+            register_governance_artifact_owner(
+                &mut artifact_owners,
+                &format!("{path}.blake3"),
+                &artifact_owner,
+                &context,
+            )?;
+        }
+        let car_size = required_governance_u64(segment, "car_size", &context)?;
+        if car_size == 0 || car_size > GOVERNANCE_CAR_ARCHIVE_MAX_BYTES as u64 {
+            return Err(GovernancePublishError::other(format!(
+                "{context} CAR size is outside its fixed bound"
+            )));
+        }
+        let car_archive_blake3 =
+            required_governance_string(segment, "car_archive_blake3", &context)?;
+        validate_governance_lower_hex(car_archive_blake3, 32, "CAR archive digest")?;
+        if car_archive_owners
+            .insert(car_archive_blake3.to_owned(), position)
+            .is_some()
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} reuses a CAR archive digest already bound to another segment"
+            )));
+        }
+        validate_governance_lower_hex(
+            required_governance_string(segment, "car_payload_blake3", &context)?,
+            32,
+            "CAR payload digest",
+        )?;
+        let car_cid = required_governance_string(segment, "car_cid_hex", &context)?;
+        validate_governance_lower_hex(car_cid, 36, "CAR CID")?;
+        if !car_cid.starts_with("01551f20") {
+            return Err(GovernancePublishError::other(format!(
+                "{context} CAR CID has a noncanonical codec"
+            )));
+        }
+        let roots = segment
+            .get("root_cids_hex")
+            .and_then(JsonValue::as_array)
+            .filter(|roots| !roots.is_empty() && roots.len() <= 64)
+            .ok_or_else(|| GovernancePublishError::other(format!("{context} roots are invalid")))?;
+        for root in roots {
+            let root = root.as_str().ok_or_else(|| {
+                GovernancePublishError::other(format!("{context} root CID is not a string"))
+            })?;
+            validate_governance_lower_hex(root, 36, "CAR root CID")?;
+            if !root.starts_with("01711f20") {
+                return Err(GovernancePublishError::other(format!(
+                    "{context} root CID has a noncanonical codec"
+                )));
+            }
+        }
+        if required_governance_u64(segment, "dag_codec", &context)? != 0x71
+            || required_governance_u64(segment, "chunk_count", &context)? == 0
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} CAR geometry is noncanonical"
+            )));
+        }
+        let profile = segment
+            .get("chunk_profile")
+            .and_then(JsonValue::as_object)
+            .ok_or_else(|| {
+                GovernancePublishError::other(format!("{context} profile is missing"))
+            })?;
+        const PROFILE_FIELDS: [&str; 4] = ["min_size", "target_size", "max_size", "break_mask"];
+        require_exact_governance_fields(profile, &PROFILE_FIELDS, "governance CAR profile")?;
+        let default = sorafs_chunker::ChunkProfile::DEFAULT;
+        if required_governance_u64(profile, "min_size", &context)? != default.min_size as u64
+            || required_governance_u64(profile, "target_size", &context)?
+                != default.target_size as u64
+            || required_governance_u64(profile, "max_size", &context)? != default.max_size as u64
+            || required_governance_u64(profile, "break_mask", &context)? != default.break_mask
+        {
+            return Err(GovernancePublishError::other(format!(
+                "{context} profile is not canonical V1"
+            )));
+        }
+        validate_governance_car_segment_source_files(segment, identity, &context)?;
+        append_index_position(&mut by_encoded_blake3, &identity.encoded_blake3, position);
+        append_index_position(&mut by_payload_kind, &identity.payload_kind, position);
+        append_index_position(&mut by_car_archive_blake3, car_archive_blake3, position);
+    }
+    let count = u64::try_from(segments.len()).unwrap_or(u64::MAX);
+    if required_governance_u64(queue, "segment_count", "governance CAR queue")? != count
+        || required_governance_u64(queue, "assembled_count", "governance CAR queue")? != count
+        || required_governance_u64(queue, "pending_count", "governance CAR queue")? != 0
+        || queue.get("by_encoded_blake3") != Some(&JsonValue::Object(by_encoded_blake3))
+        || queue.get("by_payload_kind") != Some(&JsonValue::Object(by_payload_kind))
+        || queue.get("by_car_archive_blake3") != Some(&JsonValue::Object(by_car_archive_blake3))
+    {
+        return Err(GovernancePublishError::other(
+            "governance CAR queue counters or lookups are stale",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_governance_publication_state(state: &JsonMap) -> Result<(), GovernancePublishError> {
+    const STATE_FIELDS: [&str; 7] = [
+        "schema",
+        "source",
+        "root",
+        "generation",
+        "generated_at",
+        "publish_index",
+        "car_queue",
+    ];
+    require_exact_governance_fields(
+        state,
+        &STATE_FIELDS,
+        "authoritative governance publication state",
+    )?;
+    if required_governance_string(state, "schema", "governance publication state")?
+        != GOVERNANCE_PUBLICATION_STATE_SCHEMA
+        || required_governance_string(state, "source", "governance publication state")?
+            != GOVERNANCE_DAG_SINK_FILESYSTEM
+        || required_governance_string(state, "root", "governance publication state")?
+            != GOVERNANCE_DAG_LOGICAL_ROOT
+    {
+        return Err(GovernancePublishError::other(
+            "authoritative governance publication state has an unsupported identity",
+        ));
+    }
+    required_governance_u64(state, "generation", "governance publication state")?;
+    required_governance_u64(state, "generated_at", "governance publication state")?;
+    let index = state
+        .get("publish_index")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| {
+            GovernancePublishError::other("publication state publish index is missing")
+        })?;
+    let queue = state
+        .get("car_queue")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| GovernancePublishError::other("publication state CAR queue is missing"))?;
+    let identities = validate_governance_publish_index_state(index)?;
+    validate_governance_car_queue_state(queue, &identities)
+}
+
+#[derive(Debug, Default)]
+struct GovernancePublicationArtifactInventory {
+    source_kind_dirs: BTreeSet<String>,
+    source_pair_dirs: BTreeSet<String>,
+    source_files: BTreeSet<String>,
+    car_files: BTreeSet<String>,
+}
+
+fn governance_publication_artifact_inventory(
+    state: &JsonMap,
+) -> Result<GovernancePublicationArtifactInventory, GovernancePublishError> {
+    validate_governance_publication_state(state)?;
+    let mut inventory = GovernancePublicationArtifactInventory::default();
+    let entries = state
+        .get("publish_index")
+        .and_then(|index| index.get("entries"))
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| GovernancePublishError::other("publication entries are missing"))?;
+    for (position, entry) in entries.iter().enumerate() {
+        let entry = entry.as_object().ok_or_else(|| {
+            GovernancePublishError::other(format!(
+                "governance publish entry {position} is not an object"
+            ))
+        })?;
+        let encoded_path = required_governance_string(
+            entry,
+            "encoded_path",
+            "governance publication artifact inventory",
+        )?;
+        let json_path = required_governance_string(
+            entry,
+            "json_path",
+            "governance publication artifact inventory",
+        )?;
+        let mut components = encoded_path.split('/');
+        let (Some(source_root), Some(kind), Some(pair_id), Some(file), None) = (
+            components.next(),
+            components.next(),
+            components.next(),
+            components.next(),
+            components.next(),
+        ) else {
+            return Err(GovernancePublishError::other(
+                "governance publication source inventory path is noncanonical",
+            ));
+        };
+        if source_root != GOVERNANCE_PUBLICATION_SOURCES_DIR
+            || file != "payload.to"
+            || json_path != format!("{source_root}/{kind}/{pair_id}/payload.json")
+        {
+            return Err(GovernancePublishError::other(
+                "governance publication source inventory path is noncanonical",
+            ));
+        }
+        let kind_dir = format!("{source_root}/{kind}");
+        let pair_dir = format!("{kind_dir}/{pair_id}");
+        inventory.source_kind_dirs.insert(kind_dir);
+        inventory.source_pair_dirs.insert(pair_dir);
+        for path in [encoded_path.to_owned(), json_path.to_owned()] {
+            if !inventory.source_files.insert(path.clone())
+                || !inventory.source_files.insert(format!("{path}.blake3"))
+            {
+                return Err(GovernancePublishError::other(
+                    "governance publication source inventory aliases an artifact",
+                ));
+            }
+        }
+    }
+
+    let segments = state
+        .get("car_queue")
+        .and_then(|queue| queue.get("segments"))
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| GovernancePublishError::other("publication CAR segments are missing"))?;
+    for (position, segment) in segments.iter().enumerate() {
+        let segment = segment.as_object().ok_or_else(|| {
+            GovernancePublishError::other(format!(
+                "governance CAR segment {position} is not an object"
+            ))
+        })?;
+        for field in ["car_path", "plan_path", "manifest_path"] {
+            let path = required_governance_string(
+                segment,
+                field,
+                "governance publication artifact inventory",
+            )?;
+            if !inventory.car_files.insert(path.to_owned())
+                || !inventory.car_files.insert(format!("{path}.blake3"))
+            {
+                return Err(GovernancePublishError::other(
+                    "governance publication CAR inventory aliases an artifact",
+                ));
+            }
+        }
+    }
+    Ok(inventory)
+}
+
+fn is_canonical_governance_source_pair_directory(name: &str) -> bool {
+    name.len() == 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn is_canonical_governance_source_artifact_name(name: &str) -> bool {
+    matches!(
+        name,
+        "payload.to" | "payload.to.blake3" | "payload.json" | "payload.json.blake3"
+    )
+}
+
+fn is_canonical_governance_car_artifact_name(name: &str) -> bool {
+    const SUFFIXES: [&str; 6] = [
+        ".plan.json.blake3",
+        ".json.blake3",
+        ".car.blake3",
+        ".plan.json",
+        ".json",
+        ".car",
+    ];
+    let Some(base) = SUFFIXES.iter().find_map(|suffix| name.strip_suffix(suffix)) else {
+        return false;
+    };
+    let Some((position, pair_id)) = base.split_once('_') else {
+        return false;
+    };
+    position.len() == 20
+        && position.bytes().all(|byte| byte.is_ascii_digit())
+        && is_canonical_governance_source_pair_directory(pair_id)
+}
+
+fn reconcile_governance_publication_source_artifacts(
+    root_guard: &GovernanceFilesystemRootGuard,
+    inventory: &GovernancePublicationArtifactInventory,
+) -> Result<(), GovernancePublishError> {
+    let root_directory = root_guard.rooted_directory();
+    let sources =
+        match root_directory.open_directory(OsStr::new(GOVERNANCE_PUBLICATION_SOURCES_DIR)) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if inventory.source_files.is_empty() {
+                    return Ok(());
+                }
+                return Err(GovernancePublishError::other(
+                    "committed governance publication source directory is missing",
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
+    let kind_bound = inventory
+        .source_kind_dirs
+        .len()
+        .checked_add(GOVERNANCE_PUBLICATION_ORPHAN_SOURCE_KIND_SLACK)
+        .ok_or_else(|| GovernancePublishError::other("publication source scan bound overflowed"))?
+        .max(1);
+    let mut seen = BTreeSet::new();
+    for kind_name in sources.child_names_bounded(kind_bound)? {
+        let kind = kind_name.to_str().ok_or_else(|| {
+            GovernancePublishError::other("governance publication source kind is not UTF-8")
+        })?;
+        validate_governance_publication_payload_kind(kind)?;
+        let kind_directory = sources.open_directory(&kind_name)?;
+        let kind_relative = format!("{GOVERNANCE_PUBLICATION_SOURCES_DIR}/{kind}");
+        let expected_pair_count = inventory
+            .source_pair_dirs
+            .iter()
+            .filter(|pair| pair.starts_with(&format!("{kind_relative}/")))
+            .count();
+        let pair_bound = expected_pair_count
+            .checked_add(GOVERNANCE_PUBLICATION_ORPHAN_SOURCE_PAIR_SLACK)
+            .ok_or_else(|| {
+                GovernancePublishError::other("publication source-pair scan bound overflowed")
+            })?
+            .max(1);
+        for pair_name in kind_directory.child_names_bounded(pair_bound)? {
+            let pair = pair_name.to_str().ok_or_else(|| {
+                GovernancePublishError::other(
+                    "governance publication source-pair identity is not UTF-8",
+                )
+            })?;
+            if !is_canonical_governance_source_pair_directory(pair) {
+                return Err(GovernancePublishError::other(
+                    "governance publication source-pair directory is noncanonical",
+                ));
+            }
+            let pair_directory = kind_directory.open_directory(&pair_name)?;
+            let pair_relative = format!("{kind_relative}/{pair}");
+            pair_directory.remove_atomic_temps_matching(
+                4 + GOVERNANCE_PUBLICATION_ORPHAN_ATOMIC_TEMP_SLACK,
+                is_canonical_governance_source_artifact_name,
+            )?;
+            for file_name in pair_directory.child_names_bounded(4)? {
+                let file = file_name.to_str().ok_or_else(|| {
+                    GovernancePublishError::other(
+                        "governance publication source artifact name is not UTF-8",
+                    )
+                })?;
+                if !is_canonical_governance_source_artifact_name(file) {
+                    return Err(GovernancePublishError::other(
+                        "governance publication source artifact name is noncanonical",
+                    ));
+                }
+                let relative = format!("{pair_relative}/{file}");
+                if inventory.source_files.contains(&relative) {
+                    if pair_directory.file_identity(&file_name)?.is_none() {
+                        return Err(GovernancePublishError::other(
+                            "committed governance publication source artifact disappeared during reconciliation",
+                        ));
+                    }
+                    seen.insert(relative);
+                } else {
+                    pair_directory.remove_file_if_exists(&file_name)?;
+                }
+            }
+            drop(pair_directory);
+            if !inventory.source_pair_dirs.contains(&pair_relative) {
+                kind_directory.remove_empty_directory_if_exists(&pair_name)?;
+            }
+        }
+        drop(kind_directory);
+        if !inventory.source_kind_dirs.contains(&kind_relative) {
+            sources.remove_empty_directory_if_exists(&kind_name)?;
+        }
+    }
+    drop(sources);
+    if seen != inventory.source_files {
+        return Err(GovernancePublishError::other(
+            "one or more committed governance publication source artifacts are missing",
+        ));
+    }
+    if inventory.source_files.is_empty() {
+        root_directory
+            .remove_empty_directory_if_exists(OsStr::new(GOVERNANCE_PUBLICATION_SOURCES_DIR))?;
+    }
+    Ok(())
+}
+
+fn reconcile_governance_publication_car_artifacts(
+    root_guard: &GovernanceFilesystemRootGuard,
+    inventory: &GovernancePublicationArtifactInventory,
+) -> Result<(), GovernancePublishError> {
+    let root_directory = root_guard.rooted_directory();
+    let car_segments = match root_directory.open_directory(OsStr::new(GOVERNANCE_CAR_SEGMENTS_DIR))
+    {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if inventory.car_files.is_empty() {
+                return Ok(());
+            }
+            return Err(GovernancePublishError::other(
+                "committed governance CAR artifact directory is missing",
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let file_bound = inventory
+        .car_files
+        .len()
+        .checked_add(GOVERNANCE_PUBLICATION_ORPHAN_CAR_FILE_SLACK)
+        .ok_or_else(|| GovernancePublishError::other("publication CAR scan bound overflowed"))?
+        .max(1);
+    let mut seen = BTreeSet::new();
+    let temp_scan_bound = file_bound
+        .checked_add(GOVERNANCE_PUBLICATION_ORPHAN_ATOMIC_TEMP_SLACK)
+        .ok_or_else(|| {
+            GovernancePublishError::other("publication CAR temp scan bound overflowed")
+        })?;
+    car_segments
+        .remove_atomic_temps_matching(temp_scan_bound, is_canonical_governance_car_artifact_name)?;
+    for file_name in car_segments.child_names_bounded(file_bound)? {
+        let file = file_name.to_str().ok_or_else(|| {
+            GovernancePublishError::other("governance CAR artifact name is not UTF-8")
+        })?;
+        if !is_canonical_governance_car_artifact_name(file) {
+            return Err(GovernancePublishError::other(
+                "governance CAR artifact name is noncanonical",
+            ));
+        }
+        let relative = format!("{GOVERNANCE_CAR_SEGMENTS_DIR}/{file}");
+        if inventory.car_files.contains(&relative) {
+            if car_segments.file_identity(&file_name)?.is_none() {
+                return Err(GovernancePublishError::other(
+                    "committed governance CAR artifact disappeared during reconciliation",
+                ));
+            }
+            seen.insert(relative);
+        } else {
+            car_segments.remove_file_if_exists(&file_name)?;
+        }
+    }
+    drop(car_segments);
+    if seen != inventory.car_files {
+        return Err(GovernancePublishError::other(
+            "one or more committed governance CAR artifacts are missing",
+        ));
+    }
+    if inventory.car_files.is_empty() {
+        root_directory.remove_empty_directory_if_exists(OsStr::new(GOVERNANCE_CAR_SEGMENTS_DIR))?;
+    }
+    Ok(())
+}
+
+fn governance_publish_entry_for_integrity(
+    entry: &JsonMap,
+    position: usize,
 ) -> Result<PublishIndexEntryForCar, GovernancePublishError> {
-    let PublishIndexUpdate {
-        payload_kind,
-        encoded_path,
-        json_path,
-        digest_hex,
+    let context = format!("governance publish entry {position}");
+    let encoded_len = usize::try_from(required_governance_u64(entry, "encoded_len", &context)?)
+        .map_err(|_| {
+            GovernancePublishError::other(format!("{context} length exceeds host limits"))
+        })?;
+    let json_len =
+        usize::try_from(required_governance_u64(entry, "json_len", &context)?).map_err(|_| {
+            GovernancePublishError::other(format!("{context} JSON length exceeds host limits"))
+        })?;
+    validate_governance_car_source_lengths(encoded_len, json_len)?;
+    Ok(PublishIndexEntryForCar {
+        position,
+        newly_inserted: false,
+        payload_kind: required_governance_string(entry, "payload_kind", &context)?.to_owned(),
+        encoded_path: required_governance_string(entry, "encoded_path", &context)?.to_owned(),
+        json_path: required_governance_string(entry, "json_path", &context)?.to_owned(),
+        encoded_blake3: required_governance_string(entry, "encoded_blake3", &context)?.to_owned(),
         encoded_len,
-        labels,
-    } = update;
-    let index_path = root.join(GOVERNANCE_PUBLISH_INDEX_FILE);
-    let mut index = read_publish_index(root, &index_path)?;
+        json_blake3: required_governance_string(entry, "json_blake3", &context)?.to_owned(),
+        json_len,
+    })
+}
+
+fn verify_exact_governance_publication_artifact(
+    root_guard: &GovernanceFilesystemRootGuard,
+    path: &Path,
+    expected: &[u8],
+    max_bytes: usize,
+    context: &str,
+) -> Result<(), GovernancePublishError> {
+    let snapshot =
+        read_rooted_governance_state_file(root_guard, path, max_bytes).map_err(|error| {
+            GovernancePublishError::other(format!(
+                "read committed {context} `{}`: {error}",
+                path.display()
+            ))
+        })?;
+    if snapshot.bytes() != expected {
+        return Err(GovernancePublishError::other(format!(
+            "committed {context} `{}` diverges from its authoritative canonical bytes",
+            path.display()
+        )));
+    }
+    verify_rooted_digest_sidecar(root_guard, path, snapshot.bytes())?;
+    snapshot.binding().verify()?;
+    Ok(())
+}
+
+fn verify_governance_publication_artifact_integrity(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+    state: &JsonMap,
+) -> Result<(), GovernancePublishError> {
+    let entries = state
+        .get("publish_index")
+        .and_then(|index| index.get("entries"))
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| GovernancePublishError::other("publication entries are missing"))?;
+    let segments = state
+        .get("car_queue")
+        .and_then(|queue| queue.get("segments"))
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| GovernancePublishError::other("publication CAR segments are missing"))?;
+    if entries.len() != segments.len() {
+        return Err(GovernancePublishError::other(
+            "publication entry and CAR segment integrity inventories diverge",
+        ));
+    }
+
+    for (position, (entry, segment)) in entries.iter().zip(segments).enumerate() {
+        let entry = entry.as_object().ok_or_else(|| {
+            GovernancePublishError::other(format!(
+                "governance publish entry {position} is not an object"
+            ))
+        })?;
+        let segment = segment.as_object().ok_or_else(|| {
+            GovernancePublishError::other(format!(
+                "governance CAR segment {position} is not an object"
+            ))
+        })?;
+        let entry = governance_publish_entry_for_integrity(entry, position)?;
+        let (files, file_records) = governance_car_segment_files(root, root_guard, &entry)?;
+        let prepared = prepare_governance_car_segment(root, &entry, files, file_records)?;
+        let mut canonical_segment = prepared.segment.clone();
+        canonical_segment.insert(
+            "queue_position".into(),
+            JsonValue::from(u64::try_from(position).map_err(|_| {
+                GovernancePublishError::other("governance CAR queue position exceeds u64")
+            })?),
+        );
+        if segment != &canonical_segment {
+            return Err(GovernancePublishError::other(format!(
+                "committed governance CAR segment {position} diverges from its canonical source projection"
+            )));
+        }
+        verify_exact_governance_publication_artifact(
+            root_guard,
+            &prepared.car_path,
+            &prepared.car_bytes,
+            GOVERNANCE_CAR_ARCHIVE_MAX_BYTES,
+            "governance CAR archive",
+        )?;
+        verify_exact_governance_publication_artifact(
+            root_guard,
+            &prepared.plan_path,
+            prepared.plan_body.as_bytes(),
+            GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
+            "governance CAR plan",
+        )?;
+        verify_exact_governance_publication_artifact(
+            root_guard,
+            &prepared.manifest_path,
+            prepared.manifest_body.as_bytes(),
+            GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1,
+            "governance CAR segment manifest",
+        )?;
+    }
+    root_guard.revalidate()?;
+    Ok(())
+}
+
+fn reconcile_governance_publication_artifacts(
+    root_guard: &GovernanceFilesystemRootGuard,
+    state: &JsonMap,
+) -> Result<(), GovernancePublishError> {
+    let inventory = governance_publication_artifact_inventory(state)?;
+    reconcile_governance_publication_source_artifacts(root_guard, &inventory)?;
+    reconcile_governance_publication_car_artifacts(root_guard, &inventory)?;
+    verify_governance_publication_artifact_integrity(root_guard.root(), root_guard, state)?;
+    root_guard.revalidate()?;
+    Ok(())
+}
+
+fn reconcile_current_governance_publication_artifacts(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<(), GovernancePublishError> {
+    let (state, _) = read_governance_publication_state(root, root_guard)?;
+    reconcile_governance_publication_artifacts(root_guard, &state)
+}
+
+fn validate_governance_car_source_lengths(
+    encoded_len: usize,
+    json_len: usize,
+) -> Result<usize, GovernancePublishError> {
+    if encoded_len == 0 || encoded_len > GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES {
+        return Err(GovernancePublishError::other(format!(
+            "governance encoded publication length must be in 1..={GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES} bytes"
+        )));
+    }
+    if json_len == 0 || json_len > GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES {
+        return Err(GovernancePublishError::other(format!(
+            "governance JSON publication length must be in 1..={GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES} bytes"
+        )));
+    }
+    let total = encoded_len
+        .checked_add(json_len)
+        .and_then(|bytes| bytes.checked_add(2 * GOVERNANCE_DIGEST_SIDECAR_BYTES))
+        .ok_or_else(|| {
+            GovernancePublishError::other("governance CAR source aggregate length overflowed")
+        })?;
+    if total > GOVERNANCE_CAR_SOURCE_TOTAL_MAX_BYTES {
+        return Err(GovernancePublishError::other(format!(
+            "governance CAR sources exceed the {GOVERNANCE_CAR_SOURCE_TOTAL_MAX_BYTES}-byte segment limit"
+        )));
+    }
+    Ok(total)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the publish index binds both exact source-file identities alongside their logical publication metadata"
+)]
+fn update_publish_index(
+    root: &Path,
+    mut index: JsonMap,
+    payload_kind: &str,
+    encoded_path: &Path,
+    json_path: &Path,
+    digest_hex: &str,
+    encoded_len: usize,
+    json_blake3: &str,
+    json_len: usize,
+    labels: JsonMap,
+) -> Result<(JsonMap, PublishIndexEntryForCar), GovernancePublishError> {
+    validate_governance_car_source_lengths(encoded_len, json_len)?;
+    validate_governance_publication_labels(&labels, "governance publication")?;
     let mut entries = match index.remove("entries") {
         Some(JsonValue::Array(entries)) => entries,
         Some(_) => {
@@ -4465,92 +6198,91 @@ fn update_publish_index(
     };
     let encoded_path = index_path_string(root, encoded_path);
     let json_path = index_path_string(root, json_path);
+    let labels = JsonValue::Object(labels);
     let duplicate_position = entries.iter().position(|entry| {
         entry.get("payload_kind").and_then(JsonValue::as_str) == Some(payload_kind)
-            && entry.get("encoded_blake3").and_then(JsonValue::as_str) == Some(digest_hex)
             && entry.get("encoded_path").and_then(JsonValue::as_str) == Some(encoded_path.as_str())
+            && entry.get("json_path").and_then(JsonValue::as_str) == Some(json_path.as_str())
     });
-    let position = duplicate_position.unwrap_or(entries.len());
-    if duplicate_position.is_none() {
-        let mut entry = JsonMap::new();
-        entry.insert("position".into(), JsonValue::from(position as u64));
-        entry.insert("payload_kind".into(), JsonValue::from(payload_kind));
-        entry.insert("encoded_path".into(), JsonValue::from(encoded_path.clone()));
-        entry.insert("json_path".into(), JsonValue::from(json_path.clone()));
-        entry.insert(
-            "encoded_blake3".into(),
-            JsonValue::from(digest_hex.to_string()),
-        );
-        entry.insert(
-            "encoded_len".into(),
-            JsonValue::from(u64::try_from(encoded_len).unwrap_or(u64::MAX)),
-        );
-        entry.insert(
-            "published_at_unix".into(),
-            JsonValue::from(current_unix_timestamp_seconds()),
-        );
-        entry.insert("labels".into(), JsonValue::Object(labels));
-        entries.push(JsonValue::Object(entry));
+    if duplicate_position.is_none() && entries.len() >= GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP {
+        return Err(GovernancePublishError::other(format!(
+            "governance publish index reached its {GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP}-entry hard cap"
+        )));
     }
-    rebuild_publish_index(root, root_guard, index, entries, &index_path)?;
-    Ok(PublishIndexEntryForCar {
-        position,
-        payload_kind: payload_kind.to_owned(),
-        encoded_path,
-        json_path,
-        encoded_blake3: digest_hex.to_owned(),
-        encoded_len,
-    })
-}
-
-fn read_publish_index(root: &Path, index_path: &Path) -> Result<JsonMap, GovernancePublishError> {
-    match read_bounded_governance_state_file(index_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
-        Ok(bytes) => {
-            let value: JsonValue = json::from_slice(&bytes).map_err(|err| {
-                GovernancePublishError::other(format!(
-                    "failed to parse governance publish index `{}`: {err}",
-                    index_path.display()
-                ))
-            })?;
-            let JsonValue::Object(map) = value else {
-                return Err(GovernancePublishError::other(
-                    "governance publish index root is not an object",
-                ));
-            };
-            if map.get("schema").and_then(JsonValue::as_str)
-                != Some(GOVERNANCE_PUBLISH_INDEX_SCHEMA)
-            {
-                return Err(GovernancePublishError::other(
-                    "governance publish index uses an unsupported schema",
-                ));
-            }
-            Ok(map)
+    let encoded_len_u64 = u64::try_from(encoded_len).map_err(|_| {
+        GovernancePublishError::other("governance encoded publication length exceeds u64")
+    })?;
+    let json_len_u64 = u64::try_from(json_len).map_err(|_| {
+        GovernancePublishError::other("governance JSON publication length exceeds u64")
+    })?;
+    if let Some(position) = duplicate_position {
+        let existing = &entries[position];
+        if existing.get("encoded_blake3").and_then(JsonValue::as_str) != Some(digest_hex)
+            || existing.get("encoded_len").and_then(JsonValue::as_u64) != Some(encoded_len_u64)
+            || existing.get("json_blake3").and_then(JsonValue::as_str) != Some(json_blake3)
+            || existing.get("json_len").and_then(JsonValue::as_u64) != Some(json_len_u64)
+            || existing.get("labels") != Some(&labels)
+        {
+            return Err(GovernancePublishError::other(
+                "duplicate governance publication changed its source identity or derived labels",
+            ));
         }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            let mut map = JsonMap::new();
-            map.insert(
-                "schema".into(),
-                JsonValue::from(GOVERNANCE_PUBLISH_INDEX_SCHEMA),
-            );
-            map.insert(
-                "source".into(),
-                JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
-            );
-            map.insert("root".into(), JsonValue::from(root.display().to_string()));
-            map.insert("entries".into(), JsonValue::Array(Vec::new()));
-            Ok(map)
-        }
-        Err(err) => Err(err.into()),
+        index.insert("entries".into(), JsonValue::Array(entries));
+        return Ok((
+            index,
+            PublishIndexEntryForCar {
+                position,
+                newly_inserted: false,
+                payload_kind: payload_kind.to_owned(),
+                encoded_path,
+                json_path,
+                encoded_blake3: digest_hex.to_owned(),
+                encoded_len,
+                json_blake3: json_blake3.to_owned(),
+                json_len,
+            },
+        ));
     }
+    let position = entries.len();
+    let mut entry = JsonMap::new();
+    entry.insert("position".into(), JsonValue::from(position as u64));
+    entry.insert("payload_kind".into(), JsonValue::from(payload_kind));
+    entry.insert("encoded_path".into(), JsonValue::from(encoded_path.clone()));
+    entry.insert("json_path".into(), JsonValue::from(json_path.clone()));
+    entry.insert(
+        "encoded_blake3".into(),
+        JsonValue::from(digest_hex.to_string()),
+    );
+    entry.insert("encoded_len".into(), JsonValue::from(encoded_len_u64));
+    entry.insert("json_blake3".into(), JsonValue::from(json_blake3));
+    entry.insert("json_len".into(), JsonValue::from(json_len_u64));
+    entry.insert(
+        "published_at_unix".into(),
+        JsonValue::from(current_unix_timestamp_seconds()),
+    );
+    entry.insert("labels".into(), labels);
+    entries.push(JsonValue::Object(entry));
+    let index = rebuild_publish_index(index, entries)?;
+    Ok((
+        index,
+        PublishIndexEntryForCar {
+            position,
+            newly_inserted: true,
+            payload_kind: payload_kind.to_owned(),
+            encoded_path,
+            json_path,
+            encoded_blake3: digest_hex.to_owned(),
+            encoded_len,
+            json_blake3: json_blake3.to_owned(),
+            json_len,
+        },
+    ))
 }
 
 fn rebuild_publish_index(
-    root: &Path,
-    root_guard: &GovernanceFilesystemRootGuard,
     mut index: JsonMap,
     mut entries: Vec<JsonValue>,
-    index_path: &Path,
-) -> Result<(), GovernancePublishError> {
+) -> Result<JsonMap, GovernancePublishError> {
     let mut payload_kind_counts = JsonMap::new();
     let mut by_encoded_blake3 = JsonMap::new();
     let mut by_payload_kind = JsonMap::new();
@@ -4599,7 +6331,7 @@ fn rebuild_publish_index(
         "source".into(),
         JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
     );
-    index.insert("root".into(), JsonValue::from(root.display().to_string()));
+    index.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
     index.insert(
         "generated_at".into(),
         JsonValue::from(current_unix_timestamp_seconds()),
@@ -4616,12 +6348,7 @@ fn rebuild_publish_index(
     index.insert("by_payload_kind".into(), JsonValue::Object(by_payload_kind));
     index.insert("entries".into(), JsonValue::Array(entries));
 
-    let body = json::to_json_pretty(&JsonValue::Object(index)).map_err(|err| {
-        GovernancePublishError::other(format!("serialize governance publish index: {err}"))
-    })?;
-    write_atomic(root_guard, index_path, body.as_bytes())?;
-    write_digest_sidecar(root_guard, index_path, body.as_bytes())?;
-    Ok(())
+    Ok(index)
 }
 
 fn append_index_position(index: &mut JsonMap, key: &str, position: usize) {
@@ -4647,13 +6374,22 @@ fn index_path_string(root: &Path, path: &Path) -> String {
     }
 }
 
-fn ensure_governance_car_segment(
+#[cfg(test)]
+fn assemble_governance_car_queue(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
+    queue: JsonMap,
     entry: &PublishIndexEntryForCar,
-) -> Result<(), GovernancePublishError> {
-    let queue_path = root.join(GOVERNANCE_CAR_QUEUE_FILE);
-    let mut queue = read_car_queue(root, &queue_path)?;
+) -> Result<JsonMap, GovernancePublishError> {
+    let segment = assemble_governance_car_segment(root, root_guard, entry)?;
+    install_governance_car_segment(queue, entry, segment)
+}
+
+fn install_governance_car_segment(
+    mut queue: JsonMap,
+    entry: &PublishIndexEntryForCar,
+    segment: JsonMap,
+) -> Result<JsonMap, GovernancePublishError> {
     let mut segments = match queue.remove("segments") {
         Some(JsonValue::Array(segments)) => segments,
         Some(_) => {
@@ -4671,69 +6407,21 @@ fn ensure_governance_car_segment(
             && segment.get("encoded_blake3").and_then(JsonValue::as_str)
                 == Some(entry.encoded_blake3.as_str())
     });
-    if let Some(position) = existing_position
-        && governance_car_segment_files_exist(root, &segments[position])
-    {
-        record_governance_dag_backlog(governance_car_queue_pending_count(&segments));
-        return Ok(());
-    }
-
-    let segment = assemble_governance_car_segment(root, root_guard, entry)?;
     match existing_position {
         Some(position) => segments[position] = JsonValue::Object(segment),
         None => segments.push(JsonValue::Object(segment)),
     }
-    rebuild_car_queue(root, root_guard, queue, segments, &queue_path)
-}
-
-fn read_car_queue(root: &Path, queue_path: &Path) -> Result<JsonMap, GovernancePublishError> {
-    match read_bounded_governance_state_file(queue_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
-        Ok(bytes) => {
-            let value: JsonValue = json::from_slice(&bytes).map_err(|err| {
-                GovernancePublishError::other(format!(
-                    "failed to parse governance CAR queue `{}`: {err}",
-                    queue_path.display()
-                ))
-            })?;
-            let JsonValue::Object(map) = value else {
-                return Err(GovernancePublishError::other(
-                    "governance CAR queue root is not an object",
-                ));
-            };
-            if map.get("schema").and_then(JsonValue::as_str) != Some(GOVERNANCE_CAR_QUEUE_SCHEMA) {
-                return Err(GovernancePublishError::other(
-                    "governance CAR queue uses an unsupported schema",
-                ));
-            }
-            Ok(map)
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            let mut map = JsonMap::new();
-            map.insert(
-                "schema".into(),
-                JsonValue::from(GOVERNANCE_CAR_QUEUE_SCHEMA),
-            );
-            map.insert(
-                "source".into(),
-                JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
-            );
-            map.insert("root".into(), JsonValue::from(root.display().to_string()));
-            map.insert("segments".into(), JsonValue::Array(Vec::new()));
-            Ok(map)
-        }
-        Err(err) => Err(err.into()),
-    }
+    rebuild_car_queue(queue, segments)
 }
 
 fn rebuild_car_queue(
-    root: &Path,
-    root_guard: &GovernanceFilesystemRootGuard,
-    mut queue: JsonMap,
+    _previous_queue: JsonMap,
     mut segments: Vec<JsonValue>,
-    queue_path: &Path,
-) -> Result<(), GovernancePublishError> {
+) -> Result<JsonMap, GovernancePublishError> {
+    let mut queue = JsonMap::new();
     let mut by_encoded_blake3 = JsonMap::new();
     let mut by_payload_kind = JsonMap::new();
+    let mut by_car_archive_blake3 = JsonMap::new();
     let mut assembled_count = 0u64;
 
     for (position, segment) in segments.iter_mut().enumerate() {
@@ -4748,6 +6436,11 @@ fn rebuild_car_queue(
         {
             return Err(GovernancePublishError::other(
                 "governance CAR queue segment uses an unsupported schema",
+            ));
+        }
+        if segment_map.get("status").and_then(JsonValue::as_str) != Some("assembled") {
+            return Err(GovernancePublishError::other(
+                "governance CAR queue contains a non-producible segment status",
             ));
         }
         let Some(payload_kind) = segment_map
@@ -4770,13 +6463,19 @@ fn rebuild_car_queue(
             ));
         };
         append_index_position(&mut by_encoded_blake3, &digest_hex, position);
-        if segment_map
-            .get("status")
+        let Some(car_archive_blake3) = segment_map
+            .get("car_archive_blake3")
             .and_then(JsonValue::as_str)
-            .is_some_and(|status| status == "assembled")
-        {
-            assembled_count = assembled_count.saturating_add(1);
-        }
+            .map(str::to_owned)
+        else {
+            return Err(GovernancePublishError::other(
+                "assembled governance CAR queue segment is missing `car_archive_blake3`",
+            ));
+        };
+        append_index_position(&mut by_car_archive_blake3, &car_archive_blake3, position);
+        assembled_count = assembled_count.checked_add(1).ok_or_else(|| {
+            GovernancePublishError::other("governance CAR queue assembled count overflowed")
+        })?;
     }
 
     queue.insert(
@@ -4787,7 +6486,7 @@ fn rebuild_car_queue(
         "source".into(),
         JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
     );
-    queue.insert("root".into(), JsonValue::from(root.display().to_string()));
+    queue.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
     queue.insert(
         "generated_at".into(),
         JsonValue::from(current_unix_timestamp_seconds()),
@@ -4797,50 +6496,21 @@ fn rebuild_car_queue(
         JsonValue::from(segments.len() as u64),
     );
     queue.insert("assembled_count".into(), JsonValue::from(assembled_count));
-    let pending_count = (segments.len() as u64).saturating_sub(assembled_count);
+    let pending_count = 0_u64;
     queue.insert("pending_count".into(), JsonValue::from(pending_count));
     queue.insert(
         "by_encoded_blake3".into(),
         JsonValue::Object(by_encoded_blake3),
     );
     queue.insert("by_payload_kind".into(), JsonValue::Object(by_payload_kind));
+    queue.insert(
+        "by_car_archive_blake3".into(),
+        JsonValue::Object(by_car_archive_blake3),
+    );
     queue.insert("segments".into(), JsonValue::Array(segments));
 
-    let body = json::to_json_pretty(&JsonValue::Object(queue)).map_err(|err| {
-        GovernancePublishError::other(format!("serialize governance CAR queue: {err}"))
-    })?;
-    write_atomic(root_guard, queue_path, body.as_bytes())?;
-    write_digest_sidecar(root_guard, queue_path, body.as_bytes())?;
     record_governance_dag_backlog(pending_count);
-    Ok(())
-}
-
-fn governance_car_queue_pending_count(segments: &[JsonValue]) -> u64 {
-    let assembled_count = segments
-        .iter()
-        .filter(|segment| {
-            segment
-                .get("status")
-                .and_then(JsonValue::as_str)
-                .is_some_and(|status| status == "assembled")
-        })
-        .count() as u64;
-    (segments.len() as u64).saturating_sub(assembled_count)
-}
-
-fn governance_car_segment_files_exist(root: &Path, segment: &JsonValue) -> bool {
-    let Some(segment) = segment.as_object() else {
-        return false;
-    };
-    ["car_path", "plan_path", "manifest_path"]
-        .iter()
-        .all(|field| {
-            segment
-                .get(*field)
-                .and_then(JsonValue::as_str)
-                .and_then(|path| resolve_index_path(root, path).ok())
-                .is_some_and(|path| path.is_file())
-        })
+    Ok(queue)
 }
 
 fn assemble_governance_car_segment(
@@ -4848,30 +6518,54 @@ fn assemble_governance_car_segment(
     root_guard: &GovernanceFilesystemRootGuard,
     entry: &PublishIndexEntryForCar,
 ) -> Result<JsonMap, GovernancePublishError> {
-    let (files, file_records) = governance_car_segment_files(root, entry)?;
+    let (files, file_records) = governance_car_segment_files(root, root_guard, entry)?;
+    let prepared = prepare_governance_car_segment(root, entry, files, file_records)?;
+    persist_prepared_governance_car_segment(root_guard, &prepared)?;
+    Ok(prepared.segment)
+}
+
+fn prepare_governance_car_segment(
+    root: &Path,
+    entry: &PublishIndexEntryForCar,
+    files: Vec<FileEntry>,
+    file_records: Vec<JsonValue>,
+) -> Result<PreparedGovernanceCarSegment, GovernancePublishError> {
     let (plan, payload) = CarBuildPlan::from_files(files).map_err(|err| {
         GovernancePublishError::other(format!("build governance CAR segment plan: {err}"))
     })?;
-    let mut car_bytes = Vec::new();
+    if usize::try_from(plan.content_length).ok() != Some(payload.len())
+        || payload.len() > GOVERNANCE_CAR_SOURCE_TOTAL_MAX_BYTES
+    {
+        return Err(GovernancePublishError::other(
+            "governance CAR plan payload exceeds its fixed segment bound",
+        ));
+    }
+    let mut car_output = GovernanceCarBuffer::new();
     let stats = CarWriter::new(&plan, &payload)
         .map_err(|err| GovernancePublishError::other(format!("initialise CAR writer: {err}")))?
-        .write_to(&mut car_bytes)
+        .write_to(&mut car_output)
         .map_err(|err| GovernancePublishError::other(format!("write CAR segment: {err}")))?;
+    let car_bytes = car_output.into_bytes();
+    if usize::try_from(stats.car_size).ok() != Some(car_bytes.len()) {
+        return Err(GovernancePublishError::other(
+            "governance CAR writer returned inconsistent bounded archive statistics",
+        ));
+    }
 
-    let base_path = governance_car_segment_base_path(root, entry);
+    let base_path = governance_car_segment_base_path(root, entry)?;
     let car_path = base_path.with_extension("car");
     let plan_path = base_path.with_extension("plan.json");
     let manifest_path = base_path.with_extension("json");
-
-    write_atomic(root_guard, &car_path, &car_bytes)?;
-    write_digest_sidecar(root_guard, &car_path, &car_bytes)?;
 
     let plan_json = governance_car_plan_json(entry, &plan, &stats, &file_records);
     let plan_body = json::to_json_pretty(&JsonValue::Object(plan_json)).map_err(|err| {
         GovernancePublishError::other(format!("serialize governance CAR plan: {err}"))
     })?;
-    write_atomic(root_guard, &plan_path, plan_body.as_bytes())?;
-    write_digest_sidecar(root_guard, &plan_path, plan_body.as_bytes())?;
+    if plan_body.is_empty() || plan_body.len() > GOVERNANCE_MUTABLE_INDEX_MAX_BYTES {
+        return Err(GovernancePublishError::other(
+            "governance CAR plan exceeds its fixed serialized bound",
+        ));
+    }
 
     let segment_json = governance_car_segment_json(
         root,
@@ -4886,26 +6580,79 @@ fn assemble_governance_car_segment(
         json::to_json_pretty(&JsonValue::Object(segment_json.clone())).map_err(|err| {
             GovernancePublishError::other(format!("serialize governance CAR segment: {err}"))
         })?;
-    write_atomic(root_guard, &manifest_path, segment_body.as_bytes())?;
-    write_digest_sidecar(root_guard, &manifest_path, segment_body.as_bytes())?;
-    Ok(segment_json)
+    if segment_body.is_empty() || segment_body.len() > GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1
+    {
+        return Err(GovernancePublishError::other(
+            "governance CAR segment manifest exceeds its fixed serialized bound",
+        ));
+    }
+    Ok(PreparedGovernanceCarSegment {
+        segment: segment_json,
+        car_path,
+        plan_path,
+        manifest_path,
+        car_bytes,
+        plan_body,
+        manifest_body: segment_body,
+    })
 }
 
-fn governance_car_segment_base_path(root: &Path, entry: &PublishIndexEntryForCar) -> PathBuf {
-    let digest_prefix = &entry.encoded_blake3[..entry.encoded_blake3.len().min(16)];
-    let base = format!(
-        "{:020}_{}_{}",
-        entry.position,
-        sanitize_label(&entry.payload_kind),
-        digest_prefix
-    );
-    root.join(GOVERNANCE_CAR_SEGMENTS_DIR).join(base)
+fn persist_prepared_governance_car_segment(
+    root_guard: &GovernanceFilesystemRootGuard,
+    prepared: &PreparedGovernanceCarSegment,
+) -> Result<(), GovernancePublishError> {
+    write_immutable_governance_artifact(
+        root_guard,
+        &prepared.car_path,
+        &prepared.car_bytes,
+        GOVERNANCE_CAR_ARCHIVE_MAX_BYTES,
+    )?;
+    write_immutable_governance_artifact(
+        root_guard,
+        &prepared.plan_path,
+        prepared.plan_body.as_bytes(),
+        GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
+    )?;
+    write_immutable_governance_artifact(
+        root_guard,
+        &prepared.manifest_path,
+        prepared.manifest_body.as_bytes(),
+        GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1,
+    )?;
+    Ok(())
+}
+
+fn governance_car_segment_base_path(
+    root: &Path,
+    entry: &PublishIndexEntryForCar,
+) -> Result<PathBuf, GovernancePublishError> {
+    Ok(root.join(governance_car_segment_relative_base(entry)?))
+}
+
+fn governance_car_segment_relative_base(
+    entry: &PublishIndexEntryForCar,
+) -> Result<String, GovernancePublishError> {
+    let pair_id = governance_source_pair_id(
+        &entry.payload_kind,
+        u64::try_from(entry.encoded_len)
+            .map_err(|_| GovernancePublishError::other("encoded source length exceeds u64"))?,
+        &entry.encoded_blake3,
+        u64::try_from(entry.json_len)
+            .map_err(|_| GovernancePublishError::other("JSON source length exceeds u64"))?,
+        &entry.json_blake3,
+    )?;
+    Ok(format!(
+        "{GOVERNANCE_CAR_SEGMENTS_DIR}/{:020}_{pair_id}",
+        entry.position
+    ))
 }
 
 fn governance_car_segment_files(
     root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
     entry: &PublishIndexEntryForCar,
 ) -> Result<(Vec<FileEntry>, Vec<JsonValue>), GovernancePublishError> {
+    let expected_total = validate_governance_car_source_lengths(entry.encoded_len, entry.json_len)?;
     let encoded_path = resolve_index_path(root, &entry.encoded_path)?;
     let json_path = resolve_index_path(root, &entry.json_path)?;
     let encoded_sidecar = digest_sidecar_path_for(&encoded_path);
@@ -4913,38 +6660,168 @@ fn governance_car_segment_files(
     let encoded_sidecar_path = index_path_string(root, &encoded_sidecar);
     let json_sidecar_path = index_path_string(root, &json_sidecar);
     let specs = [
-        ("encoded", entry.encoded_path.as_str(), encoded_path),
+        (
+            "encoded",
+            entry.encoded_path.as_str(),
+            encoded_path,
+            GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES,
+        ),
         (
             "encoded_blake3_sidecar",
             encoded_sidecar_path.as_str(),
             encoded_sidecar,
+            GOVERNANCE_DIGEST_SIDECAR_BYTES,
         ),
-        ("json", entry.json_path.as_str(), json_path),
+        (
+            "json",
+            entry.json_path.as_str(),
+            json_path,
+            GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES,
+        ),
         (
             "json_blake3_sidecar",
             json_sidecar_path.as_str(),
             json_sidecar,
+            GOVERNANCE_DIGEST_SIDECAR_BYTES,
         ),
     ];
-    let mut files = Vec::with_capacity(specs.len());
-    let mut records = Vec::with_capacity(specs.len());
-    for (role, relative_path, absolute_path) in specs {
-        let bytes = fs::read(&absolute_path).map_err(|err| {
+    let mut snapshots = Vec::with_capacity(specs.len());
+    for (_, _, absolute_path, max_bytes) in &specs {
+        let snapshot = read_rooted_governance_state_file(root_guard, absolute_path, *max_bytes)
+            .map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "read governance CAR segment source `{}`: {err}",
+                    absolute_path.display()
+                ))
+            })?;
+        snapshots.push(snapshot);
+    }
+
+    let encoded_bytes = snapshots[0].bytes();
+    let encoded_digest = blake3::hash(encoded_bytes).to_hex().to_string();
+    if encoded_bytes.len() != entry.encoded_len || encoded_digest != entry.encoded_blake3 {
+        return Err(GovernancePublishError::other(format!(
+            "governance CAR segment encoded source does not match publish-index length/digest identity {}:{}",
+            entry.encoded_len, entry.encoded_blake3
+        )));
+    }
+    let json_bytes = snapshots[2].bytes();
+    let json_digest = blake3::hash(json_bytes).to_hex().to_string();
+    if json_bytes.len() != entry.json_len || json_digest != entry.json_blake3 {
+        return Err(GovernancePublishError::other(format!(
+            "governance CAR segment JSON source does not match publish-index length/digest identity {}:{}",
+            entry.json_len, entry.json_blake3
+        )));
+    }
+    let encoded_sidecar = format!("{encoded_digest}\n");
+    if snapshots[1].bytes() != encoded_sidecar.as_bytes() {
+        return Err(GovernancePublishError::other(
+            "governance CAR segment encoded digest sidecar does not match retained source bytes",
+        ));
+    }
+    let json_sidecar = format!("{json_digest}\n");
+    if snapshots[3].bytes() != json_sidecar.as_bytes() {
+        return Err(GovernancePublishError::other(
+            "governance CAR segment JSON digest sidecar does not match retained source bytes",
+        ));
+    }
+    for ((role, _, absolute_path, _), snapshot) in specs.iter().zip(&snapshots) {
+        snapshot.binding().verify().map_err(|err| {
             GovernancePublishError::other(format!(
-                "read governance CAR segment source `{}`: {err}",
+                "revalidate governance CAR segment {role} source `{}`: {err}",
                 absolute_path.display()
             ))
+        })?;
+    }
+    let actual_total = snapshots.iter().try_fold(0_usize, |total, snapshot| {
+        total.checked_add(snapshot.bytes().len()).ok_or_else(|| {
+            GovernancePublishError::other("governance CAR source aggregate length overflowed")
+        })
+    })?;
+    if actual_total != expected_total || actual_total > GOVERNANCE_CAR_SOURCE_TOTAL_MAX_BYTES {
+        return Err(GovernancePublishError::other(
+            "governance CAR source aggregate does not match its bounded publish-index identity",
+        ));
+    }
+
+    let mut files = Vec::with_capacity(specs.len());
+    let mut records = Vec::with_capacity(specs.len());
+    for ((role, relative_path, _, _), snapshot) in specs.into_iter().zip(snapshots) {
+        let bytes = snapshot.into_bytes();
+        let digest_hex = blake3::hash(&bytes).to_hex().to_string();
+        let byte_len = u64::try_from(bytes.len()).map_err(|_| {
+            GovernancePublishError::other("governance CAR segment source length exceeds u64")
         })?;
         let mut record = JsonMap::new();
         record.insert("role".into(), JsonValue::from(role));
         record.insert("path".into(), JsonValue::from(relative_path));
-        record.insert("bytes".into(), JsonValue::from(bytes.len() as u64));
-        record.insert(
-            "blake3".into(),
-            JsonValue::from(blake3::hash(&bytes).to_hex().to_string()),
-        );
+        record.insert("bytes".into(), JsonValue::from(byte_len));
+        record.insert("blake3".into(), JsonValue::from(digest_hex));
         files.push(FileEntry {
             path: index_path_components(relative_path)?,
+            data: bytes,
+        });
+        records.push(JsonValue::Object(record));
+    }
+    Ok((files, records))
+}
+
+fn governance_car_segment_files_from_source_bytes(
+    entry: &PublishIndexEntryForCar,
+    encoded: &[u8],
+    json_bytes: &[u8],
+) -> Result<(Vec<FileEntry>, Vec<JsonValue>), GovernancePublishError> {
+    let expected_total = validate_governance_car_source_lengths(encoded.len(), json_bytes.len())?;
+    if encoded.len() != entry.encoded_len
+        || blake3::hash(encoded).to_hex().as_str() != entry.encoded_blake3
+        || json_bytes.len() != entry.json_len
+        || blake3::hash(json_bytes).to_hex().as_str() != entry.json_blake3
+    {
+        return Err(GovernancePublishError::other(
+            "in-memory governance CAR sources diverge from their publish-index identity",
+        ));
+    }
+    let encoded_sidecar = format!("{}\n", entry.encoded_blake3).into_bytes();
+    let json_sidecar = format!("{}\n", entry.json_blake3).into_bytes();
+    let specs = [
+        ("encoded", entry.encoded_path.clone(), encoded.to_vec()),
+        (
+            "encoded_blake3_sidecar",
+            format!("{}.blake3", entry.encoded_path),
+            encoded_sidecar,
+        ),
+        ("json", entry.json_path.clone(), json_bytes.to_vec()),
+        (
+            "json_blake3_sidecar",
+            format!("{}.blake3", entry.json_path),
+            json_sidecar,
+        ),
+    ];
+    let actual_total = specs.iter().try_fold(0_usize, |total, (_, _, bytes)| {
+        total.checked_add(bytes.len()).ok_or_else(|| {
+            GovernancePublishError::other("governance CAR source aggregate length overflowed")
+        })
+    })?;
+    if actual_total != expected_total {
+        return Err(GovernancePublishError::other(
+            "in-memory governance CAR source aggregate is inconsistent",
+        ));
+    }
+
+    let mut files = Vec::with_capacity(specs.len());
+    let mut records = Vec::with_capacity(specs.len());
+    for (role, relative_path, bytes) in specs {
+        let digest_hex = blake3::hash(&bytes).to_hex().to_string();
+        let byte_len = u64::try_from(bytes.len()).map_err(|_| {
+            GovernancePublishError::other("governance CAR source length exceeds u64")
+        })?;
+        let mut record = JsonMap::new();
+        record.insert("role".into(), JsonValue::from(role));
+        record.insert("path".into(), JsonValue::from(relative_path.clone()));
+        record.insert("bytes".into(), JsonValue::from(byte_len));
+        record.insert("blake3".into(), JsonValue::from(digest_hex));
+        files.push(FileEntry {
+            path: index_path_components(&relative_path)?,
             data: bytes,
         });
         records.push(JsonValue::Object(record));
@@ -5076,10 +6953,6 @@ fn governance_car_segment_json(
         JsonValue::from(stats.chunk_count as u64),
     );
     segment.insert("payload_bytes".into(), JsonValue::from(stats.payload_bytes));
-    segment.insert(
-        "assembled_at_unix".into(),
-        JsonValue::from(current_unix_timestamp_seconds()),
-    );
     segment.insert("files".into(), JsonValue::Array(file_records.to_vec()));
     segment.insert("chunk_profile".into(), chunk_profile_json_from_stats(stats));
     segment
@@ -5142,16 +7015,22 @@ fn index_path_components(relative_path: &str) -> Result<Vec<String>, GovernanceP
         || relative_path == "."
         || relative_path.starts_with('/')
         || relative_path.contains('\\')
+        || relative_path.len() > GOVERNANCE_RELATIVE_PATH_MAX_BYTES
     {
         return Err(GovernancePublishError::other(
-            "governance CAR queue path must be a relative slash-separated path",
+            "governance CAR queue path must be a bounded relative slash-separated path",
         ));
     }
     let mut components = Vec::new();
     for component in relative_path.split('/') {
-        if component.is_empty() || component == "." || component == ".." {
+        if component.is_empty()
+            || component == "."
+            || component == ".."
+            || component.len() > GOVERNANCE_RELATIVE_PATH_COMPONENT_MAX_BYTES
+            || components.len() == GOVERNANCE_RELATIVE_PATH_MAX_COMPONENTS
+        {
             return Err(GovernancePublishError::other(
-                "governance CAR queue path contains an invalid component",
+                "governance CAR queue path contains an invalid or oversized component",
             ));
         }
         components.push(component.to_owned());
@@ -5197,6 +7076,7 @@ fn append_runtime_signed_dag_payload(
     digest_hex: &str,
     encoded_len: usize,
     observed_timestamp: u64,
+    submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
 ) -> Result<(), GovernancePublishError> {
     root_guard.revalidate()?;
     reconcile_runtime_dag_producer_state(root, root_guard, signer, checkpoint_store)?;
@@ -5204,7 +7084,7 @@ fn append_runtime_signed_dag_payload(
     validate_existing_runtime_dag_root(root, signer, checkpoint_store)?;
     root_guard.revalidate()?;
     let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-    let mut index = read_runtime_dag_index(root, signer, checkpoint_store, &index_path)?;
+    let mut index = read_runtime_dag_index(signer, checkpoint_store, &index_path)?;
     let mut blocks = match index.remove("blocks") {
         Some(JsonValue::Array(blocks)) => blocks,
         Some(_) => {
@@ -5215,12 +7095,26 @@ fn append_runtime_signed_dag_payload(
         None => Vec::new(),
     };
 
+    let expected_submission_account_digest = submission_provenance
+        .as_ref()
+        .map(|provenance| hex::encode(provenance.publisher_account_digest));
+    let expected_submission_origin = submission_provenance
+        .as_ref()
+        .map(|provenance| provenance.origin.label());
     let duplicate_position = blocks.iter().position(|entry| {
         entry.get("payload_kind").and_then(JsonValue::as_str) == Some(payload_kind)
             && entry
                 .get("source_payload_blake3")
                 .and_then(JsonValue::as_str)
                 == Some(digest_hex)
+            && json_optional_string_matches(
+                entry.get("submission_publisher_account_digest_hex"),
+                expected_submission_account_digest.as_deref(),
+            )
+            && json_optional_string_matches(
+                entry.get("submission_origin"),
+                expected_submission_origin,
+            )
     });
     if let Some(position) = duplicate_position {
         if runtime_dag_index_entry_files_exist(root, &blocks[position]) {
@@ -5248,6 +7142,7 @@ fn append_runtime_signed_dag_payload(
         prev_cid: tip.as_ref().map(|tip| tip.node_cid.clone()),
         timestamp,
         publisher_peer_id: signer.publisher_peer_id.clone(),
+        submission_provenance,
         payload,
         publisher_signature: empty_governance_ed25519_signature(),
     };
@@ -5359,6 +7254,24 @@ fn append_runtime_signed_dag_payload(
         JsonValue::from(source_payload_len),
     );
     entry.insert(
+        "submission_publisher_account_digest_hex".into(),
+        block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| JsonValue::from(hex::encode(provenance.publisher_account_digest)))
+            .unwrap_or(JsonValue::Null),
+    );
+    entry.insert(
+        "submission_origin".into(),
+        block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| JsonValue::from(provenance.origin.label()))
+            .unwrap_or(JsonValue::Null),
+    );
+    entry.insert(
         "encoded_path".into(),
         JsonValue::from(index_path_string(root, encoded_path)),
     );
@@ -5419,7 +7332,6 @@ fn append_runtime_signed_dag_payload(
 }
 
 fn read_runtime_dag_index(
-    root: &Path,
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
     index_path: &Path,
@@ -5444,12 +7356,11 @@ fn read_runtime_dag_index(
                     "governance runtime DAG index uses an unsupported schema",
                 ));
             }
-            let expected_root = root.display().to_string();
             if map.get("source").and_then(JsonValue::as_str) != Some(GOVERNANCE_DAG_SINK_FILESYSTEM)
-                || map.get("root").and_then(JsonValue::as_str) != Some(expected_root.as_str())
+                || map.get("root").and_then(JsonValue::as_str) != Some(GOVERNANCE_DAG_LOGICAL_ROOT)
             {
                 return Err(GovernancePublishError::other(
-                    "governance runtime DAG index source or root binding is substituted",
+                    "governance runtime DAG index source or logical root marker is invalid",
                 ));
             }
             validate_runtime_dag_signer_fields(&map, signer)?;
@@ -5478,7 +7389,7 @@ fn read_runtime_dag_index(
                 "source".into(),
                 JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
             );
-            map.insert("root".into(), JsonValue::from(root.display().to_string()));
+            map.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
             insert_runtime_dag_signer_fields(&mut map, signer);
             insert_runtime_dag_checkpoint_store_fields(&mut map, store);
             map.insert("blocks".into(), JsonValue::Array(Vec::new()));
@@ -6004,7 +7915,7 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
         return Ok(Vec::new());
     }
 
-    let index = read_runtime_dag_index(root, signer, store, &index_path)?;
+    let index = read_runtime_dag_index(signer, store, &index_path)?;
     let current_binding = runtime_dag_provider_binding(signer, store);
     let indexed_blocks = index
         .get("blocks")
@@ -6115,6 +8026,24 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
         if required_runtime_string(entry, "payload_kind")? != payload_kind {
             return Err(GovernancePublishError::other(
                 "governance runtime DAG index payload kind does not match the signed payload",
+            ));
+        }
+        let submission_account_digest = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| hex::encode(provenance.publisher_account_digest));
+        let submission_origin = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| provenance.origin.label().to_owned());
+        if required_optional_runtime_string(entry, "submission_publisher_account_digest_hex")?
+            != submission_account_digest
+            || required_optional_runtime_string(entry, "submission_origin")? != submission_origin
+        {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG index submission provenance does not match the signed node",
             ));
         }
 
@@ -9405,7 +11334,7 @@ fn build_runtime_dag_index_bytes(
         "source".into(),
         JsonValue::from(GOVERNANCE_DAG_SINK_FILESYSTEM),
     );
-    index.insert("root".into(), JsonValue::from(root.display().to_string()));
+    index.insert("root".into(), JsonValue::from(GOVERNANCE_DAG_LOGICAL_ROOT));
     index.insert("generated_at".into(), JsonValue::from(head.generated_at));
     insert_runtime_dag_signer_fields(&mut index, signer);
     insert_runtime_dag_checkpoint_store_fields(&mut index, store);
@@ -10174,6 +12103,36 @@ fn optional_runtime_string(
     }
 }
 
+fn required_optional_runtime_string(
+    map: &JsonMap,
+    field: &str,
+) -> Result<Option<String>, GovernancePublishError> {
+    let value = map.get(field).ok_or_else(|| {
+        GovernancePublishError::other(format!(
+            "governance runtime DAG index entry is missing `{field}`"
+        ))
+    })?;
+    match value {
+        JsonValue::Null => Ok(None),
+        value => value
+            .as_str()
+            .map(|value| Some(value.to_owned()))
+            .ok_or_else(|| {
+                GovernancePublishError::other(format!(
+                    "governance runtime DAG index entry field `{field}` is not a string or null"
+                ))
+            }),
+    }
+}
+
+fn json_optional_string_matches(value: Option<&JsonValue>, expected: Option<&str>) -> bool {
+    match (value, expected) {
+        (Some(JsonValue::Null), None) => true,
+        (Some(value), Some(expected)) => value.as_str() == Some(expected),
+        _ => false,
+    }
+}
+
 fn required_runtime_u64(map: &JsonMap, field: &str) -> Result<u64, GovernancePublishError> {
     map.get(field).and_then(JsonValue::as_u64).ok_or_else(|| {
         GovernancePublishError::other(format!(
@@ -10267,6 +12226,138 @@ fn ensure_canonical_governance_encoding<T: norito::NoritoSerialize>(
     Ok(())
 }
 
+fn bind_authenticated_submission_labels(
+    labels: &mut JsonMap,
+    provenance: Option<&GovernanceSubmissionProvenanceV1>,
+) {
+    let Some(provenance) = provenance else {
+        return;
+    };
+    let signed_provenance = provenance.to_dag_provenance();
+    labels.insert(
+        "authenticated_publisher_account_digest_hex".into(),
+        JsonValue::from(hex::encode(signed_provenance.publisher_account_digest)),
+    );
+    labels.insert(
+        "authenticated_publisher_origin".into(),
+        JsonValue::from(provenance.origin().label()),
+    );
+}
+
+fn bind_authenticated_submission_json(
+    json_body: String,
+    provenance: Option<&GovernanceSubmissionProvenanceV1>,
+) -> Result<String, GovernancePublishError> {
+    let Some(provenance) = provenance else {
+        return Ok(json_body);
+    };
+    let value: JsonValue = json::from_slice(json_body.as_bytes()).map_err(|error| {
+        GovernancePublishError::other(format!(
+            "decode governance JSON before binding authenticated provenance: {error}"
+        ))
+    })?;
+    let JsonValue::Object(mut root) = value else {
+        return Err(GovernancePublishError::other(
+            "governance JSON root is not an object",
+        ));
+    };
+    let metadata = root
+        .get_mut("metadata")
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| GovernancePublishError::other("governance JSON metadata is missing"))?;
+    let signed_provenance = provenance.to_dag_provenance();
+    metadata.insert(
+        "authenticated_publisher_account_digest_hex".into(),
+        JsonValue::from(hex::encode(signed_provenance.publisher_account_digest)),
+    );
+    metadata.insert(
+        "authenticated_publisher_origin".into(),
+        JsonValue::from(provenance.origin().label()),
+    );
+    json::to_json_pretty(&JsonValue::Object(root)).map_err(|error| {
+        GovernancePublishError::other(format!(
+            "serialize governance JSON with authenticated provenance: {error}"
+        ))
+    })
+}
+
+#[cfg(test)]
+impl FilesystemGovernancePublisher {
+    fn publish_transparency_ledger_publication(
+        &self,
+        publication: &ModerationLedgerCyclePublicationV1,
+        encoded: &[u8],
+        authorization: Option<&PrivacyPublicationAuthorizationV1>,
+    ) -> Result<(), GovernancePublishError> {
+        let provenance = test_submission_provenance(
+            crate::GovernanceSubmissionOriginV1::PrivacyAggregatePublishDue,
+        );
+        <Self as GovernancePublisher>::publish_transparency_ledger_publication(
+            self,
+            publication,
+            encoded,
+            authorization,
+            Some(&provenance),
+        )
+    }
+
+    fn publish_proof_token_issuance(
+        &self,
+        issuance: &ProofTokenIssuanceV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let provenance = test_submission_provenance(
+            crate::GovernanceSubmissionOriginV1::TransparencyTokenIssuance,
+        );
+        <Self as GovernancePublisher>::publish_proof_token_issuance(
+            self,
+            issuance,
+            encoded,
+            Some(&provenance),
+        )
+    }
+
+    fn publish_appeal_finance_report(
+        &self,
+        report: &SoraFsAppealFinanceReportV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let provenance =
+            test_submission_provenance(crate::GovernanceSubmissionOriginV1::AppealFinanceReport);
+        <Self as GovernancePublisher>::publish_appeal_finance_report(
+            self,
+            report,
+            encoded,
+            &provenance,
+        )
+    }
+
+    fn publish_appeal_finance_weekly_rollup(
+        &self,
+        rollup: &SoraFsAppealFinanceWeeklyRollupV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let provenance = test_submission_provenance(
+            crate::GovernanceSubmissionOriginV1::AppealFinanceWeeklyRollup,
+        );
+        <Self as GovernancePublisher>::publish_appeal_finance_weekly_rollup(
+            self,
+            rollup,
+            encoded,
+            &provenance,
+        )
+    }
+}
+
+#[cfg(test)]
+fn test_submission_provenance(
+    origin: crate::GovernanceSubmissionOriginV1,
+) -> GovernanceSubmissionProvenanceV1 {
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &[0xA5; 32])
+        .expect("fixed test publisher key must be valid");
+    GovernanceSubmissionProvenanceV1::new(AccountId::new(public_key), origin)
+}
+
 impl GovernancePublisher for FilesystemGovernancePublisher {
     fn publish_deal_settlement(
         &self,
@@ -10284,12 +12375,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.base_path(settlement, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
             let mut settlement_obj = JsonMap::new();
             settlement_obj.insert("version".into(), JsonValue::from(settlement.version as u64));
             settlement_obj.insert(
@@ -10379,19 +12464,12 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             );
             metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
             metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-            metadata.insert(
-                "encoded_base64".into(),
-                JsonValue::from(BASE64_STANDARD.encode(encoded)),
-            );
             payload.insert("metadata".into(), JsonValue::Object(metadata));
 
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
                 GovernancePublishError::other(format!("serialize settlement json: {err}"))
             })?;
 
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
             let mut labels = JsonMap::new();
             labels.insert(
                 "deal_id".into(),
@@ -10410,12 +12488,10 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(status_label(settlement.status)),
             );
             labels.insert("settled_at".into(), JsonValue::from(settlement.settled_at));
-            self.record_publish_index(
+            let (encoded_path, json_path) = self.record_publish_index(
                 "deal_settlement",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
             self.record_runtime_signed_payload(
@@ -10448,17 +12524,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.pdp_archive_root().join(format!(
-                "{:020}-{}-{}-{digest_hex}",
-                archive.epoch_id,
-                hex::encode(archive.provider_id),
-                hex::encode(archive.challenge_id),
-            ));
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
             let decision = pdp_decision_label(archive.decision);
             let mut payload = JsonMap::new();
             payload.insert(
@@ -10519,9 +12584,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|error| {
                 GovernancePublishError::other(format!("serialize PDP archive json: {error}"))
             })?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
 
             let mut labels = JsonMap::new();
             labels.insert(
@@ -10539,14 +12601,8 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             labels.insert("epoch_id".into(), JsonValue::from(archive.epoch_id));
             labels.insert("decision".into(), JsonValue::from(decision));
             labels.insert("sequence".into(), JsonValue::from(archive.sequence));
-            self.record_publish_index(
-                "pdp_archive",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-                labels,
-            )?;
+            let (encoded_path, json_path) =
+                self.record_publish_index("pdp_archive", encoded, json_body.as_bytes(), labels)?;
             self.record_runtime_signed_payload(
                 "pdp_archive",
                 runtime_payload,
@@ -10582,15 +12638,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             let challenge = &publication.challenge;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self
-                .por_challenge_root()
-                .join(format!("{:020}", challenge.epoch_id))
-                .join(hex::encode(challenge.challenge_id));
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
             let mut payload = JsonMap::new();
             payload.insert(
                 "publication".into(),
@@ -10606,9 +12653,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     "serialize PoR challenge publication json: {error}"
                 ))
             })?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
 
             let mut labels = JsonMap::new();
             labels.insert(
@@ -10629,12 +12673,10 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(u64::from(publication.duplicate_samples)),
             );
             labels.insert("forced".into(), JsonValue::from(challenge.forced));
-            self.record_publish_index(
+            let (encoded_path, json_path) = self.record_publish_index(
                 "por_challenge_publication",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
             self.record_runtime_signed_payload(
@@ -10666,18 +12708,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.por_report_root().join(format!(
-                "{:04}-W{:02}_{:020}_{}",
-                report.cycle.year,
-                report.cycle.week,
-                report.generated_at,
-                &digest_hex[..16],
-            ));
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
             let mut payload = JsonMap::new();
             payload.insert(
                 "report".into(),
@@ -10691,9 +12721,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|error| {
                 GovernancePublishError::other(format!("serialize PoR weekly report json: {error}"))
             })?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
 
             let mut labels = JsonMap::new();
             labels.insert("cycle".into(), JsonValue::from(report.cycle.to_string()));
@@ -10710,12 +12737,10 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "forced_challenges".into(),
                 JsonValue::from(u64::from(report.forced_challenges)),
             );
-            self.record_publish_index(
+            let (encoded_path, json_path) = self.record_publish_index(
                 "por_weekly_report",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
             self.record_runtime_signed_payload(
@@ -10749,12 +12774,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.gc_audit_path(event, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
             let mut payload = JsonMap::new();
             payload.insert(
                 "event".into(),
@@ -10773,19 +12792,12 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             }
             metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
             metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-            metadata.insert(
-                "encoded_base64".into(),
-                JsonValue::from(BASE64_STANDARD.encode(encoded)),
-            );
             payload.insert("metadata".into(), JsonValue::Object(metadata));
 
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
                 GovernancePublishError::other(format!("serialize gc audit json: {err}"))
             })?;
 
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
             let mut labels = JsonMap::new();
             labels.insert(
                 "manifest".into(),
@@ -10804,14 +12816,8 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "evicted_at_unix".into(),
                 JsonValue::from(event.payload.evicted_at_unix),
             );
-            self.record_publish_index(
-                "gc_audit",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-                labels,
-            )?;
+            let (encoded_path, json_path) =
+                self.record_publish_index("gc_audit", encoded, json_body.as_bytes(), labels)?;
             self.record_runtime_signed_payload(
                 "gc_audit",
                 runtime_payload,
@@ -10844,12 +12850,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.reconciliation_path(report, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
             let mut payload = JsonMap::new();
             payload.insert(
                 "report".into(),
@@ -10915,10 +12915,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             }
             metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
             metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-            metadata.insert(
-                "encoded_base64".into(),
-                JsonValue::from(BASE64_STANDARD.encode(encoded)),
-            );
             payload.insert("metadata".into(), JsonValue::Object(metadata));
 
             let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
@@ -10927,9 +12923,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 ))
             })?;
 
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
             let mut labels = JsonMap::new();
             labels.insert(
                 "provider".into(),
@@ -10957,14 +12950,8 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     JsonValue::from(appeal_finance.total_treasury_xor.to_string()),
                 );
             }
-            self.record_publish_index(
-                "reconciliation",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-                labels,
-            )?;
+            let (encoded_path, json_path) =
+                self.record_publish_index("reconciliation", encoded, json_body.as_bytes(), labels)?;
             self.record_runtime_signed_payload(
                 "reconciliation",
                 runtime_payload,
@@ -11001,24 +12988,8 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             let snapshot = &envelope.snapshot;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.reputation_snapshot_path(envelope, &digest_hex);
+            let json_body = reputation_snapshot_json(envelope, encoded.len(), &digest_hex)?;
 
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
-            let json_body = reputation_snapshot_json(envelope, encoded, &digest_hex)?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
-
-            let latest_path = self.reputation_root().join("latest");
-            let latest_encoded_path = latest_path.with_extension("to");
-            write_atomic(&self.root_guard, &latest_encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &latest_encoded_path, encoded)?;
-            let latest_json_path = latest_path.with_extension("json");
-            write_atomic(&self.root_guard, &latest_json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &latest_json_path, json_body.as_bytes())?;
             let mut labels = JsonMap::new();
             labels.insert(
                 "snapshot_id_hex".into(),
@@ -11048,12 +13019,10 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "signature_count".into(),
                 JsonValue::from(envelope.signatures.len() as u64),
             );
-            self.record_publish_index(
+            let (encoded_path, json_path) = self.record_publish_index(
                 "reputation_snapshot",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
             self.record_runtime_signed_payload(
@@ -11086,16 +13055,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.moderation_ballot_event_path(event, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
             let json_body = moderation_ballot_event_json(event, encoded, &digest_hex)?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
 
             let mut labels = JsonMap::new();
             labels.insert("case_id".into(), JsonValue::from(event.case_id.clone()));
@@ -11128,12 +13088,10 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     labels.insert("winning_choice".into(), JsonValue::from(choice.as_str()));
                 }
             }
-            self.record_publish_index(
+            let (encoded_path, json_path) = self.record_publish_index(
                 "moderation_ballot_event",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
             self.record_runtime_signed_payload(
@@ -11156,6 +13114,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         publication: &ModerationLedgerCyclePublicationV1,
         encoded: &[u8],
         authorization: Option<&PrivacyPublicationAuthorizationV1>,
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
             let _publication_guard = self.lock_publication()?;
@@ -11263,24 +13222,21 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 )
                 .map_err(|err| GovernancePublishError::other(err.to_string()))?;
                 let payload = GovernanceLogPayloadV1::ExternalPayload(external);
-                self.preflight_runtime_signed_payload(&payload, encoded.len())?;
+                self.preflight_runtime_signed_payload_with_provenance(
+                    &payload,
+                    encoded.len(),
+                    provenance,
+                )?;
                 Some(payload)
             } else {
                 None
             };
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.transparency_ledger_publication_path(publication, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
-            let json_body =
-                transparency_ledger_publication_json(publication, encoded, &digest_hex)?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
+            let json_body = bind_authenticated_submission_json(
+                transparency_ledger_publication_json(publication, encoded, &digest_hex)?,
+                provenance,
+            )?;
 
             let block_hash = publication.block.block_hash().map_err(|err| {
                 GovernancePublishError::other(format!("hash transparency ledger block: {err}"))
@@ -11406,22 +13362,22 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     JsonValue::from(hex::encode(receipt.head_inclusion_digest())),
                 );
             }
-            self.record_publish_index(
+            bind_authenticated_submission_labels(&mut labels, provenance);
+            let (encoded_path, json_path) = self.record_publish_index(
                 "transparency_ledger_publication",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
             if let Some(runtime_payload) = runtime_payload {
-                self.record_runtime_signed_payload(
+                self.record_runtime_signed_payload_with_provenance(
                     "transparency_ledger_publication",
                     runtime_payload,
                     &encoded_path,
                     &json_path,
                     &digest_hex,
                     encoded.len(),
+                    provenance,
                 )?;
             } else {
                 remove_fenced_privacy_pending_request(&self.root)?;
@@ -11441,6 +13397,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         &self,
         issuance: &ProofTokenIssuanceV1,
         encoded: &[u8],
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
             let _publication_guard = self.lock_publication()?;
@@ -11452,19 +13409,17 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 GovernanceExternalPayloadV1::from_proof_token_issuance(issuance, encoded)
                     .map_err(|err| GovernancePublishError::other(err.to_string()))?;
             let runtime_payload = GovernanceLogPayloadV1::ExternalPayload(external);
-            self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
+            self.preflight_runtime_signed_payload_with_provenance(
+                &runtime_payload,
+                encoded.len(),
+                provenance,
+            )?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.proof_token_issuance_path(issuance, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
-            let json_body = proof_token_issuance_json(issuance, encoded, &digest_hex)?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
+            let json_body = bind_authenticated_submission_json(
+                proof_token_issuance_json(issuance, encoded, &digest_hex)?,
+                provenance,
+            )?;
 
             let mut labels = JsonMap::new();
             labels.insert(
@@ -11516,21 +13471,21 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     JsonValue::from(hex::encode(policy_digest)),
                 );
             }
-            self.record_publish_index(
+            bind_authenticated_submission_labels(&mut labels, provenance);
+            let (encoded_path, json_path) = self.record_publish_index(
                 "proof_token_issuance",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
-            self.record_runtime_signed_payload(
+            self.record_runtime_signed_payload_with_provenance(
                 "proof_token_issuance",
                 runtime_payload,
                 &encoded_path,
                 &json_path,
                 &digest_hex,
                 encoded.len(),
+                provenance,
             )?;
 
             Ok(())
@@ -11543,6 +13498,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         &self,
         report: &SoraFsAppealFinanceReportV1,
         encoded: &[u8],
+        provenance: &GovernanceSubmissionProvenanceV1,
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
             let _publication_guard = self.lock_publication()?;
@@ -11551,19 +13507,17 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 GovernancePublishError::other(format!("invalid appeal finance report: {err}"))
             })?;
             let runtime_payload = GovernanceLogPayloadV1::AppealFinanceReport(report.clone());
-            self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
+            self.preflight_runtime_signed_payload_with_provenance(
+                &runtime_payload,
+                encoded.len(),
+                Some(provenance),
+            )?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.appeal_finance_report_path(report, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
-            let json_body = appeal_finance_report_json(report, encoded, &digest_hex)?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
+            let json_body = bind_authenticated_submission_json(
+                appeal_finance_report_json(report, encoded, &digest_hex)?,
+                Some(provenance),
+            )?;
 
             let mut labels = JsonMap::new();
             labels.insert("case_id".into(), JsonValue::from(report.case_id.clone()));
@@ -11623,21 +13577,21 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "no_show_count".into(),
                 JsonValue::from(report.no_show_juror_ids.len() as u64),
             );
-            self.record_publish_index(
+            bind_authenticated_submission_labels(&mut labels, Some(provenance));
+            let (encoded_path, json_path) = self.record_publish_index(
                 "appeal_finance_report",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
-            self.record_runtime_signed_payload(
+            self.record_runtime_signed_payload_with_provenance(
                 "appeal_finance_report",
                 runtime_payload,
                 &encoded_path,
                 &json_path,
                 &digest_hex,
                 encoded.len(),
+                Some(provenance),
             )?;
 
             Ok(())
@@ -11650,6 +13604,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         &self,
         rollup: &SoraFsAppealFinanceWeeklyRollupV1,
         encoded: &[u8],
+        provenance: &GovernanceSubmissionProvenanceV1,
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
             let _publication_guard = self.lock_publication()?;
@@ -11660,19 +13615,17 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 ))
             })?;
             let runtime_payload = GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(rollup.clone());
-            self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
+            self.preflight_runtime_signed_payload_with_provenance(
+                &runtime_payload,
+                encoded.len(),
+                Some(provenance),
+            )?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.appeal_finance_weekly_rollup_path(rollup, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
-            let json_body = appeal_finance_weekly_rollup_json(rollup, encoded, &digest_hex)?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
+            let json_body = bind_authenticated_submission_json(
+                appeal_finance_weekly_rollup_json(rollup, encoded, &digest_hex)?,
+                Some(provenance),
+            )?;
 
             let mut labels = JsonMap::new();
             labels.insert("cycle".into(), JsonValue::from(rollup.cycle.to_string()));
@@ -11706,21 +13659,21 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "total_rewards_forfeited_treasury_xor".into(),
                 JsonValue::from(rollup.total_rewards_forfeited_treasury_xor.to_string()),
             );
-            self.record_publish_index(
+            bind_authenticated_submission_labels(&mut labels, Some(provenance));
+            let (encoded_path, json_path) = self.record_publish_index(
                 "appeal_finance_weekly_rollup",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
-            self.record_runtime_signed_payload(
+            self.record_runtime_signed_payload_with_provenance(
                 "appeal_finance_weekly_rollup",
                 runtime_payload,
                 &encoded_path,
                 &json_path,
                 &digest_hex,
                 encoded.len(),
+                Some(provenance),
             )?;
 
             Ok(())
@@ -11755,16 +13708,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
-            let base_path = self.appeal_finance_settlement_receipt_path(receipt, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&self.root_guard, &encoded_path, encoded)?;
-            write_digest_sidecar(&self.root_guard, &encoded_path, encoded)?;
-
             let json_body = appeal_finance_settlement_receipt_json(receipt, encoded, &digest_hex)?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&self.root_guard, &json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&self.root_guard, &json_path, json_body.as_bytes())?;
 
             let mut labels = JsonMap::new();
             labels.insert("case_id".into(), JsonValue::from(receipt.case_id.clone()));
@@ -11852,12 +13796,10 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "configured_signer_count".into(),
                 JsonValue::from(u64::from(receipt.configured_signer_count)),
             );
-            self.record_publish_index(
+            let (encoded_path, json_path) = self.record_publish_index(
                 "appeal_finance_settlement_receipt",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
+                encoded,
+                json_body.as_bytes(),
                 labels,
             )?;
             self.record_runtime_signed_payload(
@@ -11882,15 +13824,18 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
 
 fn reputation_snapshot_json(
     envelope: &SignedReputationSnapshotV1,
-    encoded: &[u8],
+    encoded_len: usize,
     digest_hex: &str,
 ) -> Result<String, GovernancePublishError> {
+    if encoded_len == 0 || encoded_len > GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES {
+        return Err(GovernancePublishError::other(format!(
+            "signed reputation snapshot encoded length must be in 1..={GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES} bytes"
+        )));
+    }
     let mut payload = JsonMap::new();
     payload.insert(
-        "signed_snapshot".into(),
-        json::to_value(envelope).map_err(|err| {
-            GovernancePublishError::other(format!("serialize signed reputation snapshot: {err}"))
-        })?,
+        "schema".into(),
+        JsonValue::from("sorafs.reputation_snapshot.metadata.v1"),
     );
 
     let snapshot = &envelope.snapshot;
@@ -11927,10 +13872,9 @@ fn reputation_snapshot_json(
         "encoded_blake3".into(),
         JsonValue::from(digest_hex.to_string()),
     );
-    metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
     metadata.insert(
-        "encoded_base64".into(),
-        JsonValue::from(BASE64_STANDARD.encode(encoded)),
+        "encoded_len".into(),
+        JsonValue::from(u64::try_from(encoded_len).unwrap_or(u64::MAX)),
     );
     payload.insert("metadata".into(), JsonValue::Object(metadata));
 
@@ -12008,10 +13952,6 @@ fn moderation_ballot_event_json(
         JsonValue::from(digest_hex.to_string()),
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-    metadata.insert(
-        "encoded_base64".into(),
-        JsonValue::from(BASE64_STANDARD.encode(encoded)),
-    );
     payload.insert("metadata".into(), JsonValue::Object(metadata));
 
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
@@ -12083,10 +14023,6 @@ fn transparency_ledger_publication_json(
         JsonValue::from(digest_hex.to_string()),
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-    metadata.insert(
-        "encoded_base64".into(),
-        JsonValue::from(BASE64_STANDARD.encode(encoded)),
-    );
     payload.insert("metadata".into(), JsonValue::Object(metadata));
 
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
@@ -12173,10 +14109,6 @@ fn proof_token_issuance_json(
         JsonValue::from(digest_hex.to_string()),
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-    metadata.insert(
-        "encoded_base64".into(),
-        JsonValue::from(BASE64_STANDARD.encode(encoded)),
-    );
     payload.insert("metadata".into(), JsonValue::Object(metadata));
 
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
@@ -12248,10 +14180,6 @@ fn appeal_finance_report_json(
         JsonValue::from(digest_hex.to_string()),
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-    metadata.insert(
-        "encoded_base64".into(),
-        JsonValue::from(BASE64_STANDARD.encode(encoded)),
-    );
     payload.insert("metadata".into(), JsonValue::Object(metadata));
 
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
@@ -12324,10 +14252,6 @@ fn appeal_finance_weekly_rollup_json(
         JsonValue::from(digest_hex.to_string()),
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-    metadata.insert(
-        "encoded_base64".into(),
-        JsonValue::from(BASE64_STANDARD.encode(encoded)),
-    );
     payload.insert("metadata".into(), JsonValue::Object(metadata));
 
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
@@ -12415,10 +14339,6 @@ fn appeal_finance_settlement_receipt_json(
         JsonValue::from(digest_hex.to_string()),
     );
     metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-    metadata.insert(
-        "encoded_base64".into(),
-        JsonValue::from(BASE64_STANDARD.encode(encoded)),
-    );
     payload.insert("metadata".into(), JsonValue::Object(metadata));
 
     json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
@@ -12484,6 +14404,51 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn read_publication_state_fixture(root: &Path) -> JsonValue {
+        json::from_slice(
+            &fs::read(root.join(GOVERNANCE_PUBLICATION_STATE_FILE))
+                .expect("read authoritative governance publication state"),
+        )
+        .expect("decode authoritative governance publication state")
+    }
+
+    fn read_publication_section_fixture(root: &Path, section: &str) -> JsonValue {
+        read_publication_state_fixture(root)
+            .get(section)
+            .cloned()
+            .unwrap_or_else(|| panic!("publication state section `{section}`"))
+    }
+
+    fn published_source_paths_fixture(root: &Path, payload_kind: &str) -> Vec<(PathBuf, PathBuf)> {
+        read_publication_section_fixture(root, "publish_index")
+            .get("entries")
+            .and_then(JsonValue::as_array)
+            .expect("publication entries")
+            .iter()
+            .filter(|entry| {
+                entry.get("payload_kind").and_then(JsonValue::as_str) == Some(payload_kind)
+            })
+            .map(|entry| {
+                let encoded = entry
+                    .get("encoded_path")
+                    .and_then(JsonValue::as_str)
+                    .expect("encoded source path");
+                let json = entry
+                    .get("json_path")
+                    .and_then(JsonValue::as_str)
+                    .expect("JSON source path");
+                (root.join(encoded), root.join(json))
+            })
+            .collect()
+    }
+
+    fn only_published_source_paths(root: &Path, payload_kind: &str) -> (PathBuf, PathBuf) {
+        let paths = published_source_paths_fixture(root, payload_kind);
+        assert_eq!(paths.len(), 1, "expected one `{payload_kind}` publication");
+        paths.into_iter().next().expect("one publication path")
+    }
+
     #[test]
     fn runtime_dag_decode_allocation_budget_is_scaled_and_absolutely_capped() {
         assert_eq!(
@@ -13283,6 +15248,7 @@ mod tests {
             generated_at_unix: spec.cycle_end_unix,
             population_label: "fenced-population".to_owned(),
             population_digest: [0x92; 32],
+            source_commitment: [0x91; 32],
             privacy: ModerationPrivacyParametersV1 {
                 version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
@@ -13438,15 +15404,39 @@ mod tests {
         .expect("fenced privacy request")
     }
 
+    fn assert_empty_publication_authority(root: &Path) {
+        let state = read_publication_state_fixture(root);
+        assert_eq!(state.get("generation").and_then(JsonValue::as_u64), Some(0));
+        assert_eq!(
+            state
+                .get("publish_index")
+                .and_then(|index| index.get("entries"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            state
+                .get("car_queue")
+                .and_then(|queue| queue.get("segments"))
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            fs::read(root.join(GOVERNANCE_PUBLICATION_INITIALIZED_FILE))
+                .expect("read publication initialization marker"),
+            GOVERNANCE_PUBLICATION_INITIALIZED_BODY
+        );
+    }
+
     fn assert_no_privacy_publication_side_effects(root: &Path) {
         assert!(
-            !root.join("transparency").exists(),
+            !root.join(GOVERNANCE_PUBLICATION_SOURCES_DIR).exists()
+                && !root.join(GOVERNANCE_CAR_SEGMENTS_DIR).exists(),
             "privacy artifacts must remain absent"
         );
-        assert!(
-            !root.join(GOVERNANCE_PUBLISH_INDEX_FILE).exists(),
-            "publish index must remain absent"
-        );
+        assert_empty_publication_authority(root);
         assert!(
             !root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE).exists(),
             "runtime DAG index must remain absent"
@@ -13872,20 +15862,737 @@ mod tests {
     }
 
     #[test]
-    fn governance_car_queue_pending_count_tracks_unassembled_segments() {
-        let mut assembled = JsonMap::new();
-        assembled.insert("status".into(), JsonValue::from("assembled"));
+    fn governance_car_queue_rejects_non_producible_pending_segments() {
+        let temp = tempdir().expect("tempdir");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain governance root");
         let mut pending = JsonMap::new();
+        pending.insert(
+            "schema".into(),
+            JsonValue::from(GOVERNANCE_CAR_SEGMENT_SCHEMA),
+        );
         pending.insert("status".into(), JsonValue::from("pending"));
-        let malformed = JsonValue::from("not-a-segment");
 
+        let error = rebuild_car_queue(JsonMap::new(), vec![JsonValue::Object(pending)])
+            .expect_err("pending CAR segment must fail closed");
+        assert!(error.to_string().contains("non-producible"));
+        assert!(!temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE).exists());
+        root_guard
+            .revalidate()
+            .expect("retained root remains valid");
+    }
+
+    fn write_car_segment_source_fixture(root: &Path, encoded: &[u8]) -> PublishIndexEntryForCar {
+        let payload_kind = "test_payload";
+        let json = br#"{"status":"ready"}"#;
+        let encoded_blake3 = blake3::hash(encoded).to_hex().to_string();
+        let json_blake3 = blake3::hash(json).to_hex().to_string();
+        let (encoded_relative, json_relative) = governance_source_pair_relative_paths(
+            payload_kind,
+            u64::try_from(encoded.len()).expect("encoded length"),
+            &encoded_blake3,
+            u64::try_from(json.len()).expect("JSON length"),
+            &json_blake3,
+        )
+        .expect("derive canonical source fixture paths");
+        let encoded_path = root.join(&encoded_relative);
+        let json_path = root.join(&json_relative);
+        fs::create_dir_all(encoded_path.parent().expect("encoded source parent"))
+            .expect("create CAR source directory");
+        fs::write(&encoded_path, encoded).expect("write encoded CAR source");
+        fs::write(&json_path, json).expect("write JSON CAR source");
+        for (path, bytes) in [(&encoded_path, encoded), (&json_path, json.as_slice())] {
+            let mut digest = blake3::hash(bytes).to_hex().to_string();
+            digest.push('\n');
+            fs::write(digest_sidecar_path_for(path), digest).expect("write CAR source sidecar");
+        }
+        PublishIndexEntryForCar {
+            position: 0,
+            newly_inserted: true,
+            payload_kind: payload_kind.to_owned(),
+            encoded_path: encoded_relative,
+            json_path: json_relative,
+            encoded_blake3,
+            encoded_len: encoded.len(),
+            json_blake3,
+            json_len: json.len(),
+        }
+    }
+
+    #[test]
+    fn governance_car_segment_sources_require_recorded_length_digest_and_file_caps() {
+        let temp = tempdir().expect("tempdir");
+        let encoded = b"canonical-payload";
+        let entry = write_car_segment_source_fixture(temp.path(), encoded);
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain CAR source root");
+
+        let (files, records) = governance_car_segment_files(temp.path(), &root_guard, &entry)
+            .expect("read canonical CAR sources");
+        assert_eq!(files.len(), 4);
+        assert_eq!(records.len(), 4);
+
+        let mut wrong_length = entry.clone();
+        wrong_length.encoded_len += 1;
+        let error = governance_car_segment_files(temp.path(), &root_guard, &wrong_length)
+            .expect_err("shorter encoded source must not satisfy its recorded length");
+        assert!(error.to_string().contains("encoded source"));
+
+        let encoded_path = temp.path().join(&entry.encoded_path);
+        let substituted_encoded = b"tampered!-payload";
+        assert_eq!(substituted_encoded.len(), encoded.len());
+        fs::write(&encoded_path, substituted_encoded).expect("substitute encoded source");
+        let mut substituted_sidecar = blake3::hash(substituted_encoded).to_hex().to_string();
+        substituted_sidecar.push('\n');
+        fs::write(digest_sidecar_path_for(&encoded_path), substituted_sidecar)
+            .expect("substitute matching encoded sidecar");
+        let error = governance_car_segment_files(temp.path(), &root_guard, &entry)
+            .expect_err("same-length encoded plus sidecar substitution must fail closed");
+        assert!(error.to_string().contains("encoded source"));
+
+        let entry = write_car_segment_source_fixture(temp.path(), encoded);
+        let json_path = temp.path().join(&entry.json_path);
+        let substituted_json = br#"{"status":"owned"}"#;
+        assert_eq!(substituted_json.len(), entry.json_len);
+        fs::write(&json_path, substituted_json).expect("substitute JSON source");
+        let mut substituted_sidecar = blake3::hash(substituted_json).to_hex().to_string();
+        substituted_sidecar.push('\n');
+        fs::write(digest_sidecar_path_for(&json_path), substituted_sidecar)
+            .expect("substitute matching JSON sidecar");
+        let error = governance_car_segment_files(temp.path(), &root_guard, &entry)
+            .expect_err("same-length JSON plus sidecar substitution must fail closed");
+        assert!(error.to_string().contains("JSON source"));
+
+        let entry = write_car_segment_source_fixture(temp.path(), encoded);
+        fs::write(
+            digest_sidecar_path_for(&temp.path().join(&entry.encoded_path)),
+            format!("{}\n", "0".repeat(64)),
+        )
+        .expect("substitute encoded digest sidecar");
+        let error = governance_car_segment_files(temp.path(), &root_guard, &entry)
+            .expect_err("a mismatched retained digest sidecar must fail closed");
+        assert!(error.to_string().contains("digest sidecar"));
+
+        let entry = write_car_segment_source_fixture(temp.path(), encoded);
+        fs::write(
+            digest_sidecar_path_for(&temp.path().join(&entry.encoded_path)),
+            vec![b'0'; GOVERNANCE_DIGEST_SIDECAR_BYTES + 1],
+        )
+        .expect("write oversized digest sidecar");
+        let error = governance_car_segment_files(temp.path(), &root_guard, &entry)
+            .expect_err("oversized digest sidecar must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("exceeds {GOVERNANCE_DIGEST_SIDECAR_BYTES} bytes"))
+        );
+
+        let mut corrupted_index_entry = entry;
+        corrupted_index_entry.encoded_len = GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES + 1;
+        let error = governance_car_segment_files(temp.path(), &root_guard, &corrupted_index_entry)
+            .expect_err("corrupted publish-index length must fail before its source read");
+        assert!(error.to_string().contains("encoded publication length"));
+    }
+
+    #[test]
+    fn governance_car_source_limits_cover_each_file_and_the_checked_segment_total() {
         assert_eq!(
-            governance_car_queue_pending_count(&[
-                JsonValue::Object(assembled),
-                JsonValue::Object(pending),
-                malformed,
-            ]),
-            2
+            validate_governance_car_source_lengths(
+                GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES,
+                GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES,
+            )
+            .expect("boundary lengths are valid"),
+            GOVERNANCE_CAR_SOURCE_TOTAL_MAX_BYTES
+        );
+        for (encoded_len, json_len) in [
+            (GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES + 1, 1),
+            (1, GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES + 1),
+            (0, 1),
+            (1, 0),
+        ] {
+            validate_governance_car_source_lengths(encoded_len, json_len)
+                .expect_err("outside-boundary governance CAR source lengths must fail");
+        }
+    }
+
+    #[test]
+    fn governance_immutable_artifacts_are_exact_idempotent_and_non_overwritable() {
+        let temp = tempdir().expect("tempdir");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain publication root");
+        let path = temp.path().join("sources").join("identity.to");
+        let canonical = b"canonical-source";
+
+        write_immutable_governance_artifact(
+            &root_guard,
+            &path,
+            canonical,
+            GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES,
+        )
+        .expect("create immutable source");
+        write_immutable_governance_artifact(
+            &root_guard,
+            &path,
+            canonical,
+            GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES,
+        )
+        .expect("exact replay is idempotent");
+        let error = write_immutable_governance_artifact(
+            &root_guard,
+            &path,
+            b"substituted-source",
+            GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES,
+        )
+        .expect_err("divergent replay must not replace immutable source bytes");
+        assert!(error.to_string().contains("occupied by different bytes"));
+        assert_eq!(fs::read(path).expect("read immutable source"), canonical);
+    }
+
+    #[test]
+    fn governance_publish_index_rejects_labels_above_the_fixed_cap() {
+        let temp = tempdir().expect("tempdir");
+        let fixture = write_car_segment_source_fixture(temp.path(), b"canonical-payload");
+        let mut labels = JsonMap::new();
+        for index in 0..=GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1 {
+            labels.insert(format!("label_{index}"), JsonValue::from(index as u64));
+        }
+
+        let error = update_publish_index(
+            temp.path(),
+            empty_governance_publish_index(),
+            &fixture.payload_kind,
+            &temp.path().join(&fixture.encoded_path),
+            &temp.path().join(&fixture.json_path),
+            &fixture.encoded_blake3,
+            fixture.encoded_len,
+            &fixture.json_blake3,
+            fixture.json_len,
+            labels,
+        )
+        .expect_err("publish entries above the label cap must fail before CAR assembly");
+        assert!(error.to_string().contains(&format!(
+            "{GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1}-label hard cap"
+        )));
+    }
+
+    #[test]
+    fn governance_publication_labels_enforce_canonical_scalar_and_byte_bounds() {
+        let mut boundary = JsonMap::new();
+        boundary.insert(
+            "a".repeat(GOVERNANCE_PUBLICATION_LABEL_KEY_MAX_BYTES_V1),
+            JsonValue::from("x".repeat(GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1)),
+        );
+        boundary.insert("boolean".into(), JsonValue::from(true));
+        boundary.insert("null".into(), JsonValue::Null);
+        boundary.insert("number".into(), JsonValue::from(7_u64));
+        validate_governance_publication_labels(&boundary, "test publication")
+            .expect("labels at the per-field boundaries remain valid");
+
+        for key in [
+            String::new(),
+            "bad/key".to_owned(),
+            "a".repeat(GOVERNANCE_PUBLICATION_LABEL_KEY_MAX_BYTES_V1 + 1),
+        ] {
+            let mut labels = JsonMap::new();
+            labels.insert(key, JsonValue::from("value"));
+            let error = validate_governance_publication_labels(&labels, "test publication")
+                .expect_err("noncanonical label keys must fail closed");
+            assert!(error.to_string().contains("noncanonical label key"));
+        }
+
+        for value in [
+            JsonValue::Array(Vec::new()),
+            JsonValue::Object(JsonMap::new()),
+        ] {
+            let mut labels = JsonMap::new();
+            labels.insert("nested".into(), value);
+            let error = validate_governance_publication_labels(&labels, "test publication")
+                .expect_err("structured label values must fail closed");
+            assert!(error.to_string().contains("must be a scalar"));
+        }
+
+        let mut oversized_string = JsonMap::new();
+        oversized_string.insert(
+            "value".into(),
+            JsonValue::from("x".repeat(GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1 + 1)),
+        );
+        let error = validate_governance_publication_labels(&oversized_string, "test publication")
+            .expect_err("oversized label strings must fail closed");
+        assert!(error.to_string().contains("string bound"));
+
+        let mut oversized_aggregate = JsonMap::new();
+        for index in 0..16 {
+            oversized_aggregate.insert(
+                format!("label_{index:02}"),
+                JsonValue::from("x".repeat(GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1)),
+            );
+        }
+        let error =
+            validate_governance_publication_labels(&oversized_aggregate, "test publication")
+                .expect_err("oversized aggregate label metadata must fail closed");
+        assert!(error.to_string().contains("aggregate bound"));
+    }
+
+    #[test]
+    fn governance_index_paths_enforce_fixed_byte_and_component_bounds() {
+        let boundary = std::iter::repeat_n("a", GOVERNANCE_RELATIVE_PATH_MAX_COMPONENTS)
+            .collect::<Vec<_>>()
+            .join("/");
+        assert_eq!(
+            index_path_components(&boundary)
+                .expect("path at the component-count boundary is valid")
+                .len(),
+            GOVERNANCE_RELATIVE_PATH_MAX_COMPONENTS
+        );
+        assert!(
+            index_path_components(&"a".repeat(GOVERNANCE_RELATIVE_PATH_COMPONENT_MAX_BYTES))
+                .is_ok(),
+            "component at the byte boundary is valid"
+        );
+
+        let too_many_components = format!("{boundary}/a");
+        assert!(index_path_components(&too_many_components).is_err());
+        assert!(
+            index_path_components(&"a".repeat(GOVERNANCE_RELATIVE_PATH_COMPONENT_MAX_BYTES + 1))
+                .is_err()
+        );
+        assert!(
+            index_path_components(&"a".repeat(GOVERNANCE_RELATIVE_PATH_MAX_BYTES + 1)).is_err()
+        );
+    }
+
+    #[test]
+    fn governance_publication_artifact_names_are_canonical_and_bounded() {
+        let digest = "11".repeat(32);
+        let oversized_kind = "a".repeat(129);
+        for kind in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "bad/kind",
+            "Uppercase",
+            oversized_kind.as_str(),
+        ] {
+            assert!(
+                governance_source_pair_relative_paths(kind, 1, &digest, 1, &digest).is_err(),
+                "publication kind `{kind}` must not become path authority"
+            );
+        }
+        let (encoded, json) =
+            governance_source_pair_relative_paths(&"a".repeat(128), 1, &digest, 1, &digest)
+                .expect("publication kind at the byte boundary");
+        assert!(encoded.ends_with("/payload.to"));
+        assert!(json.ends_with("/payload.json"));
+
+        let pair_id = "ab".repeat(32);
+        assert!(is_canonical_governance_source_pair_directory(&pair_id));
+        assert!(!is_canonical_governance_source_pair_directory(
+            &pair_id.to_uppercase()
+        ));
+        for suffix in [
+            ".car",
+            ".car.blake3",
+            ".plan.json",
+            ".plan.json.blake3",
+            ".json",
+            ".json.blake3",
+        ] {
+            assert!(is_canonical_governance_car_artifact_name(&format!(
+                "{:020}_{pair_id}{suffix}",
+                7
+            )));
+        }
+        assert!(!is_canonical_governance_car_artifact_name(&format!(
+            "7_{pair_id}.car"
+        )));
+        assert!(!is_canonical_governance_car_artifact_name(&format!(
+            "{:020}_{pair_id}.tmp",
+            7
+        )));
+    }
+
+    #[test]
+    fn governance_publication_state_commit_failure_preserves_immutable_orphans() {
+        let temp = tempdir().expect("tempdir");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain publication root");
+        let fixture = write_car_segment_source_fixture(temp.path(), b"canonical-payload");
+        let encoded_path = temp.path().join(&fixture.encoded_path);
+        let json_path = temp.path().join(&fixture.json_path);
+        let (publish_index, entry) = update_publish_index(
+            temp.path(),
+            empty_governance_publish_index(),
+            &fixture.payload_kind,
+            &encoded_path,
+            &json_path,
+            &fixture.encoded_blake3,
+            fixture.encoded_len,
+            &fixture.json_blake3,
+            fixture.json_len,
+            JsonMap::new(),
+        )
+        .expect("prepare bounded publish index");
+        let queue = assemble_governance_car_queue(
+            temp.path(),
+            &root_guard,
+            empty_governance_car_queue(),
+            &entry,
+        )
+        .expect("qualify CAR artifacts before commit");
+        let car_path = resolve_index_path(
+            temp.path(),
+            queue
+                .get("segments")
+                .and_then(JsonValue::as_array)
+                .and_then(|segments| segments.first())
+                .and_then(|segment| segment.get("car_path"))
+                .and_then(JsonValue::as_str)
+                .expect("qualified CAR path"),
+        )
+        .expect("resolve qualified CAR path");
+        let canonical_car = fs::read(&car_path).expect("read qualified CAR");
+        let mut state = empty_governance_publication_state();
+        state.insert(
+            "publish_index".into(),
+            JsonValue::Object(publish_index.clone()),
+        );
+        state.insert("car_queue".into(), JsonValue::Object(queue));
+
+        commit_governance_publication_state_with(
+            temp.path(),
+            &root_guard,
+            state,
+            |_guard, _path, _bytes| Err(io::Error::other("injected commit failure")),
+        )
+        .expect_err("injected authoritative rename must fail");
+        assert!(
+            !temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE).exists(),
+            "failed commit must not expose either nested index"
+        );
+
+        let retried_queue = assemble_governance_car_queue(
+            temp.path(),
+            &root_guard,
+            empty_governance_car_queue(),
+            &entry,
+        )
+        .expect("retry reuses exact immutable orphan artifacts");
+        assert_eq!(fs::read(&car_path).expect("read reused CAR"), canonical_car);
+
+        fs::write(&car_path, b"substituted orphan").expect("substitute unreachable orphan");
+        let error = assemble_governance_car_queue(
+            temp.path(),
+            &root_guard,
+            empty_governance_car_queue(),
+            &entry,
+        )
+        .expect_err("retry must not replace a divergent immutable orphan");
+        assert!(error.to_string().contains("occupied by different bytes"));
+
+        fs::remove_file(&car_path).expect("remove divergent unreachable orphan");
+        let repaired_queue = assemble_governance_car_queue(
+            temp.path(),
+            &root_guard,
+            empty_governance_car_queue(),
+            &entry,
+        )
+        .expect("retry recreates a missing immutable orphan from canonical sources");
+        for field in [
+            "segments",
+            "by_encoded_blake3",
+            "by_payload_kind",
+            "by_car_archive_blake3",
+            "segment_count",
+            "assembled_count",
+            "pending_count",
+        ] {
+            assert_eq!(
+                retried_queue.get(field),
+                repaired_queue.get(field),
+                "canonical retry diverged at `{field}`"
+            );
+        }
+        assert_eq!(
+            fs::read(&car_path).expect("read recreated CAR"),
+            canonical_car
+        );
+        let mut retry_state = empty_governance_publication_state();
+        retry_state.insert("publish_index".into(), JsonValue::Object(publish_index));
+        retry_state.insert("car_queue".into(), JsonValue::Object(repaired_queue));
+        commit_governance_publication_state(temp.path(), &root_guard, retry_state)
+            .expect("single authoritative retry commit");
+        let committed = read_publication_state_fixture(temp.path());
+        assert_eq!(
+            committed.get("generation").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        validate_governance_publication_state(
+            committed.as_object().expect("committed publication state"),
+        )
+        .expect("committed cross-sections remain one-to-one");
+    }
+
+    #[test]
+    fn governance_publication_failed_successor_commit_preserves_exact_predecessor() {
+        let temp = tempdir().expect("tempdir");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain publication root");
+
+        let first = write_car_segment_source_fixture(temp.path(), b"publication-a");
+        let (first_index, first_entry) = update_publish_index(
+            temp.path(),
+            empty_governance_publish_index(),
+            &first.payload_kind,
+            &temp.path().join(&first.encoded_path),
+            &temp.path().join(&first.json_path),
+            &first.encoded_blake3,
+            first.encoded_len,
+            &first.json_blake3,
+            first.json_len,
+            JsonMap::new(),
+        )
+        .expect("prepare publication A index");
+        let first_queue = assemble_governance_car_queue(
+            temp.path(),
+            &root_guard,
+            empty_governance_car_queue(),
+            &first_entry,
+        )
+        .expect("prepare publication A CAR");
+        let mut first_state = empty_governance_publication_state();
+        first_state.insert("publish_index".into(), JsonValue::Object(first_index));
+        first_state.insert("car_queue".into(), JsonValue::Object(first_queue));
+        commit_governance_publication_state(temp.path(), &root_guard, first_state)
+            .expect("commit publication A");
+
+        let authority_path = temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE);
+        let predecessor_bytes = fs::read(&authority_path).expect("read publication A authority");
+        let predecessor: JsonValue =
+            json::from_slice(&predecessor_bytes).expect("decode publication A authority");
+        assert_eq!(
+            predecessor.get("generation").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+
+        let second = write_car_segment_source_fixture(temp.path(), b"publication-b");
+        let mut successor = predecessor
+            .as_object()
+            .expect("publication A authority object")
+            .clone();
+        let predecessor_index = successor
+            .remove("publish_index")
+            .and_then(|value| value.as_object().cloned())
+            .expect("publication A index");
+        let predecessor_queue = successor
+            .remove("car_queue")
+            .and_then(|value| value.as_object().cloned())
+            .expect("publication A CAR queue");
+        let (successor_index, second_entry) = update_publish_index(
+            temp.path(),
+            predecessor_index,
+            &second.payload_kind,
+            &temp.path().join(&second.encoded_path),
+            &temp.path().join(&second.json_path),
+            &second.encoded_blake3,
+            second.encoded_len,
+            &second.json_blake3,
+            second.json_len,
+            JsonMap::new(),
+        )
+        .expect("prepare publication B index");
+        let successor_queue = assemble_governance_car_queue(
+            temp.path(),
+            &root_guard,
+            predecessor_queue,
+            &second_entry,
+        )
+        .expect("prepare publication B CAR");
+        successor.insert("publish_index".into(), JsonValue::Object(successor_index));
+        successor.insert("car_queue".into(), JsonValue::Object(successor_queue));
+
+        commit_governance_publication_state_with(
+            temp.path(),
+            &root_guard,
+            successor.clone(),
+            |_guard, _path, _bytes| Err(io::Error::other("injected successor commit failure")),
+        )
+        .expect_err("publication B authoritative swap must fail");
+        assert_eq!(
+            fs::read(&authority_path).expect("reread authority after failed B commit"),
+            predecessor_bytes,
+            "a failed successor swap must preserve publication A byte-for-byte"
+        );
+        let visible = read_publication_state_fixture(temp.path());
+        assert_eq!(
+            visible.get("generation").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            visible
+                .get("publish_index")
+                .and_then(|index| index.get("entry_count"))
+                .and_then(JsonValue::as_u64),
+            Some(1)
+        );
+
+        commit_governance_publication_state(temp.path(), &root_guard, successor)
+            .expect("retry publication B with the exact prepared successor");
+        let committed = read_publication_state_fixture(temp.path());
+        assert_eq!(
+            committed.get("generation").and_then(JsonValue::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            committed
+                .get("publish_index")
+                .and_then(|index| index.get("entry_count"))
+                .and_then(JsonValue::as_u64),
+            Some(2)
+        );
+        validate_governance_publication_state(
+            committed
+                .as_object()
+                .expect("committed publication B state"),
+        )
+        .expect("publication B commits both nested indexes together");
+    }
+
+    #[test]
+    fn governance_publication_state_rejects_cross_section_substitution() {
+        let temp = tempdir().expect("tempdir");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain publication root");
+        let fixture = write_car_segment_source_fixture(temp.path(), b"canonical-payload");
+        let (publish_index, entry) = update_publish_index(
+            temp.path(),
+            empty_governance_publish_index(),
+            &fixture.payload_kind,
+            &temp.path().join(&fixture.encoded_path),
+            &temp.path().join(&fixture.json_path),
+            &fixture.encoded_blake3,
+            fixture.encoded_len,
+            &fixture.json_blake3,
+            fixture.json_len,
+            JsonMap::new(),
+        )
+        .expect("prepare publish index");
+        let mut queue = assemble_governance_car_queue(
+            temp.path(),
+            &root_guard,
+            empty_governance_car_queue(),
+            &entry,
+        )
+        .expect("prepare CAR queue");
+        queue
+            .get_mut("segments")
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|segments| segments.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .expect("first CAR segment")
+            .insert(
+                "encoded_len".into(),
+                JsonValue::from(u64::try_from(fixture.encoded_len + 1).expect("small fixture")),
+            );
+        let mut state = empty_governance_publication_state();
+        state.insert("publish_index".into(), JsonValue::Object(publish_index));
+        state.insert("car_queue".into(), JsonValue::Object(queue));
+
+        let error = validate_governance_publication_state(&state)
+            .expect_err("cross-section substitution must fail closed");
+        assert!(error.to_string().contains("one-to-one"));
+    }
+
+    #[test]
+    fn governance_publication_state_rejects_noncanonical_car_artifact_paths() {
+        let temp = tempdir().expect("tempdir");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain publication root");
+        let fixture = write_car_segment_source_fixture(temp.path(), b"canonical-payload");
+        let (publish_index, entry) = update_publish_index(
+            temp.path(),
+            empty_governance_publish_index(),
+            &fixture.payload_kind,
+            &temp.path().join(&fixture.encoded_path),
+            &temp.path().join(&fixture.json_path),
+            &fixture.encoded_blake3,
+            fixture.encoded_len,
+            &fixture.json_blake3,
+            fixture.json_len,
+            JsonMap::new(),
+        )
+        .expect("prepare publish index");
+        let mut queue = assemble_governance_car_queue(
+            temp.path(),
+            &root_guard,
+            empty_governance_car_queue(),
+            &entry,
+        )
+        .expect("prepare CAR queue");
+        queue
+            .get_mut("segments")
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|segments| segments.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .expect("first CAR segment")
+            .insert(
+                "car_path".into(),
+                JsonValue::from("car-segments/00000000000000000000_substituted.car"),
+            );
+        let mut state = empty_governance_publication_state();
+        state.insert("publish_index".into(), JsonValue::Object(publish_index));
+        state.insert("car_queue".into(), JsonValue::Object(queue));
+
+        let error = validate_governance_publication_state(&state)
+            .expect_err("CAR paths must be derived from the exact position/source identity");
+        assert!(
+            error
+                .to_string()
+                .contains("canonical composite-identity path")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn governance_car_segment_sources_reject_linked_path_components() {
+        let temp = tempdir().expect("tempdir");
+        let mut entry = write_car_segment_source_fixture(temp.path(), b"canonical-payload");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain CAR source root");
+        let encoded_path = temp.path().join(&entry.encoded_path);
+        let source_dir = encoded_path.parent().expect("canonical source directory");
+        std::os::unix::fs::symlink(source_dir, temp.path().join("linked"))
+            .expect("create linked source directory");
+        entry.encoded_path = "linked/payload.to".to_owned();
+
+        governance_car_segment_files(temp.path(), &root_guard, &entry)
+            .expect_err("descriptor-rooted CAR reads must reject linked components");
+    }
+
+    #[test]
+    fn governance_car_segment_source_reader_stays_rooted_and_per_file_bounded() {
+        let source = include_str!("governance.rs");
+        let start = source
+            .find("fn governance_car_segment_files(")
+            .expect("CAR source reader definition");
+        let end = source[start..]
+            .find("\nfn governance_car_plan_json(")
+            .map(|offset| start + offset)
+            .expect("end of CAR source reader definition");
+        let reader = &source[start..end];
+
+        assert!(reader.contains("read_rooted_governance_state_file"));
+        assert!(reader.contains("entry.encoded_len"));
+        assert!(reader.contains("entry.encoded_blake3"));
+        assert!(reader.contains("entry.json_len"));
+        assert!(reader.contains("entry.json_blake3"));
+        assert!(reader.contains("GOVERNANCE_DIGEST_SIDECAR_BYTES"));
+        assert!(reader.contains("GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES"));
+        assert!(reader.contains("snapshot.binding().verify()"));
+        assert!(reader.contains("digest sidecar does not match retained source bytes"));
+        assert!(
+            !reader.contains("fs::read("),
+            "CAR source reads must remain descriptor-rooted"
         );
     }
 
@@ -14128,7 +16835,13 @@ mod tests {
     fn runtime_index(root: &Path) -> JsonValue {
         let bytes =
             fs::read(root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE)).expect("runtime index exists");
-        norito::json::from_slice(&bytes).expect("runtime index parses")
+        let index: JsonValue = norito::json::from_slice(&bytes).expect("runtime index parses");
+        assert_eq!(
+            index.get("root").and_then(JsonValue::as_str),
+            Some(GOVERNANCE_DAG_LOGICAL_ROOT),
+            "public runtime index must not disclose its host filesystem root"
+        );
+        index
     }
 
     fn runtime_blocks_from_index(root: &Path, index: &JsonValue) -> Vec<GovernanceDagBlockV1> {
@@ -14184,7 +16897,10 @@ mod tests {
             .expect_err("typed payload and canonical bytes must match");
         assert!(error.to_string().contains("do not match"));
         assert!(
-            !temp.path().join("settlements").exists(),
+            !temp
+                .path()
+                .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+                .exists(),
             "validation must fail before any governance artifact is written"
         );
     }
@@ -14203,7 +16919,10 @@ mod tests {
             .expect_err("ledger and settlement deal identifiers must match");
         assert!(error.to_string().contains("invalid deal settlement"));
         assert!(
-            !temp.path().join("settlements").exists(),
+            !temp
+                .path()
+                .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+                .exists(),
             "semantic validation must fail before any governance artifact is written"
         );
     }
@@ -15097,2765 +17816,6 @@ mod tests {
         drop(recovered);
     }
 
-    #[test]
-    fn filesystem_publisher_recovers_checkpoint_cas_applied_response_error() {
-        let temp = tempdir().expect("tempdir");
-        let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
-        checkpoint_store
-            .fail_after_next_checkpoint_cas
-            .store(true, Ordering::SeqCst);
-        {
-            let publisher =
-                signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
-            let (settlement, encoded) = sample_settlement();
-            let error = publisher
-                .publish_deal_settlement(&settlement, &encoded)
-                .expect_err("ambiguous checkpoint CAS response must surface");
-            assert!(error.to_string().contains("compare-and-swap failed"));
-        }
-        assert!(
-            checkpoint_store
-                .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
-                .expect("load retained producer intent")
-                .is_some()
-        );
-        fs::remove_dir_all(
-            temp.path()
-                .join(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR),
-        )
-        .expect("simulate loss of staging bytes after committed checkpoint CAS");
-
-        let publisher =
-            signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
-        assert!(
-            checkpoint_store
-                .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
-                .expect("reload producer intent")
-                .is_none(),
-            "restart must authenticate the committed target and delete its retained intent"
-        );
-        let index = runtime_index(temp.path());
-        assert_eq!(
-            index.get("block_count").and_then(JsonValue::as_u64),
-            Some(1)
-        );
-        drop(publisher);
-    }
-
-    #[test]
-    fn runtime_dag_producer_bounds_accept_exact_limits_and_reject_successors() {
-        let mutable_limit = GOVERNANCE_MUTABLE_INDEX_MAX_BYTES;
-        let block_limit = GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES;
-        validate_runtime_dag_producer_file_lengths(block_limit, mutable_limit, mutable_limit)
-            .expect("exact per-file limits are accepted");
-        assert!(
-            validate_runtime_dag_producer_file_lengths(block_limit + 1, 1, 1).is_err(),
-            "block limit + 1 must fail before sealing"
-        );
-        assert!(
-            validate_runtime_dag_producer_file_lengths(1, mutable_limit + 1, 1).is_err(),
-            "head limit + 1 must fail before sealing"
-        );
-        assert!(
-            validate_runtime_dag_producer_file_lengths(1, 1, mutable_limit + 1).is_err(),
-            "index limit + 1 must fail before sealing"
-        );
-        const {
-            assert!(
-                GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES
-                    > GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES
-            );
-        }
-        validate_runtime_dag_producer_entry_count(
-            GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1,
-            u64::try_from(GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1).expect("entry cap fits u64"),
-        )
-        .expect("exact entry cap is accepted");
-        assert!(
-            validate_runtime_dag_producer_entry_count(
-                GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1 + 1,
-                u64::try_from(GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1 + 1)
-                    .expect("entry cap successor fits u64"),
-            )
-            .is_err(),
-            "entry cap + 1 must fail before sealing"
-        );
-        let mut total = GOVERNANCE_RUNTIME_DAG_TOTAL_BYTES_HARD_CAP_V1 - 1;
-        add_runtime_dag_audit_bytes(&mut total, 1).expect("exact root byte cap is accepted");
-        assert!(
-            add_runtime_dag_audit_bytes(&mut total, 1).is_err(),
-            "root byte cap + 1 must fail before sealing"
-        );
-        assert_eq!(
-            governance_dag_sealed_state_payload_max_bytes_v1(
-                GovernanceDagSealedStateSlot::ProducerCheckpoint,
-            ),
-            64 * 1024
-        );
-        assert_eq!(
-            governance_dag_sealed_state_payload_max_bytes_v1(
-                GovernanceDagSealedStateSlot::ProducerPublishIntent,
-            ),
-            64 * 1024
-        );
-        assert_eq!(
-            governance_dag_sealed_state_payload_max_bytes_v1(
-                GovernanceDagSealedStateSlot::IpfsRequestReplay,
-            ),
-            256 * 1024
-        );
-        assert_eq!(
-            governance_dag_sealed_state_payload_max_bytes_v1(
-                GovernanceDagSealedStateSlot::SignedHeadRequestReplay,
-            ),
-            256 * 1024
-        );
-        assert!(
-            governance_dag_sealed_state_payload_max_bytes_v1(
-                GovernanceDagSealedStateSlot::ProducerPublishIntent,
-            ) < governance_dag_sealed_state_payload_max_bytes_v1(
-                GovernanceDagSealedStateSlot::PublishIntent,
-            ),
-            "the digest-only producer intent must retain its small independent ceiling"
-        );
-        assert!(
-            governance_dag_sealed_state_payload_max_bytes_v1(
-                GovernanceDagSealedStateSlot::ProducerCheckpoint,
-            ) < governance_dag_sealed_state_payload_max_bytes_v1(
-                GovernanceDagSealedStateSlot::Checkpoint,
-            ),
-            "the bounded producer checkpoint must retain its small independent ceiling"
-        );
-    }
-
-    #[test]
-    fn runtime_dag_producer_intent_is_digest_only_and_stage_tamper_fails_closed() {
-        let temp = tempdir().expect("tempdir");
-        let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
-        checkpoint_store
-            .fail_after_next_intent_cas
-            .store(true, Ordering::SeqCst);
-        {
-            let publisher =
-                signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
-            let (settlement, encoded) = sample_settlement();
-            publisher
-                .publish_deal_settlement(&settlement, &encoded)
-                .expect_err("retain the digest-only producer intent");
-        }
-        let intent_record = checkpoint_store
-            .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
-            .expect("load retained producer intent")
-            .expect("producer intent exists");
-        assert!(
-            intent_record.payload.len()
-                <= governance_dag_sealed_state_payload_max_bytes_v1(
-                    GovernanceDagSealedStateSlot::ProducerPublishIntent,
-                )
-        );
-        let intent: RuntimeDagProducerPublishIntentV1 =
-            norito::decode_from_bytes(&intent_record.payload).expect("decode digest-only intent");
-        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
-            .expect("retain producer root");
-        let staged =
-            load_runtime_dag_producer_staged_transaction(temp.path(), &root_guard, &intent)
-                .expect("authenticate the durable staged transaction");
-        assert_eq!(
-            intent.index.byte_len,
-            u64::try_from(staged.index_bytes.len()).expect("staged index length fits u64")
-        );
-
-        let index_path = runtime_dag_producer_staging_paths(temp.path())[2].clone();
-        let mut substituted = staged.index_bytes;
-        substituted[0] ^= 0x80;
-        fs::write(&index_path, &substituted).expect("substitute staged index");
-        write_digest_sidecar(&root_guard, &index_path, &substituted)
-            .expect("refresh only the unauthenticated sidecar");
-
-        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect("reopen publisher root")
-            .with_qualified_runtime_dag_providers(
-                qualified_test_runtime_dag_signer(1, 0x31),
-                qualified_test_runtime_dag_checkpoint_store(Arc::clone(&checkpoint_store)),
-            )
-            .expect_err("staged index substitution must fail closed");
-        assert!(error.to_string().contains("staged index is substituted"));
-        assert!(
-            checkpoint_store
-                .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
-                .expect("reload retained producer intent")
-                .is_some(),
-            "a failed staged readback must not erase the recovery intent"
-        );
-    }
-
-    #[test]
-    fn runtime_dag_checkpoint_wrapper_rejects_oversized_producer_records() {
-        for slot in [
-            GovernanceDagSealedStateSlot::ProducerCheckpoint,
-            GovernanceDagSealedStateSlot::ProducerPublishIntent,
-        ] {
-            let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
-            let oversized_payload =
-                vec![0xA5; governance_dag_sealed_state_payload_max_bytes_v1(slot) + 1];
-            let record = GovernanceDagSealedStateRecord::new(slot, 1, oversized_payload);
-            let mut state = checkpoint_store
-                .state
-                .lock()
-                .expect("lock test checkpoint store");
-            state.records[TestRuntimeDagCheckpointStore::slot_index(slot)] = Some(record);
-            drop(state);
-            let qualified =
-                qualified_test_runtime_dag_checkpoint_store(Arc::clone(&checkpoint_store));
-            let error = qualified
-                .load(slot)
-                .expect_err("oversized producer record must fail before canonical decode");
-            assert!(error.to_string().contains("oversized record"));
-        }
-    }
-
-    #[test]
-    fn runtime_dag_staging_root_is_created_through_the_retained_root() {
-        let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        ensure_runtime_dag_producer_staging_root(temp.path(), publisher.root_guard())
-            .expect("create and synchronize the producer staging root");
-        publisher
-            .root_guard()
-            .rooted_directory()
-            .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR))
-            .expect("staging root remains bound below the retained producer root");
-    }
-
-    #[test]
-    fn runtime_dag_payload_preflight_counts_without_allocating_dummy_envelopes() {
-        let (settlement, encoded) = sample_settlement();
-        let payload = GovernanceLogPayloadV1::DealSettlement(Box::new(settlement));
-
-        assert_eq!(
-            canonical_runtime_source_payload_len(&payload).expect("count canonical source"),
-            encoded.len()
-        );
-        preflight_runtime_signed_dag_payload(&payload, encoded.len())
-            .expect("small canonical payload fits every runtime DAG envelope");
-        assert!(
-            preflight_runtime_signed_dag_payload(&payload, encoded.len().saturating_add(1))
-                .is_err(),
-            "source-length substitution must fail before publication"
-        );
-    }
-
-    #[test]
-    fn runtime_dag_audit_rejects_substituted_generated_at_with_fresh_sidecar() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (settlement, encoded) = sample_settlement();
-        publisher
-            .publish_deal_settlement(&settlement, &encoded)
-            .expect("seed signed runtime DAG");
-        let index_path = temp.path().join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-        let mut index = runtime_index(temp.path());
-        let head_generated_at = index
-            .get("head_generated_at")
-            .and_then(JsonValue::as_u64)
-            .expect("head timestamp");
-        index.as_object_mut().expect("runtime index object").insert(
-            "generated_at".to_owned(),
-            JsonValue::from(head_generated_at.saturating_add(1)),
-        );
-        let bytes = json::to_json_pretty(&index)
-            .expect("encode tampered runtime index")
-            .into_bytes();
-        fs::write(&index_path, &bytes).expect("replace runtime index");
-        write_digest_sidecar(publisher.root_guard(), &index_path, &bytes)
-            .expect("replace index sidecar");
-
-        let error = validate_existing_runtime_dag_root(
-            temp.path(),
-            publisher
-                .runtime_dag_signer
-                .as_ref()
-                .expect("signed publisher"),
-            publisher
-                .runtime_dag_checkpoint_store
-                .as_ref()
-                .expect("signed publisher store"),
-        )
-        .expect_err("unchecked generated_at substitution must fail");
-        assert!(error.to_string().contains("index and signed head"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn atomic_temp_recovery_deletes_the_exact_opened_windows_object() {
-        let temp = tempdir().expect("tempdir");
-        let target = temp.path().join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-        let stale = temp_path_for_atomic(&target, 42_000, 1);
-        fs::write(&stale, b"recover-exact-object").expect("seed matching crash temp");
-        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
-            .expect("retain Windows producer root");
-        remove_recoverable_atomic_temps_for_target(&root_guard, &target)
-            .expect("delete exact matching crash temp");
-        assert!(!stale.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn filesystem_publisher_temp_recovery_never_follows_substituted_parent() {
-        let temp = tempdir().expect("tempdir");
-        let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
-        checkpoint_store
-            .fail_after_next_intent_cas
-            .store(true, Ordering::SeqCst);
-        {
-            let publisher =
-                signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
-            let (settlement, encoded) = sample_settlement();
-            publisher
-                .publish_deal_settlement(&settlement, &encoded)
-                .expect_err("retain sealed producer intent");
-        }
-        let intent_record = checkpoint_store
-            .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
-            .expect("load sealed producer intent")
-            .expect("producer intent exists");
-        let intent: RuntimeDagProducerPublishIntentV1 =
-            norito::decode_from_bytes(&intent_record.payload).expect("decode producer intent");
-        let block_path = runtime_dag_producer_block_path_from_intent(temp.path(), &intent)
-            .expect("resolve block path");
-        let outside = temp.path().join("outside-runtime");
-        let outside_blocks = outside.join(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR);
-        fs::create_dir_all(&outside_blocks).expect("create outside blocks directory");
-        let outside_target = outside_blocks.join(
-            block_path
-                .file_name()
-                .expect("producer block has a file name"),
-        );
-        let outside_temp = temp_path_for_atomic(&outside_target, 41_000, 9);
-        fs::write(&outside_temp, b"must-remain-outside").expect("seed outside temp");
-        std::os::unix::fs::symlink(&outside, temp.path().join(GOVERNANCE_RUNTIME_DAG_DIR))
-            .expect("substitute runtime parent");
-
-        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect("reopen publisher root")
-            .with_qualified_runtime_dag_providers(
-                qualified_test_runtime_dag_signer(1, 0x31),
-                qualified_test_runtime_dag_checkpoint_store(checkpoint_store),
-            )
-            .expect_err("substituted parent must fail closed");
-        assert!(
-            error.to_string().contains("symlink") || error.to_string().contains("real directory")
-        );
-        assert_eq!(
-            fs::read(&outside_temp).expect("outside temp remains"),
-            b"must-remain-outside"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn filesystem_publisher_root_lock_rejects_symlink() {
-        let temp = tempdir().expect("tempdir");
-        let target = temp.path().join("lock-target");
-        fs::write(&target, b"must remain untouched").expect("write lock target");
-        std::os::unix::fs::symlink(&target, temp.path().join(GOVERNANCE_PUBLISHER_LOCK_FILE))
-            .expect("create publisher lock symlink");
-
-        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect_err("publisher lock symlink must fail closed");
-        assert!(error.to_string().contains("must not be a symlink"));
-        assert_eq!(
-            fs::read(&target).expect("read lock target"),
-            b"must remain untouched"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn filesystem_publisher_root_lock_rejects_hard_link() {
-        let temp = tempdir().expect("tempdir");
-        let target = temp.path().join("lock-target");
-        fs::write(&target, b"must remain untouched").expect("write lock target");
-        fs::hard_link(&target, temp.path().join(GOVERNANCE_PUBLISHER_LOCK_FILE))
-            .expect("create publisher lock hard link");
-
-        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect_err("publisher lock hard link must fail closed");
-        assert!(error.to_string().contains("exactly one hard link"));
-        assert_eq!(
-            fs::read(&target).expect("read lock target"),
-            b"must remain untouched"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn governance_directory_policy_enforces_role_owner_and_sticky_ancestor_matrix() {
-        let effective_uid = 42;
-        let producer_uid = 77;
-        let unrelated_uid = 99;
-
-        assert!(governance_directory_policy_accepts(
-            effective_uid,
-            0o755,
-            true,
-            effective_uid,
-            effective_uid,
-            true,
-        ));
-        assert!(!governance_directory_policy_accepts(
-            0,
-            0o755,
-            true,
-            effective_uid,
-            effective_uid,
-            true,
-        ));
-        assert!(!governance_directory_policy_accepts(
-            effective_uid,
-            0o1777,
-            true,
-            effective_uid,
-            effective_uid,
-            true,
-        ));
-        assert!(governance_directory_policy_accepts(
-            producer_uid,
-            0o755,
-            true,
-            effective_uid,
-            producer_uid,
-            false,
-        ));
-        assert!(!governance_directory_policy_accepts(
-            effective_uid,
-            0o755,
-            true,
-            effective_uid,
-            producer_uid,
-            false,
-        ));
-
-        for owner in [0, effective_uid, producer_uid] {
-            assert!(governance_directory_policy_accepts(
-                owner,
-                0o755,
-                false,
-                effective_uid,
-                producer_uid,
-                false,
-            ));
-        }
-        assert!(governance_directory_policy_accepts(
-            0,
-            0o1777,
-            false,
-            effective_uid,
-            producer_uid,
-            false,
-        ));
-        assert!(!governance_directory_policy_accepts(
-            unrelated_uid,
-            0o1777,
-            false,
-            effective_uid,
-            producer_uid,
-            false,
-        ));
-        assert!(!governance_directory_policy_accepts(
-            effective_uid,
-            0o775,
-            false,
-            effective_uid,
-            producer_uid,
-            false,
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn governance_root_guard_accepts_exact_canonical_root_and_trusted_sticky_parent() {
-        let temp = tempdir().expect("canonical tempdir");
-        let writer_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
-            .expect("canonical writer root");
-        let source_guard = GovernanceFilesystemRootGuard::capture_source(temp.path())
-            .expect("canonical source root");
-        assert_eq!(writer_guard.root(), temp.path());
-        assert_eq!(source_guard.root(), temp.path());
-        writer_guard
-            .revalidate()
-            .expect("writer root remains pinned");
-        source_guard
-            .revalidate()
-            .expect("source root remains pinned");
-
-        let sticky = temp.path().join("sticky-parent");
-        fs::create_dir(&sticky).expect("create sticky parent");
-        fs::set_permissions(&sticky, fs::Permissions::from_mode(0o1777))
-            .expect("set sticky-parent mode");
-        let child = sticky.join("writer-root");
-        fs::create_dir(&child).expect("create writer root");
-        fs::set_permissions(&child, fs::Permissions::from_mode(0o700)).expect("secure writer root");
-        GovernanceFilesystemRootGuard::capture_writer(&child)
-            .expect("trusted sticky ancestor is accepted")
-            .revalidate()
-            .expect("sticky-root identity remains pinned");
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn governance_root_guard_rejects_descriptor_bound_acl_mutation_grant() {
-        let temp = tempdir().expect("canonical tempdir");
-        let status = std::process::Command::new("chmod")
-            .args(["+a", "everyone allow add_file"])
-            .arg(temp.path())
-            .status()
-            .expect("install macOS ACL mutation grant");
-        assert!(status.success(), "install macOS ACL mutation grant");
-        let result = GovernanceFilesystemRootGuard::capture_writer(temp.path());
-        let cleanup = std::process::Command::new("chmod")
-            .arg("-RN")
-            .arg(temp.path())
-            .status()
-            .expect("remove macOS ACL mutation grant");
-        assert!(cleanup.success(), "remove macOS ACL mutation grant");
-        let error = result.expect_err("ACL mutation grant must fail root capture");
-        assert!(
-            error.to_string().contains("ACL mutation grant"),
-            "unexpected ACL rejection: {error}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn governance_root_guard_rejects_lexical_symlink_ancestor() {
-        let temp = tempdir().expect("canonical tempdir");
-        let real_parent = temp.path().join("real-parent");
-        let real_root = real_parent.join("producer");
-        fs::create_dir_all(&real_root).expect("create real producer root");
-        let linked_parent = temp.path().join("linked-parent");
-        std::os::unix::fs::symlink(&real_parent, &linked_parent)
-            .expect("create lexical ancestor symlink");
-
-        let error = GovernanceFilesystemRootGuard::capture_writer(&linked_parent.join("producer"))
-            .expect_err("lexical symlink ancestor must fail closed");
-        assert!(
-            error.to_string().contains("canonical")
-                || error.to_string().contains("symlink")
-                || error.to_string().contains("real directory"),
-            "unexpected lexical-symlink error: {error}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn filesystem_publisher_rejects_root_mode_drift_before_publication() {
-        let temp = tempdir().expect("canonical tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o777))
-            .expect("make root unsafe");
-        let (settlement, encoded) = sample_settlement();
-        let error = publisher
-            .publish_deal_settlement(&settlement, &encoded)
-            .expect_err("unsafe root mode must fail before publication");
-        assert!(
-            error.to_string().contains("mode")
-                || error.to_string().contains("group/world writable"),
-            "unexpected mode-drift error: {error}"
-        );
-        assert!(!temp.path().join("settlements").exists());
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
-            .expect("restore root mode for cleanup");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn filesystem_publisher_rejects_root_rename_replacement_without_touching_replacement() {
-        let temp = tempdir().expect("canonical tempdir");
-        let root = temp.path().join("producer");
-        fs::create_dir(&root).expect("create producer root");
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-            .expect("secure producer root");
-        let publisher = FilesystemGovernancePublisher::try_new(root.clone()).expect("publisher");
-        let detached = temp.path().join("producer.detached");
-        fs::rename(&root, &detached).expect("detach pinned producer root");
-        fs::create_dir(&root).expect("create replacement producer root");
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-            .expect("secure replacement root");
-        let marker = root.join("must-remain");
-        fs::write(&marker, b"replacement").expect("seed replacement marker");
-
-        let (settlement, encoded) = sample_settlement();
-        let error = publisher
-            .publish_deal_settlement(&settlement, &encoded)
-            .expect_err("root replacement must fail before publication");
-        assert!(
-            error.to_string().contains("identity") || error.to_string().contains("changed"),
-            "unexpected root-replacement error: {error}"
-        );
-        assert_eq!(
-            fs::read(&marker).expect("replacement marker remains"),
-            b"replacement"
-        );
-        assert!(!root.join("settlements").exists());
-        assert!(!detached.join("settlements").exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn filesystem_publisher_rejects_ancestor_replacement_and_symlink_without_writing_target() {
-        let temp = tempdir().expect("canonical tempdir");
-        let ancestor = temp.path().join("ancestor");
-        let root = ancestor.join("producer");
-        fs::create_dir_all(&root).expect("create producer root");
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-            .expect("secure producer root");
-        let publisher = FilesystemGovernancePublisher::try_new(root.clone()).expect("publisher");
-        let detached = temp.path().join("ancestor.detached");
-        fs::rename(&ancestor, &detached).expect("detach pinned ancestor");
-        fs::create_dir(&ancestor).expect("create replacement ancestor");
-        std::os::unix::fs::symlink(detached.join("producer"), &root)
-            .expect("substitute producer root symlink");
-        let marker = detached.join("producer").join("must-remain");
-        fs::write(&marker, b"detached").expect("seed detached marker");
-
-        let (settlement, encoded) = sample_settlement();
-        let error = publisher
-            .publish_deal_settlement(&settlement, &encoded)
-            .expect_err("ancestor replacement must fail before publication");
-        assert!(
-            error.to_string().contains("identity")
-                || error.to_string().contains("changed")
-                || error.to_string().contains("real directory"),
-            "unexpected ancestor-replacement error: {error}"
-        );
-        assert_eq!(
-            fs::read(&marker).expect("detached marker remains"),
-            b"detached"
-        );
-        assert!(!detached.join("producer/settlements").exists());
-    }
-
-    #[test]
-    fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
-        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
-        let signer = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:primary",
-            &peer_id,
-            0x31,
-        ));
-        let public_key = signer.public_key();
-
-        validate_runtime_handle(
-            "pkcs11:prod/governance-dag.primary-v1_slot-a",
-            "governance runtime DAG signer",
-        )
-        .expect("canonical production runtime handle");
-        for handle in [
-            "contains whitespace",
-            "https://operator:secret@governance-signer",
-            "https://governance-signer/path?credential=secret",
-            "https://governance-signer/path#fragment",
-            "pkcs11:prod/%67overnance-signer",
-            "pkcs11:prod\\governance-signer",
-        ] {
-            let error = GovernanceRuntimeDagSigner::try_new(
-                handle.to_owned(),
-                peer_id.clone(),
-                public_key,
-                test_runtime_dag_signer_qualification(),
-                signer.clone(),
-            )
-            .expect_err("forbidden runtime-handle character must fail closed");
-            assert!(error.to_string().contains("canonical credential-free"));
-        }
-
-        let error = GovernanceRuntimeDagSigner::try_new(
-            signer.handle().to_owned(),
-            vec![0x41; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1],
-            public_key,
-            test_runtime_dag_signer_qualification(),
-            signer,
-        )
-        .expect_err("oversized governance publisher identity must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("publisher peer id exceeds 128 bytes")
-        );
-    }
-
-    #[test]
-    fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
-        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
-        let signer = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:primary",
-            &peer_id,
-            0x31,
-        ));
-        let error = GovernanceRuntimeDagSigner::try_new(
-            "pkcs11:governance-dag:test".to_owned(),
-            peer_id.clone(),
-            signer.public_key(),
-            test_runtime_dag_signer_qualification(),
-            signer,
-        )
-        .expect_err("test-marked configured handle must fail closed");
-        assert!(error.to_string().contains("test-marked"));
-
-        let mut stale = TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
-        stale.qualification_error = Some("hsm_token=must-never-escape".to_owned());
-        let stale = Arc::new(stale);
-        let error = GovernanceRuntimeDagSigner::try_new(
-            stale.handle().to_owned(),
-            peer_id.clone(),
-            stale.public_key(),
-            test_runtime_dag_signer_qualification(),
-            stale,
-        )
-        .expect_err("stale provider must fail startup qualification");
-        assert!(error.to_string().contains("stale"));
-        assert!(!error.to_string().contains("must-never-escape"));
-
-        let invalid = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:primary",
-            &peer_id,
-            0x31,
-        ));
-        invalid.qualification_revision.store(0, Ordering::SeqCst);
-        let error = GovernanceRuntimeDagSigner::try_new(
-            invalid.handle().to_owned(),
-            peer_id.clone(),
-            invalid.public_key(),
-            test_runtime_dag_signer_qualification(),
-            invalid,
-        )
-        .expect_err("zero provider revision must fail startup qualification");
-        assert!(error.to_string().contains("invalid policy qualification"));
-
-        for expected_qualification in [
-            GovernanceDagRuntimeProviderQualificationV1::new(
-                2,
-                TEST_RUNTIME_DAG_SIGNER_POLICY_DIGEST,
-            ),
-            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x72; 32]),
-        ] {
-            let substituted = Arc::new(TestRuntimeDagSigner::new(
-                "pkcs11:governance-dag:primary",
-                &peer_id,
-                0x31,
-            ));
-            let error = GovernanceRuntimeDagSigner::try_new(
-                substituted.handle().to_owned(),
-                peer_id.clone(),
-                substituted.public_key(),
-                expected_qualification,
-                substituted,
-            )
-            .expect_err("substituted configured qualification must fail startup");
-            assert!(
-                error
-                    .to_string()
-                    .contains("does not match configured revision and digest")
-            );
-        }
-
-        let drifting = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:primary",
-            &peer_id,
-            0x31,
-        ));
-        drifting
-            .drift_on_second_qualification_read
-            .store(true, Ordering::SeqCst);
-        let error = GovernanceRuntimeDagSigner::try_new(
-            drifting.handle().to_owned(),
-            peer_id.clone(),
-            drifting.public_key(),
-            test_runtime_dag_signer_qualification(),
-            drifting,
-        )
-        .expect_err("qualification drift on the second startup read must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("policy changed during startup qualification")
-        );
-
-        let signer = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:primary",
-            &peer_id,
-            0x31,
-        ));
-        let wrapped = GovernanceRuntimeDagSigner::try_new(
-            signer.handle().to_owned(),
-            peer_id,
-            signer.public_key(),
-            test_runtime_dag_signer_qualification(),
-            signer.clone(),
-        )
-        .expect("qualify stable signer");
-        signer.qualification_revision.store(2, Ordering::SeqCst);
-        let error = wrapped
-            .sign(b"canonical governance payload")
-            .expect_err("provider policy drift must fail closed");
-        assert!(error.to_string().contains("policy changed"));
-
-        let signer = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:primary",
-            b"12D3KooWRuntimeDagPublisher",
-            0x31,
-        ));
-        let wrapped = GovernanceRuntimeDagSigner::try_new(
-            signer.handle().to_owned(),
-            signer.publisher_peer_id().to_vec(),
-            signer.public_key(),
-            test_runtime_dag_signer_qualification(),
-            signer.clone(),
-        )
-        .expect("qualify stable signer");
-        signer.drift_during_sign.store(true, Ordering::SeqCst);
-        let error = wrapped
-            .sign(b"canonical governance payload")
-            .expect_err("provider policy drift during signing must discard the signature");
-        assert!(error.to_string().contains("policy changed"));
-    }
-
-    #[test]
-    fn runtime_dag_signer_rejects_handle_peer_and_public_key_mismatch() {
-        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
-        let signer = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:primary",
-            &peer_id,
-            0x31,
-        ));
-        let public_key = signer.public_key();
-        let mismatched_public_key =
-            TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x32).public_key();
-
-        for (handle, peer, key, expected) in [
-            (
-                "pkcs11:governance-dag:other",
-                peer_id.clone(),
-                public_key,
-                "handle does not match",
-            ),
-            (
-                signer.handle(),
-                b"12D3KooWOtherPublisher".to_vec(),
-                public_key,
-                "publisher identity does not match",
-            ),
-            (
-                signer.handle(),
-                peer_id.clone(),
-                mismatched_public_key,
-                "public key does not match",
-            ),
-        ] {
-            let error = GovernanceRuntimeDagSigner::try_new(
-                handle.to_owned(),
-                peer,
-                key,
-                test_runtime_dag_signer_qualification(),
-                signer.clone(),
-            )
-            .expect_err("mismatched runtime signer must fail closed");
-            assert!(error.to_string().contains(expected), "{error}");
-        }
-    }
-
-    #[test]
-    fn runtime_dag_signer_rejects_malformed_and_weak_ed25519_keys() {
-        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
-        for (public_key, expected) in [
-            ([0xFF; 32], "not canonical Ed25519"),
-            (
-                {
-                    let mut identity = [0_u8; 32];
-                    identity[0] = 1;
-                    identity
-                },
-                "non-canonical or weak",
-            ),
-        ] {
-            let mut signer =
-                TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
-            signer.public_key_override = Some(public_key);
-            let signer = Arc::new(signer);
-            let error = GovernanceRuntimeDagSigner::try_new(
-                signer.handle().to_owned(),
-                peer_id.clone(),
-                public_key,
-                test_runtime_dag_signer_qualification(),
-                signer,
-            )
-            .expect_err("malformed or weak Ed25519 key must fail during provider binding");
-            assert!(error.to_string().contains(expected), "{error}");
-        }
-    }
-
-    #[test]
-    fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
-        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
-        let mut refusing =
-            TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
-        refusing.refuse_with = Some("bearer=must-never-escape".to_owned());
-        let refusing = Arc::new(refusing);
-        let wrapped = GovernanceRuntimeDagSigner::try_new(
-            refusing.handle().to_owned(),
-            peer_id.clone(),
-            refusing.public_key(),
-            test_runtime_dag_signer_qualification(),
-            refusing,
-        )
-        .expect("bind refusing test provider");
-        let error = wrapped
-            .sign(b"canonical governance payload")
-            .expect_err("provider outage must fail closed");
-        assert!(error.to_string().contains("refused"));
-        assert!(!error.to_string().contains("must-never-escape"));
-
-        let mut corrupt =
-            TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
-        corrupt.corrupt_signature = true;
-        let corrupt = Arc::new(corrupt);
-        let wrapped = GovernanceRuntimeDagSigner::try_new(
-            corrupt.handle().to_owned(),
-            peer_id,
-            corrupt.public_key(),
-            test_runtime_dag_signer_qualification(),
-            corrupt,
-        )
-        .expect("bind corrupt test provider");
-        let error = wrapped
-            .sign(b"canonical governance payload")
-            .expect_err("wrong signature must fail closed");
-        assert!(error.to_string().contains("another key or payload"));
-    }
-
-    #[test]
-    fn filesystem_publisher_serializes_concurrent_index_and_signed_head_updates() {
-        const PUBLICATION_COUNT: usize = 16;
-
-        let temp = tempdir().expect("tempdir");
-        let publisher = Arc::new(signed_runtime_publisher(temp.path()));
-        let (template, _) = sample_settlement();
-        let threads = (0..PUBLICATION_COUNT)
-            .map(|index| {
-                let publisher = Arc::clone(&publisher);
-                let mut settlement = template.clone();
-                let marker = u8::try_from(index + 1).expect("small publication count");
-                settlement.deal_id = [marker; 32];
-                settlement.ledger.deal_id = settlement.deal_id;
-                settlement.ledger.snapshot_id = settlement
-                    .ledger
-                    .derive_snapshot_id()
-                    .expect("reseal ledger snapshot");
-                settlement.settlement_id = settlement
-                    .derive_settlement_id()
-                    .expect("reseal settlement");
-                thread::spawn(move || {
-                    let encoded = norito::to_bytes(&settlement).expect("encode settlement");
-                    publisher
-                        .publish_deal_settlement(&settlement, &encoded)
-                        .expect("publish settlement concurrently");
-                })
-            })
-            .collect::<Vec<_>>();
-
-        for thread in threads {
-            thread.join().expect("publisher thread");
-        }
-
-        let publish_index: JsonValue = json::from_slice(
-            &fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE))
-                .expect("publish index exists"),
-        )
-        .expect("publish index parses");
-        assert_eq!(
-            publish_index.get("entry_count").and_then(JsonValue::as_u64),
-            Some(PUBLICATION_COUNT as u64)
-        );
-        let entries = publish_index
-            .get("entries")
-            .and_then(JsonValue::as_array)
-            .expect("publish index entries");
-        assert_eq!(entries.len(), PUBLICATION_COUNT);
-        for (expected_position, entry) in entries.iter().enumerate() {
-            assert_eq!(
-                entry.get("position").and_then(JsonValue::as_u64),
-                Some(expected_position as u64)
-            );
-        }
-
-        let runtime_index = runtime_index(temp.path());
-        assert_eq!(
-            runtime_index.get("block_count").and_then(JsonValue::as_u64),
-            Some(PUBLICATION_COUNT as u64)
-        );
-        assert_eq!(
-            runtime_index
-                .get("blocks")
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(PUBLICATION_COUNT)
-        );
-    }
-
-    #[test]
-    fn filesystem_publisher_poisoned_transaction_lock_fails_before_writes() {
-        let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        let poisoned = catch_unwind(AssertUnwindSafe(|| {
-            let _guard = publisher
-                .publication_lock
-                .lock()
-                .expect("publication lock starts healthy");
-            panic!("poison publication transaction lock");
-        }));
-        assert!(poisoned.is_err());
-
-        let (settlement, encoded) = sample_settlement();
-        let error = publisher
-            .publish_deal_settlement(&settlement, &encoded)
-            .expect_err("poisoned publisher must fail closed");
-        assert!(error.to_string().contains("transaction lock is poisoned"));
-        assert!(
-            !temp.path().join("settlements").exists(),
-            "poison detection must happen before artifact writes"
-        );
-        assert!(
-            !temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE).exists(),
-            "poison detection must happen before index writes"
-        );
-    }
-
-    #[test]
-    fn filesystem_publisher_appends_signed_runtime_dag_for_supported_payloads() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (settlement, encoded) = sample_settlement();
-
-        publisher
-            .publish_deal_settlement(&settlement, &encoded)
-            .expect("publish settlement into runtime DAG");
-        publisher
-            .publish_deal_settlement(&settlement, &encoded)
-            .expect("duplicate publish is idempotent");
-        let index = runtime_index(temp.path());
-        assert_eq!(
-            index.get("block_count").and_then(JsonValue::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("deal_settlement"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-
-        let (snapshot, snapshot_encoded) = sample_reputation_snapshot();
-        publisher
-            .publish_reputation_snapshot(&snapshot, &snapshot_encoded)
-            .expect("publish reputation snapshot into runtime DAG");
-
-        let (finance_report, finance_encoded) = sample_appeal_finance_report();
-        publisher
-            .publish_appeal_finance_report(&finance_report, &finance_encoded)
-            .expect("publish appeal finance report into runtime DAG");
-
-        let (finance_rollup, rollup_encoded) = sample_appeal_finance_weekly_rollup();
-        publisher
-            .publish_appeal_finance_weekly_rollup(&finance_rollup, &rollup_encoded)
-            .expect("publish appeal finance weekly rollup into runtime DAG");
-
-        let (finance_receipt, receipt_encoded) = sample_appeal_finance_settlement_receipt();
-        publisher
-            .publish_appeal_finance_settlement_receipt(&finance_receipt, &receipt_encoded)
-            .expect("publish appeal finance settlement receipt into runtime DAG");
-
-        let (transparency_publication, transparency_encoded) =
-            sample_transparency_ledger_publication();
-        publisher
-            .publish_transparency_ledger_publication(
-                &transparency_publication,
-                &transparency_encoded,
-                None,
-            )
-            .expect("publish transparency ledger publication into runtime DAG");
-
-        let index = runtime_index(temp.path());
-        assert_eq!(
-            index.get("block_count").and_then(JsonValue::as_u64),
-            Some(6)
-        );
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("reputation_snapshot"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_report"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_weekly_rollup"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_settlement_receipt"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("transparency_ledger_publication"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
-        let head: GovernanceDagHeadV1 =
-            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
-        let blocks = runtime_blocks_from_index(temp.path(), &index);
-        validate_governance_dag_head_against_chain_v1(&head, &blocks)
-            .expect("runtime head validates against signed blocks");
-        assert_eq!(blocks.len(), 6);
-        assert_eq!(blocks[0].sequence, 0);
-        assert_eq!(blocks[1].sequence, 1);
-        assert_eq!(blocks[2].sequence, 2);
-        assert_eq!(blocks[3].sequence, 3);
-        assert_eq!(blocks[4].sequence, 4);
-        assert_eq!(blocks[5].sequence, 5);
-        assert_eq!(blocks[1].prev_block_cid, Some(blocks[0].block_cid.clone()));
-        assert_eq!(blocks[2].prev_block_cid, Some(blocks[1].block_cid.clone()));
-        assert_eq!(blocks[3].prev_block_cid, Some(blocks[2].block_cid.clone()));
-        assert_eq!(blocks[4].prev_block_cid, Some(blocks[3].block_cid.clone()));
-        assert_eq!(blocks[5].prev_block_cid, Some(blocks[4].block_cid.clone()));
-        assert_eq!(
-            blocks[1].node.prev_cid,
-            Some(blocks[0].node.node_cid.clone())
-        );
-        assert_eq!(
-            blocks[2].node.prev_cid,
-            Some(blocks[1].node.node_cid.clone())
-        );
-        assert_eq!(
-            blocks[3].node.prev_cid,
-            Some(blocks[2].node.node_cid.clone())
-        );
-        assert_eq!(
-            blocks[4].node.prev_cid,
-            Some(blocks[3].node.node_cid.clone())
-        );
-        assert_eq!(
-            blocks[5].node.prev_cid,
-            Some(blocks[4].node.node_cid.clone())
-        );
-        match &blocks[0].node.payload {
-            GovernanceLogPayloadV1::DealSettlement(value) => {
-                assert_eq!(value.deal_id, settlement.deal_id);
-            }
-            other => panic!("unexpected first runtime DAG payload: {other:?}"),
-        }
-        match &blocks[1].node.payload {
-            GovernanceLogPayloadV1::SignedReputationSnapshot(value) => {
-                assert_eq!(value.snapshot.snapshot_id, snapshot.snapshot.snapshot_id);
-            }
-            other => panic!("unexpected second runtime DAG payload: {other:?}"),
-        }
-        match &blocks[2].node.payload {
-            GovernanceLogPayloadV1::AppealFinanceReport(value) => {
-                assert_eq!(value.report_id, finance_report.report_id);
-                assert_eq!(value.case_id, finance_report.case_id);
-            }
-            other => panic!("unexpected third runtime DAG payload: {other:?}"),
-        }
-        match &blocks[3].node.payload {
-            GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(value) => {
-                assert_eq!(value.cycle, finance_rollup.cycle);
-                assert_eq!(value.report_count, finance_rollup.report_count);
-                assert_eq!(value.total_deposit_xor, finance_rollup.total_deposit_xor);
-            }
-            other => panic!("unexpected fourth runtime DAG payload: {other:?}"),
-        }
-        match &blocks[4].node.payload {
-            GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(value) => {
-                assert_eq!(value.receipt_id, finance_receipt.receipt_id);
-                assert_eq!(value.tx_hash_hex, finance_receipt.tx_hash_hex);
-                assert_eq!(
-                    value.reconciliation_digest_hex,
-                    finance_receipt.reconciliation_digest_hex
-                );
-            }
-            other => panic!("unexpected fifth runtime DAG payload: {other:?}"),
-        }
-        match &blocks[5].node.payload {
-            GovernanceLogPayloadV1::ExternalPayload(value) => {
-                assert_eq!(value.payload_kind, "transparency_ledger_publication");
-                assert_eq!(
-                    value.payload_version,
-                    MODERATION_LEDGER_PUBLICATION_VERSION_V1
-                );
-                assert_eq!(
-                    value.encoded_blake3,
-                    *blake3::hash(&transparency_encoded).as_bytes()
-                );
-                assert_eq!(value.encoded_len, transparency_encoded.len() as u64);
-                assert_eq!(value.encoded_payload, transparency_encoded);
-                assert_eq!(
-                    value
-                        .metadata
-                        .iter()
-                        .map(|item| item.key.as_str())
-                        .collect::<Vec<_>>(),
-                    vec![
-                        "block_hash_hex",
-                        "cycle_id_hex",
-                        "entry_count",
-                        "entry_root_hex",
-                        "publication_hash_hex"
-                    ]
-                );
-            }
-            other => panic!("unexpected sixth runtime DAG payload: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn filesystem_publisher_keeps_full_history_and_signs_checkpoint_window_with_one_identity() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (template, _) = sample_settlement();
-
-        for marker in 1_u8..=GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 as u8 {
-            let mut settlement = template.clone();
-            settlement.deal_id = [marker; 32];
-            settlement.ledger.deal_id = settlement.deal_id;
-            settlement.ledger.snapshot_id = settlement
-                .ledger
-                .derive_snapshot_id()
-                .expect("reseal ledger snapshot");
-            settlement.settlement_id = settlement
-                .derive_settlement_id()
-                .expect("reseal settlement");
-            let encoded = norito::to_bytes(&settlement).expect("encode settlement");
-            publisher
-                .publish_deal_settlement(&settlement, &encoded)
-                .expect("publish settlement into runtime DAG");
-        }
-
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
-        let head_at_window: GovernanceDagHeadV1 =
-            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
-        assert_eq!(
-            head_at_window.block_count,
-            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 as u64
-        );
-        assert_eq!(head_at_window.checkpoint_cid, None);
-
-        let mut settlement = template;
-        settlement.deal_id = [0xFF; 32];
-        settlement.ledger.deal_id = settlement.deal_id;
-        settlement.ledger.snapshot_id = settlement
-            .ledger
-            .derive_snapshot_id()
-            .expect("reseal ledger snapshot");
-        settlement.settlement_id = settlement
-            .derive_settlement_id()
-            .expect("reseal settlement");
-        let encoded = norito::to_bytes(&settlement).expect("encode settlement");
-        publisher
-            .publish_deal_settlement(&settlement, &encoded)
-            .expect("publish first checkpointed settlement");
-
-        let index = runtime_index(temp.path());
-        let blocks = runtime_blocks_from_index(temp.path(), &index);
-        assert_eq!(
-            blocks.len(),
-            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 + 1,
-            "checkpointing must not truncate the root history"
-        );
-        assert_eq!(blocks[0].sequence, 0);
-        assert_eq!(blocks[0].prev_block_cid, None);
-        assert_eq!(blocks[0].node.prev_cid, None);
-        for (position, pair) in blocks.windows(2).enumerate() {
-            assert_eq!(pair[1].sequence, (position + 1) as u64);
-            assert_eq!(pair[1].prev_block_cid, Some(pair[0].block_cid.clone()));
-            assert_eq!(pair[1].node.prev_cid, Some(pair[0].node.node_cid.clone()));
-        }
-
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
-        let head: GovernanceDagHeadV1 =
-            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
-        assert_eq!(head.block_count, blocks.len() as u64);
-        assert_eq!(head.checkpoint_cid, Some(blocks[1].block_cid.clone()));
-        validate_governance_dag_head_against_chain_v1(&head, &blocks)
-            .expect("full root chain validates against checkpointed head");
-        validate_governance_dag_head_against_chain_v1(
-            &head,
-            &blocks[blocks.len() - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1..],
-        )
-        .expect("canonical checkpoint tail validates against checkpointed head");
-
-        let governed_public_key = &head.head_signature.public_key;
-        assert_eq!(
-            head.head_signature.algorithm,
-            GovernanceSignatureAlgorithm::Ed25519
-        );
-        for block in &blocks {
-            assert_eq!(block.publisher_peer_id, head.publisher_peer_id);
-            assert_eq!(block.node.publisher_peer_id, head.publisher_peer_id);
-            assert_eq!(
-                block.block_signature.algorithm,
-                GovernanceSignatureAlgorithm::Ed25519
-            );
-            assert_eq!(
-                block.node.publisher_signature.algorithm,
-                GovernanceSignatureAlgorithm::Ed25519
-            );
-            assert_eq!(&block.block_signature.public_key, governed_public_key);
-            assert_eq!(
-                &block.node.publisher_signature.public_key,
-                governed_public_key
-            );
-        }
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_moderation_ballot_event_files_and_runtime_dag() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (event, encoded) = sample_moderation_ballot_event();
-
-        publisher
-            .publish_moderation_ballot_event(&event, &encoded)
-            .expect("publish moderation ballot event");
-
-        let ballot_dir = temp
-            .path()
-            .join("moderation")
-            .join("ballots")
-            .join("case-42")
-            .join("round-1");
-        let mut encoded_files = fs::read_dir(&ballot_dir)
-            .expect("read moderation ballot dir")
-            .map(|entry| entry.expect("dir entry").path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
-            .collect::<Vec<_>>();
-        encoded_files.sort();
-        assert_eq!(encoded_files.len(), 1);
-        let bytes = fs::read(&encoded_files[0]).expect("read moderation event payload");
-        assert_eq!(bytes, encoded);
-        let decoded: SoraFsModerationBallotGovernanceEventV1 =
-            norito::decode_from_bytes(&bytes).expect("decode moderation event payload");
-        assert_eq!(decoded, event);
-        assert!(encoded_files[0].with_extension("json").exists());
-
-        let index_bytes =
-            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
-        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("moderation_ballot_event"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-
-        let runtime_index = runtime_index(temp.path());
-        assert_eq!(
-            runtime_index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("moderation_ballot_event"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
-        let head: GovernanceDagHeadV1 =
-            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
-        let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
-        validate_governance_dag_head_against_chain_v1(&head, &blocks)
-            .expect("runtime head validates against signed blocks");
-        assert_eq!(blocks.len(), 1);
-        match &blocks[0].node.payload {
-            GovernanceLogPayloadV1::ModerationBallotEvent(value) => {
-                assert_eq!(value.case_id, event.case_id);
-                assert_eq!(value.round_id, event.round_id);
-                assert_eq!(value.kind, event.kind);
-            }
-            other => panic!("unexpected runtime DAG payload: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn fused_privacy_publisher_retries_the_exact_request_idempotently() {
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let publisher = qualified_test_fenced_publisher(Arc::clone(&provider));
-        let request = sample_fenced_request(7, None);
-
-        let first = publisher
-            .compare_and_append_privacy_classified(&request)
-            .expect("first fused append");
-        let retried = publisher
-            .compare_and_append_privacy_classified(&request)
-            .expect("idempotent fused retry");
-
-        assert_eq!(retried, first);
-        assert_eq!(provider.append_count(), 1);
-        assert_eq!(provider.head(), Some(first.included_head()));
-    }
-
-    #[test]
-    fn fused_privacy_target_deduplicates_same_lease_before_fencing() {
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let publisher = qualified_test_fenced_publisher(Arc::clone(&provider));
-        let first_request = sample_fenced_request(7, None);
-        let first = publisher
-            .compare_and_append_privacy_classified(&first_request)
-            .expect("first fused append");
-        let (publication, encoded) = sample_privacy_publication();
-        let same_lease_authorization =
-            sample_privacy_authorization(&publication, &encoded, first_request.fencing_token());
-        let same_lease_request = FencedPrivacyPublicationRequestV1::try_new(
-            same_lease_authorization,
-            &publication,
-            encoded,
-            Some(first.included_head()),
-            first.included_head().fencing_floor(),
-        )
-        .expect("same-lease lookup request remains structurally valid");
-
-        let duplicate = publisher
-            .compare_and_append_privacy_classified(&same_lease_request)
-            .expect("stable scope lookup precedes stale-fence rejection");
-
-        assert_eq!(
-            duplicate.disposition(),
-            FencedPrivacyPublicationDispositionV1::AlreadyIncluded
-        );
-        assert_eq!(duplicate.included_head(), first.included_head());
-        assert_eq!(duplicate.readback_head(), first.readback_head());
-        assert_eq!(provider.append_count(), 1);
-    }
-
-    #[test]
-    fn fused_privacy_target_rejects_conflicting_release_evidence_for_scope() {
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let publisher = qualified_test_fenced_publisher(Arc::clone(&provider));
-        let first_request = sample_fenced_request(7, None);
-        let first = publisher
-            .compare_and_append_privacy_classified(&first_request)
-            .expect("first fused append");
-        let conflicting_spec = SamplePrivacyReleaseSpec {
-            release_record_digest: [0xB8; 32],
-            ..SamplePrivacyReleaseSpec::primary()
-        };
-        let (publication, encoded) = sample_privacy_publication();
-        let conflicting_authorization =
-            sample_privacy_authorization_for(conflicting_spec, &publication, &encoded, 8, None);
-        let conflicting_request = FencedPrivacyPublicationRequestV1::try_new(
-            conflicting_authorization,
-            &publication,
-            encoded,
-            Some(first.included_head()),
-            first.included_head().fencing_floor(),
-        )
-        .expect("conflicting stable-scope request");
-
-        let error = publisher
-            .compare_and_append_privacy_classified(&conflicting_request)
-            .expect_err("one release scope cannot change its release evidence");
-
-        assert!(
-            error
-                .error
-                .to_string()
-                .contains("identity conflicts with an existing publication")
-        );
-        assert!(!error.may_have_appended);
-        assert_eq!(provider.append_count(), 1);
-        assert_eq!(provider.head(), Some(first.included_head()));
-    }
-
-    #[test]
-    fn fenced_head_reader_qualification_rejects_substitution_staleness_and_test_markers() {
-        let target = Arc::new(TestFencedTransparencyPublisher::new());
-
-        let substituted = Arc::new(TestFencedTransparencyHeadReader::with_handle(
-            Arc::clone(&target),
-            "https-pinned:governance:fenced-privacy-head-secondary",
-        ));
-        let substituted: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = substituted;
-        let error = QualifiedFencedTransparencyHeadReaderV1::try_new(
-            TEST_FENCED_HEAD_READER_HANDLE.to_owned(),
-            test_fenced_head_reader_qualification(),
-            substituted,
-        )
-        .expect_err("substituted reader identity must fail");
-        assert!(error.to_string().contains("does not match configuration"));
-
-        let stale = test_fenced_head_reader(Arc::clone(&target));
-        stale.set_revision(2);
-        let stale: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = stale;
-        let error = QualifiedFencedTransparencyHeadReaderV1::try_new(
-            TEST_FENCED_HEAD_READER_HANDLE.to_owned(),
-            test_fenced_head_reader_qualification(),
-            stale,
-        )
-        .expect_err("stale reader policy must fail");
-        assert!(error.to_string().contains("does not match configuration"));
-
-        let test_marked_handle = "https-pinned:governance:fenced-privacy-head-test";
-        let test_marked = Arc::new(TestFencedTransparencyHeadReader::with_handle(
-            target,
-            test_marked_handle,
-        ));
-        let test_marked: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = test_marked;
-        let error = QualifiedFencedTransparencyHeadReaderV1::try_new(
-            test_marked_handle.to_owned(),
-            test_fenced_head_reader_qualification(),
-            test_marked,
-        )
-        .expect_err("test-marked reader must fail");
-        assert!(error.to_string().contains("test-marked"));
-    }
-
-    #[test]
-    fn fused_writer_and_head_reader_require_one_exact_runtime_binding() {
-        let target = Arc::new(TestFencedTransparencyPublisher::new());
-        let writer = qualified_test_fenced_publisher(Arc::clone(&target));
-        let cases = [
-            (
-                "hsm:governance:fenced-privacy-secondary",
-                GovernanceDagRuntimeProviderQualificationV1::new(
-                    1,
-                    TEST_FENCED_PUBLISHER_POLICY_DIGEST,
-                ),
-            ),
-            (
-                TEST_FENCED_PUBLISHER_HANDLE,
-                GovernanceDagRuntimeProviderQualificationV1::new(
-                    2,
-                    TEST_FENCED_PUBLISHER_POLICY_DIGEST,
-                ),
-            ),
-            (
-                TEST_FENCED_PUBLISHER_HANDLE,
-                GovernanceDagRuntimeProviderQualificationV1::new(1, [0x74; 32]),
-            ),
-        ];
-
-        for (handle, qualification) in cases {
-            let reader = Arc::new(TestFencedTransparencyHeadReader::with_binding(
-                Arc::clone(&target),
-                handle,
-                qualification.revision,
-                qualification.policy_digest,
-            ));
-            let reader: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = reader;
-            let reader = QualifiedFencedTransparencyHeadReaderV1::try_new(
-                handle.to_owned(),
-                qualification,
-                reader,
-            )
-            .expect("independently qualify mismatched reader");
-            let error = ensure_fenced_privacy_runtime_bindings_match(&writer, &reader)
-                .expect_err("writer and reader binding mismatch must fail");
-            assert!(error.to_string().contains("one exact identity"));
-        }
-    }
-
-    #[test]
-    fn authenticated_head_bootstrap_rejects_read_failure_and_malformed_head_without_cache() {
-        let failed_root = tempdir().expect("failed root");
-        let failed_target = Arc::new(TestFencedTransparencyPublisher::new());
-        let failed_reader = test_fenced_head_reader(failed_target);
-        let qualified_failed_reader = qualified_test_fenced_head_reader(Arc::clone(&failed_reader));
-        failed_reader.set_fail_read(true);
-        let error = FilesystemGovernancePublisher::try_new(failed_root.path().to_path_buf())
-            .expect("failed publisher")
-            .with_qualified_fenced_privacy_head_reader(qualified_failed_reader)
-            .expect_err("failed authenticated read must abort bootstrap");
-        assert!(error.to_string().contains("failed authentication"));
-        assert!(!fenced_privacy_head_sync_path(failed_root.path()).exists());
-
-        let malformed_root = tempdir().expect("malformed root");
-        let malformed_target = Arc::new(TestFencedTransparencyPublisher::new());
-        let malformed_reader = test_fenced_head_reader(malformed_target);
-        malformed_reader.override_head(Some(FencedTransparencyTargetHeadV1 {
-            version: crate::FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1,
-            generation: 0,
-            head_digest: [0xA1; 32],
-            fencing_floor: 1,
-        }));
-        let error = FilesystemGovernancePublisher::try_new(malformed_root.path().to_path_buf())
-            .expect("malformed publisher")
-            .with_qualified_fenced_privacy_head_reader(qualified_test_fenced_head_reader(
-                malformed_reader,
-            ))
-            .expect_err("malformed authoritative head must abort bootstrap");
-        assert!(error.to_string().contains("failed authentication"));
-        assert!(!fenced_privacy_head_sync_path(malformed_root.path()).exists());
-    }
-
-    #[test]
-    fn persisted_pending_and_head_sync_reject_qualified_target_rotation() {
-        let temp = tempdir().expect("tempdir");
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let publisher = qualified_test_fenced_publisher(Arc::clone(&provider));
-        let reader =
-            qualified_test_fenced_head_reader(test_fenced_head_reader(Arc::clone(&provider)));
-        let (publication, encoded) = sample_privacy_publication();
-        let request = sample_fenced_request(7, None);
-        let mut pending = FencedPrivacyPendingRequestV1::from_request(&request, &publisher)
-            .expect("build pending request");
-        pending.target_handle = "hsm:governance:fenced-privacy-retired".to_owned();
-        write_fenced_privacy_pending_request(temp.path(), &pending)
-            .expect("persist old-target pending request");
-        let restored = read_fenced_privacy_pending_request(temp.path())
-            .expect("read pending request")
-            .expect("pending request exists");
-
-        let error = restored
-            .reconstruct_request(request.authorization(), &publication, &encoded, &publisher)
-            .expect_err("pending request must remain bound to its qualified target");
-        assert!(
-            error
-                .to_string()
-                .contains("belongs to a different qualified target")
-        );
-
-        let receipt = FencedPrivacyPublicationReceiptV1::from_verified_append(
-            &request,
-            TEST_FENCED_PUBLISHER_HANDLE,
-            test_fenced_publisher_qualification(),
-        )
-        .expect("build verified cache receipt");
-        let mut retired_cache = FencedPrivacyPublicationCacheV1::from_verified_receipt(
-            &request,
-            &receipt,
-            Some(receipt.included_head()),
-        )
-        .expect("build verified publication cache");
-        retired_cache.target_handle = "hsm:governance:fenced-privacy-retired".to_owned();
-        write_fenced_privacy_head_cache(temp.path(), &retired_cache)
-            .expect("persist retired target cache");
-        let error = synchronize_fenced_privacy_authoritative_head(temp.path(), &reader, None)
-            .expect_err("persisted publication cache must not rotate targets implicitly");
-        assert!(
-            error
-                .to_string()
-                .contains("publication cache belongs to a different qualified target")
-        );
-        fs::remove_file(fenced_privacy_head_cache_path(temp.path()))
-            .expect("remove retired cache before reader-binding check");
-
-        let retired_sync = FencedPrivacyAuthoritativeHeadSyncV1 {
-            version: GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_VERSION_V1,
-            reader_handle: "https-pinned:governance:fenced-privacy-retired".to_owned(),
-            reader_revision: 1,
-            reader_policy_digest: [0x73; 32],
-            authoritative_head: None,
-            ancestry_proof_digest: [0x74; 32],
-        };
-        write_fenced_privacy_head_sync(temp.path(), &retired_sync)
-            .expect("persist retired reader binding");
-        let error = synchronize_fenced_privacy_authoritative_head(temp.path(), &reader, None)
-            .expect_err("persisted reader binding must not rotate implicitly");
-        assert!(
-            error
-                .to_string()
-                .contains("belongs to a different qualified reader")
-        );
-        assert_eq!(provider.append_count(), 0);
-        assert!(provider.head().is_none());
-    }
-
-    #[test]
-    fn authenticated_head_sync_rejects_rollbacks_forks_and_stale_reader() {
-        let temp = tempdir().expect("tempdir");
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let qualified_writer = qualified_test_fenced_publisher(Arc::clone(&provider));
-        let first_request = sample_fenced_request(7, None);
-        let first_receipt = qualified_writer
-            .compare_and_append_privacy_classified(&first_request)
-            .expect("seed first authoritative head");
-        let next_spec = SamplePrivacyReleaseSpec::next();
-        let (next_publication, next_encoded) = sample_privacy_publication_for(next_spec);
-        let next_authorization =
-            sample_privacy_authorization_for(next_spec, &next_publication, &next_encoded, 8, None);
-        let second_request = FencedPrivacyPublicationRequestV1::try_new(
-            next_authorization,
-            &next_publication,
-            next_encoded,
-            Some(first_receipt.included_head()),
-            first_receipt.included_head().fencing_floor(),
-        )
-        .expect("second distinct fenced privacy request");
-        let second_receipt = qualified_writer
-            .compare_and_append_privacy_classified(&second_request)
-            .expect("seed second authoritative head");
-        let authoritative_head = second_receipt.included_head();
-        let head_reader = test_fenced_head_reader(Arc::clone(&provider));
-        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect("publisher")
-            .with_qualified_fenced_privacy_publisher(qualified_writer)
-            .expect("attach fused publisher")
-            .with_qualified_fenced_privacy_head_reader(qualified_test_fenced_head_reader(
-                Arc::clone(&head_reader),
-            ))
-            .expect("bootstrap current authoritative head");
-        assert_eq!(
-            read_fenced_privacy_head_sync(temp.path())
-                .expect("read synchronized head")
-                .and_then(|sync| sync.authoritative_head),
-            Some(authoritative_head)
-        );
-        let (publication, encoded) = sample_privacy_publication();
-        let authorization = sample_privacy_authorization(&publication, &encoded, 9);
-
-        head_reader.override_head(Some(first_receipt.included_head()));
-        let error = publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
-            .expect_err("generation rollback must fail");
-        assert!(error.to_string().contains("failed authentication"));
-
-        head_reader.override_head(None);
-        let error = publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
-            .expect_err("genesis rollback must fail");
-        assert!(error.to_string().contains("failed authentication"));
-
-        head_reader.override_head(Some(
-            FencedTransparencyTargetHeadV1::try_new(
-                authoritative_head.generation(),
-                [0xA2; 32],
-                authoritative_head.fencing_floor(),
-            )
-            .expect("valid substituted head"),
-        ));
-        let error = publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
-            .expect_err("same-generation substitution must fail");
-        assert!(error.to_string().contains("failed authentication"));
-
-        head_reader.override_head(Some(
-            FencedTransparencyTargetHeadV1::try_new(
-                authoritative_head.generation() + 1,
-                [0xA3; 32],
-                authoritative_head.fencing_floor(),
-            )
-            .expect("structurally valid non-monotonic head"),
-        ));
-        let error = publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
-            .expect_err("unproven higher fork must fail");
-        assert!(error.to_string().contains("failed authentication"));
-
-        head_reader.override_head(Some(authoritative_head));
-        head_reader.set_revision(2);
-        let error = publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
-            .expect_err("stale reader qualification must fail");
-        assert!(error.to_string().contains("changed after qualification"));
-
-        assert_no_privacy_publication_side_effects(temp.path());
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
-        assert_eq!(
-            read_fenced_privacy_head_sync(temp.path())
-                .expect("read retained synchronized head")
-                .and_then(|sync| sync.authoritative_head),
-            Some(authoritative_head),
-            "rejected reads must not roll back the authenticated cache"
-        );
-    }
-
-    #[test]
-    fn authenticated_head_sync_rejects_publication_at_unrelated_valid_ancestor() {
-        let temp = tempdir().expect("tempdir");
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let writer = qualified_test_fenced_publisher(Arc::clone(&provider));
-        let first_request = sample_fenced_request(7, None);
-        let first_receipt = writer
-            .compare_and_append_privacy_classified(&first_request)
-            .expect("seed first release");
-
-        let next_spec = SamplePrivacyReleaseSpec::next();
-        let (next_publication, next_encoded) = sample_privacy_publication_for(next_spec);
-        let next_authorization =
-            sample_privacy_authorization_for(next_spec, &next_publication, &next_encoded, 8, None);
-        let second_request = FencedPrivacyPublicationRequestV1::try_new(
-            next_authorization,
-            &next_publication,
-            next_encoded,
-            Some(first_receipt.included_head()),
-            first_receipt.included_head().fencing_floor(),
-        )
-        .expect("second release request");
-        let second_receipt = writer
-            .compare_and_append_privacy_classified(&second_request)
-            .expect("seed unrelated later release");
-
-        let (publication, encoded) = sample_privacy_publication();
-        let duplicate_authorization = sample_privacy_authorization(&publication, &encoded, 9);
-        let duplicate_request = FencedPrivacyPublicationRequestV1::try_new(
-            duplicate_authorization,
-            &publication,
-            encoded,
-            Some(second_receipt.included_head()),
-            second_receipt.included_head().fencing_floor(),
-        )
-        .expect("duplicate release lookup request");
-        let forged_receipt = FencedPrivacyPublicationReceiptV1::from_verified_existing(
-            &duplicate_request,
-            TEST_FENCED_PUBLISHER_HANDLE,
-            test_fenced_publisher_qualification(),
-            second_receipt.included_head(),
-            second_receipt.included_head(),
-        )
-        .expect("structurally valid receipt at an unrelated ancestor");
-        let reader =
-            qualified_test_fenced_head_reader(test_fenced_head_reader(Arc::clone(&provider)));
-
-        let error = synchronize_fenced_privacy_authoritative_head(
-            temp.path(),
-            &reader,
-            Some(&forged_receipt),
-        )
-        .expect_err("ancestry alone must not prove a different publication identity");
-
-        assert!(error.to_string().contains("failed authentication"));
-        assert!(!fenced_privacy_head_sync_path(temp.path()).exists());
-        assert_eq!(provider.append_count(), 2);
-        assert_ne!(
-            first_receipt.included_head(),
-            second_receipt.included_head()
-        );
-    }
-
-    #[test]
-    fn filesystem_privacy_publication_replays_cached_request_after_lease_rotation() {
-        let temp = tempdir().expect("tempdir");
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let head_reader = test_fenced_head_reader(Arc::clone(&provider));
-        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect("publisher")
-            .with_qualified_fenced_privacy_publisher(qualified_test_fenced_publisher(Arc::clone(
-                &provider,
-            )))
-            .expect("attach fused publisher")
-            .with_qualified_fenced_privacy_head_reader(qualified_test_fenced_head_reader(
-                head_reader,
-            ))
-            .expect("attach authenticated head reader");
-        let (publication, encoded) = sample_privacy_publication();
-        let authorization = sample_privacy_authorization(&publication, &encoded, 8);
-        let rotated_authorization = sample_privacy_authorization(&publication, &encoded, 9);
-
-        publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
-            .expect("first filesystem publication");
-        let first_cache = read_fenced_privacy_head_cache(temp.path())
-            .expect("read first cache")
-            .expect("first cache exists");
-        publisher
-            .publish_transparency_ledger_publication(
-                &publication,
-                &encoded,
-                Some(&rotated_authorization),
-            )
-            .expect("filesystem exact retry after lease rotation");
-        let retry_cache = read_fenced_privacy_head_cache(temp.path())
-            .expect("read retry cache")
-            .expect("retry cache exists");
-
-        assert_eq!(retry_cache, first_cache);
-        assert_eq!(retry_cache.last_fencing_token, 8);
-        assert_eq!(retry_cache.authoritative_head.fencing_floor(), 8);
-        assert_eq!(provider.append_count(), 1);
-        assert_eq!(provider.head(), Some(retry_cache.authoritative_head));
-
-        let conflicting_spec = SamplePrivacyReleaseSpec {
-            release_record_digest: [0xB8; 32],
-            ..SamplePrivacyReleaseSpec::primary()
-        };
-        let conflicting_authorization =
-            sample_privacy_authorization_for(conflicting_spec, &publication, &encoded, 10, None);
-        let error = publisher
-            .publish_transparency_ledger_publication(
-                &publication,
-                &encoded,
-                Some(&conflicting_authorization),
-            )
-            .expect_err("cached payload must not mask conflicting release evidence");
-        assert!(
-            error
-                .to_string()
-                .contains("identity conflicts with an existing publication")
-        );
-        assert_eq!(provider.append_count(), 1);
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
-        assert_eq!(
-            read_fenced_privacy_head_cache(temp.path())
-                .expect("read cache after conflict")
-                .expect("cache survives conflict"),
-            first_cache
-        );
-    }
-
-    #[test]
-    fn filesystem_privacy_publication_without_fused_adapter_fails_before_side_effects() {
-        let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        let (publication, encoded) = sample_privacy_publication();
-        let authorization = sample_privacy_authorization(&publication, &encoded, 8);
-
-        let error = publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
-            .expect_err("privacy publication must require fused adapter");
-
-        assert!(
-            error
-                .to_string()
-                .contains("requires a qualified fused target publisher")
-        );
-        assert_no_privacy_publication_side_effects(temp.path());
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
-    }
-
-    #[test]
-    fn fresh_filesystem_root_without_authenticated_head_reader_fails_closed() {
-        let temp = tempdir().expect("tempdir");
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect("publisher")
-            .with_qualified_fenced_privacy_publisher(qualified_test_fenced_publisher(provider))
-            .expect("attach fused publisher");
-        let (publication, encoded) = sample_privacy_publication();
-        let authorization = sample_privacy_authorization(&publication, &encoded, 8);
-
-        let error = publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
-            .expect_err("fresh root must not infer authoritative genesis");
-
-        assert!(
-            error
-                .to_string()
-                .contains("requires a qualified authenticated authoritative-head reader")
-        );
-        assert_no_privacy_publication_side_effects(temp.path());
-        assert!(!fenced_privacy_head_sync_path(temp.path()).exists());
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
-    }
-
-    #[test]
-    fn filesystem_privacy_publication_rejects_substituted_receipt_before_side_effects() {
-        let temp = tempdir().expect("tempdir");
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let head_reader = test_fenced_head_reader(Arc::clone(&provider));
-        provider.set_substitute_receipt(true);
-        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect("publisher")
-            .with_qualified_fenced_privacy_publisher(qualified_test_fenced_publisher(Arc::clone(
-                &provider,
-            )))
-            .expect("attach fused publisher")
-            .with_qualified_fenced_privacy_head_reader(qualified_test_fenced_head_reader(
-                head_reader,
-            ))
-            .expect("attach authenticated head reader");
-        let (publication, encoded) = sample_privacy_publication();
-        let authorization = sample_privacy_authorization(&publication, &encoded, 9);
-
-        let error = publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, Some(&authorization))
-            .expect_err("substituted receipt must fail closed");
-
-        assert!(error.to_string().contains("publication receipt is invalid"));
-        assert_eq!(provider.append_count(), 1);
-        assert_no_privacy_publication_side_effects(temp.path());
-        assert!(
-            fenced_privacy_pending_path(temp.path()).exists(),
-            "ambiguous append must retain its exact pending request"
-        );
-
-        provider.set_substitute_receipt(false);
-        let rotated_authorization = sample_privacy_authorization(&publication, &encoded, 10);
-        publisher
-            .publish_transparency_ledger_publication(
-                &publication,
-                &encoded,
-                Some(&rotated_authorization),
-            )
-            .expect("recover exact request after malformed receipt");
-
-        assert_eq!(provider.append_count(), 1);
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
-        let cache = read_fenced_privacy_head_cache(temp.path())
-            .expect("read recovered cache")
-            .expect("recovered cache exists");
-        assert_eq!(cache.last_fencing_token, 9);
-        let index_bytes =
-            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
-        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
-        let labels = index
-            .get("entries")
-            .and_then(JsonValue::as_array)
-            .and_then(|entries| entries.first())
-            .and_then(JsonValue::as_object)
-            .and_then(|entry| entry.get("labels"))
-            .and_then(JsonValue::as_object)
-            .expect("recovered privacy labels");
-        assert_eq!(
-            labels
-                .get("leader_lease_fencing_token")
-                .and_then(JsonValue::as_u64),
-            Some(9)
-        );
-    }
-
-    #[test]
-    fn fresh_roots_deduplicate_release_across_leases_and_later_heads() {
-        let first_root = tempdir().expect("first tempdir");
-        let same_lease_root = tempdir().expect("same-lease tempdir");
-        let later_anchor_root = tempdir().expect("later-anchor tempdir");
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let first_reader = test_fenced_head_reader(Arc::clone(&provider));
-        let same_lease_reader = test_fenced_head_reader(Arc::clone(&provider));
-        let first_publisher =
-            FilesystemGovernancePublisher::try_new(first_root.path().to_path_buf())
-                .expect("first publisher")
-                .with_qualified_fenced_privacy_publisher(qualified_test_fenced_publisher(
-                    Arc::clone(&provider),
-                ))
-                .expect("attach first fused publisher")
-                .with_qualified_fenced_privacy_head_reader(qualified_test_fenced_head_reader(
-                    first_reader,
-                ))
-                .expect("attach first authenticated head reader");
-        let same_lease_publisher =
-            FilesystemGovernancePublisher::try_new(same_lease_root.path().to_path_buf())
-                .expect("same-lease publisher")
-                .with_qualified_fenced_privacy_publisher(qualified_test_fenced_publisher(
-                    Arc::clone(&provider),
-                ))
-                .expect("attach same-lease fused publisher")
-                .with_qualified_fenced_privacy_head_reader(qualified_test_fenced_head_reader(
-                    same_lease_reader,
-                ))
-                .expect("attach same-lease authenticated head reader");
-        let (publication, encoded) = sample_privacy_publication();
-        let first_authorization = sample_privacy_authorization(&publication, &encoded, 10);
-        let same_lease_authorization = sample_privacy_authorization(&publication, &encoded, 10);
-        first_publisher
-            .publish_transparency_ledger_publication(
-                &publication,
-                &encoded,
-                Some(&first_authorization),
-            )
-            .expect("first root publishes from authenticated genesis");
-        let first_head = provider.head().expect("first authoritative head");
-        same_lease_publisher
-            .publish_transparency_ledger_publication(
-                &publication,
-                &encoded,
-                Some(&same_lease_authorization),
-            )
-            .expect("fresh root recognizes the same lease and stable release");
-
-        assert_eq!(provider.append_count(), 1);
-        assert_eq!(provider.head(), Some(first_head));
-        assert_eq!(
-            read_fenced_privacy_head_cache(first_root.path())
-                .expect("first cached head")
-                .map(|cache| cache.authoritative_head),
-            Some(first_head)
-        );
-        let same_lease_cache = read_fenced_privacy_head_cache(same_lease_root.path())
-            .expect("same-lease cached head")
-            .expect("same-lease cache exists");
-        assert_eq!(same_lease_cache.authoritative_head, first_head);
-        assert_eq!(same_lease_cache.last_included_head, first_head);
-        assert_eq!(
-            same_lease_cache.last_disposition,
-            FencedPrivacyPublicationDispositionV1::AlreadyIncluded
-        );
-        assert_eq!(same_lease_cache.last_fencing_token, 10);
-        same_lease_publisher
-            .publish_transparency_ledger_publication(
-                &publication,
-                &encoded,
-                Some(&same_lease_authorization),
-            )
-            .expect("same fresh root replays its already-included cache");
-        assert_eq!(provider.append_count(), 1);
-        assert_eq!(
-            read_fenced_privacy_head_cache(same_lease_root.path())
-                .expect("same-root retry cached head")
-                .expect("same-root retry cache exists")
-                .last_disposition,
-            FencedPrivacyPublicationDispositionV1::AlreadyIncluded
-        );
-
-        let next_spec = SamplePrivacyReleaseSpec::next();
-        let (next_publication, next_encoded) = sample_privacy_publication_for(next_spec);
-        let next_authorization =
-            sample_privacy_authorization_for(next_spec, &next_publication, &next_encoded, 11, None);
-        first_publisher
-            .publish_transparency_ledger_publication(
-                &next_publication,
-                &next_encoded,
-                Some(&next_authorization),
-            )
-            .expect("a genuinely distinct finalized release appends");
-        let advanced_head = provider.head().expect("advanced authoritative head");
-        assert_ne!(advanced_head, first_head);
-        assert_eq!(provider.append_count(), 2);
-
-        assert!(
-            !first_root
-                .path()
-                .join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE)
-                .exists()
-        );
-        assert!(
-            !same_lease_root
-                .path()
-                .join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE)
-                .exists()
-        );
-
-        let later_anchor_reader = test_fenced_head_reader(Arc::clone(&provider));
-        let later_anchor_publisher =
-            FilesystemGovernancePublisher::try_new(later_anchor_root.path().to_path_buf())
-                .expect("later-anchor publisher")
-                .with_qualified_fenced_privacy_publisher(qualified_test_fenced_publisher(
-                    Arc::clone(&provider),
-                ))
-                .expect("attach later-anchor fused publisher")
-                .with_qualified_fenced_privacy_head_reader(qualified_test_fenced_head_reader(
-                    later_anchor_reader,
-                ))
-                .expect("bootstrap authoritative head");
-        let advanced_block_hash = next_publication
-            .block
-            .block_hash()
-            .expect("advanced publication block hash");
-        let later_anchor_authorization = sample_privacy_authorization_for(
-            SamplePrivacyReleaseSpec::primary(),
-            &publication,
-            &encoded,
-            12,
-            Some(SampleFinalizedAnchorSpec {
-                sequence: next_spec.release_sequence,
-                release_id: next_publication.block.cycle_id,
-                record_digest: next_spec.release_record_digest,
-                latest_publication_block_hash: Some(advanced_block_hash),
-            }),
-        );
-        assert_eq!(
-            first_authorization.publication_idempotency_digest(),
-            later_anchor_authorization.publication_idempotency_digest(),
-            "later finalized-head advancement must not change the release identity"
-        );
-        later_anchor_publisher
-            .publish_transparency_ledger_publication(
-                &publication,
-                &encoded,
-                Some(&later_anchor_authorization),
-            )
-            .expect("fresh root recognizes a release under a later finalized anchor");
-
-        assert_eq!(provider.append_count(), 2);
-        assert_eq!(provider.head(), Some(advanced_head));
-        let later_cache = read_fenced_privacy_head_cache(later_anchor_root.path())
-            .expect("later-anchor cached head")
-            .expect("later-anchor cache exists");
-        assert_eq!(later_cache.authoritative_head, advanced_head);
-        assert_eq!(later_cache.last_included_head, first_head);
-        assert_eq!(
-            later_cache.last_disposition,
-            FencedPrivacyPublicationDispositionV1::AlreadyIncluded
-        );
-        assert!(!fenced_privacy_pending_path(later_anchor_root.path()).exists());
-    }
-
-    #[test]
-    fn newer_fencing_token_wins_while_paused_predecessor_has_zero_side_effects() {
-        let stale_root = tempdir().expect("stale tempdir");
-        let winner_root = tempdir().expect("winner tempdir");
-        let provider = Arc::new(TestFencedTransparencyPublisher::new());
-        let stale_reader = test_fenced_head_reader(Arc::clone(&provider));
-        let winner_reader = test_fenced_head_reader(Arc::clone(&provider));
-        provider.pause_fencing_token(20);
-        let stale_publisher =
-            FilesystemGovernancePublisher::try_new(stale_root.path().to_path_buf())
-                .expect("stale publisher")
-                .with_qualified_fenced_privacy_publisher(qualified_test_fenced_publisher(
-                    Arc::clone(&provider),
-                ))
-                .expect("attach stale fused publisher")
-                .with_qualified_fenced_privacy_head_reader(qualified_test_fenced_head_reader(
-                    stale_reader,
-                ))
-                .expect("attach stale authenticated head reader");
-        let winner_publisher =
-            FilesystemGovernancePublisher::try_new(winner_root.path().to_path_buf())
-                .expect("winner publisher")
-                .with_qualified_fenced_privacy_publisher(qualified_test_fenced_publisher(
-                    Arc::clone(&provider),
-                ))
-                .expect("attach winner fused publisher")
-                .with_qualified_fenced_privacy_head_reader(qualified_test_fenced_head_reader(
-                    winner_reader,
-                ))
-                .expect("attach winner authenticated head reader");
-        let (publication, encoded) = sample_privacy_publication();
-        let stale_authorization = sample_privacy_authorization(&publication, &encoded, 20);
-        let winner_spec = SamplePrivacyReleaseSpec::next();
-        let (winner_publication, winner_encoded) = sample_privacy_publication_for(winner_spec);
-        let winner_authorization = sample_privacy_authorization_for(
-            winner_spec,
-            &winner_publication,
-            &winner_encoded,
-            21,
-            None,
-        );
-        let stale_publication = publication.clone();
-        let stale_encoded = encoded.clone();
-        let stale = thread::spawn(move || {
-            stale_publisher.publish_transparency_ledger_publication(
-                &stale_publication,
-                &stale_encoded,
-                Some(&stale_authorization),
-            )
-        });
-        provider.wait_until_paused();
-
-        let winner_result = winner_publisher.publish_transparency_ledger_publication(
-            &winner_publication,
-            &winner_encoded,
-            Some(&winner_authorization),
-        );
-        provider.release_paused();
-        winner_result.expect("newer fencing token wins");
-        let stale_error = stale
-            .join()
-            .expect("stale publication thread")
-            .expect_err("paused stale token must fail");
-
-        assert!(stale_error.to_string().contains("fencing token is stale"));
-        assert_eq!(provider.append_count(), 1);
-        assert_no_privacy_publication_side_effects(stale_root.path());
-        assert!(!fenced_privacy_pending_path(stale_root.path()).exists());
-        assert_eq!(
-            read_fenced_privacy_head_cache(winner_root.path())
-                .expect("winner cached head")
-                .map(|cache| cache.authoritative_head),
-            provider.head()
-        );
-        assert!(
-            !winner_root
-                .path()
-                .join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE)
-                .exists()
-        );
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_transparency_ledger_publication_files_and_car_queue() {
-        let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        let (publication, encoded) = sample_transparency_ledger_publication();
-
-        publisher
-            .publish_transparency_ledger_publication(&publication, &encoded, None)
-            .expect("publish transparency ledger publication");
-
-        let publication_dir = temp
-            .path()
-            .join("transparency")
-            .join("ledger")
-            .join(hex::encode(publication.block.cycle_id));
-        let mut encoded_files = fs::read_dir(&publication_dir)
-            .expect("read transparency ledger dir")
-            .map(|entry| entry.expect("dir entry").path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
-            .collect::<Vec<_>>();
-        encoded_files.sort();
-        assert_eq!(encoded_files.len(), 1);
-        let bytes = fs::read(&encoded_files[0]).expect("read transparency ledger payload");
-        assert_eq!(bytes, encoded);
-        let decoded: ModerationLedgerCyclePublicationV1 =
-            norito::decode_from_bytes(&bytes).expect("decode transparency ledger publication");
-        assert_eq!(decoded, publication);
-        assert!(encoded_files[0].with_extension("json").exists());
-
-        let index_bytes =
-            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
-        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("transparency_ledger_publication"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        let entry = index
-            .get("entries")
-            .and_then(JsonValue::as_array)
-            .and_then(|entries| entries.first())
-            .and_then(JsonValue::as_object)
-            .expect("publish index entry");
-        let labels = entry
-            .get("labels")
-            .and_then(JsonValue::as_object)
-            .expect("publish labels");
-        let expected_cycle_id = hex::encode(publication.block.cycle_id);
-        assert_eq!(
-            labels.get("cycle_id_hex").and_then(JsonValue::as_str),
-            Some(expected_cycle_id.as_str())
-        );
-        assert_eq!(
-            labels.get("entry_count").and_then(JsonValue::as_u64),
-            Some(u64::from(publication.block.entry_count))
-        );
-
-        let queue_bytes = fs::read(temp.path().join(GOVERNANCE_CAR_QUEUE_FILE)).expect("car queue");
-        let queue: JsonValue = json::from_slice(&queue_bytes).expect("car queue json");
-        assert_eq!(
-            queue
-                .get("by_payload_kind")
-                .and_then(|value| value.get("transparency_ledger_publication"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            queue.get("assembled_count").and_then(JsonValue::as_u64),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_proof_token_issuance_files_and_car_queue() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (issuance, encoded) = sample_proof_token_issuance();
-
-        publisher
-            .publish_proof_token_issuance(&issuance, &encoded)
-            .expect("publish proof-token issuance");
-
-        let token_id_hex = hex::encode(issuance.token_id);
-        let issuance_dir = temp
-            .path()
-            .join("transparency")
-            .join("proof-tokens")
-            .join(&token_id_hex);
-        let mut encoded_files = fs::read_dir(&issuance_dir)
-            .expect("read proof-token issuance dir")
-            .map(|entry| entry.expect("dir entry").path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
-            .collect::<Vec<_>>();
-        encoded_files.sort();
-        assert_eq!(encoded_files.len(), 1);
-        let bytes = fs::read(&encoded_files[0]).expect("read proof-token issuance payload");
-        assert_eq!(bytes, encoded);
-        let decoded: ProofTokenIssuanceV1 =
-            norito::decode_from_bytes(&bytes).expect("decode proof-token issuance");
-        assert_eq!(decoded, issuance);
-
-        let json_path = encoded_files[0].with_extension("json");
-        assert!(json_path.exists());
-        let json_body = fs::read(&json_path).expect("read proof-token issuance json");
-        let json_value: JsonValue = json::from_slice(&json_body).expect("issuance json");
-        assert_eq!(
-            json_value
-                .get("metadata")
-                .and_then(|value| value.get("token_id_hex"))
-                .and_then(JsonValue::as_str),
-            Some(token_id_hex.as_str())
-        );
-
-        let index_bytes =
-            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
-        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("proof_token_issuance"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        let entry = index
-            .get("entries")
-            .and_then(JsonValue::as_array)
-            .and_then(|entries| entries.first())
-            .and_then(JsonValue::as_object)
-            .expect("publish index entry");
-        let labels = entry
-            .get("labels")
-            .and_then(JsonValue::as_object)
-            .expect("publish labels");
-        assert_eq!(
-            labels.get("token_id_hex").and_then(JsonValue::as_str),
-            Some(token_id_hex.as_str())
-        );
-        assert_eq!(
-            labels.get("entry_count").and_then(JsonValue::as_u64),
-            Some(2)
-        );
-        assert_single_runtime_external(temp.path(), "proof_token_issuance", &encoded);
-
-        let queue_bytes = fs::read(temp.path().join(GOVERNANCE_CAR_QUEUE_FILE)).expect("car queue");
-        let queue: JsonValue = json::from_slice(&queue_bytes).expect("car queue json");
-        assert_eq!(
-            queue
-                .get("by_payload_kind")
-                .and_then(|value| value.get("proof_token_issuance"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            queue.get("assembled_count").and_then(JsonValue::as_u64),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_appeal_finance_report_files_and_runtime_dag() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (report, encoded) = sample_appeal_finance_report();
-
-        publisher
-            .publish_appeal_finance_report(&report, &encoded)
-            .expect("publish appeal finance report");
-
-        let report_dir = temp.path().join("appeals").join("finance").join("case-42");
-        let mut encoded_files = fs::read_dir(&report_dir)
-            .expect("read appeal finance dir")
-            .map(|entry| entry.expect("dir entry").path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
-            .collect::<Vec<_>>();
-        encoded_files.sort();
-        assert_eq!(encoded_files.len(), 1);
-        let bytes = fs::read(&encoded_files[0]).expect("read appeal finance report payload");
-        assert_eq!(bytes, encoded);
-        let decoded: SoraFsAppealFinanceReportV1 =
-            norito::decode_from_bytes(&bytes).expect("decode appeal finance report");
-        assert_eq!(decoded, report);
-        assert!(encoded_files[0].with_extension("json").exists());
-
-        let index_bytes =
-            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
-        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_report"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-
-        let runtime_index = runtime_index(temp.path());
-        assert_eq!(
-            runtime_index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_report"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
-        let head: GovernanceDagHeadV1 =
-            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
-        let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
-        validate_governance_dag_head_against_chain_v1(&head, &blocks)
-            .expect("runtime head validates against signed blocks");
-        assert_eq!(blocks.len(), 1);
-        match &blocks[0].node.payload {
-            GovernanceLogPayloadV1::AppealFinanceReport(value) => {
-                assert_eq!(value.report_id, report.report_id);
-                assert_eq!(value.case_id, report.case_id);
-                assert_eq!(value.outcome, report.outcome);
-            }
-            other => panic!("unexpected runtime DAG payload: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_appeal_finance_weekly_rollup_files_and_runtime_dag() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (rollup, encoded) = sample_appeal_finance_weekly_rollup();
-
-        publisher
-            .publish_appeal_finance_weekly_rollup(&rollup, &encoded)
-            .expect("publish appeal finance weekly rollup");
-
-        let rollup_dir = temp
-            .path()
-            .join("appeals")
-            .join("finance")
-            .join("weekly")
-            .join("2026-W26");
-        let mut encoded_files = fs::read_dir(&rollup_dir)
-            .expect("read appeal finance weekly rollup dir")
-            .map(|entry| entry.expect("dir entry").path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
-            .collect::<Vec<_>>();
-        encoded_files.sort();
-        assert_eq!(encoded_files.len(), 1);
-        let bytes = fs::read(&encoded_files[0]).expect("read appeal finance weekly rollup payload");
-        assert_eq!(bytes, encoded);
-        let decoded: SoraFsAppealFinanceWeeklyRollupV1 =
-            norito::decode_from_bytes(&bytes).expect("decode appeal finance weekly rollup");
-        assert_eq!(decoded, rollup);
-        let json_path = encoded_files[0].with_extension("json");
-        assert!(json_path.exists());
-        let json_body = fs::read(&json_path).expect("read appeal finance weekly rollup json");
-        let json_value: JsonValue = json::from_slice(&json_body).expect("weekly rollup json");
-        assert_eq!(
-            json_value
-                .get("metadata")
-                .and_then(|value| value.get("cycle"))
-                .and_then(JsonValue::as_str),
-            Some("2026-W26")
-        );
-
-        let index_bytes =
-            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
-        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_weekly_rollup"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-
-        let runtime_index = runtime_index(temp.path());
-        assert_eq!(
-            runtime_index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_weekly_rollup"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
-        let head: GovernanceDagHeadV1 =
-            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
-        let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
-        validate_governance_dag_head_against_chain_v1(&head, &blocks)
-            .expect("runtime head validates against signed blocks");
-        assert_eq!(blocks.len(), 1);
-        match &blocks[0].node.payload {
-            GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(value) => {
-                assert_eq!(value.cycle, rollup.cycle);
-                assert_eq!(value.report_count, rollup.report_count);
-                assert_eq!(value.total_deposit_xor, rollup.total_deposit_xor);
-            }
-            other => panic!("unexpected runtime DAG payload: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_path_digest_binds_finalized_cursor() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (receipt, encoded) = sample_appeal_finance_settlement_receipt();
-        let digest_hex = blake3::hash(&encoded).to_hex().to_string();
-        let path = publisher.appeal_finance_settlement_receipt_path(&receipt, &digest_hex);
-
-        let mut changed_height = receipt.clone();
-        changed_height.finalized_block_height += 1;
-        let changed_height_encoded =
-            norito::to_bytes(&changed_height).expect("encode changed-height receipt");
-        let changed_height_digest_hex = blake3::hash(&changed_height_encoded).to_hex().to_string();
-        let changed_height_path = publisher
-            .appeal_finance_settlement_receipt_path(&changed_height, &changed_height_digest_hex);
-        assert_ne!(changed_height_digest_hex, digest_hex);
-        assert_ne!(changed_height_path, path);
-
-        let mut changed_hash = receipt;
-        changed_hash.finalized_block_hash[0] ^= 0x01;
-        let changed_hash_encoded =
-            norito::to_bytes(&changed_hash).expect("encode changed-hash receipt");
-        let changed_hash_digest_hex = blake3::hash(&changed_hash_encoded).to_hex().to_string();
-        let changed_hash_path = publisher
-            .appeal_finance_settlement_receipt_path(&changed_hash, &changed_hash_digest_hex);
-        assert_ne!(changed_hash_digest_hex, digest_hex);
-        assert_ne!(changed_hash_path, path);
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_appeal_finance_settlement_receipt_files_and_runtime_dag() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (receipt, encoded) = sample_appeal_finance_settlement_receipt();
-
-        publisher
-            .publish_appeal_finance_settlement_receipt(&receipt, &encoded)
-            .expect("publish appeal finance settlement receipt");
-
-        let receipt_dir = temp
-            .path()
-            .join("appeals")
-            .join("finance")
-            .join("settlement-receipts")
-            .join("case-42");
-        let mut encoded_files = fs::read_dir(&receipt_dir)
-            .expect("read appeal finance settlement receipt dir")
-            .map(|entry| entry.expect("dir entry").path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
-            .collect::<Vec<_>>();
-        encoded_files.sort();
-        assert_eq!(encoded_files.len(), 1);
-        let bytes = fs::read(&encoded_files[0]).expect("read settlement receipt payload");
-        assert_eq!(bytes, encoded);
-        let decoded: SoraFsAppealFinanceSettlementReceiptV1 =
-            norito::decode_from_bytes(&bytes).expect("decode settlement receipt");
-        assert_eq!(decoded, receipt);
-        let json_path = encoded_files[0].with_extension("json");
-        assert!(json_path.exists());
-        let json_body = fs::read(&json_path).expect("read settlement receipt json");
-        let json_value: JsonValue = json::from_slice(&json_body).expect("receipt json");
-        let expected_policy_digest_hex = hex::encode(receipt.appeal_finance_policy_digest);
-        let expected_finalized_block_hash_hex = hex::encode(receipt.finalized_block_hash);
-        assert_eq!(
-            json_value
-                .get("metadata")
-                .and_then(|value| value.get("tx_hash_hex"))
-                .and_then(JsonValue::as_str),
-            Some(receipt.tx_hash_hex.as_str())
-        );
-        assert_eq!(
-            json_value
-                .get("metadata")
-                .and_then(|value| value.get("appeal_finance_policy_digest_hex"))
-                .and_then(JsonValue::as_str),
-            Some(expected_policy_digest_hex.as_str())
-        );
-        assert_eq!(
-            json_value
-                .get("metadata")
-                .and_then(|value| value.get("finalized_block_height"))
-                .and_then(JsonValue::as_u64),
-            Some(receipt.finalized_block_height)
-        );
-        assert_eq!(
-            json_value
-                .get("metadata")
-                .and_then(|value| value.get("finalized_block_hash_hex"))
-                .and_then(JsonValue::as_str),
-            Some(expected_finalized_block_hash_hex.as_str())
-        );
-
-        let index_bytes =
-            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
-        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_settlement_receipt"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            index
-                .get("entries")
-                .and_then(JsonValue::as_array)
-                .and_then(|entries| entries.first())
-                .and_then(|entry| entry.get("labels"))
-                .and_then(|labels| labels.get("appeal_finance_policy_digest_hex"))
-                .and_then(JsonValue::as_str),
-            Some(expected_policy_digest_hex.as_str())
-        );
-        assert_eq!(
-            index
-                .get("entries")
-                .and_then(JsonValue::as_array)
-                .and_then(|entries| entries.first())
-                .and_then(|entry| entry.get("labels"))
-                .and_then(|labels| labels.get("finalized_block_height"))
-                .and_then(JsonValue::as_u64),
-            Some(receipt.finalized_block_height)
-        );
-        assert_eq!(
-            index
-                .get("entries")
-                .and_then(JsonValue::as_array)
-                .and_then(|entries| entries.first())
-                .and_then(|entry| entry.get("labels"))
-                .and_then(|labels| labels.get("finalized_block_hash_hex"))
-                .and_then(JsonValue::as_str),
-            Some(expected_finalized_block_hash_hex.as_str())
-        );
-
-        let runtime_index = runtime_index(temp.path());
-        assert_eq!(
-            runtime_index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_settlement_receipt"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
-        let head: GovernanceDagHeadV1 =
-            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
-        let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
-        validate_governance_dag_head_against_chain_v1(&head, &blocks)
-            .expect("runtime head validates against signed blocks");
-        assert_eq!(blocks.len(), 1);
-        match &blocks[0].node.payload {
-            GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(value) => {
-                assert_eq!(value.receipt_id, receipt.receipt_id);
-                assert_eq!(value.case_id, receipt.case_id);
-                assert_eq!(value.submitted_step, receipt.submitted_step);
-                assert_eq!(value.finalized_block_height, receipt.finalized_block_height);
-                assert_eq!(value.finalized_block_hash, receipt.finalized_block_hash);
-            }
-            other => panic!("unexpected runtime DAG payload: {other:?}"),
-        }
-    }
-
-    // Textual inclusion preserves the original governance test-module paths.
+    include!("governance/tests/runtime_and_privacy_publication.rs");
     include!("governance/tests/publication_persistence.rs");
 }

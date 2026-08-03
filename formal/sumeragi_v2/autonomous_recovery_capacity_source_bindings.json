@@ -1,0 +1,1171 @@
+{
+  "schema_version": 1,
+  "module": "SumeragiV2AutonomousRecoveryCapacity",
+  "positive_config": "multilane_autonomous_recovery_capacity_fixed.cfg",
+  "evidence_document": "AUTONOMOUS_RECOVERY_CAPACITY_CONTRACT.md",
+  "production_refinement_obligation": "AutonomousRecoveryCapacityProductionRefinementObligation",
+  "integration_status": "static_model_and_production_bindings_complete",
+  "formal_engine_status": "not_run_by_static_contract",
+  "invariants": [
+    "MLIncompleteCarrierNRecoverable",
+    "MLAutonomousPredecessorGloballyApplied",
+    "MLStartupRepairAfterCarrierEnvelopes",
+    "MLCertifiedFrontierCapacityReconstructable",
+    "MLMutationPeaksAdmittedBeforeFirstWrite",
+    "MLDebugAppendReservationAndRestartAccounting"
+  ],
+  "mutations": [
+    {
+      "mode": "RouteLatestOnlySkip",
+      "config": "multilane_autonomous_recovery_capacity_route_latest_only_skip_bug.cfg",
+      "invariant": "MLIncompleteCarrierNRecoverable"
+    },
+    {
+      "mode": "HashOnlyAutonomousPredecessor",
+      "config": "multilane_autonomous_recovery_capacity_hash_only_predecessor_bug.cfg",
+      "invariant": "MLAutonomousPredecessorGloballyApplied"
+    },
+    {
+      "mode": "StartupRepairBeforeEnvelope",
+      "config": "multilane_autonomous_recovery_capacity_startup_repair_before_envelopes_bug.cfg",
+      "invariant": "MLStartupRepairAfterCarrierEnvelopes"
+    },
+    {
+      "mode": "FrontierMissingBundleEnvelope",
+      "config": "multilane_autonomous_recovery_capacity_frontier_missing_bundle_obligation_bug.cfg",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable"
+    },
+    {
+      "mode": "ClaimPeakAfterMutation",
+      "config": "multilane_autonomous_recovery_capacity_claim_peak_after_mutation_bug.cfg",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite"
+    },
+    {
+      "mode": "AssociationPeakAfterMutation",
+      "config": "multilane_autonomous_recovery_capacity_association_peak_after_mutation_bug.cfg",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite"
+    },
+    {
+      "mode": "PrunePeakAfterMutation",
+      "config": "multilane_autonomous_recovery_capacity_prune_peak_after_mutation_bug.cfg",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite"
+    },
+    {
+      "mode": "DebugAppendBeforeCarrierReservation",
+      "config": "multilane_autonomous_recovery_capacity_debug_append_before_carrier_reservation_bug.cfg",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting"
+    },
+    {
+      "mode": "DebugRestartDropsAccounting",
+      "config": "multilane_autonomous_recovery_capacity_debug_restart_drops_accounting_bug.cfg",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting"
+    }
+  ],
+  "stable_bindings": [
+    {
+      "id": "durable_reservation_reconciliation_snapshot",
+      "invariant": "MLIncompleteCarrierNRecoverable",
+      "coverage": "anchor_only",
+      "path": "crates/iroha_core/src/queue.rs",
+      "kind": "method",
+      "symbol": "Queue::lane_reservation_reconciliation_snapshot",
+      "required_tokens": [
+        "self.transaction_selection_durability_faulted()",
+        "self.lane_reservation_journal.lock().is_none()",
+        "let ordered_owner_phases = self.lane_reservation_recovery_phases_locked()?",
+        ".sort_by_key(|record| (record.fifo_ordinal, record.key.signed_transaction_hash))",
+        "ordered_groups",
+        "commit_barriers",
+        "prepared_release_barriers",
+        "completed_releases"
+      ],
+      "ordered_tokens": [
+        "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
+        "let _queue_guard = self.push_remove_lock.lock()",
+        "let store = self.lane_reservations.lock()",
+        "let ordered_owner_phases = self.lane_reservation_recovery_phases_locked()?",
+        "Ok(LaneQueueReservationReconciliationSnapshotV1 {"
+      ]
+    },
+    {
+      "id": "autonomous_predecessor_role_dispatch",
+      "invariant": "MLAutonomousPredecessorGloballyApplied",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
+      "kind": "method",
+      "symbol": "State::certified_lane_block_session_predecessor_is_applied_cached",
+      "required_tokens": [
+        "session.prepare_qc.payload_availability_qc.is_some()",
+        "self.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached",
+        "&session.proposal"
+      ],
+      "ordered_tokens": [
+        "if session.prepare_qc.payload_availability_qc.is_some()",
+        "self.certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+        "else",
+        "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached"
+      ]
+    },
+    {
+      "id": "autonomous_predecessor_ordinary_receipt_filter",
+      "invariant": "MLAutonomousPredecessorGloballyApplied",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
+      "kind": "method",
+      "symbol": "State::ordinary_application_receipt_repair_session",
+      "required_tokens": [
+        "let session = crate::lane_consensus::CommittedLaneBlockSession {",
+        ".payload_availability_qc",
+        ".is_none()",
+        ".then_some(session)"
+      ],
+      "ordered_tokens": [
+        "let session = crate::lane_consensus::CommittedLaneBlockSession {",
+        ".payload_availability_qc",
+        ".is_none()",
+        ".then_some(session)"
+      ]
+    },
+    {
+      "id": "autonomous_predecessor_global_application_gate",
+      "invariant": "MLAutonomousPredecessorGloballyApplied",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
+      "kind": "method",
+      "symbol": "State::certified_autonomous_lane_block_predecessor_is_globally_applied_cached",
+      "required_tokens": [
+        "descriptor.previous_lane_block_height",
+        "descriptor.previous_lane_block_descriptor_hash",
+        "previous_height.checked_add(1) != Some(descriptor.lane_block_height)",
+        "Self::canonical_merged_lane_frontier_from_world",
+        "if frontier.0 >= previous_height",
+        "return frontier == (previous_height, Some(previous_descriptor_hash))",
+        "self.kura.autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair",
+        "proposal"
+      ],
+      "ordered_tokens": [
+        "let previous_height = descriptor.previous_lane_block_height",
+        "let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else",
+        "previous_height.checked_add(1) != Some(descriptor.lane_block_height)",
+        "Self::canonical_merged_lane_frontier_from_world",
+        "if frontier.0 >= previous_height",
+        "return frontier == (previous_height, Some(previous_descriptor_hash))",
+        "autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair"
+      ]
+    },
+    {
+      "id": "autonomous_predecessor_merge_receipt_revalidator",
+      "invariant": "MLAutonomousPredecessorGloballyApplied",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/autonomous_application_evidence.rs",
+      "kind": "method",
+      "symbol": "Kura::autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair",
+      "required_tokens": [
+        "descriptor.previous_lane_block_height",
+        "descriptor.previous_lane_block_descriptor_hash",
+        "previous_height.checked_add(1) != Some(descriptor.lane_block_height)",
+        "self.read_lane_block_application_receipt_without_sidecar_repair",
+        "descriptor.lane_id",
+        "previous_height",
+        "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
+        "previous.dataspace_id == descriptor.dataspace_id",
+        "previous.lane_incarnation == descriptor.lane_incarnation",
+        "previous.descriptor_hash == previous_descriptor_hash",
+        "self.lane_block_application_receipt_matches_merge_log(&receipt)"
+      ],
+      "ordered_tokens": [
+        "let previous_height = descriptor.previous_lane_block_height",
+        "let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else",
+        "self.read_lane_block_application_receipt_without_sidecar_repair",
+        "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
+        "previous.lane_incarnation == descriptor.lane_incarnation",
+        "previous.descriptor_hash == previous_descriptor_hash",
+        "self.lane_block_application_receipt_matches_merge_log(&receipt)"
+      ]
+    },
+    {
+      "id": "autonomous_current_merge_receipt_revalidator",
+      "invariant": "MLAutonomousPredecessorGloballyApplied",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/autonomous_application_evidence.rs",
+      "kind": "method",
+      "symbol": "Kura::autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair",
+      "required_tokens": [
+        "self.read_lane_block_application_receipt_without_sidecar_repair",
+        "descriptor.lane_id",
+        "descriptor.lane_block_height",
+        "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
+        "receipt.proposal == *proposal",
+        "self.lane_block_application_receipt_matches_merge_log(&receipt)"
+      ],
+      "ordered_tokens": [
+        "self.read_lane_block_application_receipt_without_sidecar_repair",
+        "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
+        "receipt.proposal == *proposal",
+        "self.lane_block_application_receipt_matches_merge_log(&receipt)"
+      ]
+    },
+    {
+      "id": "certified_merge_stage_consumer",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "anchor_only",
+      "path": "crates/iroha_core/src/state.rs",
+      "kind": "method",
+      "symbol": "StateBlock::stage_certified_merge_entry",
+      "required_tokens": [
+        "self.state_ref.validate_certified_merge_entry_for_global_order(entry)?",
+        "let Some(batch) = entry.execution_batch.as_ref() else",
+        "self.stage_merge_execution_markers(entry.epoch_id, batch)?",
+        "self.canonical_wsv_merge_commit_authorization = Some(CanonicalWsvMergeCommitAuthorization {",
+        "self.staged_merge_entry = Some(entry.clone())"
+      ],
+      "ordered_tokens": [
+        "self.ensure_pristine_certified_merge_stage()?",
+        "self.state_ref.validate_certified_merge_entry_for_global_order(entry)?",
+        "State::preexecute_merge_execution_sources_into(self, sources)",
+        "self.stage_merge_execution_markers(entry.epoch_id, batch)?",
+        "self.staged_merge_entry = Some(entry.clone())"
+      ]
+    },
+    {
+      "id": "certified_bundle_reservation_sum",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity_reservation_types.rs",
+      "kind": "method",
+      "symbol": "CertifiedBundleCapacityReservation::reserved_bytes",
+      "required_tokens": [
+        "if self.outstanding_components.is_empty()",
+        "self.plan.component_bytes.get(component)?",
+        "self.plan.component_transient_bytes.get(component)?",
+        "stable.checked_add(transient)"
+      ],
+      "ordered_tokens": [
+        "if self.outstanding_components.is_empty()",
+        "let stable = self.outstanding_components.iter().try_fold",
+        "self.plan.component_bytes.get(component)?",
+        "let transient = self.outstanding_components.iter().try_fold",
+        "self.plan.component_transient_bytes.get(component)?",
+        "stable.checked_add(transient)"
+      ]
+    },
+    {
+      "id": "certified_bundle_admission_before_first_write",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::persist_committed_lane_block_session_inner",
+      "required_tokens": [
+        "let _prune_guard = self.prune_lock.lock()",
+        "Self::validate_certified_lane_block_artifact(&artifact)",
+        "!authority.authorizes_proposal(&artifact.proposal)",
+        "self.ensure_certified_bundle_capacity_reservation_under_prune_guard",
+        "self.write_certified_lane_block_artifact_with_authority_under_prune_guard",
+        "self.persist_autonomous_lane_merge_bundle_under_prune_guard(&source)?",
+        "descriptor.lane_block_height, *chain_id_hash, *epoch, None, true"
+      ],
+      "ordered_tokens": [
+        "let _prune_guard = self.prune_lock.lock()",
+        "Self::validate_certified_lane_block_artifact(&artifact)",
+        "!authority.authorizes_proposal(&artifact.proposal)",
+        "self.ensure_certified_bundle_capacity_reservation_under_prune_guard",
+        "self.write_certified_lane_block_artifact_with_authority_under_prune_guard",
+        "self.persist_autonomous_lane_merge_bundle_under_prune_guard(&source)?",
+        "descriptor.lane_block_height, *chain_id_hash, *epoch, None, true",
+        "if published != source"
+      ]
+    },
+    {
+      "id": "certified_bundle_exact_pair_capacity_projection",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::certified_bundle_pair_remaining_capacity_locked",
+      "required_tokens": [
+        "self.certified_bundle_pair_has_exact_append_recovery_locked",
+        "physical_stable.checked_add(recovery.physical_temp_bytes)",
+        "self.open_bound_progress_pair(data_path, index_path)?",
+        "if existing == payload",
+        "let intent = BoundProgressAppendIntentV1",
+        "let stable = payload_len.checked_add",
+        "let transient = u64::try_from(norito::encode_canonical(&intent)",
+        "self.certified_bundle_capacity_pair_read_unchanged(&pair)?"
+      ],
+      "ordered_tokens": [
+        "self.certified_bundle_pair_has_exact_append_recovery_locked",
+        "physical_stable.checked_add(recovery.physical_temp_bytes)",
+        "let namespace = self.open_bound_progress_namespace",
+        "self.open_bound_progress_pair(data_path, index_path)?",
+        "if existing == payload",
+        "let intent = BoundProgressAppendIntentV1",
+        "let stable = payload_len.checked_add",
+        "let transient = u64::try_from(norito::encode_canonical(&intent)",
+        "self.certified_bundle_capacity_pair_read_unchanged(&pair)?"
+      ]
+    },
+    {
+      "id": "certified_bundle_complete_plan",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::certified_bundle_capacity_plan",
+      "required_tokens": [
+        "source.bundle.certified != *artifact",
+        "source.bundle.encode_framed()? != source.source_bundle",
+        "self.certified_bundle_pair_remaining_capacity_locked",
+        "CertifiedBundleCapacityComponent::LatestCertifiedFrontier",
+        "CertifiedBundleCapacityComponent::CertifiedPair",
+        "CertifiedBundleCapacityComponent::AutonomousBundlePair",
+        "CertifiedBundleCapacityComponent::AutonomousBundlePair, bundle_component",
+        "startup_physical_credit_bytes"
+      ],
+      "ordered_tokens": [
+        "source.bundle.certified != *artifact",
+        "let frontier = LatestCertifiedLaneBlockFrontierV1::new",
+        "CertifiedLaneBlockArtifact::FORMAT_LABEL",
+        "AutonomousLaneMergeBundleV1::FORMAT_LABEL",
+        "let component_bytes = BTreeMap::from",
+        "let component_transient_bytes = BTreeMap::from",
+        "startup_physical_credit_bytes"
+      ]
+    },
+    {
+      "id": "certified_bundle_history_preflight",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::preflight_certified_bundle_inventory_locked",
+      "required_tokens": [
+        "self.certified_bundle_pair_has_exact_append_recovery_locked",
+        "self.certified_bundle_append_preimage_payloads_locked",
+        "self.bound_indexed_sidecar_payload_heights",
+        "self.validate_autonomous_lane_merge_bundle_pair_layout_locked",
+        "if bundle.certified != *artifact",
+        "non-frontier autonomous certificate lacks its durable bundle"
+      ],
+      "ordered_tokens": [
+        "let certified_recovery",
+        "let bundle_recovery",
+        "self.certified_bundle_append_preimage_payloads_locked",
+        "self.certified_bundle_append_preimage_payloads_locked",
+        "for (height, bundle) in &bundles",
+        "if bundle.certified != *artifact",
+        "for (height, artifact) in &certified",
+        "non-frontier autonomous certificate lacks its durable bundle"
+      ]
+    },
+    {
+      "id": "certified_bundle_aggregate_capacity_gate",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::ensure_certified_bundle_capacity_plan_locked",
+      "required_tokens": [
+        "another certified/bundle capacity identity is still outstanding for this route",
+        "reservation.plan.bundle_bytes_hash != plan.bundle_bytes_hash",
+        "let existing_reserved = reservations",
+        ".checked_add(pending_block_bytes)",
+        ".and_then(|bytes| bytes.checked_add(terminal_reserved_bytes))",
+        ".and_then(|bytes| bytes.checked_add(post_wsv_reserved_bytes))",
+        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
+        ".and_then(|bytes| bytes.checked_add(existing_reserved))",
+        ".and_then(|bytes| bytes.checked_add(new_reserved))",
+        "reservations.insert(identity, reservation)"
+      ],
+      "ordered_tokens": [
+        "let mut reservations = self.certified_bundle_capacity_reservations.lock()",
+        "another certified/bundle capacity identity is still outstanding for this route",
+        "let existing_reserved = reservations",
+        "let required = physical_bytes",
+        ".checked_add(pending_block_bytes)",
+        ".and_then(|bytes| bytes.checked_add(terminal_reserved_bytes))",
+        ".and_then(|bytes| bytes.checked_add(post_wsv_reserved_bytes))",
+        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
+        ".and_then(|bytes| bytes.checked_add(existing_reserved))",
+        ".and_then(|bytes| bytes.checked_add(new_reserved))",
+        "if required > self.max_disk_usage_bytes",
+        "reservations.insert(identity, reservation)"
+      ]
+    },
+    {
+      "id": "certified_bundle_capacity_snapshot_order",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::ensure_certified_bundle_capacity_reservation_under_prune_guard",
+      "required_tokens": [
+        "self.persisted_count_and_unindexed_bytes()?",
+        "self.pending_block_bytes(persisted_count, unindexed_bytes)?",
+        "self.kura_disk_usage_bytes()?",
+        "let _geometry_guard = self.lane_geometry_lock.lock()",
+        "let _sidecar_guard = self.sidecar_lock.lock()",
+        "self.autonomous_global_terminal_outcome_reserved_bytes_locked()?",
+        "self.post_wsv_lane_artifact_budget_reserved_bytes()?",
+        "self.certified_bundle_capacity_plan(&entry, artifact, source)?",
+        "self.certified_bundle_capacity_consumed_components_locked",
+        "self.ensure_certified_bundle_capacity_plan_locked"
+      ],
+      "ordered_tokens": [
+        "self.persisted_count_and_unindexed_bytes()?",
+        "self.pending_block_bytes(persisted_count, unindexed_bytes)?",
+        "self.kura_disk_usage_bytes()?",
+        "let _geometry_guard = self.lane_geometry_lock.lock()",
+        "let _sidecar_guard = self.sidecar_lock.lock()",
+        "self.autonomous_global_terminal_outcome_reserved_bytes_locked()?",
+        "self.post_wsv_lane_artifact_budget_reserved_bytes()?",
+        "self.certified_bundle_capacity_plan(&entry, artifact, source)?",
+        "self.certified_bundle_capacity_consumed_components_locked",
+        "self.ensure_certified_bundle_capacity_plan_locked"
+      ]
+    },
+    {
+      "id": "certified_bundle_durable_component_consumption",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::consume_certified_bundle_capacity_component",
+      "required_tokens": [
+        "identity.lane_incarnation == descriptor.lane_incarnation",
+        "identity.lane_block_descriptor_hash == descriptor.descriptor_hash",
+        "reservation.plan.certified_bytes_hash != certified_hash",
+        "if durable_bytes_hash != expected_hash",
+        "reservation.outstanding_components.remove(&component)",
+        "reservations.remove(&identity)"
+      ],
+      "ordered_tokens": [
+        "let certified_hash = Hash::new",
+        "identity.lane_incarnation == descriptor.lane_incarnation",
+        "identity.lane_block_descriptor_hash == descriptor.descriptor_hash",
+        "reservation.plan.certified_bytes_hash != certified_hash",
+        "if durable_bytes_hash != expected_hash",
+        "reservation.outstanding_components.remove(&component)",
+        "reservations.remove(&identity)"
+      ]
+    },
+    {
+      "id": "certified_bundle_retirement_blocker",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::ensure_lane_has_no_certified_bundle_capacity_reservation",
+      "required_tokens": [
+        "self.certified_bundle_capacity_reservations",
+        "identity.lane_id == entry.lane_id",
+        "lane retirement is blocked by an outstanding certified/bundle capacity obligation"
+      ],
+      "ordered_tokens": [
+        "self.certified_bundle_capacity_reservations",
+        "identity.lane_id == entry.lane_id",
+        "lane retirement is blocked by an outstanding certified/bundle capacity obligation"
+      ]
+    },
+    {
+      "id": "certified_bundle_transactional_startup_rebuild",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::rebuild_certified_bundle_capacity_reservations_on_startup",
+      "required_tokens": [
+        "let mut rebuilt = BTreeMap",
+        "read_latest_certified_lane_block_frontier_locked(&active, true)?",
+        "self.certified_bundle_capacity_plan(&active, &artifact, &source)?",
+        "self.certified_bundle_capacity_consumed_components_locked",
+        "self.preflight_certified_bundle_inventory_locked",
+        "startup_physical_credit_bytes.min(reserved)",
+        ".checked_add(pending_block_bytes)",
+        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
+        "*self.certified_bundle_capacity_reservations.lock() = rebuilt"
+      ],
+      "ordered_tokens": [
+        "let mut rebuilt = BTreeMap",
+        "read_latest_certified_lane_block_frontier_locked(&active, true)?",
+        "self.certified_bundle_capacity_plan(&active, &artifact, &source)?",
+        "self.certified_bundle_capacity_consumed_components_locked",
+        "self.preflight_certified_bundle_inventory_locked",
+        "let rebuilt_effective_reserved = rebuilt",
+        "startup_physical_credit_bytes.min(reserved)",
+        "let required = used",
+        ".checked_add(pending_block_bytes)",
+        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
+        "*self.certified_bundle_capacity_reservations.lock() = rebuilt"
+      ]
+    },
+    {
+      "id": "lane_history_compaction_recovery_before_capacity",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/lane_history_compaction.rs",
+      "kind": "method",
+      "symbol": "Kura::compact_lane_histories_through_merge_frontier_locked",
+      "required_tokens": [
+        "self.lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards",
+        "let before_recovery = Self::sidecar_tracked_bytes",
+        "let recovery_accounting = self.begin_total_disk_usage_mutation()",
+        "Self::recover_indexed_sidecar_artifacts",
+        "let before = Self::sidecar_tracked_bytes",
+        "self.update_disk_usage_delta(before_recovery, before)",
+        "recovery_accounting.finish()",
+        "let temp_peak = before",
+        ".checked_add(pending_canonical_bytes)",
+        ".checked_add(terminal_reservations)",
+        ".checked_add(post_wsv_reservations)",
+        ".checked_add(certified_bundle_reservations)",
+        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
+        ".checked_add(temp_peak)",
+        "LaneHistoryCompactionOutcome::CapacityBlocked",
+        "Self::prune_indexed_sidecars_through_terminal_frontier"
+      ],
+      "ordered_tokens": [
+        "let before_recovery = Self::sidecar_tracked_bytes",
+        "let recovery_accounting = self.begin_total_disk_usage_mutation()",
+        "Self::recover_indexed_sidecar_artifacts",
+        "let before = Self::sidecar_tracked_bytes",
+        "self.update_disk_usage_delta(before_recovery, before)",
+        "recovery_accounting.finish()",
+        "let temp_peak = before",
+        ".checked_add(pending_canonical_bytes)",
+        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
+        ".checked_add(temp_peak)",
+        "LaneHistoryCompactionOutcome::CapacityBlocked",
+        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "Self::prune_indexed_sidecars_through_terminal_frontier"
+      ]
+    },
+    {
+      "id": "entrypoint_claim_preflight_order",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "anchor_only",
+      "path": "crates/iroha_core/src/lane_consensus.rs",
+      "kind": "method",
+      "symbol": "LaneBlockSessionCache::insert_proposal",
+      "required_tokens": [
+        "validate_lane_block_proposal(&proposal)",
+        "self.ensure_entrypoints_available(&proposal, key)?",
+        "self.sessions.entry(key).or_default()",
+        "self.entrypoint_claims",
+        "self.evict()"
+      ],
+      "ordered_tokens": [
+        "self.ensure_entrypoints_available(&proposal, key)?",
+        "self.touch(key)",
+        "self.sessions.entry(key).or_default()",
+        "session.proposal = Some(proposal)",
+        "self.entrypoint_claims",
+        "self.evict()"
+      ]
+    },
+    {
+      "id": "exact_incomplete_carrier_history_scan",
+      "invariant": "MLIncompleteCarrierNRecoverable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/merge_ledger_latest_execution_index.rs",
+      "kind": "method",
+      "symbol": "MergeLedgerLog::execution_entries_for_bounded_identities",
+      "required_tokens": [
+        "identities.len() > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES",
+        "self.recover_failed_append_tail()?",
+        "for index in 1..=self.total_entries",
+        "descriptor.lane_id",
+        "descriptor.dataspace_id",
+        "descriptor.lane_incarnation",
+        "descriptor.lane_block_height",
+        "descriptor.proposal_height",
+        "identities.contains(&identity)",
+        "found.insert(identity, frame.entry_hash).is_some()",
+        "found.len() == identities.len()"
+      ],
+      "ordered_tokens": [
+        "identities.len() > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES",
+        "self.recover_failed_append_tail()?",
+        "let mut found = BTreeMap::new()",
+        "for index in 1..=self.total_entries",
+        "descriptor.lane_incarnation",
+        "descriptor.lane_block_height",
+        "descriptor.proposal_height",
+        "identities.contains(&identity)",
+        "found.insert(identity, frame.entry_hash).is_some()",
+        "found.len() == identities.len()",
+        "Ok(found)"
+      ]
+    },
+    {
+      "id": "exact_incomplete_carrier_reservation_rebuild",
+      "invariant": "MLIncompleteCarrierNRecoverable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/lane_artifact_budget.rs",
+      "kind": "method",
+      "symbol": "Kura::rebuild_post_wsv_lane_artifact_budget_reservations_on_startup",
+      "required_tokens": [
+        "self.autonomous_lane_attempt_inventory_counts_locked(&lane_entry, 1)?",
+        ".difference(&inventory.complete_terminal_outcome_identities)",
+        "incomplete_seen > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES",
+        "AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier",
+        "read_lane_block_application_receipt_from_paths_durability_attested_locked",
+        "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
+        "receipt.proposal.descriptor.proposal_height == identity.1",
+        "latest_execution_entry",
+        "latest_height != identity.0",
+        "execution_entries_for_bounded_identities(&historical_execution_identities)",
+        "merge_carrier_for_entry_under_prune_and_canonical_guards",
+        "ensure_post_wsv_lane_artifact_budget_reservation_locked"
+      ],
+      "ordered_tokens": [
+        "let mut incomplete_seen = 0_usize",
+        ".difference(&inventory.complete_terminal_outcome_identities)",
+        "incomplete_seen > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES",
+        "AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier",
+        "if let Some(entry_hash) = terminal_entry_hash",
+        "read_lane_block_application_receipt_from_paths_durability_attested_locked",
+        "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
+        "receipt.proposal.descriptor.proposal_height == identity.1",
+        "latest_execution_entry",
+        "if latest_height != identity.0",
+        "execution_entries_for_bounded_identities(&historical_execution_identities)",
+        "for entry_hash in carrier_hashes",
+        "merge_carrier_for_entry_under_prune_and_canonical_guards",
+        "ensure_post_wsv_lane_artifact_budget_reservation_locked"
+      ]
+    },
+    {
+      "id": "startup_carrier_envelope_reconstruction_order",
+      "invariant": "MLStartupRepairAfterCarrierEnvelopes",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::new_inner",
+      "required_tokens": [
+        "if !provisional_open",
+        "kura.reconcile_merge_carriers_from_durable_blocks()?",
+        "kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
+        "kura.rebuild_certified_bundle_capacity_reservations_on_startup()?",
+        "kura.repair_lane_merge_application_frontiers_on_startup()?",
+        "kura.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "kura.validate_configured_kura_capacity_after_startup_recovery()?",
+        "Ok((kura, BlockCount(block_count)))"
+      ],
+      "ordered_tokens": [
+        "kura.reconcile_merge_carriers_from_durable_blocks()?",
+        "kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
+        "kura.rebuild_certified_bundle_capacity_reservations_on_startup()?",
+        "kura.repair_lane_merge_application_frontiers_on_startup()?",
+        "kura.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "kura.validate_configured_kura_capacity_after_startup_recovery()?",
+        "match kura.kura_disk_usage_bytes()",
+        "match kura.refresh_total_disk_usage_bytes()",
+        "Ok((kura, BlockCount(block_count)))"
+      ]
+    },
+    {
+      "id": "entrypoint_claim_set_peak_projection",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/hot_path_capacity_preflight.rs",
+      "kind": "method",
+      "symbol": "Kura::preflight_autonomous_lane_entrypoint_claims_locked",
+      "required_tokens": [
+        "self.inspect_autonomous_lane_entrypoint_claim_inventory(max_files)?",
+        "for entrypoint_hash in &payload.entrypoint_hashes",
+        "unique_paths.insert(path.clone())",
+        "let existing_bytes",
+        "let pending_bytes",
+        "capacity.remove_physical(pending_bytes)",
+        "capacity.promote_named_temp_over_main(existing_bytes)",
+        "projected_files > max_files",
+        "capacity.add_physical(u64::try_from(bytes.len())?)",
+        "capacity.additional_peak_bytes()",
+        "validate_configured_autonomous_mutation_disk_peak_locked"
+      ],
+      "ordered_tokens": [
+        "self.inspect_autonomous_lane_entrypoint_claim_inventory(max_files)?",
+        "let mut unique_paths = BTreeSet::new()",
+        "let mut capacity = AutonomousClaimMutationPeak::default()",
+        "for entrypoint_hash in &payload.entrypoint_hashes",
+        "unique_paths.insert(path.clone())",
+        "projected_files > max_files",
+        "capacity.add_physical(u64::try_from(bytes.len())?)",
+        "capacity.additional_peak_bytes()",
+        "self.validate_configured_autonomous_mutation_disk_peak_locked"
+      ]
+    },
+    {
+      "id": "entrypoint_claim_set_preflight_before_mutation",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::prepare_autonomous_lane_entrypoint_claims_with_limit_locked",
+      "required_tokens": [
+        "self.preflight_autonomous_lane_entrypoint_claims_locked(",
+        "pending_canonical_bytes, payload, max_files,",
+        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "for entrypoint_hash in &payload.entrypoint_hashes",
+        ".create_new(true)",
+        "temp.write_all(&bytes).and_then(|()| temp.sync_all())",
+        "self.add_disk_usage_bytes",
+        "accounting_mutation.finish()"
+      ],
+      "ordered_tokens": [
+        "self.preflight_autonomous_lane_entrypoint_claims_locked(",
+        "pending_canonical_bytes, payload, max_files,",
+        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "for entrypoint_hash in &payload.entrypoint_hashes",
+        ".create_new(true)",
+        "temp.write_all(&bytes).and_then(|()| temp.sync_all())",
+        "self.add_disk_usage_bytes",
+        "accounting_mutation.finish()",
+        "Ok(staged)"
+      ]
+    },
+    {
+      "id": "canonical_association_stage_projection",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/hot_path_capacity_preflight.rs",
+      "kind": "method",
+      "symbol": "Kura::prepare_canonical_association_stage",
+      "required_tokens": [
+        "let block_wire = block.encode_wire()?",
+        "let _ = self.validate_canonical_association_stage(&stage)?",
+        "let bytes = norito::encode_canonical(&stage)",
+        "let encoded_len = u64::try_from(bytes.len())?",
+        "Some(existing) if existing == stage => 0",
+        "Some(_) =>",
+        "None => encoded_len"
+      ],
+      "ordered_tokens": [
+        "let block_wire = block.encode_wire()?",
+        "let _ = self.validate_canonical_association_stage(&stage)?",
+        "let bytes = norito::encode_canonical(&stage)",
+        "let encoded_len = u64::try_from(bytes.len())?",
+        "match self.read_canonical_association_stage()?",
+        "Some(existing) if existing == stage => 0",
+        "Some(_) =>",
+        "None => encoded_len",
+        "Ok(CanonicalAssociationStagePublication"
+      ]
+    },
+    {
+      "id": "canonical_association_normal_budget_peak",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::check_storage_budget",
+      "required_tokens": [
+        "self.canonical_association_stage_additional_bytes(block, merge_entry)?",
+        "self.disk_usage.load(Ordering::Relaxed)",
+        ".saturating_add(block_required)",
+        ".saturating_add(merge_entry_bytes)",
+        ".saturating_add(association_stage_bytes)",
+        "if required > limit"
+      ],
+      "ordered_tokens": [
+        "self.canonical_association_stage_additional_bytes(block, merge_entry)?",
+        "let mut used = self.disk_usage.load(Ordering::Relaxed)",
+        "let mut required = budget_used",
+        ".saturating_add(block_required)",
+        ".saturating_add(merge_entry_bytes)",
+        ".saturating_add(association_stage_bytes)",
+        "if required > limit"
+      ]
+    },
+    {
+      "id": "canonical_association_replacement_budget_peak",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::check_replace_storage_budget",
+      "required_tokens": [
+        "self.canonical_association_stage_additional_bytes(block, None)?",
+        "let pending_current = pending_raw.saturating_sub(unindexed_bytes)",
+        "let projected_after",
+        "budget_used.max(projected_after)",
+        ".saturating_add(association_stage_bytes)",
+        "if required > limit"
+      ],
+      "ordered_tokens": [
+        "self.canonical_association_stage_additional_bytes(block, None)?",
+        "let pending_current = pending_raw.saturating_sub(unindexed_bytes)",
+        "let mut budget_used",
+        "let projected_after",
+        "let mut required = budget_used",
+        ".max(projected_after)",
+        ".saturating_add(association_stage_bytes)",
+        "if required > limit"
+      ]
+    },
+    {
+      "id": "canonical_association_normal_preflight_order",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs",
+      "kind": "method",
+      "symbol": "Kura::store_block_durable",
+      "required_tokens": [
+        "self.check_storage_budget(block, merge_entry)?",
+        "self.persist_pending_certified_merge_entry(entry)?",
+        "self.stage_lane_payload_ownership_artifacts_for_block",
+        "self.write_canonical_association_stage(block, merge_entry)?",
+        "self.persist_block_at_height_while_locked"
+      ],
+      "ordered_tokens": [
+        "self.check_storage_budget(block, merge_entry)?",
+        "self.persist_pending_certified_merge_entry(entry)?",
+        "self.stage_lane_payload_ownership_artifacts_for_block",
+        "self.write_canonical_association_stage(block, merge_entry)?",
+        "self.persist_block_at_height_while_locked"
+      ]
+    },
+    {
+      "id": "canonical_association_replacement_preflight_order",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::replace_top_block",
+      "required_tokens": [
+        "self.check_replace_storage_budget(block.as_ref())?",
+        "self.validate_lane_payload_ownership_artifacts_for_block",
+        "self.write_canonical_association_stage(&block, None)?",
+        "self.persist_block_at_height_while_locked"
+      ],
+      "ordered_tokens": [
+        "self.check_replace_storage_budget(block.as_ref())?",
+        "self.validate_lane_payload_ownership_artifacts_for_block",
+        "self.write_canonical_association_stage(&block, None)?",
+        "self.persist_block_at_height_while_locked"
+      ]
+    },
+    {
+      "id": "canonical_association_publication_boundary",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::write_canonical_association_stage",
+      "required_tokens": [
+        "let publication = self.prepare_canonical_association_stage(block, merge_entry)?",
+        "if publication.additional_bytes == 0",
+        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "self.write_atomic_synced_noclobber(&path, &publication.bytes)?",
+        "self.update_disk_usage_delta(before, after)",
+        "accounting_mutation.finish()"
+      ],
+      "ordered_tokens": [
+        "let publication = self.prepare_canonical_association_stage(block, merge_entry)?",
+        "if publication.additional_bytes == 0",
+        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "self.write_atomic_synced_noclobber(&path, &publication.bytes)?",
+        "self.update_disk_usage_delta(before, after)",
+        "accounting_mutation.finish()"
+      ]
+    },
+    {
+      "id": "debug_append_capacity_preflight_order",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs",
+      "kind": "method",
+      "symbol": "Kura::append_debug_block_dump",
+      "required_tokens": [
+        "norito::json::to_writer(&mut bytes, block.as_ref())",
+        "bytes.push(b'\\n')",
+        "self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()",
+        "let _geometry_guard = self.lane_geometry_lock.lock()",
+        "let _sidecar_guard = self.sidecar_lock.lock()",
+        "self.validate_configured_autonomous_mutation_disk_peak_locked",
+        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "self.append_bound_debug_block_dump(&path, &bytes)",
+        "self.update_disk_usage_delta(before, after)",
+        "accounting_mutation.finish()"
+      ],
+      "ordered_tokens": [
+        "norito::json::to_writer(&mut bytes, block.as_ref())",
+        "bytes.push(b'\\n')",
+        "self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()",
+        "let _geometry_guard = self.lane_geometry_lock.lock()",
+        "let _sidecar_guard = self.sidecar_lock.lock()",
+        "self.validate_configured_autonomous_mutation_disk_peak_locked",
+        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "self.append_bound_debug_block_dump(&path, &bytes)",
+        "self.update_disk_usage_delta(before, after)",
+        "accounting_mutation.finish()"
+      ]
+    },
+    {
+      "id": "debug_append_capacity_lock_bridge",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs",
+      "kind": "method",
+      "symbol": "Kura::store_block_durable",
+      "required_tokens": [
+        "let _prune_guard = self.prune_lock.lock()",
+        "let _canonical_chain_guard = self.canonical_chain_lock.lock()",
+        "self.append_debug_block_dump(block)"
+      ],
+      "ordered_tokens": [
+        "let _prune_guard = self.prune_lock.lock()",
+        "let _canonical_chain_guard = self.canonical_chain_lock.lock()",
+        "self.append_debug_block_dump(block)"
+      ]
+    },
+    {
+      "id": "debug_append_replacement_lock_owner",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::replace_top_block",
+      "required_tokens": [
+        "let _prune_guard = self.prune_lock.lock()",
+        "let _canonical_chain_guard = self.canonical_chain_lock.lock()",
+        "self.append_debug_block_dump(&block)"
+      ],
+      "ordered_tokens": [
+        "let _prune_guard = self.prune_lock.lock()",
+        "let _canonical_chain_guard = self.canonical_chain_lock.lock()",
+        "self.append_debug_block_dump(&block)"
+      ]
+    },
+    {
+      "id": "debug_append_pending_canonical_snapshot",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::pending_canonical_capacity_bytes_under_prune_and_canonical_guards",
+      "required_tokens": [
+        "self.max_disk_usage_bytes == 0",
+        "self.persisted_count_and_unindexed_bytes()?",
+        "self.pending_block_bytes(persisted_count, unindexed_bytes)"
+      ],
+      "ordered_tokens": [
+        "self.max_disk_usage_bytes == 0",
+        "self.persisted_count_and_unindexed_bytes()?",
+        "self.pending_block_bytes(persisted_count, unindexed_bytes)"
+      ]
+    },
+    {
+      "id": "debug_append_capacity_locked_bridge",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::validate_configured_autonomous_mutation_disk_peak_locked",
+      "required_tokens": [
+        "self.validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked",
+        "pending_canonical_bytes",
+        "additional_physical_peak_bytes",
+        "creates_lifecycle_identity",
+        "consumes_terminal_cas_transient",
+        "path",
+        "None"
+      ],
+      "ordered_tokens": [
+        "self.validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked",
+        "pending_canonical_bytes",
+        "additional_physical_peak_bytes",
+        "creates_lifecycle_identity",
+        "consumes_terminal_cas_transient",
+        "path",
+        "None"
+      ]
+    },
+    {
+      "id": "debug_append_carrier_reservation_gate",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked",
+      "required_tokens": [
+        "additional_physical_peak_bytes",
+        "stable_terminal_reservations",
+        "let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?",
+        "let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?",
+        ".kura_disk_usage_bytes()?",
+        ".checked_add(pending_canonical_bytes)",
+        ".and_then(|bytes| bytes.checked_add(post_wsv_reservations))",
+        ".and_then(|bytes| bytes.checked_add(certified_bundle_reservations))",
+        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
+        "if required > self.max_disk_usage_bytes"
+      ],
+      "ordered_tokens": [
+        "let physical_and_transient",
+        "let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?",
+        "let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?",
+        "let required = self",
+        ".kura_disk_usage_bytes()?",
+        ".checked_add(pending_canonical_bytes)",
+        ".checked_add(physical_and_transient)",
+        ".and_then(|bytes| bytes.checked_add(stable_terminal_reservations))",
+        ".and_then(|bytes| bytes.checked_add(post_wsv_reservations))",
+        ".and_then(|bytes| bytes.checked_add(certified_bundle_reservations))",
+        "Self::canonical_prune_intent_maintenance_headroom_bytes()",
+        "if required > self.max_disk_usage_bytes"
+      ]
+    },
+    {
+      "id": "debug_append_file_accounting",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs",
+      "kind": "method",
+      "symbol": "Kura::blocks_root_debug_file_bytes",
+      "required_tokens": [
+        "let path = root.join(\"blocks.jsonl\")",
+        "std::fs::symlink_metadata(&path)",
+        "metadata.file_type().is_symlink()",
+        "!metadata.file_type().is_file()",
+        "!Self::sidecar_is_single_link(&metadata)",
+        "Ok(metadata.len())"
+      ],
+      "ordered_tokens": [
+        "let path = root.join(\"blocks.jsonl\")",
+        "std::fs::symlink_metadata(&path)",
+        "metadata.file_type().is_symlink()",
+        "!Self::sidecar_is_single_link(&metadata)",
+        "Ok(metadata.len())"
+      ]
+    },
+    {
+      "id": "debug_append_enforced_root_accounting",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::blocks_root_bytes",
+      "required_tokens": [
+        "let mut total = Self::blocks_root_debug_file_bytes(root)?",
+        "Self::block_store_bytes_with_historical_budget",
+        "total.saturating_add",
+        "Ok(total)"
+      ],
+      "ordered_tokens": [
+        "let mut total = Self::blocks_root_debug_file_bytes(root)?",
+        "for entry in entries",
+        "Self::block_store_bytes_with_historical_budget",
+        "Ok(total)"
+      ]
+    },
+    {
+      "id": "debug_append_total_root_accounting",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::blocks_root_total_bytes",
+      "required_tokens": [
+        "let mut total = Self::blocks_root_debug_file_bytes(root)?",
+        "Self::block_store_total_bytes_with_historical_budget",
+        "total.saturating_add",
+        "Ok(total)"
+      ],
+      "ordered_tokens": [
+        "let mut total = Self::blocks_root_debug_file_bytes(root)?",
+        "for entry in entries",
+        "Self::block_store_total_bytes_with_historical_budget",
+        "Ok(total)"
+      ]
+    },
+    {
+      "id": "debug_append_enforced_usage_chain",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::kura_disk_usage_bytes",
+      "required_tokens": [
+        "let blocks_root = self.store_root.join(\"blocks\")",
+        "Self::blocks_root_bytes(&blocks_root",
+        "Self::blocks_root_bytes(&retired_blocks_root",
+        "Ok(used)"
+      ],
+      "ordered_tokens": [
+        "let blocks_root = self.store_root.join(\"blocks\")",
+        "let retired_blocks_root = retired_root.join(\"blocks\")",
+        "Self::blocks_root_bytes(&blocks_root",
+        "Self::blocks_root_bytes(&retired_blocks_root",
+        "Ok(used)"
+      ]
+    },
+    {
+      "id": "debug_append_total_usage_chain",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::kura_total_disk_usage_bytes",
+      "required_tokens": [
+        "let blocks_root = self.store_root.join(\"blocks\")",
+        "Self::blocks_root_total_bytes(&blocks_root",
+        "Self::blocks_root_total_bytes(&retired_blocks_root",
+        "Ok(used)"
+      ],
+      "ordered_tokens": [
+        "let blocks_root = self.store_root.join(\"blocks\")",
+        "let retired_blocks_root = retired_root.join(\"blocks\")",
+        "Self::blocks_root_total_bytes(&blocks_root",
+        "Self::blocks_root_total_bytes(&retired_blocks_root",
+        "Ok(used)"
+      ]
+    },
+    {
+      "id": "debug_append_total_cache_refresh",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::refresh_total_disk_usage_bytes",
+      "required_tokens": [
+        "let scanned = self.kura_total_disk_usage_bytes()",
+        "self.disk_usage_total.store(usage, Ordering::Relaxed)",
+        "self.disk_usage_total_initialized",
+        ".store(true, Ordering::Relaxed)"
+      ],
+      "ordered_tokens": [
+        "let scanned = self.kura_total_disk_usage_bytes()",
+        "let usage = match scanned",
+        "self.disk_usage_total.store(usage, Ordering::Relaxed)",
+        "self.disk_usage_total_initialized",
+        ".store(true, Ordering::Relaxed)",
+        "return Ok(usage)"
+      ]
+    },
+    {
+      "id": "debug_append_startup_accounting_publish",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::new_inner",
+      "required_tokens": [
+        "match kura.kura_disk_usage_bytes()",
+        "kura.disk_usage.store(bytes, Ordering::Relaxed)",
+        "kura.disk_usage_initialized.store(true, Ordering::Relaxed)",
+        "match kura.refresh_total_disk_usage_bytes()",
+        "Ok((kura, BlockCount(block_count)))"
+      ],
+      "ordered_tokens": [
+        "match kura.kura_disk_usage_bytes()",
+        "kura.disk_usage.store(bytes, Ordering::Relaxed)",
+        "kura.disk_usage_initialized.store(true, Ordering::Relaxed)",
+        "match kura.refresh_total_disk_usage_bytes()",
+        "Ok((kura, BlockCount(block_count)))"
+      ]
+    }
+  ],
+  "editor_placeholders": []
+}

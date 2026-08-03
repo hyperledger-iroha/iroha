@@ -10,7 +10,8 @@
 
     use super::*;
     use crate::privacy_engines::zk_x509::{
-        der_air::ZkX509DerEkuV1, der_stark::ZkX509DerStarkPrivateShapeV1,
+        der_air::ZkX509DerEkuV1,
+        der_stark::ZkX509DerStarkPrivateShapeV1,
         io_air::ZkX509IoEndpointV1,
         p256_aggregate_adapter::p256_main_base_source_fixture_for_test_v1,
         sha_call_bus_stark::ZkX509ShaCallPublicShapeV1,

@@ -2399,9 +2399,11 @@ mod tests {
             bootle_lantern::{
                 codec::PROOF_BYTES_V1 as BOOTLE_LANTERN_PROOF_BYTES_V1,
                 issuer::{
-                    BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
-                    holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
-                    issuer_blind_issue_with_rng_v1,
+                    BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
+                    BootleLanternIssuerPolicyMetadataV1, holder_finalize_blind_issuance_v1,
+                    holder_prepare_blind_issuance_with_rng_v1,
+                    issuer_authorize_blind_issuance_with_rng_v1,
+                    issuer_blind_issue_once_with_rng_v1,
                 },
                 prove_bound_presentation_v1,
             },
@@ -2749,7 +2751,7 @@ mod tests {
         let statement =
             PrivacyStatementV1::VeRangeTransparentRangeV1(VeRangeTransparentRangeStatementV1 {
                 context,
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
                     Name::from_str("asset").expect("name"),
                 ),
@@ -2828,18 +2830,32 @@ mod tests {
                 },
             ));
             let chain_id = ChainId::from("taira-privacy-jindo-test");
-            let polynomial = vec![
-                jindo_field(3),
-                jindo_field(5),
-                jindo_field(7),
-                jindo_field(11),
+            let polynomials = vec![
+                vec![
+                    jindo_field(3),
+                    jindo_field(5),
+                    jindo_field(7),
+                    jindo_field(11),
+                ],
+                vec![jindo_field(13), jindo_field(17)],
+                vec![jindo_field(19), jindo_field(23)],
+                vec![jindo_field(29), jindo_field(31)],
             ];
             let evaluation_point = jindo_field(13);
-            let claim = evaluate_polynomial_v1(&polynomial, evaluation_point)
-                .expect("canonical Jindo evaluation");
-            let (commitment, opening) =
-                commit_polynomial_v1(&polynomial, &mut KatRng::new([0x6a; 32]))
-                    .expect("Jindo commitment");
+            let claimed_evaluations = polynomials
+                .iter()
+                .map(|polynomial| {
+                    evaluate_polynomial_v1(polynomial, evaluation_point)
+                        .expect("canonical Jindo evaluation")
+                })
+                .collect();
+            let mut commitment_rng = KatRng::new([0x6a; 32]);
+            let (polynomial_commitments, openings): (Vec<_>, Vec<_>) = polynomials
+                .iter()
+                .map(|polynomial| {
+                    commit_polynomial_v1(polynomial, &mut commitment_rng).expect("Jindo commitment")
+                })
+                .unzip();
             let statement = IrohaJindoPolynomialCommitmentStatementV1 {
                 context: PrivacyStatementContextV1 {
                     chain_id: chain_id.clone(),
@@ -2851,9 +2867,9 @@ mod tests {
                     statement_schema_digest: compiled.statement_schema_digest,
                     engine_manifest_digest: compiled.engine_manifest_digest,
                 },
-                polynomial_commitments: vec![commitment],
+                polynomial_commitments,
                 evaluation_point,
-                claimed_evaluations: vec![claim],
+                claimed_evaluations,
             };
             let typed_statement =
                 PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone());
@@ -2871,7 +2887,7 @@ mod tests {
                 generator_digest: jindo_crs_digest_v1(),
             };
             let proof =
-                prove_batched_evaluation_v1(&statement, &[polynomial], &[opening], &transcript)
+                prove_batched_evaluation_v1(&statement, &polynomials, &openings, &transcript)
                     .expect("Jindo proof");
             assert_eq!(proof.len(), JINDO_NATIVE_PROOF_BYTES_V1);
             Self {
@@ -2976,29 +2992,43 @@ mod tests {
                         .collect(),
                 })
                 .expect("canonical initial native issuer policy");
-            let mut attributes = [[0_u8; 8]; 8];
-            attributes[1] = [1; 8];
-            let mut holder_mask_rng = KatRng::new([0xB4; 32]);
-            let mut holder_proof_rng = KatRng::new([0xB5; 32]);
-            let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
-                &context,
-                genesis_hash,
-                &policy,
-                attributes,
-                &mut holder_mask_rng,
-                &mut holder_proof_rng,
-            )
-            .expect("holder blind-issuance request");
-            let mut tag_rng = KatRng::new([0xB6; 32]);
-            let mut preimage_rng = KatRng::new([0xB7; 32]);
-            let issuance_response = issuer_blind_issue_with_rng_v1(
+            let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
+            let mut authorization_rng = KatRng::new([0xB9; 32]);
+            let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
                 &context,
                 genesis_hash,
                 &policy,
+                [0xBA; 32],
+                10,
+                20,
+                &issuance_store,
+                &mut authorization_rng,
+            )
+            .expect("issuer one-shot authorization");
+            let mut attributes = [[0_u8; 8]; 8];
+            attributes[1] = [1; 8];
+            let mut holder_issuance_rng = KatRng::new([0xB4; 32]);
+            let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
+                attributes,
+                &mut holder_issuance_rng,
+            )
+            .expect("holder blind-issuance request");
+            let mut issuer_issuance_rng = KatRng::new([0xB6; 32]);
+            let issuance_response = issuer_blind_issue_once_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
                 &issuance_request,
-                &mut tag_rng,
-                &mut preimage_rng,
+                10,
+                &issuance_store,
+                &mut issuer_issuance_rng,
             )
             .expect("native blind issuance");
             let credential = holder_finalize_blind_issuance_v1(
@@ -3230,7 +3260,7 @@ mod tests {
                 PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
             );
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("orchard_asset").expect("name"),
             );
@@ -3498,7 +3528,7 @@ mod tests {
             ));
             let chain_id = ChainId::from("taira-privacy-fcmp-test");
             let pool_id = PrivacyPoolIdV1::new([0xC1; 32]);
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("fcmp_asset").expect("name"),
             );
@@ -3781,7 +3811,7 @@ mod tests {
                 policy_digest: PrivacyPolicyDigestV1::new([0x9B; 32]),
                 source: account(0x9C),
                 destination: account(0x9D),
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("privacy domain"),
                     Name::from_str("zkace_runtime").expect("asset name"),
                 ),
@@ -4308,7 +4338,7 @@ mod tests {
             let statement =
                 PrivacyStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
                     context: statement_context,
-                    asset_definition_id: AssetDefinitionId::new(
+                    asset_definition_id: AssetDefinitionId::derive_from_components(
                         DomainId::try_new("privacy", "universal").expect("domain"),
                         Name::from_str("asset").expect("name"),
                     ),
@@ -5112,7 +5142,7 @@ mod tests {
         let wrong_asset = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
             fixture.namespace,
             PrivacyOrchardPoolBootstrapDigestV1::new([0xC3; 32]),
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("wrong_orchard_asset").expect("name"),
             ),
@@ -5476,7 +5506,7 @@ mod tests {
                 PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
                     PrivacyIvmPrivateNotePoolBootstrapV1 {
                         pool_id: fixture.statement.pool_id,
-                        asset_definition_id: AssetDefinitionId::new(
+                        asset_definition_id: AssetDefinitionId::derive_from_components(
                             DomainId::try_new("privacy", "universal").expect("domain"),
                             Name::from_str("wrong_private_asset").expect("name"),
                         ),
@@ -5667,7 +5697,7 @@ mod tests {
         let wrong_asset = PrivacyProofManagedPoolSnapshotV1::canonical_pq_masp_bootstrap_for_test(
             PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1 {
                 pool_id: fixture.statement.pool_id,
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
                     Name::from_str("wrong_pq_asset").expect("name"),
                 ),
@@ -6006,7 +6036,7 @@ mod tests {
         let wrong_asset = PrivacyProofManagedPoolSnapshotV1::canonical_fcmp_bootstrap_for_test(
             PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
                 pool_id: statement.pool_id,
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
                     Name::from_str("wrong_fcmp_asset").expect("name"),
                 ),
@@ -6643,10 +6673,11 @@ mod tests {
         assert_rejected(&changed_policy, &activation, &chain_id, "changed-policy");
 
         let mut changed_asset = envelope.clone();
-        verange_statement_mut(&mut changed_asset).asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("privacy", "universal").expect("domain"),
-            Name::from_str("other_asset").expect("name"),
-        );
+        verange_statement_mut(&mut changed_asset).asset_definition_id =
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("other_asset").expect("name"),
+            );
         refresh_statement_digest(&mut changed_asset);
         assert_rejected(&changed_asset, &activation, &chain_id, "changed-asset");
 
@@ -7409,62 +7440,5 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn every_governed_envelope_binding_fails_closed_when_tampered() {
-        let (envelope, activation, chain_id) = valid_envelope();
-        let mutations: [(&str, fn(&mut PrivacyProofEnvelopeV1)); 9] = [
-            ("protocol", |value| {
-                value.protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
-            }),
-            ("parameter-id", |value| value.parameter_id.0[0] ^= 1),
-            ("parameter-digest", |value| value.parameter_digest.0[0] ^= 1),
-            ("verifier-digest", |value| value.verifier_digest.0[0] ^= 1),
-            ("schema-digest", |value| {
-                value.statement_schema_digest.0[0] ^= 1
-            }),
-            ("engine-manifest", |value| {
-                value.engine_manifest_digest.0[0] ^= 1
-            }),
-            ("statement-digest", |value| value.statement_digest.0[0] ^= 1),
-            ("proof-system", |value| {
-                value.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
-            }),
-            ("engine", |value| {
-                value.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri
-            }),
-        ];
-        for (label, mutate) in mutations {
-            let mut candidate = envelope.clone();
-            mutate(&mut candidate);
-            assert_rejected(&candidate, &activation, &chain_id, label);
-        }
-    }
-
-    #[test]
-    fn every_statement_context_artifact_binding_fails_closed_when_tampered() {
-        let (envelope, activation, chain_id) = valid_envelope();
-        let mutations: [(&str, fn(&mut PrivacyStatementContextV1)); 5] = [
-            ("statement-parameter-id", |context| {
-                context.parameter_id.0[0] ^= 1
-            }),
-            ("statement-parameter-digest", |context| {
-                context.parameter_digest.0[0] ^= 1
-            }),
-            ("statement-verifier-digest", |context| {
-                context.verifier_digest.0[0] ^= 1
-            }),
-            ("statement-schema-digest", |context| {
-                context.statement_schema_digest.0[0] ^= 1
-            }),
-            ("statement-engine-manifest", |context| {
-                context.engine_manifest_digest.0[0] ^= 1
-            }),
-        ];
-        for (label, mutate) in mutations {
-            let mut candidate = envelope.clone();
-            mutate(&mut verange_statement_mut(&mut candidate).context);
-            refresh_statement_digest(&mut candidate);
-            assert_rejected(&candidate, &activation, &chain_id, label);
-        }
-    }
+    include!("privacy_verifier/governed_binding_tests.rs");
 }

@@ -844,7 +844,7 @@ fn leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum() 
         assert!(simulation.stats.withheld_commit_messages > 0);
 
         // The original leader crashes only after it has the same durable lock
-        // and body pipeline as its peers. The responsive dual quorum must be
+        // and body pipeline as its peers. The responsive equal-vote quorum must be
         // able to install a TC without it while Commit traffic is still held.
         simulation.nodes[leader_index].online = false;
         simulation.timeout_all_online();
@@ -1011,7 +1011,7 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
     }
 
     // One node receives a delayed CommitQC from view zero after advancing to
-    // view three. It finalizes immediately; the remaining dual quorum safely
+    // view three. It finalizes immediately; the remaining equal-vote quorum safely
     // commits the TC-selected subject in view three.
     let old_commit = certificate(&simulation.context, 0, Phase::Commit, subject);
     simulation.deliver_commit_qc(0, old_commit);

@@ -1079,7 +1079,7 @@ mod tests {
     fn orchard_bootstrap() -> PrivacyOrchardPoolBootstrapV1 {
         PrivacyOrchardPoolBootstrapV1::new(
             PrivacyPoolIdV1::new(digest(23)),
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("orchard").expect("asset name"),
             ),
@@ -1091,7 +1091,7 @@ mod tests {
     fn proof_managed_pool_bootstrap() -> PrivacyProofManagedPoolBootstrapV1 {
         PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
             pool_id: PrivacyPoolIdV1::new(digest(25)),
-            asset_definition_id: AssetDefinitionId::new(
+            asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("fcmp").expect("asset name"),
             ),
@@ -1140,18 +1140,28 @@ mod tests {
             statement_schema_digest: activation.statement_schema_digest,
             engine_manifest_digest: activation.engine_manifest_digest,
         };
-        let mut commitment = vec![0; IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1];
-        commitment[..4].copy_from_slice(&6_i32.to_le_bytes());
         let mut evaluation_point = [0; 32];
         evaluation_point[0] = 7;
-        let mut claimed_evaluation = [0; 32];
-        claimed_evaluation[0] = 8;
+        let polynomial_commitments = (6_i32..10)
+            .map(|coefficient| {
+                let mut commitment = vec![0; IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1];
+                commitment[..4].copy_from_slice(&coefficient.to_le_bytes());
+                PrivacyJindoLatticeCommitmentV1::new(commitment)
+            })
+            .collect();
+        let claimed_evaluations = (8_u8..12)
+            .map(|value| {
+                let mut encoding = [0; 32];
+                encoding[0] = value;
+                PrivacyJindoFieldElementV1::new(encoding)
+            })
+            .collect();
         let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
             IrohaJindoPolynomialCommitmentStatementV1 {
                 context,
-                polynomial_commitments: vec![PrivacyJindoLatticeCommitmentV1::new(commitment)],
+                polynomial_commitments,
                 evaluation_point: PrivacyJindoFieldElementV1::new(evaluation_point),
-                claimed_evaluations: vec![PrivacyJindoFieldElementV1::new(claimed_evaluation)],
+                claimed_evaluations,
             },
         );
         let statement_digest = statement.digest().expect("fixture statement encodes");
@@ -1240,7 +1250,7 @@ mod tests {
             PrivacyCommitmentV1::new(digest(identity_seed)),
             PrivacyPolicyDigestV1::new(digest(44)),
             epoch,
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("zkace").expect("asset name"),
             ),

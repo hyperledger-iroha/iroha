@@ -363,10 +363,17 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
     let domain_id = DomainId::try_new("queue_fee_drift", "universal").expect("fee drift domain");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
-    let fee_asset = AssetDefinitionId::new(domain_id, "xor".parse().expect("fee drift asset name"));
-    let definition = AssetDefinition::numeric(fee_asset.clone())
-        .with_name("queue fee drift XOR".to_owned())
-        .build(&authority);
+    let fee_asset = AssetDefinitionId::derive_from_components(
+        domain_id,
+        "xor".parse().expect("fee drift asset name"),
+    );
+    let definition = AssetDefinition::numeric(
+        fee_asset.clone(),
+        "queue fee drift XOR".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
     let payer_asset_id = AssetId::new(fee_asset.clone(), authority.clone());
     let payer_asset = Asset::new(payer_asset_id.clone(), Quantity::from(10_u32));
     let world = World::with_assets([domain], [account], [definition], [payer_asset], []);

@@ -46,6 +46,33 @@ def canonical_models() -> list[dict]:
     return copy.deepcopy(ledger["models"])
 
 
+def copy_stable_generation_diagnostics_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path]:
+    destinations = []
+    for relative in (
+        Path("crates/iroha_core/src/state.rs"),
+        Path("crates/iroha_core/src/state/diagnostic_state_generation.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+        destinations.append(destination)
+    return destinations[0], destinations[1]
+
+
+def validate_stable_generation_diagnostics_fixture(
+    tmp_path: Path, module
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    module._validate_stable_generation_diagnostics_contract(
+        tmp_path,
+        canonical_models(),
+        errors,
+    )
+    return tuple(errors)
+
+
 def canonical_kura_retention_contract() -> dict:
     ledger = json.loads(BINDINGS.read_text(encoding="utf-8"))
     return copy.deepcopy(ledger["kura_replica_retention_contract"])
@@ -114,7 +141,6 @@ def test_kura_replica_retention_contract_rejects_unsigned_identity_drift(
         and "finality_artifact_hash: self.finality_artifact_hash" in error
         for error in errors
     ), errors
-
 def test_kura_replica_retention_contract_rejects_final_prestage_order_drift(
     tmp_path: Path,
 ) -> None:
@@ -507,6 +533,7 @@ def validate_native_participant_classifier_fixture(
         tmp_path, models, errors
     )
     return tuple(errors)
+
 
 
 def copy_queue_plan_pending_membership_fixture(
@@ -1382,6 +1409,91 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
     assert validate_fixture(tmp_path, module, contract) == ()
 
 
+def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    ownership_guard = "(before.carrier.kura_active & projection.actor) != 0u128"
+    replace_once(path, ownership_guard, "projection.actor != 0u128")
+    replace_once(path, ownership_guard, "projection.actor != 0u128")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "production_in_flight_first_release_transition_body" in error
+        and ownership_guard in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_composed_contract_rejects_rehydrate_action_tag_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    symbol = (
+        "pub(crate) fn "
+        "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition("
+    )
+    action = "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY"
+    replace_once_after(
+        path,
+        symbol,
+        action,
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition"
+        in error
+        and action in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_composed_contract_rejects_rehydrate_ready_tampering(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    ready_guard = "after.session.ready_authorized == before.session.ready_authorized"
+    weakened = (
+        "after.session.ready_authorized "
+        "== (before.session.ready_authorized | projection.actor)"
+    )
+    replace_once(path, ready_guard, weakened)
+    replace_once(path, ready_guard, weakened)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "production_in_flight_first_release_transition_body" in error
+        and ready_guard in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_composed_contract_rejects_terminal_rehydrate_resurrection(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    retirement_guard = "!before.release.kura_retired"
+    replace_once(path, retirement_guard, "before.release.kura_retired == before.release.kura_retired")
+    replace_once(path, retirement_guard, "before.release.kura_retired == before.release.kura_retired")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "production_in_flight_first_release_transition_body" in error
+        and retirement_guard in error
+        for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     ("relative", "anchor", "old", "new", "symbol", "required_token"),
     (
@@ -1434,7 +1546,7 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
             "revalidate_lane_reservation_startup_reconciliation_receipt(",
         ),
         (
-            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "crates/iroha_sumeragi_core/src/verus_proofs/in_flight_first_release_proofs.rs",
             "pub proof fn production_in_flight_reservation_snapshot_replay_refines_composed_stutter(",
             "production_in_flight_reservation_transition_kernel(primitive),",
             "true,",
@@ -2647,7 +2759,8 @@ def test_inflight_composed_contract_rejects_legacy_layout_only_claim(
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "in-flight layout contract claim must equal" in error
-        and "composed_state_action_relation_no_trace_extraction" in error
+        and "composed_state_action_relation_with_source_bound_trace_extraction"
+        in error
         for error in errors
     ), errors
 
@@ -2701,278 +2814,56 @@ def test_inflight_composed_contract_rejects_per_key_prefix_skip_weakening(
     ), errors
 
 
-def test_inflight_composed_contract_rejects_terminal_wsv_before_full_forget_prefix(
+def test_stable_generation_diagnostics_rejects_retry_bound_weakening(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path)
     replace_once(
-        path,
-        "        && projection.history.reservation_commit_forgotten_prefix == projection.queue.selected_count\n",
-        "",
+        state,
+        "const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 4;",
+        "const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 40;",
     )
-    errors = validate_fixture(tmp_path, module, contract)
+    errors = validate_stable_generation_diagnostics_fixture(tmp_path, module)
+    assert any("four-attempt declaration" in error for error in errors), errors
+
+
+def test_stable_generation_diagnostics_rejects_missing_fail_closed_sink(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    _state, helper = copy_stable_generation_diagnostics_fixture(tmp_path)
+    replace_once(helper, "Err(generation_drift_error())", "derive()")
+    errors = validate_stable_generation_diagnostics_fixture(tmp_path, module)
     assert any(
-        "production_in_flight_first_release_terminal_owner" in error
-        and "reservation_commit_forgotten_prefix" in error
+        "stable-generation diagnostics helper token" in error
+        and "generation_drift_error" in error
         for error in errors
     ), errors
 
 
-def test_inflight_composed_contract_rejects_tla_noncanonical_key_prefix(
+@pytest.mark.parametrize(
+    "consumer_anchor",
+    (
+        "pub fn native_amx_participant_applications_diagnostics(",
+        "fn autonomous_lane_execution_diagnostics_inner(",
+    ),
+)
+def test_stable_generation_diagnostics_rejects_unwrapped_projection(
     tmp_path: Path,
+    consumer_anchor: str,
 ) -> None:
     module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = (
-        tmp_path
-        / "formal"
-        / "sumeragi_v2"
-        / "SumeragiV2InFlightFirstRelease.tla"
+    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path)
+    replace_once_after(
+        state,
+        consumer_anchor,
+        "self.derive_diagnostics_at_stable_state_generation(",
+        "self.derive_diagnostics_without_stable_generation(",
     )
-    replace_once(
-        path,
-        "  /\\ keys = PrefixThrough(Cardinality(keys))",
-        "  /\\ Cardinality(keys) <= bound",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
+    errors = validate_stable_generation_diagnostics_fixture(tmp_path, module)
     assert any(
-        "composed Rust/TLA action-alignment token" in error
-        and "CanonicalKeyPrefix" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_composed_contract_rejects_unreachable_prune_reintroduction(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = (
-        tmp_path
-        / "formal"
-        / "sumeragi_v2"
-        / "SumeragiV2InFlightFirstRelease.tla"
-    )
-    replace_once(
-        path,
-        '   "DirectReleased"}',
-        '   "DirectReleased", "PrunedRetired"}',
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "stale first-release layout token 'PrunedRetired' is forbidden" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_contract_rejects_reservation_journal_prune_variant_reintroduction(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
-    replace_once(
-        path,
-        "    ForgetCommit(LaneQueueReservationKeyV2),\n"
-        "    /// Durably claim an exact FIFO-ordered live reservation set for release.",
-        "    ForgetCommit(LaneQueueReservationKeyV2),\n"
-        "    Prune { lane_id: LaneId, lane_incarnation: Hash },\n"
-        "    /// Durably claim an exact FIFO-ordered live reservation set for release.",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "LaneQueueReservationJournalFrameV6" in error
-        and "forbidden source-bound token 'Prune'" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_contract_rejects_reservation_bootstrap_without_operation_schema(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
-    replace_once(
-        path,
-        "            RESERVATION_JOURNAL_OPERATION_SCHEMA_V6,\n",
-        "",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "bootstrap_frame" in error
-        and "RESERVATION_JOURNAL_OPERATION_SCHEMA_V6" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_contract_rejects_primitive_prune_action_reintroduction(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
-    replace_once(
-        path,
-        "        let projection = $projection;\n"
-        "        canonical_identity_is_typed_body!(",
-        "        let projection = $projection;\n"
-        "        let _retired = IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED;\n"
-        "        canonical_identity_is_typed_body!(",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "production_in_flight_reservation_transition_body" in error
-        and "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
-    replace_once(
-        path,
-        "// exact stutter, never a new reservation acquisition.\n"
-        "                projection.actor == 0u128\n"
-        "                    && projection.target == 0u128\n"
-        "                    && in_flight_first_release_state_equal_body!(before, after)",
-        "// exact stutter, never a new reservation acquisition.\n"
-        "                projection.actor == 0u128\n"
-        "                    && projection.target == 0u128\n"
-        "                    && before.queue.reservation_state "
-        "== after.queue.reservation_state",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "production_in_flight_first_release_transition_body" in error
-        and "in_flight_first_release_state_equal_body" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_composed_contract_rejects_missing_direct_release_action(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = (
-        tmp_path
-        / "formal"
-        / "sumeragi_v2"
-        / "SumeragiV2InFlightFirstRelease.tla"
-    )
-    replace_once(
-        path,
-        "ReleaseReservationDirect ==",
-        "ReleaseReservationDirectRemoved ==",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "current-semantics action ReleaseReservationDirect" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
-    replace_once(
-        path,
-        "                    && (before.session.crashed & projection.actor) == 0u128\n"
-        "                    && (before.carrier.kura_active & projection.actor) != 0u128\n"
-        "                    && (before.session.bodies & projection.actor) == 0u128\n"
-        "                    && !before.release.kura_retired\n",
-        "                    && (before.session.crashed & projection.actor) == 0u128\n"
-        "                    && (before.session.bodies & projection.actor) == 0u128\n"
-        "                    && !before.release.kura_retired\n",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "production_in_flight_first_release_transition_body" in error
-        and "kura_active" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_composed_contract_rejects_rehydrate_action_tag_drift(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
-    replace_once(
-        path,
-        "pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY: u8 = 27;",
-        "pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY: u8 = 28;",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "current-layout token" in error
-        and "REHYDRATE_LOCAL_KURA_CUSTODY" in error
-        and "27" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_composed_contract_rejects_rehydrate_ready_tampering(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
-    replace_once(
-        path,
-        "                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED\n"
-        "                        )\n"
-        "                    && after.session.bodies == (before.session.bodies | projection.actor)\n"
-        "                    && after.session.ready_authorized == before.session.ready_authorized\n"
-        "                    && after.session.crashed == before.session.crashed\n",
-        "                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED\n"
-        "                        )\n"
-        "                    && after.session.bodies == (before.session.bodies | projection.actor)\n"
-        "                    && after.session.ready_authorized\n"
-        "                        == (before.session.ready_authorized | projection.actor)\n"
-        "                    && after.session.crashed == before.session.crashed\n",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "production_in_flight_first_release_transition_body" in error
-        and "ready_authorized" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_composed_contract_rejects_terminal_rehydrate_resurrection(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
-    replace_once(path, "                    && !before.release.kura_retired\n", "")
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any(
-        "production_in_flight_first_release_transition_body" in error
-        and "kura_retired" in error
+        "diagnostic consumer" in error
+        and "derive_diagnostics_at_stable_state_generation" in error
         for error in errors
     ), errors

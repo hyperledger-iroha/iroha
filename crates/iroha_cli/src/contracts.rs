@@ -2233,10 +2233,13 @@ pub struct DeriveAddressArgs {
     /// Successful deploy nonce consumed for address derivation
     #[arg(long)]
     pub deploy_nonce: u64,
-    /// Public network profile used for Bech32m contract-address derivation
+    /// Exact chain identifier committed into the contract address
+    #[arg(long)]
+    pub chain_id: ChainId,
+    /// Public network profile used to decode the authority account literal
     #[arg(long)]
     pub profile: Option<String>,
-    /// Explicit chain discriminant used for Bech32m contract-address derivation
+    /// Explicit chain discriminant used to decode the authority account literal
     #[arg(long)]
     pub chain_discriminant: Option<u16>,
     /// Optional numeric dataspace id override for non-default dataspaces
@@ -2257,7 +2260,7 @@ impl Run for DeriveAddressArgs {
             .wrap_err("failed to decode --authority")?;
         let dataspace_id = resolve_contract_dataspace_id_hint(&self.dataspace, self.dataspace_id)?;
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            chain_discriminant,
+            &self.chain_id,
             &authority,
             self.deploy_nonce,
             dataspace_id,
@@ -2270,6 +2273,7 @@ impl Run for DeriveAddressArgs {
             "dataspace": (self.dataspace),
             "dataspace_id": (dataspace_id.as_u64()),
             "deploy_nonce": (self.deploy_nonce),
+            "chain_id": (self.chain_id),
             "profile": (profile_name),
             "chain_discriminant": (chain_discriminant),
             "contract_address": (contract_address),
@@ -5792,13 +5796,9 @@ mod tests {
         .expect("encode contract arguments");
         let arguments = ContractArgumentRecord::try_new(argument_bytes)
             .expect("bounded contract argument record");
-        let contract_address = ContractAddress::derive(
-            iroha::account_address::chain_discriminant(),
-            &authority,
-            1,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive contract address");
+        let contract_address =
+            ContractAddress::derive(&ctx.config().chain, &authority, 1, DataSpaceId::UNIVERSAL)
+                .expect("derive contract address");
 
         let fixture_domain =
             Domain::new(DomainId::try_new("fixture", "universal").expect("valid fixture domain"))
@@ -6012,7 +6012,7 @@ mod tests {
     fn resolve_contract_target_accepts_contract_address() {
         let authority = fixture_account(0x41);
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             iroha::data_model::nexus::DataSpaceId::new(0),

@@ -3,6 +3,8 @@
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
+/// Deployment-injected supervised private Musubi publication service.
+pub mod musubi_publication_service;
 /// Asynchronous Nexus DPN fee settlement relay.
 mod nexus_fee_relay_worker;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
@@ -39,13 +41,20 @@ pub mod sorafs_reputation_runtime;
 pub mod sorafs_reserve_transparency_runtime;
 /// Qualified stream-token gateway admission and durable callback reconciliation.
 mod sorafs_stream_token_gateway_runtime;
+/// Native Falcon-backed standalone Taira Bootle/Lantern issuer broker.
+#[cfg(feature = "daemon")]
+pub mod taira_bootle_lantern_broker;
+
 pub use runtime_provider_broker::{
+    BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
     RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
     RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
     RuntimeProviderBrokerLauncherErrorV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
+    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
+    StockGovernanceDagServiceRuntimeProviderRegistryV1,
     load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
+    serve_runtime_provider_broker_with_fallible_readiness_v1,
     serve_runtime_provider_broker_with_lifecycle_v1,
 };
 pub use runtime_provider_registry::{
@@ -67,7 +76,7 @@ use std::{
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::soracloud_runtime::{
@@ -78,7 +87,7 @@ use error_stack::{Report, ResultExt};
 use eyre::Result as EyreResult;
 use fastpq_prover::MetalOverrides;
 use iroha_config::{
-    base::{WithOrigin, read::ConfigReader, util::Emitter},
+    base::{WithOrigin, read::ConfigReader, toml::TomlSource, util::Emitter},
     parameters::{
         actual::{
             FastpqExecutionMode, FastpqPoseidonMode, NexusStorageBudgetComponent,
@@ -477,6 +486,7 @@ mod shared_sorafs_provider_cache_tests {
 
             [genesis]
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
             [streaming]
             identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -739,11 +749,21 @@ mod shared_sorafs_provider_cache_tests {
             .expect("enabled discovery cache");
         {
             let mut cache = cache.try_write().expect("exclusive cache guard");
+            let original_now = original.issued_at.saturating_add(1);
+            let prepared = cache
+                .validation_policy()
+                .prepare(original.clone(), original_now)
+                .expect("prepare original provider advert");
             cache
-                .ingest(original.clone(), original.issued_at.saturating_add(1))
+                .commit_prepared(prepared, original_now)
                 .expect("persist original provider advert");
+            let latest_now = latest.issued_at.saturating_add(1);
+            let prepared = cache
+                .validation_policy()
+                .prepare(latest.clone(), latest_now)
+                .expect("prepare latest provider advert");
             cache
-                .ingest(latest.clone(), latest.issued_at.saturating_add(1))
+                .commit_prepared(prepared, latest_now)
                 .expect("persist latest provider advert high-water mark");
         }
         drop(cache);
@@ -757,8 +777,13 @@ mod shared_sorafs_provider_cache_tests {
             .expect("restart with canonical replay checkpoint")
             .expect("enabled discovery cache after restart");
         let mut restarted = restarted.try_write().expect("exclusive restarted guard");
+        let stale_now = latest.issued_at.saturating_add(1);
+        let prepared = restarted
+            .validation_policy()
+            .prepare(original, stale_now)
+            .expect("stale advert remains otherwise authentic");
         let stale_error = restarted
-            .ingest(original, latest.issued_at.saturating_add(1))
+            .commit_prepared(prepared, stale_now)
             .expect_err("restart must preserve stale-advert rejection");
         assert!(matches!(
             stale_error,
@@ -773,8 +798,13 @@ mod shared_sorafs_provider_cache_tests {
         let mut conflicting = latest.clone();
         conflicting.allow_unknown_capabilities = !conflicting.allow_unknown_capabilities;
         resign_advert(&mut conflicting);
+        let conflict_now = latest.issued_at.saturating_add(1);
+        let prepared = restarted
+            .validation_policy()
+            .prepare(conflicting, conflict_now)
+            .expect("conflicting advert remains otherwise authentic");
         let conflict_error = restarted
-            .ingest(conflicting, latest.issued_at.saturating_add(1))
+            .commit_prepared(prepared, conflict_now)
             .expect_err("restart must preserve conflicting same-timestamp rejection");
         assert!(matches!(
             conflict_error,
@@ -1181,6 +1211,13 @@ pub struct StartupArgs {
     /// Might be useful for configuration troubleshooting.
     #[arg(long, env)]
     pub trace_config: bool,
+    /// Require the configuration file bytes to match this lowercase or uppercase
+    /// 64-digit BLAKE3 digest.
+    ///
+    /// Integrity-bound files are parsed from the exact bytes that were hashed
+    /// and must be flattened (the `extends` directive is not accepted).
+    #[arg(long, value_name = "HEX", requires = "config")]
+    pub config_blake3: Option<String>,
 }
 
 /// Complete command-line arguments for the Iroha server.
@@ -8252,6 +8289,7 @@ impl Iroha {
             logger,
             shutdown_signal,
             IrohaRuntimeDeps::default(),
+            None,
         ))
         .await
     }
@@ -8264,12 +8302,14 @@ impl Iroha {
     /// handoffs, and all hedging/billing query, verification, HSM,
     /// publication, acknowledgement, and witness adapters must be supplied by
     /// an injecting launcher; enabling the dependent path without one fails
-    /// closed. The reputation queue submitter is a separately injected
-    /// deployment boundary. The Torii proxy bridge signer remains a separate
-    /// native node role. Any configured signed Governance DAG producer requires
-    /// a sealed monotonic checkpoint store; enabling its public service
-    /// additionally requires separately qualified IPFS/head authenticators. The
-    /// exact historical reputation query is daemon-owned and backed only by the
+    /// closed. A private Musubi publication runner is likewise available only
+    /// through explicit deployment injection and joins this node's supervisor.
+    /// The reputation queue submitter is a separately injected deployment
+    /// boundary. The Torii proxy bridge signer remains a separate native node
+    /// role. Any configured signed Governance DAG producer requires a sealed
+    /// monotonic checkpoint store; enabling its public service additionally
+    /// requires separately qualified IPFS/head authenticators. The exact
+    /// historical reputation query is daemon-owned and backed only by the
     /// configured Kura-authenticated archive.
     ///
     /// # Errors
@@ -8284,6 +8324,9 @@ impl Iroha {
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
         mut runtime_deps: IrohaRuntimeDeps,
+        musubi_publication_deployment: Option<
+            musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+        >,
     ) -> ReportResult<
         (
             Self,
@@ -8527,7 +8570,7 @@ impl Iroha {
             .unwrap_or_else(|| config.common.key_pair.public_key());
         let signing_key = config.snapshot.signing_private_key.as_ref().map_or_else(
             || config.common.key_pair.clone(),
-            |key| iroha_crypto::KeyPair::from(key.0.clone()),
+            |key| iroha_crypto::KeyPair::from(key.clone()),
         );
 
         let genesis = load_deferred_normal_startup_genesis(
@@ -9249,13 +9292,22 @@ impl Iroha {
             require_sm_handshake_match: config.network.require_sm_handshake_match,
             require_sm_openssl_preview_match: config.network.require_sm_openssl_preview_match,
         };
-        let (network, child) = IrohaNetwork::start_with_crypto(
+        let initial_trusted_sources = config
+            .common
+            .trusted_peers
+            .value()
+            .others
+            .iter()
+            .map(|peer| peer.id().clone())
+            .collect();
+        let (network, child) = IrohaNetwork::start_with_crypto_and_initial_trusted_sources(
             config.common.key_pair.clone(),
             config.network.clone(),
             config.common.chain.clone(),
             Some(consensus_caps.clone()),
             Some(confidential_caps),
             Some(crypto_caps),
+            initial_trusted_sources,
             supervisor.shutdown_signal(),
         )
         .await
@@ -9486,7 +9538,8 @@ impl Iroha {
         let zk_cfg = config.zk.clone();
         let gov_cfg = config.gov.clone();
         let oracle_cfg = config.oracle.clone();
-        let streaming_cfg = config.streaming.clone();
+        let streaming_soranet_spool_dir = config.streaming.soranet.provision_spool_dir.clone();
+        let streaming_soravpn_spool_dir = config.streaming.soravpn.provision_spool_dir.clone();
         let merge_cache_capacity = config.kura.merge_ledger_cache_capacity;
         state
             .set_tiered_backend(&tiered_state_cfg)
@@ -9497,7 +9550,7 @@ impl Iroha {
         state.set_pipeline(pipeline_cfg);
         state.set_sumeragi_parameters(&sumeragi_cfg);
         state.set_oracle(oracle_cfg);
-        state.set_streaming(streaming_cfg);
+        state.set_streaming_storage_paths(streaming_soranet_spool_dir, streaming_soravpn_spool_dir);
         state.set_fraud_monitoring(fraud_cfg);
         // Settlement runtime state was installed before Kura replay. Preserve
         // its lazily derived escrow bindings instead of replacing the replayed
@@ -10005,6 +10058,9 @@ impl Iroha {
         let sorafs_repair_config =
             sorafs_node::config::RepairConfig::from(&config.torii.sorafs_repair);
         let sorafs_gc_config = sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc);
+        let bootle_lantern_issuance_provider_registry = runtime_deps
+            .bootle_lantern_issuance_provider_registry
+            .clone();
         let moderation_quarantine_key_wrapper =
             runtime_deps.moderation_quarantine_key_wrapper.clone();
         let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
@@ -10674,12 +10730,60 @@ impl Iroha {
             Report::new(StartError::StartTorii)
                 .attach(format!("failed to derive Torii receipt signer: {err}"))
         })?;
+        let vpn_relay_trust = if config.network.soranet_vpn.enabled {
+            let vpn = &config.network.soranet_vpn;
+            let snapshot_path = vpn.guard_directory_path.as_ref().ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("VPN guard directory path missing after configuration validation")
+            })?;
+            let snapshot = fs::read(snapshot_path).map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to read VPN guard directory {}: {error}",
+                    snapshot_path.display()
+                ))
+            })?;
+            let expected_digest = vpn.guard_directory_digest.ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("VPN guard directory digest missing after configuration validation")
+            })?;
+            let relay_id = vpn.relay_id.ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("VPN relay identity missing after configuration validation")
+            })?;
+            let at_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii)
+                        .attach(format!("system clock precedes Unix epoch: {error}"))
+                })?
+                .as_secs()
+                .try_into()
+                .map_err(|_| {
+                    Report::new(StartError::StartTorii).attach("current Unix time exceeds i64::MAX")
+                })?;
+            let trust = iroha_torii::VpnRelayTrust::from_guard_directory_at(
+                &snapshot,
+                expected_digest,
+                relay_id,
+                at_unix,
+            )
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
+            Some(trust)
+        } else {
+            None
+        };
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
             .with_sorafs_node(sorafs_node)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
-            .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
+            .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret)
+            .with_vpn_relay_trust(vpn_relay_trust);
+        let runtime_deps = if let Some(registry) = bootle_lantern_issuance_provider_registry {
+            runtime_deps.with_bootle_lantern_issuance_provider_registry(registry)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(runtime) = sorafs_reputation_runtime.as_ref() {
             let reader: Arc<dyn sorafs_node::reputation::runtime::ReputationCommittedReadApiV1> =
                 Arc::new(ReadyReputationCommittedReaderV1 {
@@ -10927,6 +11031,15 @@ impl Iroha {
         supervisor
             .setup_shutdown_on_os_signals()
             .change_context(StartError::ListenOsSignal)?;
+
+        let (_availability, publication_child) =
+            musubi_publication_service::start_injected_musubi_publication_private_service_v1(
+                musubi_publication_deployment,
+                supervisor.shutdown_signal(),
+            );
+        if let Some(child) = publication_child {
+            supervisor.monitor(child);
+        }
 
         supervisor.shutdown_on_external_signal(shutdown_signal);
 
@@ -11283,7 +11396,7 @@ impl StartupTrustRoot {
     fn resolve(
         authenticated_snapshot_pending: bool,
         public_key: &PublicKey,
-        configured_hash: Option<HashOf<BlockHeader>>,
+        configured_hash: HashOf<BlockHeader>,
         local_genesis: Option<&GenesisBlock>,
     ) -> ReportResult<Self, StartError> {
         if authenticated_snapshot_pending {
@@ -11320,27 +11433,19 @@ fn load_deferred_normal_startup_genesis(
 impl ResolvedGenesisTrustAnchor {
     fn resolve(
         public_key: &PublicKey,
-        configured_hash: Option<HashOf<BlockHeader>>,
+        configured_hash: HashOf<BlockHeader>,
         local_genesis: Option<&GenesisBlock>,
     ) -> ReportResult<Self, StartError> {
-        let local_hash = local_genesis.map(|genesis| genesis.0.hash());
-        let consensus_header_hash = match (configured_hash, local_hash) {
-            (Some(configured), Some(local)) if configured != local => {
-                return Err(Report::new(StartError::InitKura).attach(format!(
-                    "local signed genesis hash {local} differs from configured genesis.expected_hash {configured}"
-                )));
-            }
-            (Some(configured), _) => configured,
-            (None, Some(local)) => local,
-            (None, None) => {
-                return Err(Report::new(StartError::InitKura).attach(
-                    "normal startup requires an exact genesis hash from genesis.expected_hash or a local signed genesis artifact",
-                ));
-            }
-        };
+        if let Some(local) = local_genesis.map(|genesis| genesis.0.hash())
+            && configured_hash != local
+        {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "local signed genesis hash {local} differs from configured genesis.expected_hash {configured_hash}"
+            )));
+        }
         let anchor = Self {
             public_key: public_key.clone(),
-            consensus_header_hash,
+            consensus_header_hash: configured_hash,
         };
         if let Some(local_genesis) = local_genesis {
             anchor.verify(local_genesis)?;
@@ -11551,12 +11656,17 @@ mod genesis_key_tests {
     }
 
     #[test]
-    fn startup_trust_root_derives_exact_hash_from_local_artifact() {
+    fn startup_trust_root_requires_local_artifact_to_match_configured_hash() {
         let keypair = KeyPair::random();
         let genesis = signed_genesis(&keypair);
 
-        let root = StartupTrustRoot::resolve(false, keypair.public_key(), None, Some(&genesis))
-            .expect("a local signed genesis supplies the exact hash anchor");
+        let root = StartupTrustRoot::resolve(
+            false,
+            keypair.public_key(),
+            genesis.0.hash(),
+            Some(&genesis),
+        )
+        .expect("the local signed genesis matches the independently configured hash");
         let StartupTrustRoot::Genesis(anchor) = root else {
             panic!("normal startup must resolve a genesis root");
         };
@@ -11595,28 +11705,16 @@ mod genesis_key_tests {
     #[test]
     fn snapshot_startup_selects_the_independent_pending_trust_root() {
         let keypair = KeyPair::random();
+        let configured_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; 32]));
 
-        let root = StartupTrustRoot::resolve(true, keypair.public_key(), None, None)
+        let root = StartupTrustRoot::resolve(true, keypair.public_key(), configured_hash, None)
             .expect("an authenticated provisional snapshot is an independent trust root");
 
         assert!(matches!(
             root,
             StartupTrustRoot::AuthenticatedSnapshotPending
         ));
-    }
-
-    #[test]
-    fn normal_startup_requires_an_exact_hash_source() {
-        let keypair = KeyPair::random();
-
-        let error = StartupTrustRoot::resolve(false, keypair.public_key(), None, None)
-            .expect_err("a signer key alone is not an exact genesis-instance anchor");
-
-        assert!(matches!(error.current_context(), StartError::InitKura));
-        assert!(
-            format!("{error:?}").contains("requires an exact genesis hash"),
-            "unexpected missing-anchor diagnostic: {error:?}"
-        );
     }
 
     #[test]
@@ -11627,13 +11725,9 @@ mod genesis_key_tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB6; 32]));
         assert_ne!(configured_hash, genesis.0.hash());
 
-        let error = StartupTrustRoot::resolve(
-            false,
-            keypair.public_key(),
-            Some(configured_hash),
-            Some(&genesis),
-        )
-        .expect_err("two exact genesis sources must agree");
+        let error =
+            StartupTrustRoot::resolve(false, keypair.public_key(), configured_hash, Some(&genesis))
+                .expect_err("two exact genesis sources must agree");
 
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
@@ -11650,7 +11744,7 @@ mod genesis_key_tests {
         let root = StartupTrustRoot::resolve(
             false,
             keypair.public_key(),
-            Some(genesis.0.hash()),
+            genesis.0.hash(),
             Some(&genesis),
         )
         .expect("matching configured and local hashes resolve one exact anchor");
@@ -11662,14 +11756,19 @@ mod genesis_key_tests {
     }
 
     #[test]
-    fn local_artifact_anchor_rejects_alternate_same_key_same_chain_genesis() {
+    fn configured_anchor_rejects_alternate_same_key_same_chain_genesis_with_local_body() {
         let keypair = KeyPair::random();
         let trusted = signed_genesis_with_marker(&keypair, "trusted genesis");
         let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
         assert_ne!(trusted.0.hash(), alternate.0.hash());
 
-        let root = StartupTrustRoot::resolve(false, keypair.public_key(), None, Some(&trusted))
-            .expect("local trusted genesis resolves an exact anchor");
+        let root = StartupTrustRoot::resolve(
+            false,
+            keypair.public_key(),
+            trusted.0.hash(),
+            Some(&trusted),
+        )
+        .expect("the local trusted genesis matches the configured exact anchor");
         let StartupTrustRoot::Genesis(anchor) = root else {
             panic!("normal startup must resolve a genesis root");
         };
@@ -11691,9 +11790,8 @@ mod genesis_key_tests {
         let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
         assert_ne!(trusted.0.hash(), alternate.0.hash());
 
-        let root =
-            StartupTrustRoot::resolve(false, keypair.public_key(), Some(trusted.0.hash()), None)
-                .expect("configured expected hash resolves an exact anchor");
+        let root = StartupTrustRoot::resolve(false, keypair.public_key(), trusted.0.hash(), None)
+            .expect("configured expected hash resolves an exact anchor");
         let StartupTrustRoot::Genesis(anchor) = root else {
             panic!("normal startup must resolve a genesis root");
         };
@@ -11864,47 +11962,24 @@ fn fastpq_metal_overrides_from_config(
     }
 }
 
-fn ivm_stack_budget_bytes(config: &Config) -> u64 {
-    config
-        .compute
-        .resource_profiles
-        .get(&config.ivm.memory_budget_profile)
-        .map(|budget| budget.max_stack_bytes.get())
-        .expect("ivm.memory_budget_profile missing from compute.resource_profiles")
-}
-
 /// Apply concurrency settings (IVM scheduler + Rayon) derived from configuration.
-fn apply_concurrency_config(
-    concurrency: &iroha_config::parameters::actual::Concurrency,
-    stack_budget_bytes: u64,
-) {
+fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Concurrency) {
     let stack_outcome = ivm::apply_stack_sizes(
         concurrency.scheduler_stack_bytes,
         concurrency.prover_stack_bytes,
-        concurrency.guest_stack_bytes,
-        stack_budget_bytes,
     );
     iroha_core::sumeragi::set_sumeragi_stack_size_bytes(concurrency.sumeragi_stack_bytes);
-    if stack_outcome.scheduler_clamped
-        || stack_outcome.prover_clamped
-        || stack_outcome.guest_clamped
-        || stack_outcome.budget_clamped
-    {
+    if stack_outcome.scheduler_clamped || stack_outcome.prover_clamped {
         iroha_logger::warn!(
             requested_scheduler_bytes = stack_outcome.requested_scheduler_bytes,
             requested_prover_bytes = stack_outcome.requested_prover_bytes,
-            requested_guest_bytes = stack_outcome.requested_guest_bytes,
-            requested_budget_bytes = stack_outcome.requested_budget_bytes,
             scheduler_bytes = stack_outcome.scheduler_bytes,
             prover_bytes = stack_outcome.prover_bytes,
-            guest_bytes = stack_outcome.guest_bytes,
-            budget_bytes = stack_outcome.budget_bytes,
             min_stack_bytes = ivm::MIN_STACK_BYTES,
             max_stack_bytes = ivm::MAX_STACK_BYTES,
             "Stack size overrides were clamped to the supported range"
         );
     }
-    ivm::set_gas_to_stack_multiplier(concurrency.gas_to_stack_multiplier);
     let min = concurrency.scheduler_min_threads;
     let max = concurrency.scheduler_max_threads;
     ivm::set_scheduler_thread_limits(
@@ -11940,9 +12015,50 @@ pub fn read_config_and_genesis(
     let mut config = ConfigReader::new();
 
     if let Some(path) = &args.config {
-        config = config
-            .read_toml_with_extends(path)
-            .change_context(ConfigError::ReadConfig)?;
+        config = if let Some(expected) = args.startup.config_blake3.as_deref() {
+            if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(Report::new(ConfigError::ReadConfig)
+                    .attach("`--config-blake3` must contain exactly 64 hexadecimal digits"));
+            }
+            let raw = fs::read(path)
+                .change_context(ConfigError::ReadConfig)
+                .attach_with(|| {
+                    format!(
+                        "failed to read integrity-bound configuration {}",
+                        path.display()
+                    )
+                })?;
+            let observed = blake3::hash(&raw).to_hex().to_string();
+            if !expected.eq_ignore_ascii_case(&observed) {
+                return Err(Report::new(ConfigError::ReadConfig).attach(format!(
+                    "integrity-bound configuration {} has BLAKE3 {observed}, expected {expected}",
+                    path.display()
+                )));
+            }
+            let raw = std::str::from_utf8(&raw).map_err(|error| {
+                Report::new(ConfigError::ReadConfig).attach(format!(
+                    "integrity-bound configuration {} is not UTF-8: {error}",
+                    path.display()
+                ))
+            })?;
+            let table = raw.parse::<toml::Table>().map_err(|error| {
+                Report::new(ConfigError::ReadConfig).attach(format!(
+                    "failed to parse integrity-bound configuration {}: {error}",
+                    path.display()
+                ))
+            })?;
+            if table.contains_key("extends") {
+                return Err(Report::new(ConfigError::ReadConfig).attach(format!(
+                    "integrity-bound configuration {} must be flattened and cannot use `extends`",
+                    path.display()
+                )));
+            }
+            config.with_toml_source(TomlSource::new(path.clone(), table))
+        } else {
+            config
+                .read_toml_with_extends(path)
+                .change_context(ConfigError::ReadConfig)?
+        };
     }
 
     let sorafs_storage_enabled_is_explicit =
@@ -11953,6 +12069,9 @@ pub fn read_config_and_genesis(
         .change_context(ConfigError::ReadConfig)?
         .parse()
         .change_context(ConfigError::ParseConfig)?;
+    if let Some(path) = args.genesis_manifest_json.as_ref() {
+        config.genesis.manifest_json = Some(WithOrigin::inline(path.clone()));
+    }
 
     if args.sora {
         let configured_sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
@@ -12055,8 +12174,7 @@ pub fn read_config_and_genesis(
     #[cfg(feature = "fastpq-gpu")]
     preflight_fastpq_bn254_poseidon_words(&config.zk.fastpq);
 
-    let stack_budget_bytes = ivm_stack_budget_bytes(&config);
-    apply_concurrency_config(&config.concurrency, stack_budget_bytes);
+    apply_concurrency_config(&config.concurrency);
 
     // Apply Norito settings immediately so subsequent Norito decode/encode (e.g., genesis)
     // uses the configured archive bounds and GPU offload policy.
@@ -12068,15 +12186,6 @@ pub fn read_config_and_genesis(
     apply_ivm_acceleration_config(&config.accel);
     rs16::set_simd_enabled(config.accel.enable_simd);
 
-    iroha_data_model::account::address::set_default_domain_name(
-        config.common.default_account_domain_label.value().clone(),
-    )
-    .map_err(|err| {
-        Report::new(ConfigError::ParseConfig).attach(format!(
-            "invalid default account domain label `{}`: {err}",
-            config.common.default_account_domain_label.value()
-        ))
-    })?;
     iroha_data_model::account::address::set_chain_discriminant(
         *config.common.chain_discriminant.value(),
     );
@@ -12643,6 +12752,17 @@ fn deduplicate_managed_roots(roots: &mut Vec<PathBuf>) {
 }
 
 fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Result<u64> {
+    managed_root_size_with_identity(path, expected_filesystem_id, filesystem_identity)
+}
+
+fn managed_root_size_with_identity<F>(
+    path: &Path,
+    expected_filesystem_id: &str,
+    identity: F,
+) -> std::io::Result<u64>
+where
+    F: Fn(&Path) -> Option<String>,
+{
     let metadata = fs::symlink_metadata(path)?;
     if metadata_is_symlink_or_reparse(&metadata) {
         return Err(std::io::Error::new(
@@ -12650,7 +12770,7 @@ fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Resu
             "managed storage root must not be a symbolic link or reparse point",
         ));
     }
-    if filesystem_identity(path).as_deref() != Some(expected_filesystem_id) {
+    if identity(path).as_deref() != Some(expected_filesystem_id) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "managed storage root moved to a different filesystem during probing",
@@ -12676,7 +12796,7 @@ fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Resu
                     ),
                 ));
             }
-            let entry_filesystem_id = filesystem_identity(&entry_path).ok_or_else(|| {
+            let entry_filesystem_id = identity(&entry_path).ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!(
@@ -12708,7 +12828,7 @@ fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Resu
     }
     let final_metadata = fs::symlink_metadata(path)?;
     if metadata_is_symlink_or_reparse(&final_metadata)
-        || filesystem_identity(path).as_deref() != Some(expected_filesystem_id)
+        || identity(path).as_deref() != Some(expected_filesystem_id)
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -12997,6 +13117,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13025,6 +13146,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13067,6 +13189,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13087,11 +13210,33 @@ metadata = {}
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "b3c8f4f51a4ca789162763da59ac1a81c1d5fb864370a043a372ac13340d4315";
+        "3a7d7f8a8a20880b05d9473ee7d08492afead4a3160949ef9da9aa0e152628c7";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
+    }
+
+    pub(super) fn load_unprovisioned_profile_for_inspection(path: &Path) -> Config {
+        let source = std::fs::read_to_string(path).expect("read checked-in signing profile");
+        let mut table: Table = toml::from_str(&source).expect("parse signing profile TOML");
+        let expected_hash = table
+            .get_mut("genesis")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|genesis| genesis.get_mut("expected_hash"))
+            .expect("signing profile genesis.expected_hash placeholder");
+        assert_eq!(
+            expected_hash.as_str(),
+            Some("REPLACE_WITH_GENESIS_EXPECTED_HASH"),
+            "checked-in signing profiles must remain explicitly unprovisioned"
+        );
+        // This hash exists only so tests can inspect unrelated typed fields. It never enters a
+        // runtime config and the returned config must not be used to start a node.
+        *expected_hash = toml::Value::String(
+            Hash::new(b"irohad non-runtime signing-profile inspection").to_string(),
+        );
+        Config::from_toml_source(TomlSource::inline(table))
+            .expect("resolve signing profile for non-runtime inspection")
     }
 
     #[test]
@@ -13296,10 +13441,14 @@ metadata = {}
     #[test]
     fn nexus_profile_defaults_enable_flag() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/nexus/config.toml");
-        let config = Config::from_toml_source(
-            TomlSource::from_file(path).expect("read nexus defaults config"),
-        )
-        .expect("parse nexus defaults");
+        assert!(
+            Config::from_toml_source(
+                TomlSource::from_file(path.clone()).expect("read nexus defaults config")
+            )
+            .is_err(),
+            "the unprovisioned profile must not be a runnable node config"
+        );
+        let config = load_unprovisioned_profile_for_inspection(&path);
 
         assert!(config.nexus.enabled);
         assert_eq!(config.nexus.dataspace_catalog.entries().len(), 3);
@@ -13948,26 +14097,6 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
         }
     }
 
-    if config.compute.enabled {
-        let guest_stack = config.concurrency.guest_stack_bytes;
-        let budget_stack = config
-            .compute
-            .resource_profiles
-            .get(&config.ivm.memory_budget_profile)
-            .map_or_else(|| guest_stack.max(1), |budget| budget.max_stack_bytes.get());
-        if guest_stack < budget_stack {
-            log_config_warning(&format!(
-                "concurrency.guest_stack_bytes ({guest_stack}) is smaller than ivm.memory_budget_profile `{}` max_stack_bytes ({budget_stack}); guest stack limits will be clamped to the smaller value",
-                config.ivm.memory_budget_profile
-            ));
-        } else if guest_stack != budget_stack {
-            log_config_warning(&format!(
-                "concurrency.guest_stack_bytes ({guest_stack}) differs from ivm.memory_budget_profile `{}` max_stack_bytes ({budget_stack}); effective stacks use the minimum of the caps",
-                config.ivm.memory_budget_profile
-            ));
-        }
-    }
-
     if config.sumeragi.role == iroha_config::parameters::actual::NodeRole::Validator {
         if !config.confidential.enabled {
             emitter.emit(
@@ -14069,7 +14198,7 @@ pub fn main_entry(default_build_line: BuildLine) {
         env::var(BUILD_LINE_ENV).ok(),
         default_build_line.daemon_bin(),
     );
-    if let Err(report) = run_main(build_line, None) {
+    if let Err(report) = run_main(build_line, None, None) {
         eprintln!("{report:?}");
         std::process::exit(1);
     }
@@ -14095,7 +14224,55 @@ pub fn run_with_runtime_provider_registry(
         env::var(BUILD_LINE_ENV).ok(),
         default_build_line.daemon_bin(),
     );
-    run_main(build_line, Some(registry))
+    run_main(build_line, Some(registry), None)
+}
+
+/// Run the standard CLI launcher with a deployment-owned private Musubi publication service.
+///
+/// The caller must assemble the complete private HTTPS runner, including its durable clock and
+/// journal, receipt signer, and admitted SoraFS backends, before invoking this function. The
+/// launcher transfers that opaque deployment into the daemon supervisor without requiring an
+/// unrelated runtime-provider registry. It never exposes the private routes through Torii or
+/// reads service credentials from argv or node configuration. An unexpected private-runner exit
+/// is fatal to the same supervisor that owns the node.
+///
+/// # Errors
+///
+/// Returns a launcher error if configuration, subsystem startup, or supervised execution fails.
+pub fn run_with_musubi_publication(
+    default_build_line: BuildLine,
+    deployment: musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+) -> ReportResult<(), MainError> {
+    let build_line = resolve_build_line_from_env(
+        env::var(BUILD_LINE_ENV).ok(),
+        default_build_line.daemon_bin(),
+    );
+    run_main(build_line, None, Some(deployment))
+}
+
+/// Run the standard CLI launcher with deployment-owned runtime providers and a private Musubi
+/// publication service.
+///
+/// The caller must assemble the complete private HTTPS runner, including its durable clock and
+/// journal, receipt signer, and admitted SoraFS backends, before invoking this function. The
+/// launcher only transfers that opaque deployment into the daemon supervisor; it never exposes
+/// the private routes through Torii or reads service credentials from argv or node configuration.
+/// An unexpected private-runner exit is fatal to the same supervisor that owns the node.
+///
+/// # Errors
+///
+/// Returns a launcher error if configuration, provider resolution, subsystem startup, or
+/// supervised execution fails.
+pub fn run_with_runtime_provider_registry_and_musubi_publication(
+    default_build_line: BuildLine,
+    registry: &dyn IrohaRuntimeProviderRegistryV1,
+    deployment: musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+) -> ReportResult<(), MainError> {
+    let build_line = resolve_build_line_from_env(
+        env::var(BUILD_LINE_ENV).ok(),
+        default_build_line.daemon_bin(),
+    );
+    run_main(build_line, Some(registry), Some(deployment))
 }
 
 fn parse_fastpq_execution_mode(value: &str) -> Result<FastpqExecutionMode, String> {
@@ -14339,6 +14516,9 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
 fn run_main(
     build_line: BuildLine,
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
+    musubi_publication_deployment: Option<
+        musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+    >,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
 
@@ -14490,7 +14670,12 @@ fn run_main(
         .map_err(Report::from)
         .change_context(MainError::IrohaStart)?;
 
-    let result = rt.block_on(run_node(config, genesis, runtime_deps));
+    let result = rt.block_on(run_node(
+        config,
+        genesis,
+        runtime_deps,
+        musubi_publication_deployment,
+    ));
     rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
     result
 }
@@ -15259,12 +15444,11 @@ fn validate_config_for_check(
         )));
     }
 
-    if let Some(expected_hash) = config.genesis.expected_hash
-        && genesis.0.hash() != expected_hash
-    {
+    if genesis.0.hash() != config.genesis.expected_hash {
         return Err(Report::new(MainError::Config).attach(format!(
-            "local genesis hash {} does not match configured genesis.expected_hash {expected_hash}",
-            genesis.0.hash()
+            "local genesis hash {} does not match configured genesis.expected_hash {}",
+            genesis.0.hash(),
+            config.genesis.expected_hash,
         )));
     }
 
@@ -16147,6 +16331,9 @@ async fn run_node(
     config: Config,
     genesis: Option<GenesisBlock>,
     runtime_deps: IrohaRuntimeDeps,
+    musubi_publication_deployment: Option<
+        musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+    >,
 ) -> ReportResult<(), MainError> {
     let logger = iroha_logger::init_global(config.logger.clone()).map_err(|err| {
         // https://github.com/hashintel/hash/issues/4295
@@ -16202,8 +16389,14 @@ async fn run_node(
         default_hook(info);
     }));
 
-    let start =
-        Iroha::start_with_runtime_deps(config, genesis, logger, shutdown_on_panic, runtime_deps);
+    let start = Iroha::start_with_runtime_deps(
+        config,
+        genesis,
+        logger,
+        shutdown_on_panic,
+        runtime_deps,
+        musubi_publication_deployment,
+    );
     let (_iroha, supervisor_fut) = Box::pin(start)
         .await
         .change_context(MainError::IrohaStart)?;
@@ -16244,7 +16437,9 @@ fn log_norito_banner(cfg: &Config) {
 
 #[cfg(test)]
 mod tests {
-    use super::build_line_tests::{minimal_config_table, multilane_config_table};
+    use super::build_line_tests::{
+        load_unprovisioned_profile_for_inspection, minimal_config_table, multilane_config_table,
+    };
     #[allow(unused_imports)]
     use super::*;
     use iroha_config_base::toml::TomlSource;
@@ -16633,10 +16828,7 @@ mod tests {
     fn repository_iroha3_dev_default_config_requests_no_runtime_providers() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../defaults/kagami/iroha3-dev/config.toml");
-        let config = Config::from_toml_source(
-            TomlSource::from_file(path).expect("read checked-in iroha3-dev default config"),
-        )
-        .expect("resolve checked-in iroha3-dev default config");
+        let config = load_unprovisioned_profile_for_inspection(&path);
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
             .expect("project default provider bindings");
 
@@ -16960,14 +17152,16 @@ mod tests {
             "an explicitly injected deployment registry must remain authoritative"
         );
         assert!(
-            run_main_source.contains("rt.block_on(run_node(config,genesis,runtime_deps))"),
-            "standard CLI startup must forward the resolved dependency set"
+            run_main_source.contains(
+                "rt.block_on(run_node(config,genesis,runtime_deps,musubi_publication_deployment))"
+            ),
+            "standard CLI startup must forward the resolved dependency set and private publication deployment"
         );
         assert!(
             run_node_source.contains(
-                "Iroha::start_with_runtime_deps(config,genesis,logger,shutdown_on_panic,runtime_deps)"
+                "Iroha::start_with_runtime_deps(config,genesis,logger,shutdown_on_panic,runtime_deps,musubi_publication_deployment)"
             ),
-            "daemon startup must consume the resolved dependency set"
+            "daemon startup must consume the resolved dependency set and private publication deployment"
         );
         assert!(
             !run_main_source
@@ -16998,6 +17192,59 @@ mod tests {
                 && stock_broker < resolution
                 && resolution < runtime_start,
             "fixed-binding preflight must precede broker construction, and provider resolution must precede Tokio/node startup"
+        );
+    }
+
+    #[test]
+    fn explicit_musubi_private_deployment_is_threaded_and_supervised_fail_closed() {
+        let compact_source: String = include_str!("main.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+
+        assert!(
+            compact_source.contains("run_main(build_line,None,None)"),
+            "the stock launcher must not construct or start a private publication service"
+        );
+        assert!(
+            compact_source.contains("run_main(build_line,Some(registry),None)"),
+            "the existing custom registry launcher must preserve fail-closed publication defaults"
+        );
+        assert!(
+            compact_source.contains("run_main(build_line,None,Some(deployment))"),
+            "the standalone publication launcher must not require an unrelated provider registry"
+        );
+        assert!(
+            compact_source.contains("run_main(build_line,Some(registry),Some(deployment))"),
+            "the combined custom launcher must inject both deployment-owned dependencies"
+        );
+
+        let startup_source = compact_source
+            .split_once("pub(crate)asyncfnstart_with_runtime_deps(")
+            .expect("start_with_runtime_deps source")
+            .1
+            .split_once("fnvalidate_membership_snapshot_against_live_peers(")
+            .expect("start_with_runtime_deps source boundary")
+            .0;
+        let signal_setup = startup_source
+            .find("supervisor.setup_shutdown_on_os_signals()")
+            .expect("OS signal setup");
+        let publication_start = startup_source
+            .find(
+                "musubi_publication_service::start_injected_musubi_publication_private_service_v1(musubi_publication_deployment,supervisor.shutdown_signal())",
+            )
+            .expect("injected publication service startup");
+        let publication_monitor = startup_source
+            .find("ifletSome(child)=publication_child{supervisor.monitor(child);}")
+            .expect("publication child supervision");
+        let external_signal = startup_source
+            .find("supervisor.shutdown_on_external_signal(shutdown_signal)")
+            .expect("external shutdown signal hookup");
+        assert!(
+            signal_setup < publication_start
+                && publication_start < publication_monitor
+                && publication_monitor < external_signal,
+            "the private runner must start only after fallible signal setup and join the node supervisor"
         );
     }
 
@@ -17381,6 +17628,7 @@ mod tests {
                 [genesis]
                 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
                 file = "./genesis.signed.nrt"
+                expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -17399,7 +17647,7 @@ mod tests {
                 std::num::NonZeroU64::new(7).expect("nonzero message cap");
             config.zk.sccp.max_pending_outbound_payload_bytes =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
-            let offline_asset_definition_id = AssetDefinitionId::new(
+            let offline_asset_definition_id = AssetDefinitionId::derive_from_components(
                 iroha_data_model::domain::DomainId::try_new("boi", "is")
                     .expect("offline asset domain"),
                 "ds".parse().expect("offline asset name"),
@@ -17617,6 +17865,7 @@ mod tests {
 
                 [genesis]
                 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -19495,6 +19744,7 @@ mod tests {
                 [genesis]
                 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
                 file = "./genesis.signed.nrt"
+                expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -20205,7 +20455,7 @@ mod tests {
             );
 
             config.settlement.offline.escrow_accounts.insert(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     iroha_data_model::domain::DomainId::try_new("offline", "universal")
                         .expect("offline asset domain"),
                     "cash".parse().expect("offline asset name"),
@@ -20550,6 +20800,7 @@ mod tests {
                     check_config: false,
                     write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
+                    config_blake3: None,
                 },
                 terminal_colors: false,
                 language: None,
@@ -20630,6 +20881,76 @@ mod tests {
             table
         }
 
+        fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {
+            Args {
+                config: Some(config_path),
+                genesis_manifest_json,
+                startup: StartupArgs {
+                    check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
+                    trace_config: false,
+                    config_blake3: None,
+                },
+                terminal_colors: false,
+                language: None,
+                sora: false,
+                fastpq_execution_mode: None,
+                fastpq_poseidon_mode: None,
+                fastpq_device_class: None,
+                fastpq_chip_family: None,
+                fastpq_gpu_kind: None,
+            }
+        }
+
+        #[test]
+        fn integrity_bound_config_is_hashed_and_parsed_from_one_buffer() -> eyre::Result<()> {
+            let genesis_key_pair = KeyPair::random();
+            let config = config_factory(genesis_key_pair.public_key());
+            let raw = toml::to_string(&config)?;
+            let dir = tempfile::tempdir()?;
+            let config_path = dir.path().join("config.toml");
+            std::fs::write(&config_path, raw.as_bytes())?;
+            let expected = blake3::hash(raw.as_bytes()).to_hex().to_string();
+            let mut args = config_test_args(config_path.clone(), None);
+            args.startup.config_blake3 = Some(expected);
+
+            read_config_and_genesis(&args)
+                .map_err(|report| eyre::eyre!("valid integrity-bound config failed: {report:?}"))?;
+
+            std::fs::write(&config_path, format!("{raw}\n# changed after admission\n"))?;
+            let error = read_config_and_genesis(&args)
+                .expect_err("changed integrity-bound config must fail closed");
+            assert!(
+                format!("{error:?}").contains("has BLAKE3"),
+                "unexpected integrity error: {error:?}"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn integrity_bound_config_rejects_extends() -> eyre::Result<()> {
+            let genesis_key_pair = KeyPair::random();
+            let mut config = config_factory(genesis_key_pair.public_key());
+            config.insert(
+                "extends".to_owned(),
+                toml::Value::String("base.toml".to_owned()),
+            );
+            let raw = toml::to_string(&config)?;
+            let dir = tempfile::tempdir()?;
+            let config_path = dir.path().join("config.toml");
+            std::fs::write(&config_path, raw.as_bytes())?;
+            let mut args = config_test_args(config_path, None);
+            args.startup.config_blake3 = Some(blake3::hash(raw.as_bytes()).to_hex().to_string());
+
+            let error = read_config_and_genesis(&args)
+                .expect_err("integrity-bound config must not resolve external extends");
+            assert!(
+                format!("{error:?}").contains("must be flattened"),
+                "unexpected extends error: {error:?}"
+            );
+            Ok(())
+        }
+
         fn load_config_with_overrides<F>(
             mut adjust: F,
         ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>
@@ -20665,26 +20986,38 @@ mod tests {
             std::fs::write(&genesis_path, genesis.0.encode_wire()?)?;
             std::fs::write(&executor_path, "")?;
 
-            let (config, _genesis) = read_config_and_genesis(&Args {
-                config: Some(config_path.clone()),
-                genesis_manifest_json: None,
-                startup: StartupArgs {
-                    check_config: false,
-                    write_kagemusha_catalog_qualification_seal: None,
-                    trace_config: false,
-                },
-                terminal_colors: false,
-                language: None,
-                sora: false,
-                fastpq_execution_mode: None,
-                fastpq_poseidon_mode: None,
-                fastpq_device_class: None,
-                fastpq_chip_family: None,
-                fastpq_gpu_kind: None,
-            })
-            .map_err(|report| eyre::eyre!("{report:?}"))?;
+            let (config, _genesis) =
+                read_config_and_genesis(&config_test_args(config_path.clone(), None))
+                    .map_err(|report| eyre::eyre!("{report:?}"))?;
 
             Ok((config, dir, config_path))
+        }
+
+        #[test]
+        fn cli_genesis_manifest_path_overrides_config() -> eyre::Result<()> {
+            let (_config, dir, config_path) = load_config_with_overrides(|table, _| {
+                iroha_config::base::toml::Writer::new(table)
+                    .write(["genesis", "manifest_json"], "./stale-manifest.json");
+            })?;
+            let manifest_path = dir.path().join("bound-genesis.json");
+            std::fs::write(&manifest_path, b"{}")?;
+
+            let (config, _genesis) = read_config_and_genesis(&config_test_args(
+                config_path,
+                Some(manifest_path.clone()),
+            ))
+            .map_err(|report| eyre::eyre!("{report:?}"))?;
+
+            assert_eq!(
+                config
+                    .genesis
+                    .manifest_json
+                    .as_ref()
+                    .expect("CLI manifest override should be retained")
+                    .resolve_relative_path(),
+                manifest_path
+            );
+            Ok(())
         }
 
         fn parse_config_with_overrides<F>(
@@ -20761,6 +21094,7 @@ mod tests {
                     check_config: false,
                     write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
+                    config_blake3: None,
                 },
                 terminal_colors: false,
                 language: None,
@@ -20854,6 +21188,52 @@ mod tests {
             Ok(())
         }
 
+        #[cfg(unix)]
+        #[test]
+        fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode()
+        -> eyre::Result<()> {
+            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+            let (_parsed, _dir, config_path) =
+                parse_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
+                })?;
+            std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o400))?;
+            let original_bytes = std::fs::read(&config_path)?;
+            let original_metadata = std::fs::metadata(&config_path)?;
+            assert_eq!(original_metadata.mode() & 0o777, 0o400);
+
+            let (config, _genesis) = read_config_and_genesis(&Args {
+                config: Some(config_path.clone()),
+                genesis_manifest_json: None,
+                startup: StartupArgs {
+                    check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
+                    trace_config: false,
+                    config_blake3: None,
+                },
+                terminal_colors: false,
+                language: None,
+                sora: true,
+                fastpq_execution_mode: None,
+                fastpq_poseidon_mode: None,
+                fastpq_device_class: None,
+                fastpq_chip_family: None,
+                fastpq_gpu_kind: None,
+            })
+            .map_err(|report| eyre::eyre!("{report:?}"))?;
+            assert!(
+                config.nexus.storage.effective_local_budget_bytes.is_some(),
+                "startup must complete runtime reconciliation"
+            );
+
+            let final_metadata = std::fs::metadata(&config_path)?;
+            assert_eq!(std::fs::read(&config_path)?, original_bytes);
+            assert_eq!(final_metadata.mode(), original_metadata.mode());
+            assert_eq!(final_metadata.ino(), original_metadata.ino());
+            Ok(())
+        }
+
         #[test]
         fn operator_local_budget_initializes_the_effective_budget() -> eyre::Result<()> {
             let (config, _dir, config_path) =
@@ -20909,6 +21289,20 @@ mod tests {
         }
 
         #[test]
+        fn runtime_budget_is_stable_across_restart_usage_splits() {
+            let before_restart = storage_budget_probe(1_000, 700, 100);
+            let after_restart = storage_budget_probe(1_000, 300, 500);
+
+            let before = derive_runtime_nexus_storage_budget(&[before_restart])
+                .expect("safe pre-restart budget");
+            let after = derive_runtime_nexus_storage_budget(&[after_restart])
+                .expect("safe post-restart budget");
+
+            assert_eq!(before[0].budget_bytes, after[0].budget_bytes);
+            assert_eq!(before[0].budget_bytes.get(), 600);
+        }
+
+        #[test]
         fn runtime_budget_rejects_existing_usage_above_the_safe_cap() {
             let probe = storage_budget_probe(1_000, 100, 150);
             let error = derive_runtime_nexus_storage_budget(&[probe])
@@ -20935,454 +21329,7 @@ mod tests {
         }
 
         #[cfg(unix)]
-        #[test]
-        fn budget_root_allows_ancestor_symlink_but_rejects_exact_and_dangling_links()
-        -> eyre::Result<()> {
-            use std::os::unix::fs::symlink;
-
-            let temp = tempfile::tempdir()?;
-            let real_parent = temp.path().join("real-parent");
-            let real_root = real_parent.join("managed");
-            std::fs::create_dir_all(&real_root)?;
-            let alias_parent = temp.path().join("alias-parent");
-            symlink(&real_parent, &alias_parent)?;
-
-            let lexical_root =
-                normalize_budget_probe_path(alias_parent.join("managed")).expect("absolute path");
-            let resolved =
-                resolve_budget_probe_root(&lexical_root, NexusStorageBudgetComponent::Kura)
-                    .expect("a symlink strictly above the managed root is allowed");
-            let canonical_root = std::fs::canonicalize(&real_root)?;
-            assert_eq!(
-                resolved.managed_root.as_deref(),
-                Some(canonical_root.as_path())
-            );
-
-            let exact_link = temp.path().join("exact-root-link");
-            symlink(&real_root, &exact_link)?;
-            let exact_error =
-                resolve_budget_probe_root(&exact_link, NexusStorageBudgetComponent::Kura)
-                    .expect_err("the exact managed root must not be a symlink");
-            assert!(
-                format!("{exact_error:?}").contains("must not be a symbolic link or reparse point")
-            );
-
-            let dangling_link = temp.path().join("dangling-root-link");
-            symlink(temp.path().join("missing-target"), &dangling_link)?;
-            assert!(
-                resolve_budget_probe_root(&dangling_link, NexusStorageBudgetComponent::Kura)
-                    .is_err(),
-                "a dangling exact-root link must fail closed"
-            );
-            Ok(())
-        }
-
-        #[cfg(unix)]
-        #[test]
-        fn explicit_budget_does_not_downgrade_structural_path_failures() -> eyre::Result<()> {
-            use std::os::unix::fs::symlink;
-
-            let temp = tempfile::tempdir()?;
-            let real_root = temp.path().join("real-root");
-            std::fs::create_dir(&real_root)?;
-            let linked_root = temp.path().join("linked-root");
-            symlink(&real_root, &linked_root)?;
-
-            let (mut config, _dir, _config_path) =
-                parse_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table)
-                        .write(["nexus", "enabled"], true)
-                        .write(["nexus", "storage", "local_budget_bytes"], 2_000_i64);
-                })?;
-            config.kura.store_dir = WithOrigin::inline(linked_root);
-            let error = reconcile_nexus_storage_budget(&mut config)
-                .expect_err("an explicit budget must not suppress a structural path failure");
-            assert!(format!("{error:?}").contains("must not be a symbolic link or reparse point"));
-            Ok(())
-        }
-
-        #[cfg(unix)]
-        #[test]
-        fn managed_root_measurement_rejects_descendant_links_and_identity_drift() -> eyre::Result<()>
-        {
-            use std::os::unix::fs::symlink;
-
-            let temp = tempfile::tempdir()?;
-            let root = temp.path().join("managed");
-            let outside = temp.path().join("outside");
-            std::fs::create_dir(&root)?;
-            std::fs::create_dir(&outside)?;
-            let descendant_link = root.join("linked-child");
-            symlink(&outside, &descendant_link)?;
-
-            let canonical_root = std::fs::canonicalize(&root)?;
-            let filesystem_id = filesystem_identity(&canonical_root).expect("filesystem identity");
-            let link_error = managed_root_size(&canonical_root, &filesystem_id)
-                .expect_err("descendant links must fail closed");
-            assert!(
-                link_error
-                    .to_string()
-                    .contains("symbolic link or reparse point")
-            );
-
-            std::fs::remove_file(descendant_link)?;
-            assert!(
-                managed_root_size(&canonical_root, "dev:stale").is_err(),
-                "the filesystem identity is rechecked during measurement"
-            );
-            Ok(())
-        }
-
-        #[test]
-        fn operator_explicit_budget_shortfall_accounts_for_managed_bytes() -> eyre::Result<()> {
-            let (mut config, _dir, _config_path) =
-                parse_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table)
-                        .write(["nexus", "enabled"], true)
-                        .write(["nexus", "storage", "local_budget_bytes"], 2_000_i64);
-                })?;
-            config.apply_storage_budget();
-
-            let mut filesystem = StorageBudgetFilesystemProbe {
-                filesystem_id: "dev:1".to_owned(),
-                path: PathBuf::from("/tmp/storage"),
-                total_bytes: 10_000,
-                available_bytes: 1_000,
-                managed_bytes: 100,
-                components: NexusStorageBudgetComponent::ORDER.to_vec(),
-                managed_roots: Vec::new(),
-                derived_budget_bytes: None,
-            };
-            assert_eq!(
-                operator_explicit_budget_shortfall(&config, &filesystem),
-                Some(2_000)
-            );
-
-            filesystem.available_bytes = 1_900;
-            assert_eq!(
-                operator_explicit_budget_shortfall(&config, &filesystem),
-                None
-            );
-            Ok(())
-        }
-
-        #[test]
-        fn normalize_windows_volume_mount_point_adds_trailing_separator() {
-            assert_eq!(
-                normalize_windows_volume_mount_point(r"C:\nexus\storage"),
-                r"C:\nexus\storage\"
-            );
-            assert_eq!(
-                normalize_windows_volume_mount_point(
-                    r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
-                ),
-                r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
-            );
-        }
-
-        #[test]
-        fn normalize_windows_volume_identity_uses_lowercased_guid_path() {
-            assert_eq!(
-                normalize_windows_volume_identity(
-                    r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
-                ),
-                r"volume:\\?\volume{abcdef12-3456-7890-abcd-ef1234567890}\"
-            );
-        }
-
-        #[test]
-        fn windows_string_from_wide_buffer_stops_at_first_nul() {
-            let buffer: Vec<u16> = "Volume\0ignored".encode_utf16().collect();
-            assert_eq!(
-                windows_string_from_wide_buffer(&buffer).as_deref(),
-                Some("Volume")
-            );
-            assert_eq!(windows_string_from_wide_buffer(&[]), None);
-        }
-
-        #[test]
-        fn validate_config_io_flags_address_conflict() -> eyre::Result<()> {
-            let (config, _dir, _config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    if let Some(genesis_table) =
-                        table.get_mut("genesis").and_then(toml::Value::as_table_mut)
-                    {
-                        genesis_table.remove("file");
-                    }
-                    iroha_config::base::toml::Writer::new(table).write(
-                        ["torii", "address"],
-                        socket_addr!(127.0.0.1:1337).to_literal(),
-                    );
-                })?;
-
-            let mut emitter = Emitter::new();
-            validate_config_io(&mut emitter, &config);
-            let report = emitter
-                .into_result()
-                .expect_err("expected validation errors");
-            let report_text = format!("{report:#}");
-            assert_contains!(
-                report_text,
-                "Torii and Network addresses are the same, but should be different"
-            );
-
-            Ok(())
-        }
-
-        #[test]
-        fn check_config_and_runtime_enforce_frame_cap_boundary() -> eyre::Result<()> {
-            let (exact_config, _exact_dir, _exact_config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table).write(
-                        ["network", "max_frame_bytes"],
-                        i64::try_from(iroha_p2p::MAX_ENCRYPTED_FRAME_BYTES)
-                            .expect("runtime frame limit fits i64"),
-                    );
-                })?;
-            validate_network_frame_runtime_limit(&exact_config)
-                .expect("the exact deterministic runtime frame limit must be accepted");
-
-            let (config, _dir, _config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table).write(
-                        ["network", "max_frame_bytes"],
-                        i64::try_from(iroha_p2p::MAX_ENCRYPTED_FRAME_BYTES + 1)
-                            .expect("first rejected frame cap fits i64"),
-                    );
-                })?;
-            assert_eq!(
-                config.network.max_frame_bytes,
-                iroha_p2p::MAX_ENCRYPTED_FRAME_BYTES + 1
-            );
-
-            let check_report = validate_config_for_check(&config, None, false)
-                .expect_err("--check-config must reject an unrepresentable frame cap");
-            assert_contains!(
-                format!("{check_report:#}"),
-                "exceeds the deterministic encrypted P2P runtime limit of 2147483643 bytes"
-            );
-
-            let runtime_report = validate_config(&config)
-                .expect_err("runtime preflight must reject before binding sockets");
-            assert_contains!(
-                format!("{runtime_report:#}"),
-                "exceeds the deterministic encrypted P2P runtime limit of 2147483643 bytes"
-            );
-
-            let encrypted_cap = iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get();
-            let plaintext_ceiling = iroha_p2p::frame_plaintext_cap(encrypted_cap);
-            let (topic_config, _topic_dir, _topic_config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table).write(
-                        ["network", "max_frame_bytes_consensus"],
-                        i64::try_from(plaintext_ceiling + 1)
-                            .expect("first rejected topic cap fits i64"),
-                    );
-                })?;
-
-            let check_report = validate_config_for_check(&topic_config, None, false)
-                .expect_err("--check-config must reject a topic cap above plaintext capacity");
-            let expected = format!(
-                "network.max_frame_bytes_consensus ({}) exceeds the AEAD-specific plaintext ceiling of {plaintext_ceiling} bytes derived from network.max_frame_bytes ({encrypted_cap})",
-                plaintext_ceiling + 1
-            );
-            assert_contains!(format!("{check_report:#}"), &expected);
-
-            let runtime_report = validate_config(&topic_config)
-                .expect_err("runtime preflight must reject the same invalid topic cap");
-            assert_contains!(
-                format!("{runtime_report:#}"),
-                "network.max_frame_bytes_consensus"
-            );
-
-            Ok(())
-        }
-
-        #[test]
-        fn check_config_enforces_embedded_soracloud_runtime_feature() -> eyre::Result<()> {
-            let (config, _dir, _config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table)
-                        .write(["soracloud_runtime", "production_mode"], true)
-                        .write(["soracloud_runtime", "inrou", "enabled"], true)
-                        .write(["soracloud_runtime", "inrou", "proxy_only"], false)
-                        .write(["soracloud_runtime", "egress", "default_allow"], false)
-                        .write(
-                            ["soracloud_runtime", "egress", "allowed_hosts"],
-                            Vec::<String>::new(),
-                        )
-                        .write(["soracloud_runtime", "egress", "rate_per_minute"], 60_i64)
-                        .write(
-                            ["soracloud_runtime", "egress", "max_bytes_per_minute"],
-                            1_048_576_i64,
-                        )
-                        .write(
-                            ["soracloud_runtime", "hf", "allow_inference_bridge_fallback"],
-                            false,
-                        );
-                })?;
-            let result = validate_config_for_check(&config, None, false);
-
-            #[cfg(feature = "embedded-soracloud-runtime")]
-            result.expect("featured irohad must accept Soracloud production mode");
-
-            #[cfg(not(feature = "embedded-soracloud-runtime"))]
-            {
-                let report = result.expect_err(
-                    "--check-config must reject production mode without the embedded runtime",
-                );
-                assert_contains!(
-                    format!("{report:#}"),
-                    "`soracloud_runtime.production_mode = true` requires building irohad with the `embedded-soracloud-runtime` feature"
-                );
-            }
-
-            Ok(())
-        }
-
-        #[test]
-        fn stack_budget_mismatch_warns_but_allows_config() -> eyre::Result<()> {
-            let (config, _dir, _config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    let mut cpu_balanced = toml::Table::new();
-                    cpu_balanced.insert("max_cycles".to_owned(), toml::Value::Integer(10_000_000));
-                    cpu_balanced.insert(
-                        "max_memory_bytes".to_owned(),
-                        toml::Value::Integer(256 * 1024 * 1024),
-                    );
-                    cpu_balanced.insert(
-                        "max_stack_bytes".to_owned(),
-                        toml::Value::Integer(8 * 1024 * 1024),
-                    );
-                    cpu_balanced.insert(
-                        "max_io_bytes".to_owned(),
-                        toml::Value::Integer(24 * 1024 * 1024),
-                    );
-                    cpu_balanced.insert(
-                        "max_egress_bytes".to_owned(),
-                        toml::Value::Integer(12 * 1024 * 1024),
-                    );
-                    cpu_balanced.insert("allow_gpu_hints".to_owned(), toml::Value::Boolean(true));
-                    cpu_balanced.insert("allow_wasi".to_owned(), toml::Value::Boolean(true));
-
-                    let mut profiles = toml::Table::new();
-                    profiles.insert("cpu-balanced".to_owned(), toml::Value::Table(cpu_balanced));
-
-                    iroha_config::base::toml::Writer::new(table)
-                        .write(["compute", "enabled"], true)
-                        .write(
-                            ["compute", "resource_profiles"],
-                            toml::Value::Table(profiles),
-                        )
-                        .write(["compute", "default_resource_profile"], "cpu-balanced")
-                        .write(["ivm", "memory_budget_profile"], "cpu-balanced")
-                        .write(["concurrency", "guest_stack_bytes"], 4_i64 * 1024 * 1024);
-                })?;
-
-            validate_config(&config).map_err(|report| eyre::eyre!("{report:?}"))?;
-
-            Ok(())
-        }
-
-        #[test]
-        fn validator_requires_confidential_enabled() -> eyre::Result<()> {
-            let (config, _dir, _config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table)
-                        .write(["sumeragi", "role"], "validator")
-                        .write(["confidential", "enabled"], false)
-                        .write(["confidential", "assume_valid"], false);
-                })?;
-
-            let report = validate_config(&config).unwrap_err();
-            assert_contains!(
-                format!("{report:#}"),
-                "validator nodes must enable confidential verification"
-            );
-
-            Ok(())
-        }
-
-        #[test]
-        fn validate_config_runtime_rejects_validator_confidential_disabled() -> eyre::Result<()> {
-            let (config, _dir, _config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table)
-                        .write(["sumeragi", "role"], "validator")
-                        .write(["confidential", "enabled"], false)
-                        .write(["confidential", "assume_valid"], false);
-                })?;
-
-            let mut emitter = Emitter::new();
-            validate_config_runtime(&mut emitter, &config);
-            let report = emitter
-                .into_result()
-                .expect_err("expected validation errors");
-            assert_contains!(
-                format!("{report:#}"),
-                "validator nodes must enable confidential verification"
-            );
-
-            Ok(())
-        }
-
-        #[test]
-        fn validate_config_runtime_rejects_sorafs_storage_without_compliance() -> eyre::Result<()> {
-            let (mut config, _dir, _config_path) = load_config_with_overrides(|_, _| {})?;
-            config.torii.sorafs_storage.enabled = true;
-            config.torii.sorafs_gateway.compliance = None;
-
-            let mut emitter = Emitter::new();
-            validate_config_runtime(&mut emitter, &config);
-            let report = emitter
-                .into_result()
-                .expect_err("ungoverned embedded storage must fail before startup");
-            assert_contains!(
-                format!("{report:#}"),
-                "sorafs.storage.enabled requires the governed sorafs.gateway.compliance controller"
-            );
-
-            Ok(())
-        }
-
-        #[test]
-        fn validate_config_runtime_rejects_gateway_automation_without_storage() -> eyre::Result<()>
-        {
-            let (mut config, _dir, _config_path) = load_config_with_overrides(|_, _| {})?;
-            config.torii.sorafs_storage.enabled = false;
-            config.torii.sorafs_gateway.acme.enabled = true;
-
-            let mut emitter = Emitter::new();
-            validate_config_runtime(&mut emitter, &config);
-            let report = emitter
-                .into_result()
-                .expect_err("gateway automation without storage must fail before startup");
-            assert_contains!(
-                format!("{report:#}"),
-                "SoraFS gateway ACME/compliance configuration requires sorafs.storage.enabled"
-            );
-
-            Ok(())
-        }
-
-        #[test]
-        fn validator_cannot_assume_valid_confidential() -> eyre::Result<()> {
-            let (config, _dir, _config_path) =
-                load_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table)
-                        .write(["sumeragi", "role"], "validator")
-                        .write(["confidential", "enabled"], true)
-                        .write(["confidential", "assume_valid"], true);
-                })?;
-
-            let report = validate_config(&config).unwrap_err();
-            assert_contains!(
-                format!("{report:#}"),
-                "validator nodes cannot enable confidential observer mode"
-            );
-
-            Ok(())
-        }
+        include!("main/runtime_budget_and_config_tests.rs");
     }
 
     include!("main/startup_tail_tests.rs");

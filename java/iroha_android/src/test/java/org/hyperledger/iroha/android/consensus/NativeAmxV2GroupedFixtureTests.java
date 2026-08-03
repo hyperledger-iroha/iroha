@@ -23,6 +23,8 @@ import java.util.Set;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplication;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplicationState;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.sdk.consensus.NativeAmxV2;
 import org.junit.Test;
 
@@ -30,6 +32,8 @@ import org.junit.Test;
 public final class NativeAmxV2GroupedFixtureTests {
   private static final BigInteger U64_MAX =
       BigInteger.ONE.shiftLeft(Long.SIZE).subtract(BigInteger.ONE);
+  private static final byte[] MERKLE_LEAF_NODE_DOMAIN =
+      "iroha:merkle:leaf:v1\0".getBytes(StandardCharsets.UTF_8);
 
   @Test
   public void rustOwnedGroupedGoldenIsConsumable() throws Exception {
@@ -127,6 +131,7 @@ public final class NativeAmxV2GroupedFixtureTests {
                 "coherent_stale_settlement_hash",
                 "coherent_duplicate_validator_set",
                 "coherent_over_quorum_requirement",
+                "manifest_leaf_hash_tampering",
                 "non_canonical_validator_peer_id",
                 "execution_commitment_merge_carrier_wrong_version",
                 "execution_commitment_missing_merge_carrier_field")));
@@ -244,21 +249,22 @@ public final class NativeAmxV2GroupedFixtureTests {
     require(new BigInteger(mergeCarrierVersion.toString()).equals(BigInteger.ONE));
     require(mergeCarrier.get("entry_hash") instanceof String);
     new NativeAmxV2.ConsensusHash(string(mergeCarrier, "entry_hash"));
+    final long manifestCount = number(execution, "native_amx_application_manifest_count");
     require(
-        number(execution, "native_amx_application_manifest_count") == artifacts.size()
-            && artifacts.size() == 1);
+        manifestCount == artifacts.size() && artifacts.size() == 1);
     final Map<String, Object> artifact = object(artifacts.get(0));
     final Map<String, Object> leaf = object(artifact, "leaf");
     final Map<String, Object> proof = object(artifact, "proof");
     require(number(artifact, "version") == 1L && number(leaf, "version") == 1L);
     require(number(artifact, "leaf_index") == 0L && number(proof, "leaf_index") == 0L);
     require(array(proof, "audit_path").isEmpty());
-    require(number(artifact, "manifest_leaf_count") == 1L);
+    require(number(artifact, "manifest_leaf_count") == manifestCount);
+    final String expectedManifestRoot =
+        applicationManifestSingletonRoot(string(artifact, "leaf_hash"));
     require(
-        Objects.equals(
-            artifact.get("manifest_root"),
-            execution.get("native_amx_application_manifest_root")));
-    require(Objects.equals(artifact.get("manifest_root"), artifact.get("leaf_hash")));
+        expectedManifestRoot.equals(string(artifact, "manifest_root"))
+            && expectedManifestRoot.equals(
+                string(execution, "native_amx_application_manifest_root")));
     require(
         Objects.equals(
             leaf.get("executed_block_wire_hash"), execution.get("executed_block_wire_hash")));
@@ -458,6 +464,22 @@ public final class NativeAmxV2GroupedFixtureTests {
       tokens.add(token.replace("~1", "/").replace("~0", "~"));
     }
     return tokens;
+  }
+
+  private static String applicationManifestSingletonRoot(final String leafHash) {
+    final byte[] leafHashBytes = HashLiteral.decode(leafHash);
+    require(leafHash.equals(HashLiteral.canonicalize(leafHashBytes)));
+    final byte[] preimage =
+        Arrays.copyOf(
+            MERKLE_LEAF_NODE_DOMAIN,
+            MERKLE_LEAF_NODE_DOMAIN.length + leafHashBytes.length);
+    System.arraycopy(
+        leafHashBytes,
+        0,
+        preimage,
+        MERKLE_LEAF_NODE_DOMAIN.length,
+        leafHashBytes.length);
+    return HashLiteral.canonicalize(IrohaHash.prehash(preimage));
   }
 
   @SuppressWarnings("unchecked")

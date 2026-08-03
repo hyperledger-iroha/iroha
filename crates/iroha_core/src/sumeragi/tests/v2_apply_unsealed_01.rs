@@ -407,7 +407,7 @@ v2_apply_test!(
             Hash::new(fixture.context.chain_id.clone().into_inner().as_bytes()),
         )
         .expect("authenticate complete merge group before State membership preflight");
-        let error = finalize_certified_merge_reservations(
+        let error = finalize_certified_merge_reservations_for_test(
             fixture.state.as_ref(),
             &queue,
             &entry,
@@ -437,7 +437,7 @@ v2_apply_test!(
         )
         .expect("remint exact authenticated cleanup authority for retry");
         assert_eq!(
-            finalize_certified_merge_reservations(
+            finalize_certified_merge_reservations_for_test(
                 fixture.state.as_ref(),
                 &queue,
                 &entry,
@@ -554,7 +554,7 @@ v2_apply_test!(
         .expect("authenticate both autonomous cleanup groups");
         assert_eq!(applications.len(), 2);
 
-        let error = finalize_certified_merge_reservations(
+        let error = finalize_certified_merge_reservations_for_test(
             fixture.state.as_ref(),
             &queue,
             &entry,
@@ -1111,7 +1111,6 @@ v2_apply_test!(
             &first_queue,
             fixture.kura.as_ref(),
             &verified_context_for_fixture(&fixture, &fixture.context),
-            None,
         )
         .expect_err("a durable Kura carrier absent from committed State history must fail");
         assert!(matches!(
@@ -1800,7 +1799,6 @@ v2_apply_test!(
             queue.as_ref(),
             fixture.kura.as_ref(),
             &verified_context_for_fixture(&fixture, &fixture.context),
-            None,
         )
         .expect_err("partial atomic reservation group must fail closed");
         assert!(matches!(
@@ -1970,6 +1968,230 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
 });
 
 v2_apply_test!(
+    terminal_presweep_rejects_unquarantined_nonempty_queue_before_kura_inventory,
+    {
+        let fixture = ApplyFixture::new();
+        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Queue::from_config(QueueConfig::default(), events_sender);
+        let journal_dir = tempfile::tempdir().expect("terminal pre-sweep journal directory");
+        queue
+            .install_plan_journal(
+                journal_dir.path().join("queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("install terminal pre-sweep QueuePlan journal");
+        queue
+            .install_lane_reservation_journal(
+                journal_dir.path().join("lane-reservations.norito"),
+                1024 * 1024,
+            )
+            .expect("install terminal pre-sweep reservation journal");
+        let transaction = fixture
+            .body
+            .external_transactions()
+            .next()
+            .expect("fixture transaction")
+            .clone();
+        let _ = reserve_transaction_for_test_with_identity(
+            fixture.state.as_ref(),
+            &queue,
+            transaction,
+            Hash::new(b"terminal pre-sweep owner"),
+            Hash::new(b"terminal pre-sweep proposal"),
+        );
+        let before = queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture unquarantined terminal pre-sweep snapshot");
+        assert!(!before.is_empty());
+        assert!(!queue.lane_reservation_startup_reconciliation_pending());
+
+        let error = crate::sumeragi::v2_lifecycle_recovery::reconcile_pending_autonomous_lifecycle_terminal_outcomes(
+            fixture.state.as_ref(),
+            &queue,
+            fixture.kura.as_ref(),
+            &fixture.context,
+        )
+        .expect_err("terminal pre-sweep must reject an unquarantined non-empty Queue cut");
+        assert!(error.contains("published before terminal-outcome pre-sweep"));
+        assert_eq!(
+            queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("recapture rejected terminal pre-sweep snapshot"),
+            before,
+        );
+    }
+);
+
+v2_apply_test!(
+    empty_startup_plan_skips_canonical_cleanup_and_publishes_its_receipt,
+    {
+        let fixture = ApplyFixture::new();
+        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+        let journal_dir = tempfile::tempdir().expect("empty startup journal directory");
+        queue
+            .install_plan_journal(
+                journal_dir.path().join("queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("install empty startup QueuePlan journal");
+        let replay = queue
+            .install_lane_reservation_journal(
+                journal_dir.path().join("lane-reservations.norito"),
+                1024 * 1024,
+            )
+            .expect("install empty startup reservation journal");
+        assert_eq!(replay, Default::default());
+        assert_eq!(
+            queue
+                .replay_plan_journal(fixture.state.as_ref())
+                .expect("replay empty startup QueuePlan journal"),
+            Default::default(),
+        );
+        assert!(
+            queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("capture empty startup snapshot")
+                .is_empty(),
+        );
+        assert!(!queue.lane_reservation_startup_reconciliation_pending());
+
+        let planning = plan_lane_reservation_ownership(
+            fixture.state.as_ref(),
+            queue.as_ref(),
+            fixture.kura.as_ref(),
+            &verified_context_for_fixture(&fixture, &fixture.context),
+            None,
+        )
+        .expect("plan empty startup ownership cut");
+        let LaneReservationReconciliationPlanning::Ready(plan) = planning else {
+            panic!("empty startup ownership cut must be immediately ready");
+        };
+        assert_eq!(
+            apply_lane_reservation_reconciliation_plan(
+                fixture.state.as_ref(),
+                queue.as_ref(),
+                fixture.kura.as_ref(),
+                plan,
+            )
+            .expect("apply empty startup ownership cut"),
+            LaneReservationReconciliationSummary::default(),
+        );
+        assert!(!queue.lane_reservation_startup_reconciliation_pending());
+    }
+);
+
+v2_apply_test!(
+    deferred_canonical_carrier_owned_and_absent_groups_complete_before_gate_publication,
+    {
+        let recovery = deferred_canonical_carrier_startup_fixture();
+        let summary = apply_lane_reservation_reconciliation_plan(
+            recovery.fixture.state.as_ref(),
+            recovery.queue.as_ref(),
+            recovery.fixture.kura.as_ref(),
+            recovery.plan,
+        )
+        .expect("apply Queue-owned A and terminalize absent sibling B");
+        assert_eq!(summary.recovered, 1);
+        assert_eq!(summary.finalized_committed, 1);
+        assert!(
+            recovery
+                .queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("read completed deferred carrier Queue snapshot")
+                .is_empty()
+        );
+        assert!(
+            !recovery
+                .queue
+                .lane_reservation_startup_reconciliation_pending(),
+            "Queue publication opens only after direct A+B Complete proof",
+        );
+        let stages = recovery
+            .fixture
+            .kura
+            .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
+                Hash::new(
+                    recovery
+                        .fixture
+                        .context
+                        .chain_id
+                        .clone()
+                        .into_inner()
+                        .as_bytes(),
+                ),
+                &recovery.expected_groups,
+            )
+            .expect("prove both deferred carrier outcomes Complete");
+        assert!(stages.iter().all(|stage| {
+            stage.stage()
+                == crate::kura::AutonomousLifecycleTerminalOutcomeDurableStage::Complete
+        }));
+    }
+);
+
+v2_apply_test!(
+    deferred_canonical_carrier_missing_after_queue_cleanup_keeps_startup_gate_closed,
+    {
+        let recovery = deferred_canonical_carrier_startup_fixture();
+        let missing_path = recovery.outcome_paths[1].clone();
+        crate::sumeragi::v2_lifecycle_recovery::install_deferred_terminal_stage_proof_hook_for_test(
+            move || {
+                std::fs::remove_file(&missing_path)
+                    .expect("delete B only after normal Queue cleanup succeeds");
+            },
+        );
+        let error = apply_lane_reservation_reconciliation_plan(
+            recovery.fixture.state.as_ref(),
+            recovery.queue.as_ref(),
+            recovery.fixture.kura.as_ref(),
+            recovery.plan,
+        )
+        .expect_err("missing post-handoff B must block final receipt publication");
+        assert!(matches!(
+            error,
+            V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization { ref detail }
+                if detail.contains("deferred terminal stage proof failed")
+        ));
+        assert!(
+            recovery
+                .queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("read Queue after injected terminal proof loss")
+                .is_empty(),
+            "the injected cut must occur after Queue mutation succeeds",
+        );
+        assert!(
+            recovery
+                .queue
+                .lane_reservation_startup_reconciliation_pending(),
+            "missing exact terminal evidence must keep startup publication closed",
+        );
+        assert!(
+            recovery
+                .fixture
+                .kura
+                .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
+                    Hash::new(
+                        recovery
+                            .fixture
+                            .context
+                            .chain_id
+                            .clone()
+                            .into_inner()
+                            .as_bytes(),
+                    ),
+                    &recovery.expected_groups,
+                )
+                .is_err(),
+            "the final exact stage proof must remain fail-closed after B disappears",
+        );
+    }
+);
+
+v2_apply_test!(
     finalized_hash_only_carrier_plans_recovery_before_queue_mutation,
     {
         let fixture = ApplyFixture::new();
@@ -2114,8 +2336,13 @@ v2_apply_test!(
             panic!("exact recovered body must make the mutation plan ready");
         };
         assert!(queue.lane_reservation_startup_reconciliation_pending());
-        apply_lane_reservation_reconciliation_plan(queue.as_ref(), fixture.kura.as_ref(), plan)
-            .expect("apply only the fully ready reconciliation plan");
+        apply_lane_reservation_reconciliation_plan(
+            fixture.state.as_ref(),
+            queue.as_ref(),
+            fixture.kura.as_ref(),
+            plan,
+        )
+        .expect("apply only the fully ready reconciliation plan");
         assert!(
             !queue.lane_reservation_startup_reconciliation_pending(),
             "Queue publication opens only after recovered evidence is replanned and applied"
@@ -2560,9 +2787,13 @@ v2_apply_test!(
         fixture
             .kura
             .reset_historical_autonomous_recovery_inventory_scans_for_test();
-        let summary =
-            apply_lane_reservation_reconciliation_plan(queue.as_ref(), fixture.kura.as_ref(), plan)
-                .expect("publish historical reservation reconciliation");
+        let summary = apply_lane_reservation_reconciliation_plan(
+            fixture.state.as_ref(),
+            queue.as_ref(),
+            fixture.kura.as_ref(),
+            plan,
+        )
+        .expect("publish historical reservation reconciliation");
         assert_eq!(
             fixture
                 .kura

@@ -12,7 +12,7 @@ Use Mochi as the local Iroha devnet launcher and MCP bridge.
 1. Start the sandbox from the target workspace:
    - `scripts/mochi_local_sandbox.sh up`
    - Use `MOCHI_WORKSPACE_ROOT=/path/to/app` when the current shell is not already in the app workspace.
-   - Use `MOCHI_PROFILE=four-peer-bft` when the user wants the four-validator rehearsal instead of the default `single-peer`.
+   - The default `four-peer-bft` profile launches the smallest valid validator committee.
 2. Confirm the sandbox is healthy:
    - `scripts/mochi_local_sandbox.sh status`
    - Healthy means `status: ready`, `ready: true`, and `mcp_ready: true`.
@@ -38,7 +38,7 @@ Use Mochi as the local Iroha devnet launcher and MCP bridge.
    - `<workspace>/.mochi/sandbox/<profile>/session.json` when it exists
    - `<workspace>/.mochi/sandbox/<profile>/serve.pid` when `status` reports `stale-session`
 7. If readiness smoke fails, treat `serve.log` as authoritative. The smoke path updates metadata on the existing `wonderland.universal` domain and confirms commit through block/event streams plus HTTP transaction-status fallback.
-8. If the user wants a custom non-preset profile, prefer the GUI or direct `mochi sandbox serve` flow instead of stretching the helper script beyond `single-peer` and `four-peer-bft`.
+8. If the user wants a custom non-preset profile, prefer the GUI or direct `mochi sandbox serve` flow instead of stretching the helper script beyond `four-peer-bft`. Custom peer counts must be exact 3f+1 committees (4 or 7 in Mochi).
 
 ## Response Pattern
 

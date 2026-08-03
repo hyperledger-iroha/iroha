@@ -3562,6 +3562,26 @@ fn optional_json_string(
     }
 }
 
+fn required_optional_json_string(
+    map: &JsonMap,
+    field: &str,
+) -> Result<Option<String>, GovernanceDagServiceError> {
+    match map.get(field) {
+        Some(JsonValue::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|value| Some(value.to_owned()))
+            .ok_or_else(|| {
+                GovernanceDagServiceError::Source(format!(
+                    "runtime index `{field}` is not a string or null"
+                ))
+            }),
+        None => Err(GovernanceDagServiceError::Source(format!(
+            "runtime index is missing `{field}`"
+        ))),
+    }
+}
+
 fn canonical_hex_vec(
     value: &str,
     expected_bytes: usize,
@@ -3846,6 +3866,26 @@ fn load_source_snapshot(
         if required_json_string(entry, "payload_kind")? != kind {
             return Err(GovernanceDagServiceError::Source(format!(
                 "runtime index block {position} payload kind is invalid"
+            )));
+        }
+        let indexed_submission_account_digest =
+            required_optional_json_string(entry, "submission_publisher_account_digest_hex")?;
+        let indexed_submission_origin = required_optional_json_string(entry, "submission_origin")?;
+        let signed_submission_account_digest = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| hex::encode(provenance.publisher_account_digest));
+        let signed_submission_origin = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| provenance.origin.label().to_owned());
+        if indexed_submission_account_digest != signed_submission_account_digest
+            || indexed_submission_origin != signed_submission_origin
+        {
+            return Err(GovernanceDagServiceError::Source(format!(
+                "runtime index block {position} submission provenance does not match its signed governance node"
             )));
         }
         let digest = blake3_array(&bytes);
@@ -6547,7 +6587,26 @@ fn mirror_index_value(
     let mut by_node_cid = JsonMap::new();
     let mut by_digest = JsonMap::new();
     let mut by_kind_positions = BTreeMap::<String, Vec<JsonValue>>::new();
+    let source_by_sequence = source
+        .blocks
+        .iter()
+        .map(|source_block| (source_block.block.sequence, source_block))
+        .collect::<BTreeMap<_, _>>();
     for (position, block) in blocks.iter().enumerate() {
+        let source_block = source_by_sequence.get(&block.sequence).ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "published mirror block has no signed source block".to_owned(),
+            )
+        })?;
+        if source_block.block.block_cid != block.governance_block_cid
+            || source_block.block.node.node_cid != block.governance_node_cid
+            || source_block.encoded_blake3 != block.encoded_blake3
+            || source_block.payload_kind != block.payload_kind
+        {
+            return Err(GovernanceDagServiceError::State(
+                "published mirror block does not match its signed source block".to_owned(),
+            ));
+        }
         let block_cid_hex = hex::encode(&block.governance_block_cid);
         let node_cid_hex = hex::encode(&block.governance_node_cid);
         let digest_hex = hex::encode(block.encoded_blake3);
@@ -6571,6 +6630,26 @@ fn mirror_index_value(
         value.insert("blake3".into(), JsonValue::from(digest_hex));
         value.insert("encoded_len".into(), JsonValue::from(block.encoded_len));
         value.insert("ipfs_cid".into(), JsonValue::from(block.ipfs_cid.clone()));
+        value.insert(
+            "submission_publisher_account_digest_hex".into(),
+            source_block
+                .block
+                .node
+                .submission_provenance
+                .as_ref()
+                .map(|provenance| JsonValue::from(hex::encode(provenance.publisher_account_digest)))
+                .unwrap_or(JsonValue::Null),
+        );
+        value.insert(
+            "submission_origin".into(),
+            source_block
+                .block
+                .node
+                .submission_provenance
+                .as_ref()
+                .map(|provenance| JsonValue::from(provenance.origin.label()))
+                .unwrap_or(JsonValue::Null),
+        );
         block_values.push(JsonValue::Object(value));
     }
     let by_kind = by_kind_positions
@@ -7201,14 +7280,18 @@ mod tests {
         routing::{any, post},
     };
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature as IrohaSignature};
+    use norito::codec::Encode as _;
     use sorafs_manifest::{
         GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_LOG_VERSION_V1,
-        GovernanceLogNodeV1, GovernanceLogSignatureV1,
+        GovernanceDagSubmissionOriginV1, GovernanceDagSubmissionProvenanceV1, GovernanceLogNodeV1,
+        GovernanceLogSignatureV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
         deal::{
             DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
             DealSettlementStatusV1, DealSettlementV1, XorQuantity,
         },
-        governance_dag_block_cid_v1,
+        governance_dag_block_cid_v1, governance_dag_submission_account_digest_v1,
     };
     use std::{
         collections::{HashMap, VecDeque},
@@ -8710,6 +8793,7 @@ mod tests {
                 prev_cid: previous_node_cid.clone(),
                 timestamp,
                 publisher_peer_id: peer_id.clone(),
+                submission_provenance: None,
                 payload: GovernanceLogPayloadV1::DealSettlement(Box::new(settlement(
                     sequence, timestamp,
                 ))),
@@ -8786,6 +8870,110 @@ mod tests {
             head_bytes,
             blocks: source_blocks,
         }
+    }
+
+    fn appeal_finance_report(timestamp: u64) -> SoraFsAppealFinanceReportV1 {
+        SoraFsAppealFinanceReportV1 {
+            version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+            report_id: [0x42; 16],
+            case_id: "case-42".to_owned(),
+            round_id: Some("round-1".to_owned()),
+            generated_at_unix_ms: timestamp.saturating_mul(1_000),
+            appeal_finance_config_version: "baseline-v1".to_owned(),
+            evidence_bundle_digest: Some([0xA7; 32]),
+            outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
+            deposit_xor: xor("420"),
+            refund: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "refund-account".to_owned(),
+                amount_xor: xor("420"),
+            },
+            treasury: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "treasury-account".to_owned(),
+                amount_xor: xor("50"),
+            },
+            held: SoraFsAppealFinanceAccountFlowV1 {
+                account_id: "escrow-account".to_owned(),
+                amount_xor: XorQuantity::zero(),
+            },
+            panel_size: 3,
+            panel_reward_total_xor: xor("85"),
+            rewards_paid_total_xor: xor("60"),
+            rewards_forfeited_treasury_xor: xor("25"),
+            juror_payouts: vec![
+                SoraFsAppealFinanceJurorPayoutV1 {
+                    juror_id: "juror-a".to_owned(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
+                },
+                SoraFsAppealFinanceJurorPayoutV1 {
+                    juror_id: "juror-b".to_owned(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
+                },
+            ],
+            no_show_juror_ids: vec!["juror-c".to_owned()],
+        }
+    }
+
+    fn signed_finance_source(seed: u8, timestamp: u64) -> SourceSnapshot {
+        let signer = TestSigner::new(seed);
+        let account_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive canonical submission account");
+        let account = iroha_data_model::account::AccountId::new(account_key.public_key().clone());
+        let mut source = signed_source(1, seed, timestamp);
+        let source_block = source.blocks.first_mut().expect("single source block");
+        source_block.block.node.payload =
+            GovernanceLogPayloadV1::AppealFinanceReport(appeal_finance_report(timestamp));
+        source_block.block.node.submission_provenance = Some(GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: governance_dag_submission_account_digest_v1(
+                &account.encode(),
+            ),
+            origin: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+        });
+        source_block.block.node.node_cid = source_block
+            .block
+            .node
+            .recompute_node_cid()
+            .expect("derive attributed node CID");
+        source_block.block.node.publisher_signature = signer.sign(
+            &source_block
+                .block
+                .node
+                .signature_payload_bytes()
+                .expect("encode attributed node signing payload"),
+        );
+        source_block.block.block_cid = source_block
+            .block
+            .recompute_block_cid()
+            .expect("derive attributed block CID");
+        source_block.block.block_signature = signer.sign(
+            &source_block
+                .block
+                .signature_payload_bytes()
+                .expect("encode attributed block signing payload"),
+        );
+        source_block
+            .block
+            .validate()
+            .expect("attributed source block validates");
+        source_block.bytes =
+            norito::to_bytes(&source_block.block).expect("encode attributed source block");
+        source_block.encoded_blake3 = blake3_array(&source_block.bytes);
+        source_block.payload_kind = "appeal_finance_report".to_owned();
+
+        source.head.head_block_cid = source_block.block.block_cid.clone();
+        source.head.head_signature = signer.sign(
+            &source
+                .head
+                .signature_payload_bytes()
+                .expect("encode attributed head signing payload"),
+        );
+        validate_governance_dag_head_against_chain_v1(&source.head, &[source_block.block.clone()])
+            .expect("attributed source head validates");
+        source.head_bytes = norito::to_bytes(&source.head).expect("encode attributed source head");
+        source
     }
 
     fn test_runtime_config(source: &SourceSnapshot, root: &Path) -> RuntimeConfig {
@@ -10092,6 +10280,69 @@ listen_addr = "127.0.0.1:0"
     }
 
     #[test]
+    fn mirror_index_exposes_only_signed_submission_provenance() {
+        let source = signed_finance_source(0x39, 1_800_000_000);
+        let checkpoint = checkpoint_from_source(&source);
+        let mirror = mirror_index_value(
+            &source,
+            &checkpoint.mirror_blocks,
+            &checkpoint.archive_head,
+            checkpoint.generation,
+            &checkpoint.head_ipfs_cid,
+            &checkpoint.public_head_token,
+            checkpoint.published_at_unix,
+        )
+        .expect("build attributed mirror index");
+        let entry = mirror
+            .get("blocks")
+            .and_then(JsonValue::as_array)
+            .and_then(|blocks| blocks.first())
+            .expect("attributed mirror block");
+        let signed = source.blocks[0]
+            .block
+            .node
+            .submission_provenance
+            .as_ref()
+            .expect("signed submission provenance");
+        assert_eq!(
+            entry
+                .get("submission_publisher_account_digest_hex")
+                .and_then(JsonValue::as_str),
+            Some(hex::encode(signed.publisher_account_digest).as_str())
+        );
+        assert_eq!(
+            entry.get("submission_origin").and_then(JsonValue::as_str),
+            Some(signed.origin.label())
+        );
+
+        let internal_source = signed_source(1, 0x38, 1_800_000_000);
+        let internal_checkpoint = checkpoint_from_source(&internal_source);
+        let internal_mirror = mirror_index_value(
+            &internal_source,
+            &internal_checkpoint.mirror_blocks,
+            &internal_checkpoint.archive_head,
+            internal_checkpoint.generation,
+            &internal_checkpoint.head_ipfs_cid,
+            &internal_checkpoint.public_head_token,
+            internal_checkpoint.published_at_unix,
+        )
+        .expect("build internal-producer mirror index");
+        let internal_entry = internal_mirror
+            .get("blocks")
+            .and_then(JsonValue::as_array)
+            .and_then(|blocks| blocks.first())
+            .expect("internal mirror block");
+        assert_eq!(
+            internal_entry.get("submission_publisher_account_digest_hex"),
+            Some(&JsonValue::Null)
+        );
+        assert_eq!(
+            internal_entry.get("submission_origin"),
+            Some(&JsonValue::Null)
+        );
+    }
+
+    #[test]
     fn mirror_file_rejects_truncation_metadata_drift_and_recovers_when_missing() {
         let dir = secure_temp_dir();
         let source = signed_source(2, 0x3a, 1_800_000_000);
@@ -10165,434 +10416,5 @@ listen_addr = "127.0.0.1:0"
         }
     }
 
-    #[test]
-    fn durable_restart_state_preserves_every_publish_phase() {
-        let source = signed_source(2, 0x3b, 1_800_000_000);
-        let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
-        let store = test_checkpoint_store(provider);
-        let mut intent = intent_from_source(&source);
-        for block in &mut intent.blocks {
-            block.ipfs_cid = None;
-        }
-        intent.head_ipfs_cid = None;
-        let mut intent_revision =
-            save_publish_intent(&store, None, &intent).expect("persist prepared intent");
-        assert_eq!(
-            load_publish_intent(&store)
-                .expect("reload prepared intent")
-                .0
-                .expect("prepared intent exists")
-                .blocks
-                .iter()
-                .filter(|block| block.ipfs_cid.is_some())
-                .count(),
-            0
-        );
-
-        intent.blocks[0].ipfs_cid = Some(TEST_CID_BLOCK.to_owned());
-        intent_revision = save_publish_intent(&store, Some(intent_revision), &intent)
-            .expect("persist partial pins");
-        assert_eq!(
-            load_publish_intent(&store)
-                .expect("reload partial pins")
-                .0
-                .expect("partial intent exists")
-                .blocks[0]
-                .ipfs_cid
-                .as_deref(),
-            Some(TEST_CID_BLOCK)
-        );
-
-        intent.blocks[1].ipfs_cid = Some(TEST_CID_PAYLOAD.to_owned());
-        intent.head_ipfs_cid = Some(TEST_CID_HEAD.to_owned());
-        intent_revision =
-            save_publish_intent(&store, Some(intent_revision), &intent).expect("persist head pin");
-        let loaded = load_publish_intent(&store)
-            .expect("reload head pin")
-            .0
-            .expect("head intent exists");
-        assert_eq!(loaded.head_ipfs_cid.as_deref(), Some(TEST_CID_HEAD));
-
-        let target = PublicHead::Present {
-            bytes: intent.target_head_bytes.clone(),
-            token: "\"target\"".to_owned(),
-        };
-        assert_eq!(
-            public_head_digest(&target),
-            Some(intent.target_head_blake3),
-            "restart recognizes a public head already at the durable target"
-        );
-
-        let checkpoint = checkpoint_from_source(&source);
-        save_checkpoint(&store, None, &checkpoint).expect("persist checkpoint before cleanup");
-        assert!(
-            load_checkpoint(&store)
-                .expect("reload checkpoint")
-                .0
-                .is_some()
-        );
-        assert!(
-            load_publish_intent(&store)
-                .expect("reload stale completed intent")
-                .0
-                .is_some()
-        );
-        delete_publish_intent(&store, Some(intent_revision))
-            .expect("restart removes completed intent");
-        assert!(
-            load_publish_intent(&store)
-                .expect("intent remains absent")
-                .0
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn metrics_expose_exact_values_and_payload_kind_counts() {
-        let mut block = JsonMap::new();
-        block.insert("payload_kind".into(), JsonValue::from("deal_settlement"));
-        let mut mirror = JsonMap::new();
-        mirror.insert(
-            "blocks".into(),
-            JsonValue::Array(vec![
-                JsonValue::Object(block.clone()),
-                JsonValue::Object(block),
-            ]),
-        );
-        let state = ApiState(Arc::new(RwLock::new(ApiSnapshot {
-            mirror: Some(JsonValue::Object(mirror)),
-            metrics: ServiceMetrics {
-                publish_success_total: 2,
-                publish_failure_total: 3,
-                published_bytes_total: 5,
-                last_publish_timestamp_seconds: 7,
-                backlog: 11,
-                head_age_seconds: 13,
-                ipfs_pin_lag_seconds: 17,
-                ipns_update_success_total: 19,
-                ipns_update_failure_total: 23,
-                last_ipns_update_timestamp_seconds: 29,
-                validation_failure_total: 31,
-                mirror_drift: 37,
-            },
-            ..ApiSnapshot::default()
-        })));
-        let response = metrics_handler(State(state)).await;
-        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
-            .await
-            .expect("read metrics body");
-        let body = std::str::from_utf8(&body).expect("metrics are UTF-8");
-        for expected in [
-            "result=\"success\"} 2",
-            "result=\"failure\"} 3",
-            "published_bytes_total{sink=\"ipfs\"} 5",
-            "last_ipns_update_timestamp_seconds 29",
-            "validation_failure_total 31",
-            "mirror_drift 37",
-            "blocks{payload_kind=\"deal_settlement\"} 2",
-        ] {
-            assert!(body.contains(expected), "missing metric row: {expected}");
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "requires SORAFS_RUN_KUBO_INTEGRATION=1 and a local Kubo binary"]
-    async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
-        let kubo = KuboHarness::start().await;
-        let endpoint = kubo.endpoint();
-        assert_kubo_has_no_swarm_peers(&endpoint).await;
-        let ipns_name = kubo_key_generate(&endpoint, KUBO_IPNS_KEY_ALIAS).await;
-
-        let direct_payload = b"sorafs-governance-dag-real-kubo-integration-v1";
-        let direct_cid = ipfs_add_verified(
-            &endpoint,
-            "direct-integration-object.to",
-            direct_payload,
-            1024 * 1024,
-            1024 * 1024,
-        )
-        .await
-        .expect("real Kubo add/pin/ls/cat roundtrip");
-        assert!(is_canonical_cid_v1(&direct_cid));
-        assert_eq!(
-            ipfs_cat(
-                &endpoint,
-                &direct_cid,
-                direct_payload.len() as u64,
-                1024 * 1024
-            )
-            .await
-            .expect("cat direct Kubo object"),
-            direct_payload
-        );
-        assert!(
-            ipfs_cat(
-                &endpoint,
-                &direct_cid,
-                direct_payload.len() as u64 - 1,
-                1024 * 1024,
-            )
-            .await
-            .is_err(),
-            "bounded cat must reject a real response larger than expected"
-        );
-        kubo_unpin(&endpoint, &direct_cid).await;
-        assert!(
-            ipfs_verify_pin(&endpoint, &direct_cid, 1024 * 1024)
-                .await
-                .is_err(),
-            "real Kubo pin/ls must expose a removed recursive pin"
-        );
-        ipfs_pin(&endpoint, &direct_cid, 1024 * 1024)
-            .await
-            .expect("restore direct object pin");
-        assert!(
-            ipfs_cat(&endpoint, TEST_CID_ATTACKER, 1024, 1024)
-                .await
-                .is_err(),
-            "unknown content-addressed bytes must fail closed"
-        );
-
-        let work = secure_temp_dir();
-        let source_dir = work.path().join("source");
-        let state_dir = work.path().join("state");
-        let checkpoint_store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
-
-        let first_timestamp = current_unix_timestamp_seconds().saturating_sub(5);
-        let mut source = signed_source(3, 0x72, first_timestamp);
-        materialize_source_snapshot(&source_dir, &mut source);
-        seed_producer_checkpoint(&checkpoint_store, &source_dir, &source);
-        let view =
-            real_kubo_service_view(&source, &source_dir, &state_dir, &kubo.api_url, &ipns_name);
-
-        let mut service = Service::from_view(
-            view.clone(),
-            test_runtime_providers(checkpoint_store.clone()),
-        )
-        .await
-        .expect("initialize G-DAG service against real Kubo");
-        service
-            .reconcile_once()
-            .await
-            .expect("publish verified source through real Kubo and IPNS");
-        let checkpoint = service
-            .checkpoint
-            .clone()
-            .expect("first reconciliation persists checkpoint");
-        assert_eq!(checkpoint.block_count, source.blocks.len() as u64);
-        assert_eq!(checkpoint.mirror_blocks.len(), source.blocks.len());
-        assert!(state_dir.join(MIRROR_INDEX_FILE).is_file());
-        assert!(
-            checkpoint_store
-                .load(GovernanceDagSealedStateSlot::PublishIntent)
-                .expect("read integration sealed intent")
-                .is_none()
-        );
-        assert!(
-            checkpoint_store
-                .load(GovernanceDagSealedStateSlot::Checkpoint)
-                .expect("read integration sealed checkpoint")
-                .is_some()
-        );
-        for (published, block) in checkpoint.mirror_blocks.iter().zip(&source.blocks) {
-            ipfs_verify_pin(&service.ipfs, &published.ipfs_cid, 1024 * 1024)
-                .await
-                .expect("real Kubo retains recursive block pin");
-            assert_eq!(
-                ipfs_cat(
-                    &service.ipfs,
-                    &published.ipfs_cid,
-                    block.bytes.len() as u64,
-                    1024 * 1024,
-                )
-                .await
-                .expect("read real Kubo block"),
-                block.bytes
-            );
-        }
-        let public = resolve_ipns_head(&service.ipfs, &ipns_name, 1024 * 1024)
-            .await
-            .expect("resolve published IPNS head");
-        assert!(matches!(
-            &public,
-            PublicHead::Present { bytes, token }
-                if bytes == &source.head_bytes && token == &checkpoint.head_ipfs_cid
-        ));
-
-        fs::remove_file(state_dir.join(MIRROR_INDEX_FILE))
-            .expect("remove mirror to exercise deterministic recovery");
-        service
-            .reconcile_once()
-            .await
-            .expect("steady-state reconciliation rebuilds missing mirror");
-        assert!(state_dir.join(MIRROR_INDEX_FILE).is_file());
-
-        kubo_unpin(&service.ipfs, &checkpoint.head_ipfs_cid).await;
-        let missing_pin = service
-            .reconcile_once()
-            .await
-            .expect_err("steady state must reject a missing real Kubo head pin");
-        assert!(matches!(missing_pin, GovernanceDagServiceError::Network(_)));
-        ipfs_pin(&service.ipfs, &checkpoint.head_ipfs_cid, 1024 * 1024)
-            .await
-            .expect("restore real Kubo head pin");
-        service
-            .reconcile_once()
-            .await
-            .expect("steady state recovers after head repin");
-
-        let checkpoint_record = checkpoint_store
-            .load(GovernanceDagSealedStateSlot::Checkpoint)
-            .expect("read sealed checkpoint")
-            .expect("sealed checkpoint exists");
-        {
-            let mut inner = checkpoint_store
-                .inner
-                .lock()
-                .expect("lock integration store");
-            let record = inner.checkpoint.as_mut().expect("checkpoint record");
-            let tamper_position = record.payload.len() / 2;
-            record.payload[tamper_position] ^= 0x80;
-        }
-        let checkpoint_error = service
-            .reconcile_once()
-            .await
-            .expect_err("authenticated checkpoint tamper must fail closed");
-        assert!(matches!(
-            checkpoint_error,
-            GovernanceDagServiceError::State(_)
-        ));
-        {
-            let mut inner = checkpoint_store
-                .inner
-                .lock()
-                .expect("lock integration store");
-            inner.checkpoint = Some(checkpoint_record);
-        }
-        service
-            .reconcile_once()
-            .await
-            .expect("restored authenticated checkpoint reconciles");
-
-        drop(service);
-        let mut restarted = Service::from_view(view, test_runtime_providers(checkpoint_store))
-            .await
-            .expect("restart G-DAG service from durable state");
-        restarted
-            .reconcile_once()
-            .await
-            .expect("restart verifies checkpoint, IPNS head, pins, and readback");
-        assert_eq!(
-            restarted
-                .checkpoint
-                .as_ref()
-                .expect("restart loaded checkpoint")
-                .generation,
-            checkpoint.generation
-        );
-        assert!(restarted.api.0.read().await.ready);
-
-        let attacker_bytes = b"concurrent-authorized-but-unexpected-ipns-head";
-        let attacker_cid = ipfs_add_verified(
-            &restarted.ipfs,
-            "attacker-head.to",
-            attacker_bytes,
-            1024 * 1024,
-            1024 * 1024,
-        )
-        .await
-        .expect("publish adversarial head bytes to real Kubo");
-        let current = resolve_ipns_head(&restarted.ipfs, &ipns_name, 1024 * 1024)
-            .await
-            .expect("read current IPNS head before adversarial movement");
-        publish_ipns_head(
-            &restarted.ipfs,
-            IpnsHeadPublishRequest {
-                name: &ipns_name,
-                key_name: KUBO_IPNS_KEY_ALIAS,
-                head_cid: &attacker_cid,
-                bytes: attacker_bytes,
-                initial: &current,
-                allow_bootstrap: false,
-                max_response_bytes: 1024 * 1024,
-            },
-        )
-        .await
-        .expect("move test IPNS name with its isolated key");
-        let moved = restarted
-            .reconcile_once()
-            .await
-            .expect_err("checkpoint reconciliation must reject unexpected IPNS movement");
-        assert!(matches!(moved, GovernanceDagServiceError::Conflict(_)));
-
-        let attacker = resolve_ipns_head(&restarted.ipfs, &ipns_name, 1024 * 1024)
-            .await
-            .expect("resolve adversarial IPNS value");
-        publish_ipns_head(
-            &restarted.ipfs,
-            IpnsHeadPublishRequest {
-                name: &ipns_name,
-                key_name: KUBO_IPNS_KEY_ALIAS,
-                head_cid: &checkpoint.head_ipfs_cid,
-                bytes: &source.head_bytes,
-                initial: &attacker,
-                allow_bootstrap: false,
-                max_response_bytes: 1024 * 1024,
-            },
-        )
-        .await
-        .expect("restore checkpointed IPNS value");
-        restarted
-            .reconcile_once()
-            .await
-            .expect("restored IPNS head returns service to steady state");
-
-        eprintln!(
-            "real Kubo G-DAG lane passed: direct_cid={direct_cid} head_cid={} ipns_name={ipns_name}",
-            checkpoint.head_ipfs_cid
-        );
-        drop(restarted);
-        kubo.shutdown();
-    }
-
-    #[test]
-    fn remote_head_validates_complete_prefix_and_rejects_checkpoint_tamper() {
-        let source = signed_source(2, 0x39, current_unix_timestamp_seconds().saturating_sub(1));
-        let dir = secure_temp_dir();
-        let config = test_runtime_config(&source, dir.path());
-        validate_remote_head(&source.head_bytes, &source, &config)
-            .expect("canonical public head binds the complete source prefix");
-
-        let signer = TestSigner::new(0x39);
-        let mut tampered = source.head.clone();
-        tampered.checkpoint_cid = Some(source.blocks[0].block.block_cid.clone());
-        tampered.head_signature = signer.sign(
-            &tampered
-                .signature_payload_bytes()
-                .expect("encode checkpoint-tampered head"),
-        );
-        let tampered_bytes = norito::to_bytes(&tampered).expect("encode checkpoint-tampered head");
-        assert!(
-            validate_remote_head(&tampered_bytes, &source, &config).is_err(),
-            "a validly signed head with a noncanonical checkpoint must fail"
-        );
-    }
-
-    #[test]
-    fn remote_head_rejects_future_timestamp() {
-        let now = current_unix_timestamp_seconds();
-        let signer = TestSigner::new(0x3c);
-        let mut source = signed_source(1, 0x3c, now);
-        source.head.generated_at = now + 120;
-        source.head.head_signature = signer.sign(
-            &source
-                .head
-                .signature_payload_bytes()
-                .expect("encode future head"),
-        );
-        source.head_bytes = norito::to_bytes(&source.head).expect("encode future head");
-        let dir = secure_temp_dir();
-        let config = test_runtime_config(&source, dir.path());
-        assert!(validate_remote_head(&source.head_bytes, &source, &config).is_err());
-    }
+    include!("governance_service/tests/restart_and_live_kubo.rs");
 }

@@ -65,6 +65,7 @@ use reqwest::Url;
 use sorafs_car::{CarBuildPlan, PersistedChunkRecord};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, CouncilSignature, ProfileId,
+    ProviderAdmissionCouncilPolicy, canonical_manifest_root_cid,
     pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
@@ -1128,6 +1129,7 @@ fn encode_alias_proof_bytes(
     expiry_epoch: u64,
     generated_at_unix: u64,
     expires_at_hint: u64,
+    council_seeds: &[[u8; 32]],
 ) -> Vec<u8> {
     let binding = AliasBindingV1 {
         alias: format!("{alias_namespace}/{alias_name}"),
@@ -1147,20 +1149,46 @@ fn encode_alias_proof_bytes(
     bundle.registry_root =
         alias_merkle_root(&bundle.binding, &bundle.merkle_path).expect("compute alias proof root");
     let digest = alias_proof_signature_digest(&bundle);
-    let council_key =
-        PrivateKey::from_bytes(Algorithm::Ed25519, &[0x33; 32]).expect("seeded council key");
-    let keypair = KeyPair::from_private_key(council_key).expect("derive council keypair");
-    let signature = checked_signature(keypair.private_key(), digest.as_ref());
-    let (_, signer_bytes) = keypair
-        .public_key()
-        .try_to_bytes()
-        .expect("fixture public key must be valid");
-    let signer: [u8; 32] = signer_bytes.try_into().expect("ed25519 pk length");
-    bundle.council_signatures.push(CouncilSignature {
-        signer,
-        signature: signature.payload().to_vec(),
-    });
+    bundle.council_signatures = council_seeds
+        .iter()
+        .map(|seed| {
+            let keypair = alias_council_keypair(seed);
+            let signature = checked_signature(keypair.private_key(), digest.as_ref());
+            let (_, signer_bytes) = keypair
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture public key must be valid");
+            CouncilSignature {
+                signer: signer_bytes.try_into().expect("ed25519 pk length"),
+                signature: signature.payload().to_vec(),
+            }
+        })
+        .collect();
+    bundle
+        .council_signatures
+        .sort_by_key(|signature| signature.signer);
     to_bytes(&bundle).expect("encode alias proof")
+}
+
+fn alias_council_keypair(seed: &[u8; 32]) -> KeyPair {
+    let private = PrivateKey::from_bytes(Algorithm::Ed25519, seed).expect("seeded council key");
+    KeyPair::from_private_key(private).expect("derive council keypair")
+}
+
+fn alias_council_policy(
+    council_seeds: &[[u8; 32]],
+    threshold: usize,
+) -> ProviderAdmissionCouncilPolicy {
+    let trusted_signers = council_seeds.iter().map(|seed| {
+        let keypair = alias_council_keypair(seed);
+        let (_, signer_bytes) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
+        signer_bytes.try_into().expect("ed25519 pk length")
+    });
+    ProviderAdmissionCouncilPolicy::new(trusted_signers, threshold)
+        .expect("valid fixture council policy")
 }
 
 fn build_ssm_bytes(
@@ -1171,7 +1199,8 @@ fn build_ssm_bytes(
     generated_at_unix: u64,
     expires_at_hint: u64,
 ) -> Vec<u8> {
-    build_ssm_bytes_with_publisher_algorithm(
+    build_ssm_bytes_with_alias_council(
+        manifest_hash,
         manifest_hash,
         car_digest,
         envelope_hash,
@@ -1179,6 +1208,7 @@ fn build_ssm_bytes(
         generated_at_unix,
         expires_at_hint,
         Algorithm::Ed25519,
+        &[[0x33; 32]],
     )
 }
 
@@ -1191,14 +1221,41 @@ fn build_ssm_bytes_with_publisher_algorithm(
     expires_at_hint: u64,
     publisher_algorithm: Algorithm,
 ) -> Vec<u8> {
+    build_ssm_bytes_with_alias_council(
+        manifest_hash,
+        manifest_hash,
+        car_digest,
+        envelope_hash,
+        segment_sequence,
+        generated_at_unix,
+        expires_at_hint,
+        publisher_algorithm,
+        &[[0x33; 32]],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_ssm_bytes_with_alias_council(
+    manifest_hash: BlobDigest,
+    alias_manifest_hash: BlobDigest,
+    car_digest: BlobDigest,
+    envelope_hash: BlobDigest,
+    segment_sequence: u64,
+    generated_at_unix: u64,
+    expires_at_hint: u64,
+    publisher_algorithm: Algorithm,
+    council_seeds: &[[u8; 32]],
+) -> Vec<u8> {
+    let manifest_cid = canonical_manifest_root_cid(*alias_manifest_hash.as_bytes());
     let alias_proof = encode_alias_proof_bytes(
         "sora",
         "docs",
-        b"cid-placeholder",
+        &manifest_cid,
         1,
         32,
         generated_at_unix,
         expires_at_hint,
+        council_seeds,
     );
     let alias_binding = ManifestAliasBinding {
         name: "docs".into(),
@@ -3627,6 +3684,48 @@ fn take_trm_entry_returns_payload_and_strips_metadata() {
     );
 }
 
+fn taikai_ssm_validation_fixture() -> (ManifestArtifacts, taikai_ingest::EnvelopeArtifacts) {
+    let mut request = sample_request();
+    request.metadata = taikai_metadata();
+    let canonical = normalize_payload(&request).expect("normalize payload");
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let metadata =
+        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
+    let rent_policy = DaRentPolicyV1::default();
+    let manifest = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &metadata,
+        &request.retention_policy,
+        1,
+        &rent_policy,
+    )
+    .expect("manifest");
+    let envelope = taikai_ingest::build_envelope(
+        &request,
+        &manifest,
+        &chunk_store,
+        canonical.as_slice(),
+        None,
+    )
+    .expect("envelope");
+    (manifest, envelope)
+}
+
+fn taikai_alias_cache_policy() -> crate::sorafs::AliasCachePolicy {
+    crate::sorafs::AliasCachePolicy::new(
+        Duration::from_secs(600),
+        Duration::from_secs(60),
+        Duration::from_secs(1_200),
+        Duration::from_secs(60),
+        Duration::from_secs(120),
+        Duration::from_secs(10_000),
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+    )
+}
+
 #[test]
 fn validate_taikai_ssm_accepts_matching_payload() {
     let mut request = sample_request();
@@ -3681,10 +3780,151 @@ fn validate_taikai_ssm_accepts_matching_payload() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect("ssm valid");
     assert_eq!(outcome.alias_label, "sora/docs");
+}
+
+#[test]
+fn validate_taikai_ssm_rejects_self_asserted_alias_council() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let attacker_ssm = build_ssm_bytes(
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+    );
+    let trusted_policy = alias_council_policy(&[[0x44; 32]], 1);
+    let (_, telemetry) = telemetry_handle_for_tests();
+
+    let err = taikai::validate_taikai_ssm(
+        &attacker_ssm,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&trusted_policy),
+        &telemetry,
+    )
+    .expect_err("self-asserted alias council must fail Taikai admission");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("not trusted"), "unexpected error: {}", err.1);
+}
+
+#[test]
+fn validate_taikai_ssm_accepts_trusted_alias_council_threshold() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let council_seeds = [[0x33; 32], [0x44; 32], [0x55; 32]];
+    let ssm = build_ssm_bytes_with_alias_council(
+        manifest.manifest_hash,
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+        Algorithm::Ed25519,
+        &council_seeds[..2],
+    );
+    let trusted_policy = alias_council_policy(&council_seeds, 2);
+    let (_, telemetry) = telemetry_handle_for_tests();
+
+    let outcome = taikai::validate_taikai_ssm(
+        &ssm,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&trusted_policy),
+        &telemetry,
+    )
+    .expect("trusted 2-of-3 alias council must authorize Taikai admission");
+
+    assert_eq!(outcome.alias_label, "sora/docs");
+}
+
+#[test]
+fn validate_taikai_ssm_rejects_alias_manifest_binding_mismatch() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let council_seeds = [[0x33; 32]];
+    let ssm = build_ssm_bytes_with_alias_council(
+        manifest.manifest_hash,
+        BlobDigest::from_hash(blake3_hash(b"different DA manifest")),
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+        Algorithm::Ed25519,
+        &council_seeds,
+    );
+    let trusted_policy = alias_council_policy(&council_seeds, 1);
+    let (_, telemetry) = telemetry_handle_for_tests();
+
+    let err = taikai::validate_taikai_ssm(
+        &ssm,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&trusted_policy),
+        &telemetry,
+    )
+    .expect_err("alias proof for another manifest must fail Taikai admission");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("does not commit to the canonical DA manifest"),
+        "unexpected error: {}",
+        err.1
+    );
+}
+
+#[test]
+fn validate_taikai_ssm_fails_closed_without_alias_council_policy() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let ssm = build_ssm_bytes(
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+    );
+    let (_, telemetry) = telemetry_handle_for_tests();
+
+    let err = taikai::validate_taikai_ssm(
+        &ssm,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        None,
+        &telemetry,
+    )
+    .expect_err("Taikai admission without a trust policy must fail closed");
+
+    assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        err.1
+            .contains("requires a configured SoraFS council trust policy"),
+        "unexpected error: {}",
+        err.1
+    );
 }
 
 #[test]
@@ -3741,6 +3981,7 @@ fn validate_taikai_ssm_rejects_manifest_mismatch() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect_err("manifest mismatch must fail");
@@ -3805,6 +4046,7 @@ fn validate_taikai_ssm_rejects_tampered_signature() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect_err("tampered signature must fail");
@@ -3873,6 +4115,7 @@ fn validate_taikai_ssm_rejects_malformed_ed25519_signature_r() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect("valid SSM should verify before mutation");
@@ -3896,6 +4139,7 @@ fn validate_taikai_ssm_rejects_malformed_ed25519_signature_r() {
             &taikai.envelope_bytes,
             taikai.telemetry.segment_sequence,
             &alias_policy,
+            Some(&alias_council_policy(&[[0x33; 32]], 1)),
             &telemetry,
         )
         .expect_err("malformed Taikai SSM signature R must fail");
@@ -3965,6 +4209,7 @@ fn validate_taikai_ssm_rejects_malformed_mldsa_signature_lengths() {
         &taikai.envelope_bytes,
         taikai.telemetry.segment_sequence,
         &alias_policy,
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
         &telemetry,
     )
     .expect("valid ML-DSA SSM should verify before mutation");
@@ -3990,6 +4235,7 @@ fn validate_taikai_ssm_rejects_malformed_mldsa_signature_lengths() {
             &taikai.envelope_bytes,
             taikai.telemetry.segment_sequence,
             &alias_policy,
+            Some(&alias_council_policy(&[[0x33; 32]], 1)),
             &telemetry,
         )
         .expect_err("malformed Taikai SSM ML-DSA signature length must fail");
@@ -8713,324 +8959,4 @@ fn record_da_receipt_metrics_tracks_outcomes_and_cursor() {
     assert_eq!(cursor, 5, "cursor gauge should reflect stored sequence");
 }
 
-#[test]
-fn da_spool_rejection_response_allows_committed_receipt_outcomes() {
-    for receipt_outcome in [
-        ReceiptInsertOutcome::Stored {
-            cursor_advanced: true,
-        },
-        ReceiptInsertOutcome::Duplicate {
-            path: PathBuf::from("receipt.norito"),
-        },
-    ] {
-        let mut batch = DaSpoolBatch::new();
-        batch.push(DaSpoolAction::new("receipt_log", move || {
-            Ok(DaSpoolActionOutput::ReceiptOutcome(receipt_outcome))
-        }));
-        let report = batch.execute_sync();
-
-        assert!(
-            da_spool_rejection_response(&report, ResponseFormat::Json).is_none(),
-            "accepted receipt outcomes must not be converted into errors"
-        );
-    }
-}
-
-#[test]
-fn da_spool_rejection_response_rejects_stale_receipt_outcome() {
-    let mut batch = DaSpoolBatch::new();
-    batch.push(DaSpoolAction::new("receipt_log", || {
-        Ok(DaSpoolActionOutput::ReceiptOutcome(
-            ReceiptInsertOutcome::StaleSequence { highest: 9 },
-        ))
-    }));
-    let report = batch.execute_sync();
-    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
-        .expect("stale receipt must produce a conflict response");
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-}
-
-#[test]
-fn da_spool_rejection_response_rejects_sequence_gap_outcome() {
-    let mut batch = DaSpoolBatch::new();
-    batch.push(DaSpoolAction::new("receipt_log", || {
-        Ok(DaSpoolActionOutput::ReceiptOutcome(
-            ReceiptInsertOutcome::SequenceGap {
-                expected_next: 10,
-                observed: 12,
-            },
-        ))
-    }));
-    let report = batch.execute_sync();
-    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
-        .expect("sequence gap receipt must produce a conflict response");
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-}
-
-#[test]
-fn da_spool_rejection_response_rejects_receipt_conflict_outcome() {
-    let mut batch = DaSpoolBatch::new();
-    batch.push(DaSpoolAction::new("receipt_log", || {
-        Ok(DaSpoolActionOutput::ReceiptOutcome(
-            ReceiptInsertOutcome::ReceiptConflict {
-                path: PathBuf::from("receipt.norito"),
-            },
-        ))
-    }));
-    let report = batch.execute_sync();
-    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
-        .expect("receipt conflict must produce a conflict response");
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-}
-
-#[test]
-fn da_spool_rejection_response_rejects_duplicate_fingerprint_conflict_outcome() {
-    let mut batch = DaSpoolBatch::new();
-    batch.push(DaSpoolAction::new("receipt_log", || {
-        Ok(DaSpoolActionOutput::ReceiptOutcome(
-            ReceiptInsertOutcome::DuplicateFingerprintConflict {
-                path: PathBuf::from("receipt.norito"),
-                expected: test_fingerprint(0xA1),
-                observed: test_fingerprint(0xA2),
-            },
-        ))
-    }));
-    let report = batch.execute_sync();
-    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
-        .expect("duplicate fingerprint conflict must produce a conflict response");
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-}
-
-#[test]
-fn da_spool_rejection_response_rejects_manifest_conflict_outcome() {
-    let mut batch = DaSpoolBatch::new();
-    batch.push(DaSpoolAction::new("receipt_log", || {
-        Ok(DaSpoolActionOutput::ReceiptOutcome(
-            ReceiptInsertOutcome::ManifestConflict {
-                expected: BlobDigest::new([1; 32]),
-                observed: BlobDigest::new([2; 32]),
-            },
-        ))
-    }));
-    let report = batch.execute_sync();
-    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
-        .expect("manifest conflict must produce a conflict response");
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-}
-
-#[test]
-fn da_spool_rejection_response_rejects_missing_receipt_log_outcome() {
-    let mut batch = DaSpoolBatch::new();
-    batch.push(DaSpoolAction::new("manifest", || {
-        Ok(DaSpoolActionOutput::None)
-    }));
-    let report = batch.execute_sync();
-    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
-        .expect("missing receipt log outcome must fail closed");
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-#[test]
-fn da_spool_rejection_response_rejects_spool_action_errors() {
-    let mut batch = DaSpoolBatch::new();
-    batch.push(DaSpoolAction::new("manifest", || {
-        Err("disk full".to_owned())
-    }));
-    let report = batch.execute_sync();
-    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
-        .expect("spool action errors must fail closed");
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-fn telemetry_handle_for_tests_with_profile(
-    profile: TelemetryProfile,
-) -> (Arc<Metrics>, MaybeTelemetry) {
-    let metrics = test_metrics();
-    let telemetry = Telemetry::new(metrics.clone(), true);
-    let handle = MaybeTelemetry::from_profile(Some(telemetry), profile);
-    (metrics, handle)
-}
-
-fn telemetry_handle_for_tests() -> (Arc<Metrics>, MaybeTelemetry) {
-    telemetry_handle_for_tests_with_profile(TelemetryProfile::Operator)
-}
-
-fn test_metrics() -> Arc<Metrics> {
-    enable_duplicate_metric_panic();
-    Arc::new(Metrics::default())
-}
-
-fn enable_duplicate_metric_panic() {
-    static INIT: LazyLock<()> = LazyLock::new(|| {
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("IROHA_METRICS_PANIC_ON_DUPLICATE", "1");
-        }
-    });
-    LazyLock::force(&INIT);
-}
-
-fn find_metric_line<'a>(dump: &'a str, prefix: &str) -> &'a str {
-    dump.lines()
-        .find(|line| line.starts_with(prefix))
-        .unwrap_or_else(|| panic!("metric `{prefix}` not found\n{dump}"))
-}
-
-fn da_rent_metric_lines(dump: &str) -> Vec<String> {
-    let mut lines: Vec<String> = dump
-        .lines()
-        .filter(|line| {
-            line.starts_with("# HELP torii_da_")
-                || line.starts_with("# TYPE torii_da_")
-                || line.starts_with("torii_da_")
-        })
-        .filter(|line| {
-            line.contains("_rent_")
-                || line.contains("protocol_reserve_micro_total")
-                || line.contains("provider_reward_micro_total")
-                || line.contains("_pdp_bonus_micro_total")
-                || line.contains("_potr_bonus_micro_total")
-        })
-        .map(str::to_owned)
-        .collect();
-    lines.sort();
-    lines
-}
-
-fn parse_metric_value(line: &str) -> f64 {
-    line.split_whitespace()
-        .last()
-        .unwrap_or_default()
-        .parse::<f64>()
-        .expect("metric value")
-}
-
-struct ChunkRecordFixture {
-    file_name: String,
-    offset: u64,
-    length: u32,
-    digest_hex: String,
-}
-
-fn load_chunk_record_fixture(name: &str) -> Vec<ChunkRecordFixture> {
-    let path = fixtures_dir().join(name);
-    let contents = fs::read_to_string(&path).unwrap_or_else(|err| {
-        panic!("failed to read chunk fixture {}: {err}", path.display());
-    });
-    contents
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                return None;
-            }
-            let mut parts = line.split_whitespace();
-            let file_name = parts.next()?.to_string();
-            let offset = parts
-                .next()
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or_else(|| panic!("missing offset in fixture line `{line}`"));
-            let length = parts
-                .next()
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or_else(|| panic!("missing length in fixture line `{line}`"));
-            let digest_hex = parts
-                .next()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| panic!("missing digest in fixture line `{line}`"));
-            Some(ChunkRecordFixture {
-                file_name,
-                offset,
-                length,
-                digest_hex,
-            })
-        })
-        .collect()
-}
-
-fn load_manifest_fixture(name: &str) -> Vec<u8> {
-    let path = fixtures_dir().join(name);
-    let contents = fs::read_to_string(&path).unwrap_or_else(|err| {
-        panic!("failed to read manifest fixture {}: {err}", path.display());
-    });
-    hex::decode(contents.trim()).expect("fixture must be valid hex")
-}
-
-fn load_manifest_json_fixture(name: &str) -> Value {
-    let path = fixtures_dir().join(name);
-    let contents = fs::read_to_string(&path).unwrap_or_else(|err| {
-        panic!(
-            "failed to read manifest JSON fixture {}: {err}",
-            path.display()
-        );
-    });
-    json::from_str(&contents).expect("fixture must be valid Norito JSON")
-}
-
-fn write_manifest_fixture_bundle(
-    case: &ManifestFixtureCase,
-    context: &ManifestFixtureContext,
-) -> std::io::Result<()> {
-    let manifest_dir = fixtures_dir().join("manifests").join(case.slug);
-    fs::create_dir_all(&manifest_dir)?;
-    let hex_path = manifest_dir.join("manifest.norito.hex");
-    let hex_text = format!("{}\n", hex::encode(&context.artifacts.encoded));
-    fs::write(hex_path, hex_text)?;
-    let manifest_value =
-        json::to_value(&context.artifacts.manifest).expect("serialize manifest as JSON value");
-    let json_text = json::to_string_pretty(&manifest_value).expect("render manifest JSON fixture");
-    fs::write(manifest_dir.join("manifest.json"), format!("{json_text}\n"))?;
-    Ok(())
-}
-
-fn write_chunk_record_fixture(
-    path: &Path,
-    records: &[PersistedChunkRecord],
-    total_bytes: u64,
-) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut file = fs::File::create(path)?;
-    writeln!(file, "# file_name offset length digest_hex")?;
-    for record in records {
-        writeln!(
-            file,
-            "{} {} {} {}",
-            record.file_name,
-            record.offset,
-            record.length,
-            hex::encode(record.digest)
-        )?;
-    }
-    writeln!(file, "# total_bytes {total_bytes}")?;
-    Ok(())
-}
-
-fn format_base_id(
-    lane_id: LaneId,
-    epoch: u64,
-    sequence: u64,
-    ticket: &StorageTicketId,
-    fingerprint: &ReplayFingerprint,
-) -> String {
-    let lane_hex = format!("{:08x}", lane_id.as_u32());
-    let epoch_hex = format!("{:016x}", epoch);
-    let sequence_hex = format!("{:016x}", sequence);
-    let ticket_hex = hex::encode(ticket.as_ref());
-    let fingerprint_hex = hex::encode(fingerprint.as_bytes());
-    format!("{lane_hex}-{epoch_hex}-{sequence_hex}-{ticket_hex}-{fingerprint_hex}")
-}
-
-fn fixtures_dir() -> PathBuf {
-    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/da/ingest");
-    base.canonicalize()
-        .expect("fixtures/da/ingest directory must exist")
-}
+include!("tests/receipt_outcome_tests.rs");

@@ -7,10 +7,9 @@ use core::{
 use std::{
     cell::Cell,
     sync::{
-        Arc, Condvar, LazyLock, Mutex, RwLock,
+        LazyLock,
         atomic::{AtomicU16, Ordering},
     },
-    thread::ThreadId,
 };
 
 use blake2::{
@@ -24,7 +23,6 @@ use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
-    codec::{Decode, Encode},
     core::{self as ncore, Archived},
 };
 use thiserror::Error;
@@ -33,154 +31,17 @@ use super::{
     AccountController, AccountId, MultisigMember, MultisigPolicy, MultisigPolicyError,
     curve::{CurveId, CurveRegistryError},
 };
-use crate::{domain::DomainId, error::ParseError, name};
+use crate::{domain::DomainId, name};
 
 #[cfg(feature = "json")]
 pub mod compliance_vectors;
 #[cfg(feature = "json")]
 pub mod vectors;
 
-/// Built-in implicit domain label used when configuration does not override it.
+/// Conventional client-display label retained for deterministic fixtures.
+///
+/// This value is never part of canonical account identity or World state.
 pub const DEFAULT_DOMAIN_NAME: &str = "default";
-
-static DEFAULT_DOMAIN_LABEL: LazyLock<RwLock<Arc<str>>> =
-    LazyLock::new(|| RwLock::new(Arc::<str>::from(DEFAULT_DOMAIN_NAME)));
-
-#[derive(Default)]
-struct DefaultDomainLockState {
-    owner: Option<ThreadId>,
-    depth: usize,
-}
-
-static DEFAULT_DOMAIN_LOCK: LazyLock<(Mutex<DefaultDomainLockState>, Condvar)> =
-    LazyLock::new(|| {
-        (
-            Mutex::new(DefaultDomainLockState::default()),
-            Condvar::new(),
-        )
-    });
-
-/// Guard that serializes mutations to the default domain label and restores the previous value when requested.
-#[derive(Debug)]
-pub(crate) struct DefaultDomainGuard {
-    release_on_drop: bool,
-    original: Option<Arc<str>>,
-}
-
-impl DefaultDomainGuard {
-    fn enter(label: Option<&str>) -> Self {
-        let current = std::thread::current().id();
-        let (lock, cvar) = &*DEFAULT_DOMAIN_LOCK;
-        let mut state = lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        while state.owner.is_some() && state.owner != Some(current) {
-            state = cvar
-                .wait(state)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-
-        if state.owner == Some(current) {
-            state.depth = state
-                .depth
-                .checked_add(1)
-                .expect("default domain guard recursion overflow");
-            return Self {
-                release_on_drop: false,
-                original: None,
-            };
-        }
-
-        state.owner = Some(current);
-        state.depth = 1;
-        drop(state);
-
-        let original = label.map(|_| default_domain_name());
-        if let Some(label) = label {
-            let _ = set_default_domain_name(label.to_owned());
-        }
-
-        Self {
-            release_on_drop: label.is_some(),
-            original,
-        }
-    }
-}
-
-impl Drop for DefaultDomainGuard {
-    fn drop(&mut self) {
-        let current = std::thread::current().id();
-        let (lock, cvar) = &*DEFAULT_DOMAIN_LOCK;
-        let mut state = lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        if state.owner != Some(current) {
-            return;
-        }
-
-        if state.depth > 1 {
-            state.depth -= 1;
-            return;
-        }
-
-        state.owner = None;
-        state.depth = 0;
-        drop(state);
-
-        if self.release_on_drop
-            && let Some(original) = self.original.take()
-        {
-            let _ = set_default_domain_name(original.as_ref().to_owned());
-        }
-
-        cvar.notify_one();
-    }
-}
-
-/// Error returned when configuring the default domain label fails.
-#[derive(Debug, Clone, Copy, Error)]
-pub enum DefaultDomainLabelError {
-    /// Supplied label is not a valid domain name according to Name normalization rules.
-    #[error("default domain label must be a valid domain name: {0}")]
-    InvalidName(#[from] ParseError),
-}
-
-/// Obtain the configured default domain label (or the fallback when unset).
-#[must_use]
-pub fn default_domain_name() -> Arc<str> {
-    DEFAULT_DOMAIN_LABEL
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-}
-
-/// Configure the default domain label used when encoding implicit-domain addresses.
-///
-/// The provided value is normalised via [`Name`] to match on-chain domain identifiers.
-///
-/// # Errors
-///
-/// Returns [`DefaultDomainLabelError`] when the supplied label is not a valid domain name.
-pub fn set_default_domain_name(
-    label: impl Into<String>,
-) -> Result<Arc<str>, DefaultDomainLabelError> {
-    let label = label.into();
-    let canonical_label = name::canonicalize_domain_label(&label)?;
-    let canonical = Arc::<str>::from(canonical_label);
-    {
-        let mut guard = DEFAULT_DOMAIN_LABEL
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = canonical.clone();
-    }
-    Ok(canonical)
-}
-
-pub(crate) fn default_domain_guard(label: Option<&str>) -> DefaultDomainGuard {
-    DefaultDomainGuard::enter(label)
-}
 
 /// Obtain the currently configured chain discriminant for i105 literal encoding,
 /// honoring any thread-local override.
@@ -251,10 +112,12 @@ pub struct AccountAddress {
     controller: ControllerPayload,
 }
 
-/// Classification of the domain selector embedded in an [`AccountAddress`].
+/// Legacy selector classification exposed for address diagnostics.
+///
+/// Canonical V1 account addresses are domainless and always use [`Self::Default`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AddressDomainKind {
-    /// Selector references the configured default domain.
+    /// Canonical domainless address payload.
     Default,
     /// Selector contains the 12-byte local digest derived from a domain label.
     LocalDigest12,
@@ -270,63 +133,6 @@ impl AddressDomainKind {
             Self::Default => "default",
             Self::LocalDigest12 => "local12",
             Self::GlobalRegistry => "global",
-        }
-    }
-}
-
-/// Stable selector key embedded into account addresses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
-)]
-pub enum AccountDomainSelector {
-    /// Selector referencing the configured default domain.
-    Default,
-    /// Selector carrying the 12-byte local digest derived from a domain label.
-    LocalDigest12([u8; 12]),
-    /// Selector pointing at a global registry entry.
-    GlobalRegistry(u32),
-}
-
-impl AccountDomainSelector {
-    /// Derive the selector key for a canonical domain identifier.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountAddressError`] when the domain label cannot be normalized.
-    pub fn from_domain(domain: &DomainId) -> Result<Self, AccountAddressError> {
-        DomainSelector::from_domain(domain).map(Self::from_selector)
-    }
-
-    /// Classify the selector into its coarse-grained kind.
-    #[must_use]
-    pub const fn kind(self) -> AddressDomainKind {
-        match self {
-            Self::Default => AddressDomainKind::Default,
-            Self::LocalDigest12(_) => AddressDomainKind::LocalDigest12,
-            Self::GlobalRegistry(_) => AddressDomainKind::GlobalRegistry,
-        }
-    }
-
-    /// Borrow the local digest when present.
-    #[must_use]
-    pub const fn local12(self) -> Option<[u8; 12]> {
-        match self {
-            Self::LocalDigest12(bytes) => Some(bytes),
-            _ => None,
-        }
-    }
-
-    fn from_selector(selector: DomainSelector) -> Self {
-        match selector {
-            DomainSelector::Default => Self::Default,
-            DomainSelector::Local12(bytes) => Self::LocalDigest12(bytes),
-            DomainSelector::Global { registry_id } => Self::GlobalRegistry(registry_id),
         }
     }
 }
@@ -378,7 +184,7 @@ impl AccountAddress {
         encode_i105_literal(discriminant, &canonical)
     }
 
-    /// Classify the embedded domain selector.
+    /// Classify the legacy in-memory domain marker.
     ///
     /// Canonical payloads do not encode domain selectors and always report
     /// [`AddressDomainKind::Default`].
@@ -391,16 +197,7 @@ impl AccountAddress {
         }
     }
 
-    /// Return the canonical selector key embedded in this address.
-    ///
-    /// New canonical payloads do not encode selector bytes and therefore always
-    /// return [`AccountDomainSelector::Default`].
-    #[must_use]
-    pub fn domain_selector(&self) -> AccountDomainSelector {
-        AccountDomainSelector::from_selector(self.domain)
-    }
-
-    /// Return the raw Local-12 selector digest when the address targets a non-default domain.
+    /// Return the raw Local-12 digest from a legacy in-memory selector.
     ///
     /// Canonical payloads never include Local-12 data.
     #[must_use]
@@ -561,11 +358,12 @@ impl AccountAddress {
         Ok(AccountId { controller })
     }
 
-    /// Check that the provided domain matches the selector embedded in this address.
+    /// Check whether the address can be used with an explicit domain routing context.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError::DomainMismatch`] when domains do not match.
+    /// Canonical V1 addresses are universal and accept every valid [`DomainId`]. The
+    /// mismatch error is retained only for noncanonical in-memory test vectors.
     pub fn ensure_domain_matches(&self, domain: &DomainId) -> Result<(), AccountAddressError> {
         if self.domain.matches_domain(domain) {
             Ok(())
@@ -747,15 +545,16 @@ impl DomainSelector {
             .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))
     }
 
+    #[cfg(test)]
     fn is_default_domain(domain: &DomainId) -> Result<bool, AccountAddressError> {
         let canonical_name = name::canonicalize_domain_label(domain.name().as_ref())
             .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))?;
         let canonical_dataspace = name::canonicalize_domain_label(domain.dataspace().as_ref())
             .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))?;
-        let default_label = default_domain_name();
-        Ok(canonical_name == default_label.as_ref() && canonical_dataspace == "universal")
+        Ok(canonical_name == DEFAULT_DOMAIN_NAME && canonical_dataspace == "universal")
     }
 
+    #[cfg(test)]
     fn from_domain(domain: &DomainId) -> Result<Self, AccountAddressError> {
         let canonical = Self::canonical_domain(domain)?;
         if Self::is_default_domain(domain)? {
@@ -1599,7 +1398,7 @@ static I105_DIGIT_TABLE: LazyLock<Vec<(&'static str, u8)>> = LazyLock::new(|| {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, sync::Arc};
+    use std::collections::BTreeSet;
 
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 
@@ -1643,18 +1442,6 @@ mod tests {
 
     fn domain(name: &str) -> DomainId {
         DomainId::try_new(name, "universal").expect("valid domain id")
-    }
-
-    fn guard_default_label() -> DefaultDomainGuard {
-        default_domain_guard(None)
-    }
-
-    struct Reset(Arc<str>);
-
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            let _ = set_default_domain_name(self.0.as_ref().to_owned());
-        }
     }
 
     fn account_address_for_seed(seed: u8) -> AccountAddress {
@@ -1893,12 +1680,12 @@ mod tests {
     }
 
     #[test]
-    fn local12_digest_absent_for_default_domain() {
+    fn local12_digest_absent_for_canonical_address() {
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("account encodes");
         assert!(
             address.local12_digest().is_none(),
-            "default domain selectors should not report Local-12 digests"
+            "canonical domainless addresses must not report Local-12 digests"
         );
     }
 
@@ -1933,11 +1720,6 @@ mod tests {
 
     #[test]
     fn i105_golden_vectors_roundtrip() {
-        let _guard_default = guard_default_label();
-        let original = default_domain_name();
-        let _reset = Reset(original.clone());
-        set_default_domain_name("default").expect("restore default label");
-
         let vectors = [
             ("default", 0_u8),
             ("treasury", 1_u8),
@@ -1979,7 +1761,6 @@ mod tests {
 
     #[test]
     fn canonical_payload_omits_domain_selector_bytes() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let canonical = address.canonical_bytes().expect("bytes");
@@ -1992,64 +1773,36 @@ mod tests {
     }
 
     #[test]
-    fn non_default_domain_address_bytes_match_default_domain_bytes() {
-        let _guard = guard_default_label();
+    fn canonical_address_bytes_depend_only_on_account_controller() {
         let key = ed25519_pk();
-        let default_account = AccountId::new(key.clone());
-        let local_account = AccountId::new(key);
-        let default_address = AccountAddress::from_account_id(&default_account).expect("encode");
-        let local_address = AccountAddress::from_account_id(&local_account).expect("encode");
+        let first_account = AccountId::new(key.clone());
+        let second_account = AccountId::new(key);
+        let first_address = AccountAddress::from_account_id(&first_account).expect("encode");
+        let second_address = AccountAddress::from_account_id(&second_account).expect("encode");
         assert_eq!(
-            default_address.canonical_bytes().expect("default bytes"),
-            local_address.canonical_bytes().expect("local bytes"),
-            "domain must not influence canonical address bytes"
+            first_address.canonical_bytes().expect("first bytes"),
+            second_address.canonical_bytes().expect("second bytes"),
+            "only the universal account controller may influence canonical bytes"
         );
-        assert!(local_address.local12_digest().is_none());
+        assert!(second_address.local12_digest().is_none());
     }
 
     #[test]
-    fn domain_kind_distinguishes_default_and_local_selectors() {
-        let _guard = guard_default_label();
-        let default_account = AccountId::new(ed25519_pk_with(7));
-        let default_address =
-            AccountAddress::from_account_id(&default_account).expect("encode default domain");
-        assert_eq!(default_address.domain_kind(), AddressDomainKind::Default);
-
-        let local_account = AccountId::new(ed25519_pk_with(9));
-        let local_address =
-            AccountAddress::from_account_id(&local_account).expect("encode local domain");
-        assert_eq!(local_address.domain_kind(), AddressDomainKind::Default);
+    fn canonical_address_reports_domainless_legacy_kind() {
+        let account = AccountId::new(ed25519_pk_with(7));
+        let address = AccountAddress::from_account_id(&account).expect("encode account");
+        assert_eq!(address.domain_kind(), AddressDomainKind::Default);
     }
 
     #[test]
     fn domain_kind_reports_global_registry_variant() {
-        let _guard = guard_default_label();
         let mut address = account_address_for_seed(11);
         address.domain = DomainSelector::Global { registry_id: 42 };
         assert_eq!(address.domain_kind(), AddressDomainKind::GlobalRegistry);
     }
 
     #[test]
-    fn account_domain_selector_helpers_cover_default_local_and_global() {
-        let _guard = guard_default_label();
-        let default_selector =
-            AccountDomainSelector::from_domain(&domain(DEFAULT_DOMAIN_NAME)).expect("default");
-        assert_eq!(default_selector.kind(), AddressDomainKind::Default);
-        assert_eq!(default_selector.local12(), None);
-
-        let local_selector =
-            AccountDomainSelector::from_domain(&domain("treasury")).expect("local selector");
-        assert_eq!(local_selector.kind(), AddressDomainKind::LocalDigest12);
-        assert!(local_selector.local12().is_some());
-
-        let global_selector = AccountDomainSelector::GlobalRegistry(7);
-        assert_eq!(global_selector.kind(), AddressDomainKind::GlobalRegistry);
-        assert_eq!(global_selector.local12(), None);
-    }
-
-    #[test]
     fn domain_selector_canonicalises_before_digest() {
-        let _guard = guard_default_label();
         let selectors = (
             DomainSelector::from_domain(&domain("Treasury")).expect("upper-case normalizes"),
             DomainSelector::from_domain(&domain("treasury")).expect("lower-case normalizes"),
@@ -2062,7 +1815,6 @@ mod tests {
 
     #[test]
     fn domain_selector_distinguishes_dataspaces() {
-        let _guard = guard_default_label();
         let universal = DomainSelector::from_domain(&domain("billing")).expect("selector");
         let retail = DomainSelector::from_domain(
             &DomainId::try_new("billing", "retail").expect("domain id"),
@@ -2075,31 +1827,7 @@ mod tests {
     }
 
     #[test]
-    fn configurable_default_domain_label_updates_selector() {
-        let _guard = guard_default_label();
-        let original = default_domain_name();
-        let _reset = Reset(original.clone());
-        let _canonical = set_default_domain_name("ledger").expect("set default label");
-        let account = AccountId::new(ed25519_pk());
-        let address = AccountAddress::from_account_id(&account).expect("encode");
-        let canonical_bytes = address.canonical_bytes().expect("bytes");
-        assert_eq!(canonical_bytes[1], CONTROLLER_SINGLE_KEY_TAG);
-    }
-
-    #[test]
-    fn configurable_default_domain_label_is_canonicalised() {
-        let _guard = guard_default_label();
-        let original = default_domain_name();
-        let _reset = Reset(original.clone());
-        let canonical =
-            set_default_domain_name("Ledger").expect("default domain canonicalization succeeds");
-        assert_eq!(canonical.as_ref(), "ledger");
-        assert_eq!(default_domain_name().as_ref(), "ledger");
-    }
-
-    #[test]
     fn i105_encoding_respects_chain_discriminant() {
-        let _guard = guard_default_label();
         let _chain = ChainDiscriminantGuard::enter(42);
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
@@ -2121,7 +1849,6 @@ mod tests {
 
     #[test]
     fn i105_known_discriminants_roundtrip() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
 
@@ -2158,7 +1885,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_without_expected_discriminant_accepts_literal_prefix() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let testnet = address
@@ -2303,7 +2029,6 @@ mod tests {
 
     #[test]
     fn i105_round_trip_recovers_canonical_payload() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
         let encoded = original.to_i105_for_discriminant(73).expect("i105");
@@ -2317,7 +2042,6 @@ mod tests {
 
     #[test]
     fn i105_discriminant_mismatch_fails() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let encoded = address.to_i105_for_discriminant(10).expect("i105");
@@ -2334,7 +2058,6 @@ mod tests {
 
     #[test]
     fn from_i105_validates_scoped_chain_discriminant() {
-        let _guard = guard_default_label();
         let _chain = ChainDiscriminantGuard::enter(73);
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
@@ -2351,7 +2074,6 @@ mod tests {
 
     #[test]
     fn from_i105_without_expected_discriminant_accepts_literal_prefix() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
         let literal = original.to_i105_for_discriminant(42).expect("i105");
@@ -2366,7 +2088,6 @@ mod tests {
 
     #[test]
     fn i105_round_trip() {
-        let _guard = guard_default_label();
         let _chain = ChainDiscriminantGuard::enter(42);
         let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
@@ -2443,7 +2164,6 @@ mod tests {
         let seeds = [0_u8, 1, 2, 7, 31, 63, 127, 128, 191, 255];
 
         for &seed in &seeds {
-            let _guard = guard_default_label();
             let address = account_address_for_seed(seed);
             let literal = address
                 .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
@@ -2474,7 +2194,6 @@ mod tests {
 
     #[test]
     fn canonical_decode_rejects_small_order_public_key() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let mut canonical = AccountAddress::from_account_id(&account)
             .expect("encode")
@@ -2489,7 +2208,6 @@ mod tests {
 
     #[test]
     fn canonical_decode_rejects_all_zero_public_key() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let mut canonical = AccountAddress::from_account_id(&account)
             .expect("encode")
@@ -2504,7 +2222,6 @@ mod tests {
 
     #[test]
     fn canonical_decode_rejects_non_canonical_public_key() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let mut canonical = AccountAddress::from_account_id(&account)
             .expect("encode")
@@ -2519,10 +2236,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_accepts_i105_format() {
-        let _guard = guard_default_label();
-        let original = default_domain_name();
-        let _reset = Reset(original.clone());
-        set_default_domain_name(DEFAULT_DOMAIN_NAME).expect("reset default domain label");
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let literal = address
@@ -2537,7 +2250,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_accepts_numeric_i105_without_global_discriminant() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let literal = address.to_i105_for_discriminant(42).expect("i105");
@@ -2563,7 +2275,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_trims_i105_literal() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let literal = address.to_i105_for_discriminant(42).expect("i105");
@@ -2585,7 +2296,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_rejects_noncanonical_numeric_sentinel() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let canonical = address.to_i105_for_discriminant(42).expect("i105");
@@ -2598,7 +2308,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_rejects_wrong_expected_numeric_discriminant() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let literal = address.to_i105_for_discriminant(42).expect("i105");
@@ -2624,7 +2333,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_rejects_foreign_numeric_discriminant_that_extends_expected_prefix() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let foreign = address
@@ -2655,7 +2363,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_rejects_numeric_i105_payload_tampering() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let literal = address.to_i105_for_discriminant(42).expect("i105");
@@ -2688,7 +2395,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_preserves_malformed_i105_errors() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let mut chars = address
@@ -2712,7 +2418,6 @@ mod tests {
 
     #[test]
     fn parse_encoded_accepts_only_i105() {
-        let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let i105 = address.to_i105_for_discriminant(42).expect("i105");
@@ -2753,7 +2458,6 @@ mod tests {
 
     #[test]
     fn multisig_address_rejects_inert_member_public_key() {
-        let _guard = guard_default_label();
         let members = vec![
             MultisigMember::new(ed25519_pk_with(1), 1).expect("member"),
             MultisigMember::new(ed25519_pk_with(2), 2).expect("member"),

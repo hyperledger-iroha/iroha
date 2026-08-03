@@ -1863,7 +1863,7 @@ public struct SumeragiV2ProgressTransitionStatus: Equatable, Sendable {
 public enum SumeragiV2LivenessBlocker: UInt32, Equatable, Sendable {
     case missingProposal = 0, bodyUnavailable, prepareQuorumMissing, commitQuorumMissing
     case timeoutCertificateMissing, schedulerStarvation, applicationPending
-    case localControlPending = 7
+    case successorActivationPending, localControlPending
     fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
     fileprivate static func decode(_ data: Data) throws -> Self {
         let tag = try sumeragiV2DecodeU32(data)

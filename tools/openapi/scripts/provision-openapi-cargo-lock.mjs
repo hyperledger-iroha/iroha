@@ -52,6 +52,41 @@ const IO_CHUNK_BYTES = 64 * 1024;
 const GIT_MAX_BUFFER_BYTES = 1024 * 1024;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const defaultRepoRoot = path.resolve(__dirname, '..', '..', '..');
+const GIT_REPOSITORY_ENVIRONMENT_VARIABLES = Object.freeze([
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_CONFIG',
+  'GIT_CONFIG_COUNT',
+  'GIT_CONFIG_PARAMETERS',
+  'GIT_DIR',
+  'GIT_GRAFT_FILE',
+  'GIT_IMPLICIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_INTERNAL_SUPER_PREFIX',
+  'GIT_NAMESPACE',
+  'GIT_NO_REPLACE_OBJECTS',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_PREFIX',
+  'GIT_REPLACE_REF_BASE',
+  'GIT_SHALLOW_FILE',
+  'GIT_WORK_TREE',
+]);
+
+/**
+ * Remove inherited state that can redirect Git away from an explicit cwd.
+ */
+export function isolateGitRepositoryEnvironment(environment = process.env) {
+  const isolated = {...environment};
+  for (const variable of GIT_REPOSITORY_ENVIRONMENT_VARIABLES) {
+    delete isolated[variable];
+  }
+  for (const variable of Object.keys(isolated)) {
+    if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(variable)) {
+      delete isolated[variable];
+    }
+  }
+  return isolated;
+}
 
 /**
  * Parse the canonical command-line surface.
@@ -417,7 +452,7 @@ export async function generateOpenApiCargoLockCandidate({
   await spawnChecked(cargoExecutable, arguments_, {
     cwd: repoRoot,
     env: {
-      ...process.env,
+      ...isolateGitRepositoryEnvironment(),
       RUSTC_BOOTSTRAP: '1',
     },
   });
@@ -835,6 +870,7 @@ async function gitBytes(repoRoot, arguments_, {allowedExitCodes = [0]} = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn('git', arguments_, {
       cwd: repoRoot,
+      env: isolateGitRepositoryEnvironment(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const stdout = [];

@@ -20,9 +20,10 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
    `MOCHI_CARGO_TARGET_DIR` overrides it.
 2. Run `./ci/check_mochi.sh` from the workspace root. This validates the core,
    UI, and integration crates before you begin modifying configs.
-3. Note the preset (`single-peer` or `four-peer-bft`). The generated topology
-   determines how many peer folders/logs you should expect under the sandbox
-   root.
+3. Note the preset (`four-peer-bft`, or a custom exact 3f+1 committee). The
+   generated topology determines how many peer folders/logs you should expect
+   under the sandbox root. Historical configs named `single-peer` also launch
+   four validators.
 4. If you are using the shell helper, capture:
    - `scripts/mochi_local_sandbox.sh status`
    - `<workspace>/.mochi/sandbox/<profile>/serve.log`

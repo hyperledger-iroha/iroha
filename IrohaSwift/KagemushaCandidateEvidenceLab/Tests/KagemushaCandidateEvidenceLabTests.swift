@@ -310,7 +310,7 @@ private struct Session {
             "session schema is not exact"
         )
         try require((object["version"] as? NSNumber)?.intValue == 1, "session version is not exact")
-        try require(object["source_repo_dirty"] as? Bool == true, "session must bind dirty source")
+        try require(object["source_repo_dirty"] as? Bool == false, "session must bind clean source")
         func string(_ key: String) throws -> String {
             guard let value = object[key] as? String, !value.isEmpty, value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
                 throw LabFailure.invalid("invalid session field: \(key)")
@@ -673,7 +673,7 @@ private func commonReceipt(
         "native_library_sha256": session.nativeLibrarySHA256,
         "source_commit": session.sourceCommit,
         "source_tree_sha256": session.sourceTreeSHA256,
-        "source_repo_dirty": true,
+        "source_repo_dirty": false,
         "reviewed_source_closure_descriptor_sha256": session.reviewedSourceClosureSHA256,
         "install_identity_sha256": sha256(installIdentity),
         "checkpoint_size_bytes": checkpoint.count,

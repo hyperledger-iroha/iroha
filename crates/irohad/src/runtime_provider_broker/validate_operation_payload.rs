@@ -84,6 +84,8 @@ fn validate_operation_payload(
         IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
     let soracloud_hf_credential_slot =
         IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
+    let bootle_lantern_issuance_slot =
+        IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id();
     match (request.binding.slot, request.operation) {
         (slot, OPERATION_QUALIFY_V1)
             if slot == moderation_quarantine_slot
@@ -122,9 +124,54 @@ fn validate_operation_payload(
                 || slot == billing_epoch_witness_store_slot
                 || slot == soracloud_runtime_signer_slot
                 || slot == soracloud_hf_credential_slot
+                || slot == bootle_lantern_issuance_slot
                 || native_transaction_signer_role_for_slot(slot).is_some() =>
         {
             decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
+        }
+        (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1)
+            if slot == bootle_lantern_issuance_slot =>
+        {
+            let authenticate = decode_canonical::<BootleLanternAuthenticateRequestWireV1>(
+                &request.payload,
+                MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+            )?;
+            if authenticate.opaque_credential.is_empty()
+                || authenticate.opaque_credential.len()
+                    > MAX_BOOTLE_LANTERN_AUTH_CREDENTIAL_BYTES_V1
+                || authenticate.request_binding == [0; 32]
+                || authenticate.committed_height == 0
+            {
+                return Err(BrokerError::Rejected);
+            }
+            bootle_lantern_action_from_wire(authenticate.action)?;
+        }
+        (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1)
+            if slot == bootle_lantern_issuance_slot =>
+        {
+            let prepare = decode_canonical::<BootleLanternPrepareAuthorizationRequestWireV1>(
+                &request.payload,
+                MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+            )?;
+            validate_bootle_lantern_prepare_request(&prepare, &request.binding, session_chain_id)?;
+        }
+        (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1)
+            if slot == bootle_lantern_issuance_slot =>
+        {
+            decode_bootle_lantern_issue_request(
+                &request.payload,
+                &request.binding,
+                session_chain_id,
+            )?;
+        }
+        (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1)
+            if slot == bootle_lantern_issuance_slot =>
+        {
+            decode_bootle_lantern_issue_request(
+                &request.payload,
+                &request.binding,
+                session_chain_id,
+            )?;
         }
         (slot, OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1) if slot == privacy_cycle_prf_slot => {
             decode_canonical::<PrivacyCyclePrfRequestWireV1>(

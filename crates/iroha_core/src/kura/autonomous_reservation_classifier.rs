@@ -136,7 +136,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 proposal_height,
                 expected_chain_id_hash,
                 expected_epoch,
-                false,
+                None,
             )?
             .ok_or(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)?;
         attempts.insert(
@@ -219,7 +219,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
             &pointer,
             expected_chain_id_hash,
             pointer.epoch,
-            false,
+            None,
         )?;
         attempts.insert(
             coordinate,
@@ -906,7 +906,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                         &pointer,
                         expected_chain_id_hash,
                         pointer.epoch,
-                        false,
+                        None,
                     )?;
                     attempts.insert(
                         coordinate,
@@ -956,7 +956,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                         &pointer,
                         expected_chain_id_hash,
                         pointer.epoch,
-                        false,
+                        None,
                     )?;
                     attempts.insert(
                         coordinate,

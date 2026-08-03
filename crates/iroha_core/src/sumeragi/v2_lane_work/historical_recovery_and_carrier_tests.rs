@@ -629,3 +629,55 @@ fn lane_proposal_vote_and_qc_reject_non_authoritative_incarnation() {
         "a cryptographically valid QC cannot revive a retired incarnation"
     );
 }
+
+/// Build a successor with one retained historical certificate waiting for
+/// an absent canonical Kura body and no ingress event needed to service it.
+pub(in crate::sumeragi) fn quiet_historical_recovery_fixture() -> V2LaneWorkAdapter {
+    let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+    let (parent_block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+    let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
+    commit_test_block_to_state(adapter.state.as_ref(), &committed_parent, &adapter.context);
+    assert!(
+        adapter
+            .kura
+            .get_durable_block_hash(NonZeroUsize::new(1).expect("non-zero height"))
+            .is_none(),
+        "quiet recovery fixture must retain the canonical Kura publication gap"
+    );
+    let certificate = LaneBlockCertificateV1 {
+        proposal: proposal.clone(),
+        prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+        commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+    };
+    let successor_context = successor_context_for_parent(&adapter, &parent_block);
+    let local_peer = adapter.local_peer.clone();
+    let local_key = adapter.key_pair.clone();
+    let state = Arc::clone(&adapter.state);
+    let kura = Arc::clone(&adapter.kura);
+    let limits = adapter.limits;
+    drop(adapter);
+
+    let mut successor = V2LaneWorkAdapter::new(
+        successor_context,
+        local_peer,
+        local_key,
+        true,
+        state,
+        kura,
+        limits,
+        None,
+    )
+    .expect("open quiet historical-recovery successor");
+    assert_eq!(
+        successor.accept_lane_message(
+            InboundBlockMessage::new(
+                BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+                Some(PeerId::new(keys[0].public_key().clone())),
+            ),
+            0,
+        ),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert!(successor.has_pending_historical_recovery());
+    successor
+}

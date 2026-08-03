@@ -138,6 +138,22 @@ def test_numeric_workflow_enforces_the_ci_lock() -> None:
     assert "PYTHONPATH: src:../norito_py/src:.." in workflow
 
 
+def test_native_amx_installed_package_path_is_dependency_only() -> None:
+    harness = (
+        REPO_ROOT / "ci/run_native_amx_v2_grouped_sdk_parity.sh"
+    ).read_text(encoding="utf-8")
+    installed_paths = re.findall(
+        r'if \[\[ "\$\{IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-\}" == "1" \]\]; then\n'
+        r'\s+readonly python_parity_path="([^"]*)"\n'
+        r"\s+else",
+        harness,
+    )
+
+    assert installed_paths == [
+        "${repo_root}/python/norito_py/src:${repo_root}/python"
+    ]
+
+
 def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     workflow = (REPO_ROOT / ".github/workflows/pr_privacy_sdk_guard.yml").read_text(
         encoding="utf-8"

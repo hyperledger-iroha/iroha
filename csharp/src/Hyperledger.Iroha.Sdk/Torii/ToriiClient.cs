@@ -826,6 +826,7 @@ public sealed partial class ToriiClient : IDisposable
 
     public async Task<ToriiVpnProfile> GetVpnProfileAsync(CancellationToken cancellationToken = default)
     {
+        RequireSecureVpnTransport();
         using var response = await SendExpectingStatusAsync(
             HttpMethod.Get,
             "/v1/vpn/profile",
@@ -1812,7 +1813,17 @@ public sealed partial class ToriiClient : IDisposable
             accept: null,
             configureRequest: null,
             cancellationToken);
+        var expectedRequestUri = request.RequestUri;
         var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (path.StartsWith("/v1/vpn/", StringComparison.Ordinal)
+            && response.RequestMessage?.RequestUri is Uri responseUri
+            && expectedRequestUri is not null
+            && responseUri != expectedRequestUri)
+        {
+            response.Dispose();
+            throw new HttpRequestException("Sora VPN requests must not follow redirects.");
+        }
+
         if (response.StatusCode == expectedStatusCode
             || (allowedStatusCode.HasValue && response.StatusCode == allowedStatusCode.Value))
         {
@@ -1826,10 +1837,19 @@ public sealed partial class ToriiClient : IDisposable
 
     private void RequireVpnCanonicalRequestCredentials(string route)
     {
+        RequireSecureVpnTransport();
         if (Options.CanonicalRequestCredentials is null)
         {
             throw new InvalidOperationException(
                 $"VPN route `{route}` requires ToriiClientOptions.CanonicalRequestCredentials.");
+        }
+    }
+
+    private void RequireSecureVpnTransport()
+    {
+        if (!string.Equals(BaseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Sora VPN requests require an HTTPS Torii base URI.");
         }
     }
 
@@ -2775,40 +2795,6 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateVpnReceipt(ToriiVpnReceipt response, string context)
     {
         ToriiVpnJson.ValidateVpnReceipt(response, context);
-    }
-
-    private static void ValidateVpnTxInstructions(IReadOnlyList<ToriiVpnTxInstruction>? instructions, string context)
-    {
-        if (instructions is null)
-        {
-            return;
-        }
-
-        for (var index = 0; index < instructions.Count; index++)
-        {
-            var instruction = instructions[index];
-            if (instruction is null)
-            {
-                throw new JsonException($"{context}[{index}] must be an object.");
-            }
-
-            ValidateVpnTxInstruction(instruction, $"{context}[{index}]");
-        }
-    }
-
-    private static void ValidateOptionalVpnTxInstruction(ToriiVpnTxInstruction? instruction, string context)
-    {
-        if (instruction is null)
-        {
-            return;
-        }
-
-        ValidateVpnTxInstruction(instruction, context);
-    }
-
-    private static void ValidateVpnTxInstruction(ToriiVpnTxInstruction instruction, string context)
-    {
-        ToriiVpnJson.ValidateVpnTxInstruction(instruction, context);
     }
 
     private static void ValidateContractCodeRecord(ToriiContractCodeRecord response, string context)
@@ -5025,12 +5011,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
             new KeyValuePair<string, string?>("with_asset", NormalizeOptionalExactValue(query.WithAsset, nameof(query.WithAsset))),
         ]);
@@ -5043,12 +5029,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
         ]);
     }
@@ -5060,13 +5046,13 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("owning_domain", NormalizeOptionalExactValue(query.OwningDomain, nameof(query.OwningDomain))),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
         ]);
     }
@@ -5078,12 +5064,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
             new KeyValuePair<string, string?>("definition", NormalizeOptionalExactValue(query.Definition, nameof(query.Definition))),
             new KeyValuePair<string, string?>("asset_id", NormalizeOptionalExactValue(query.AssetId, nameof(query.AssetId))),
@@ -5097,12 +5083,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
             new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
         ]);
@@ -5115,12 +5101,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
             new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
         ]);

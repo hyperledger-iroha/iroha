@@ -83,7 +83,7 @@ fn sample_contract_address(
     deploy_nonce: u64,
 ) -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        0,
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         authority,
         deploy_nonce,
         DataSpaceId::UNIVERSAL,
@@ -112,9 +112,8 @@ fn prepare_approved_enactment(
     proposal_id: [u8; 32],
 ) -> ([u8; 32], iroha_data_model::governance::types::AtWindow) {
     let preimage_hash = {
-        let proposal = stx
-            .world
-            .governance_proposals_mut()
+        let mut proposals = stx.world.governance_proposals_mut();
+        let proposal = proposals
             .get_mut(&proposal_id)
             .expect("proposal record present");
         proposal.status = iroha_core::state::GovernanceProposalStatus::Approved;

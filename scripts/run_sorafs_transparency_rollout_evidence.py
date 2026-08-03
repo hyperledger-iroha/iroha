@@ -21,11 +21,12 @@ BUNDLED_VERIFIER = SCRIPT_DIR / "check_sorafs_transparency_rollout_evidence.py"
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_REQUIRED_KINDS,
-    DEFAULT_REQUIRED_SOURCE_KINDS,
     EVIDENCE_REQUIRED_FIELDS,
     KIND_BY_NAME,
     MAX_EVIDENCE_BYTES,
     SUMMARY_SCHEMA,
+    ValidationOptions,
+    validate_evidence_payload,
 )
 from sorafs_evidence_json import load_evidence_json  # noqa: E402
 from sorafs_checker_preflight import fsync_checker_output_parent  # noqa: E402
@@ -36,8 +37,6 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
     require_equals_form_option_values,
 )
-from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
-from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     require_rollout_deployment_id,
     require_rollout_environment,
@@ -92,6 +91,7 @@ PLAN_FIELDS = frozenset(
         "schema",
         "verifier_summary_schema",
         "deployment_context",
+        "external_evidence",
         "evidence_contract",
         "steps",
     }
@@ -99,6 +99,7 @@ PLAN_FIELDS = frozenset(
 PLAN_DEPLOYMENT_CONTEXT_FIELDS = frozenset(
     {"deployment_id", "environment", "deployment_context_reviewed"}
 )
+PLAN_EXTERNAL_EVIDENCE_FIELDS = frozenset({"source_entry"})
 
 
 @dataclass(frozen=True)
@@ -113,19 +114,43 @@ class CommandPlan:
 IROHA_ARG_EQUALS_FORM_DIAGNOSTIC = (
     "SoraFS runner --iroha-arg values must use --iroha-arg=VALUE form"
 )
+SOURCE_PRODUCER_EVIDENCE_READ_DIAGNOSTIC = (
+    "pre-collected source-entry producer evidence cannot be read"
+)
+SOURCE_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC = (
+    "pre-collected source-entry producer evidence is invalid"
+)
+SOURCE_PRODUCER_EVIDENCE_CONTEXT_DIAGNOSTIC = (
+    "pre-collected source-entry producer evidence must match rollout context"
+)
 
 
-def split_source_entry_spec(spec: str) -> tuple[str, Path]:
-    source_kind, separator, path = spec.partition("=")
+def validate_source_entry_producer_evidence(args: argparse.Namespace) -> list[str]:
+    """Validate trusted producer evidence before contacting any live service."""
+
+    try:
+        payload = load_evidence_json(
+            args.source_entry_producer_evidence,
+            MAX_EVIDENCE_BYTES,
+        )
+    except (OSError, RuntimeError, UnicodeDecodeError, ValueError):
+        return [SOURCE_PRODUCER_EVIDENCE_READ_DIAGNOSTIC]
+    kind_name, validation_errors = validate_evidence_payload(
+        payload,
+        ValidationOptions(
+            now_unix=args.now_unix,
+            max_evidence_age_secs=args.max_evidence_age_secs,
+        ),
+    )
+    if kind_name != "source_entry" or validation_errors:
+        return [SOURCE_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC]
     if (
-        not separator
-        or not source_kind
-        or not path
-        or not diagnostic_text_is_canonical(source_kind)
-        or not diagnostic_text_is_canonical(path)
+        payload.get("deployment_id") != args.deployment_id
+        or payload.get("environment") != args.environment
+        or payload.get("deployment_context_reviewed") is not True
     ):
-        raise ValueError("--source-entry must use KIND=PATH form")
-    return source_kind, Path(path)
+        return [SOURCE_PRODUCER_EVIDENCE_CONTEXT_DIAGNOSTIC]
+    return []
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
@@ -144,30 +169,14 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     require_rollout_deployment_id({"deployment_id": args.deployment_id}, errors)
     require_rollout_environment({"environment": args.environment}, errors)
     seen_input_files: dict[Path, tuple[str, Path]] = {}
-    source_entries: list[tuple[str, Path]] = []
-    for spec in args.source_entry:
-        try:
-            source_entries.append(split_source_entry_spec(spec))
-        except ValueError as error:
-            errors.append(error_diagnostic_label(error))
-
-    allowed_source_kinds = set(DEFAULT_REQUIRED_SOURCE_KINDS)
-    present_source_kinds: set[str] = set()
-    source_paths: list[Path] = []
-    for source_kind, path in source_entries:
-        if source_kind not in allowed_source_kinds:
-            errors.append("source-entry supplied for unsupported kind")
-            continue
-        if source_kind in present_source_kinds:
-            errors.append("duplicate source-entry kind")
-            continue
-        present_source_kinds.add(source_kind)
-        source_paths.append(path)
-    for source_kind in DEFAULT_REQUIRED_SOURCE_KINDS:
-        if source_kind not in present_source_kinds:
-            errors.append("missing required source-entry coverage")
-
-    errors.extend(require_existing_files(source_paths, "--source-entry", seen=seen_input_files))
+    producer_evidence_errors = require_existing_files(
+        [args.source_entry_producer_evidence],
+        "--source-entry-producer-evidence",
+        seen=seen_input_files,
+    )
+    errors.extend(producer_evidence_errors)
+    if not producer_evidence_errors:
+        errors.extend(validate_source_entry_producer_evidence(args))
     errors.extend(require_existing_files(args.privacy_source_event, "--privacy-source-event", seen=seen_input_files))
     errors.extend(require_existing_files(args.privacy_publish_due, "--privacy-publish-due", seen=seen_input_files))
     errors.extend(require_existing_files(args.proof_token_issuance, "--proof-token-issuance", seen=seen_input_files))
@@ -194,23 +203,10 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     verifier = BUNDLED_VERIFIER
     iroha_prefix = [args.iroha_bin, *args.iroha_arg]
     summary_out = args.summary_out or out_dir / "rollout-summary.json"
-    source_entry_out = out_dir / "source-entry.json"
     privacy_aggregate_out = out_dir / "privacy-aggregate.json"
     proof_token_out = out_dir / "proof-token-issuance.json"
     publication_out = out_dir / "publication.json"
     explorer_out = out_dir / "explorer.json"
-
-    source_entry_command = [
-        *iroha_prefix,
-        "sorafs",
-        "transparency",
-        "source-entry",
-        "canary",
-        "--out",
-        str(source_entry_out),
-    ]
-    for spec in args.source_entry:
-        source_entry_command.extend(["--source-entry", spec])
 
     privacy_command = [
         *iroha_prefix,
@@ -275,6 +271,8 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         str(verifier),
         "--evidence-dir",
         str(out_dir),
+        "--evidence",
+        str(args.source_entry_producer_evidence),
         "--summary-out",
         str(summary_out),
         "--topology-qualification-summary",
@@ -286,7 +284,6 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         verifier_command.extend(["--now-unix", str(args.now_unix)])
 
     return [
-        CommandPlan("source_entry_canary", source_entry_out, source_entry_command),
         CommandPlan("privacy_aggregate_canary", privacy_aggregate_out, privacy_command),
         CommandPlan("proof_token_issuance_canary", proof_token_out, proof_token_command),
         CommandPlan("publication_canary", publication_out, publication_command),
@@ -317,11 +314,18 @@ def deployment_context(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def external_evidence(args: argparse.Namespace) -> dict[str, str]:
+    """Return trusted producer evidence rendered in dry-run plans."""
+
+    return {"source_entry": str(args.source_entry_producer_evidence)}
+
+
 def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
     return {
         "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
         "deployment_context": deployment_context(args),
+        "external_evidence": external_evidence(args),
         "evidence_contract": evidence_contract(),
         "steps": [
             {
@@ -358,6 +362,8 @@ def validate_plan_json(
         known_kinds=KIND_BY_NAME,
         evidence_contract=evidence_contract(),
         evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
+        external_evidence=external_evidence(args),
+        external_evidence_fields=PLAN_EXTERNAL_EVIDENCE_FIELDS,
     )
 
 
@@ -550,6 +556,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
+        required=True,
         help="Validator clock used for verifier freshness checks.",
     )
     parser.add_argument(
@@ -559,11 +566,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Maximum accepted age for generated evidence timestamps.",
     )
     parser.add_argument(
-        "--source-entry",
-        action="append",
-        default=[],
-        metavar="KIND=PATH",
-        help="Source-entry canary payload. Repeat for every supported source kind.",
+        "--source-entry-producer-evidence",
+        type=Path,
+        required=True,
+        help=(
+            "Pre-collected, checker-valid source-entry evidence from trusted internal "
+            "producers. Generic live source-entry submission is not supported."
+        ),
     )
     parser.add_argument(
         "--privacy-source-event",

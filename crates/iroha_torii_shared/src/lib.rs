@@ -211,6 +211,8 @@ pub mod uri {
     pub const LEDGER_STATE_ROOT: &str = "/v1/ledger/state/{height}";
     /// URI used to fetch the execution state proof/QC for a block height.
     pub const LEDGER_STATE_PROOF: &str = "/v1/ledger/state-proof/{height}";
+    /// URI used to fetch the exact canonical executed block wire for a finalized height.
+    pub const LEDGER_EXECUTED_BLOCK_WIRE: &str = "/v1/ledger/block/{height}";
     /// URI used to fetch Merkle proofs for a transaction entrypoint within a block.
     pub const LEDGER_BLOCK_PROOF: &str = "/v1/ledger/block/{height}/proof/{entry_hash}";
     /// URI used to list validator-set snapshots (newest first).
@@ -964,6 +966,52 @@ mod tests {
         let envelope = ErrorEnvelope::new("test_code", "test message");
         assert_eq!(envelope.code(), "test_code");
         assert_eq!(envelope.message(), "test message");
+    }
+
+    #[test]
+    fn privacy_issuance_error_fixture_matches_authoritative_norito_serializer() {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../fixtures/privacy/bootle_lantern_issuance_client_v1.json"
+        ))
+        .expect("privacy issuance cross-SDK fixture must parse");
+        let rows = fixture
+            .get("errors")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|errors| errors.get("responses"))
+            .and_then(norito::json::Value::as_array)
+            .expect("privacy issuance fixture error rows");
+        let mut checked = 0_usize;
+        let mut mismatches = Vec::new();
+        for row in rows {
+            let status = row
+                .get("status")
+                .and_then(norito::json::Value::as_u64)
+                .expect("privacy issuance fixture status");
+            if status == 406 {
+                continue;
+            }
+            let code = row
+                .get("code")
+                .and_then(norito::json::Value::as_str)
+                .expect("privacy issuance fixture error code");
+            let fixture_hex = row
+                .get("body_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("Norito privacy issuance fixture body_hex");
+            let canonical = norito::to_bytes(&ErrorEnvelope::new(code, code))
+                .expect("authoritative ErrorEnvelope serialization");
+            let canonical_hex = hex::encode(canonical);
+            if fixture_hex != canonical_hex {
+                mismatches.push(format!("status {status}: {canonical_hex}"));
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 7, "every non-406 error row must use Norito");
+        assert!(
+            mismatches.is_empty(),
+            "stale privacy issuance body_hex; replace only with these authoritative serializer outputs:\n{}",
+            mismatches.join("\n"),
+        );
     }
 
     #[test]

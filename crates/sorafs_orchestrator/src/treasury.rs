@@ -1600,7 +1600,7 @@ mod tests {
     fn asset_id() -> AssetDefinitionId {
         let domain = DomainId::try_new("sora", "universal").expect("domain id");
         let name = Name::from_str("xor").expect("asset name");
-        AssetDefinitionId::new(domain, name)
+        AssetDefinitionId::derive_from_components(domain, name)
     }
 
     fn budget_id() -> [u8; 32] {

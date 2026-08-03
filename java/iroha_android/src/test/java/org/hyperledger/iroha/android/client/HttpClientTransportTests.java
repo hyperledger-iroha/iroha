@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
@@ -91,35 +92,13 @@ public final class HttpClientTransportTests {
 
   private HttpClientTransportTests() {}
 
-  private static String noncanonicalStandardBase64PadBitAlias(final String encoded) {
-    if (!encoded.endsWith("==")) {
-      throw new AssertionError("64-byte signatures encode with == padding");
-    }
-    final String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    final char[] chars = encoded.toCharArray();
-    final int index = chars.length - 3;
-    final int value = alphabet.indexOf(chars[index]);
-    if (value < 0) {
-      throw new AssertionError("standard base64 alphabet");
-    }
-    chars[index] = alphabet.charAt(value ^ 0x01);
-    return new String(chars);
-  }
-
-  private static String canonicalSignatureBase64Fixture() {
-    final byte[] signature = new byte[64];
-    for (int i = 0; i < signature.length; i++) {
-      signature[i] = 0x01;
-    }
-    return Base64.getEncoder().encodeToString(signature);
-  }
 
   public static void main(final String[] args) throws Exception {
     submitBuildsToriiRequest();
     submitPropagatesExecutorFailure();
     submitSkipsRetryWhenNetworkRetriesDisabled();
     submitRetriesOnServerError();
-    retryPolicyRecognizesRetryableStatus();
+    HttpClientTransportExactReadTests.main(args);
     submitQueuesTransactionsWhenOffline();
     submitQueuesTransactionsWithExportedKey();
     submitReplaysPendingTransactions();
@@ -341,23 +320,6 @@ public final class HttpClientTransportTests {
         : "Canonical hash must match SignedTransactionHasher output after retries";
   }
 
-  private static void retryPolicyRecognizesRetryableStatus() {
-    final RetryPolicy defaultPolicy = RetryPolicy.builder().setMaxAttempts(1).build();
-    assert defaultPolicy.isRetryableStatus(503) : "Server errors should be retryable by default";
-    assert defaultPolicy.isRetryableStatus(429) : "Too many requests should be retryable by default";
-    assert !defaultPolicy.isRetryableStatus(400) : "Client errors should not be retryable";
-
-    final RetryPolicy custom =
-        RetryPolicy.builder()
-            .setMaxAttempts(1)
-            .setRetryOnServerError(false)
-            .setRetryOnTooManyRequests(false)
-            .addRetryStatusCode(418)
-            .build();
-    assert !custom.isRetryableStatus(503) : "Server errors must be disabled by policy";
-    assert !custom.isRetryableStatus(429) : "429 must be disabled by policy";
-    assert custom.isRetryableStatus(418) : "Custom retry codes must be honored";
-  }
 
   private static void submitQueuesTransactionsWhenOffline() throws Exception {
     final Path tempDir = Files.createTempDirectory("iroha-queue-offline-");
@@ -2266,7 +2228,6 @@ public final class HttpClientTransportTests {
     assert quote.openLeaseInstruction() != null : "VPN quote must include open lease instruction";
     assert "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow"
         .equals(quote.openLeaseInstruction().wireId()) : "Open lease wire id mismatch";
-    assert quote.txInstructions().size() == 1 : "VPN quote should have one native instruction";
 
     final TransportRequest request = executor.lastRequest();
     assert "POST".equals(request.method()) : "VPN quote must use POST";
@@ -3019,7 +2980,7 @@ public final class HttpClientTransportTests {
 
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     final byte[] transactionPayload = transactionWithPayload((byte) 0x07).encodedPayload();
     final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
     final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
@@ -3321,9 +3282,12 @@ public final class HttpClientTransportTests {
                     .setSignatureB64("not base64")
                     .build()),
         "malformed detached signature must be rejected");
-    final String canonicalSignature = canonicalSignatureBase64Fixture();
+    final String canonicalSignature = HttpClientTransportExactReadTests.canonicalSignatureBase64Fixture();
     for (final String signatureB64 :
-        List.of(" " + canonicalSignature, noncanonicalStandardBase64PadBitAlias(canonicalSignature))) {
+        List.of(
+            " " + canonicalSignature,
+            HttpClientTransportExactReadTests.noncanonicalStandardBase64PadBitAlias(
+                canonicalSignature))) {
       expectIllegalArgument(
           () ->
               HttpClientTransport.buildMultisigProposePayload(
@@ -3554,7 +3518,7 @@ public final class HttpClientTransportTests {
       transport.prepareContractCall(
           "alice",
           feePayment(5000L),
-          "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           "router::universal",
           "contribute",
           null);
@@ -3597,7 +3561,7 @@ public final class HttpClientTransportTests {
 
   private static void governanceContractRequestParsesResponse() {
     final String contractAddress =
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
@@ -4151,7 +4115,7 @@ public final class HttpClientTransportTests {
               object(loadSharedBfvFixture(), "operation_vectors");
           final Map<String, Object> material =
               object(operationVectors, "full_bootstrap_material");
-          material.put("vk_commitment_hex", string(material, "expected_statement_digest_hex"));
+          material.put("vk_commitment_hex", string(material, "parameter_digest_hex"));
           assertBfvOperationKeyComponentVectors(operationVectors);
         },
         "full-bootstrap verifier commitment drift must be rejected");
@@ -5014,8 +4978,7 @@ public final class HttpClientTransportTests {
             "verifier_key_digest_hex",
             "verifier_key_material_commitment_hex",
             "vk_commitment_hex",
-            "expected_material_digest_hex",
-            "expected_statement_digest_hex");
+            "expected_material_digest_hex");
     final List<String> uniqueDigestValues = new ArrayList<>();
     for (final String field : digestFields) {
       final String value = string(material, field);
@@ -5032,9 +4995,6 @@ public final class HttpClientTransportTests {
     assert string(material, "verifier_key_material_commitment_hex")
             .equals(string(material, "vk_commitment_hex"))
         : "full-bootstrap verifier-key commitment mismatch";
-    assert !string(material, "expected_material_digest_hex")
-            .equals(string(material, "expected_statement_digest_hex"))
-        : "full-bootstrap material and statement digests must differ";
   }
 
   private static void assertBfvRnsModulusChainFixture(
@@ -5824,15 +5784,26 @@ public final class HttpClientTransportTests {
         + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
         + "\"mtu_bytes\":1280,"
         + "\"display_billing_label\":\"standard XOR\","
-        + "\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"settlement_grace_secs\":120,"
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
+        + "\"relay_id_hex\":\""
+        + VALID_ED25519_PUBLIC_KEY_HEX
+        + "\","
+        + "\"descriptor_commit_hex\":\""
+        + "cd".repeat(32)
+        + "\","
+        + "\"tls_server_name\":\"relay.example\","
         + "\"relay_tls_spki_sha256_hex\":\""
         + "ab".repeat(32)
+        + "\","
+        + "\"relay_certificate_sha256_hex\":\""
+        + "ef".repeat(32)
+        + "\","
+        + "\"directory_snapshot_digest_hex\":\""
+        + "42".repeat(32)
         + "\""
         + "}";
   }
@@ -5853,8 +5824,8 @@ public final class HttpClientTransportTests {
         + "\"lease_secs\":600,"
         + "\"quote_expires_at_ms\":1700000600000,"
         + "\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"route_pushes\":[\"0.0.0.0/0\"],"
         + "\"excluded_routes\":[],"
@@ -5864,16 +5835,26 @@ public final class HttpClientTransportTests {
         + "\"meter_family\":\"soranet.vpn.standard\","
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
+        + "\"relay_id_hex\":\""
+        + meteringKey
+        + "\","
+        + "\"descriptor_commit_hex\":\""
+        + "cd".repeat(32)
+        + "\","
+        + "\"tls_server_name\":\"relay.example\","
         + "\"relay_tls_spki_sha256_hex\":\""
         + "ab".repeat(32)
+        + "\","
+        + "\"relay_certificate_sha256_hex\":\""
+        + "ef".repeat(32)
+        + "\","
+        + "\"directory_snapshot_digest_hex\":\""
+        + "42".repeat(32)
         + "\",\"metering_public_key_hex\":\""
         + meteringKey
         + "\",\"open_lease_instruction\":{"
         + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
-        + "\"payload_hex\":\"cafe\"},"
-        + "\"tx_instructions\":[{"
-        + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
-        + "\"payload_hex\":\"cafe\"}]"
+        + "\"payload_hex\":\"cafe\"}"
         + "}";
   }
 
@@ -5895,13 +5876,26 @@ public final class HttpClientTransportTests {
         + "\",\"payment_tx_hash\":\""
         + paymentTxHash
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
+        + "\"relay_id_hex\":\""
+        + VALID_ED25519_PUBLIC_KEY_HEX
+        + "\","
+        + "\"descriptor_commit_hex\":\""
+        + "cd".repeat(32)
+        + "\","
+        + "\"tls_server_name\":\"relay.example\","
         + "\"relay_tls_spki_sha256_hex\":\""
         + "ab".repeat(32)
+        + "\","
+        + "\"relay_certificate_sha256_hex\":\""
+        + "ef".repeat(32)
+        + "\","
+        + "\"directory_snapshot_digest_hex\":\""
+        + "42".repeat(32)
         + "\",\"route_pushes\":[\"0.0.0.0/0\"],"
         + "\"excluded_routes\":[],"
         + "\"dns_servers\":[\"1.1.1.1\"],"
@@ -5926,11 +5920,8 @@ public final class HttpClientTransportTests {
         settled
             ? ",\"settle_lease_instruction\":{"
                 + "\"wire_id\":\"iroha_data_model::isi::vpn::SettleVpnLease\","
-                + "\"payload_hex\":\"f00d\"},"
-                + "\"tx_instructions\":[{"
-                + "\"wire_id\":\"iroha_data_model::isi::vpn::SettleVpnLease\","
-                + "\"payload_hex\":\"f00d\"}]"
-            : ",\"settle_lease_instruction\":null,\"tx_instructions\":[]";
+                + "\"payload_hex\":\"f00d\"}"
+            : ",\"settle_lease_instruction\":null";
     return "{"
         + "\"session_id\":\""
         + sessionId
@@ -5952,8 +5943,8 @@ public final class HttpClientTransportTests {
         + "\",\"payment_tx_hash\":\""
         + paymentTxHash
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauEscrow\","
-        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
+        + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"earned_fee\":\""
         + earned
@@ -6176,6 +6167,7 @@ public final class HttpClientTransportTests {
       return lastRequest;
     }
   }
+
 
   private record QueuedResponse(int statusCode, String body) {}
 

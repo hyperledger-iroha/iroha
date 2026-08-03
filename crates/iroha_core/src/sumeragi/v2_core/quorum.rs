@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, error::Error, fmt};
 
 use super::{HeightContext, ValidatorId, VotingPower};
 
-/// Count and voting-power totals represented by a signer set.
+/// Equal-vote count and its redundant unit-vote projection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Quorum {
     signer_count: usize,
@@ -16,7 +16,7 @@ impl Quorum {
         self.signer_count
     }
 
-    /// Returns the total voting power represented by the set.
+    /// Returns the redundant unit-vote projection represented by the set.
     #[must_use]
     pub const fn voting_power(self) -> VotingPower {
         self.voting_power
@@ -36,7 +36,6 @@ impl Quorum {
         signers: &[ValidatorId],
     ) -> Result<Self, QuorumError> {
         let mut previous = None;
-        let mut power = 0_u128;
         for signer in signers {
             if previous.is_some_and(|value| value >= *signer) {
                 return Err(QuorumError::SignersNotStrictlyOrdered);
@@ -45,11 +44,11 @@ impl Quorum {
             let Some(validator) = context.validator(signer) else {
                 return Err(QuorumError::UnknownValidator(*signer));
             };
-            power = power
-                .checked_add(u128::from(validator.power().get()))
-                .ok_or(QuorumError::VotingPowerOverflow)?;
+            if validator.power().get() != 1 {
+                return Err(QuorumError::VotingPowerNotOne(*signer));
+            }
         }
-        let voting_power = u64::try_from(power)
+        let voting_power = u64::try_from(signers.len())
             .map(VotingPower::new)
             .map_err(|_| QuorumError::VotingPowerOverflow)?;
         Ok(Self {
@@ -58,17 +57,13 @@ impl Quorum {
         })
     }
 
-    /// Returns whether both the distinct-validator and voting-power thresholds
-    /// are satisfied.
+    /// Returns whether the `2f + 1` distinct-validator threshold is satisfied.
     #[must_use]
     pub fn satisfies(self, context: &HeightContext) -> bool {
         self.signer_count >= context.minimum_signer_count()
-            && u128::from(self.voting_power.get()) * 3
-                > u128::from(context.total_voting_power().get()) * 2
     }
 
-    /// Validates a canonical signer set and requires it to meet both quorum
-    /// thresholds.
+    /// Validates a canonical signer set and requires its equal-vote quorum.
     ///
     /// # Errors
     ///
@@ -123,9 +118,11 @@ pub enum QuorumError {
     UnknownValidator(ValidatorId),
     /// Signers contain a duplicate or are not in canonical ascending order.
     SignersNotStrictlyOrdered,
-    /// Voting powers could not be summed without overflow.
+    /// The redundant unit-vote projection could not be represented.
     VotingPowerOverflow,
-    /// The signer set fails either the count or power threshold.
+    /// A context validator does not carry the required single consensus vote.
+    VotingPowerNotOne(ValidatorId),
+    /// The signer set fails the `2f + 1` distinct-validator threshold.
     Insufficient {
         /// Distinct validators represented by the set.
         signer_count: usize,
@@ -169,6 +166,12 @@ impl fmt::Display for QuorumError {
                 formatter.write_str("signers are not strictly ordered")
             }
             Self::VotingPowerOverflow => formatter.write_str("voting power overflow"),
+            Self::VotingPowerNotOne(validator) => {
+                write!(
+                    formatter,
+                    "validator {validator} does not have exactly one vote"
+                )
+            }
             Self::Insufficient {
                 signer_count,
                 voting_power,
@@ -176,7 +179,7 @@ impl fmt::Display for QuorumError {
                 total_voting_power,
             } => write!(
                 formatter,
-                "insufficient quorum: {signer_count}/{required_signer_count} signers and {}/{}, power",
+                "insufficient equal-vote quorum: {signer_count}/{required_signer_count} signers and redundant unit-vote projection {}/{}",
                 voting_power.get(),
                 total_voting_power.get()
             ),

@@ -598,12 +598,18 @@ fn dag_fingerprint_stability_smoke() {
         DomainId::try_new("wonderland", "universal").expect("wonderland domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = {
-        let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        );
-        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-            .with_name(__asset_definition_id.name().to_string())
+        let __asset_definition_id =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "coin".parse().unwrap(),
+            );
+        AssetDefinition::new(
+            __asset_definition_id.clone(),
+            "coin".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     }
     .build(&alice_id);
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
@@ -613,10 +619,11 @@ fn dag_fingerprint_stability_smoke() {
     let query = LiveQueryStore::start_test();
     let state = State::new(world, kura, query);
 
-    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "coin".parse().unwrap(),
-    );
+    let rose: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let tx1 = TransactionBuilder::new(
         chain_id.clone(),

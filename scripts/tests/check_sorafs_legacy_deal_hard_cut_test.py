@@ -103,7 +103,8 @@ def test_retired_routes_exist_only_as_runtime_catalog_and_openapi_negatives() ->
         / "crates"
         / "iroha_torii_shared"
         / "src"
-        / "route_catalog.rs",
+        / "route_catalog"
+        / "tests.rs",
     }
 
     for retired_path in RETIRED_PATHS:

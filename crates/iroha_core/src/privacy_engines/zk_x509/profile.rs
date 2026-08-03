@@ -49,7 +49,6 @@ pub(crate) const ZK_X509_MAX_CRL_BYTES_V1: usize = 4_096;
 pub(crate) const ZK_X509_MAX_CRL_ENTRIES_V1: usize = 64;
 /// Maximum canonical unsigned certificate-serial bytes.
 pub(crate) const ZK_X509_MAX_SERIAL_BYTES_V1: usize = 20;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Maximum accepted lag between trusted block time and CRL `thisUpdate`.
 pub(crate) const ZK_X509_MAX_CRL_AGE_SECONDS_V1: u64 = 300;
 /// Fixed private salt width for one subject-attribute commitment.

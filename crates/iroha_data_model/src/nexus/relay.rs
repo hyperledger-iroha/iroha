@@ -39,6 +39,7 @@ pub const VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX: 
 /// FASTPQ business effect expected for verified lane-relay block commitments.
 pub const LANE_RELAY_FASTPQ_EFFECT_TYPE: &str = "lane_relay_block";
 const LANE_RELAY_FASTPQ_CLAIM_DIGEST_DOMAIN_V1: &[u8] = b"iroha.nexus.lane-relay.fastpq-claim.v1";
+const LANE_FINALITY_STATEMENT_DOMAIN_V1: &[u8] = b"iroha.nexus.lane-finality-statement.v1";
 const LANE_RELAY_MERGE_HINT_DOMAIN_V1: &[u8] = b"iroha.nexus.lane-relay.merge-hint.v1";
 const LANE_RELAY_SETTLEMENT_HASH_DOMAIN_V1: &[u8] = b"iroha.nexus.lane-relay.settlement.v1";
 const FEE_SPONSOR_VAULT_SOURCE_STATE_ROOT_DOMAIN_V1: &[u8] =
@@ -70,7 +71,7 @@ pub struct LaneRelayEnvelope {
     pub block_height: u64,
     /// Full lane block header being relayed.
     pub block_header: BlockHeader,
-    /// QC attesting to the block header.
+    /// QC attesting to the block header and canonical post-execution effect.
     ///
     /// `None` is permitted only for pending transport/status. Any persistent
     /// or merge-authoritative use must require and cryptographically verify it.
@@ -102,6 +103,58 @@ pub struct LaneRelayEnvelope {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
+}
+
+/// Canonical post-execution effect authenticated by a lane-finality QC.
+///
+/// This statement deliberately excludes the QC and `FastPQ` proof material.
+/// Validators can therefore derive and sign it before either proof is attached,
+/// while every merge-relevant effect remains committed by the resulting QC.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneFinalityStatement {
+    /// Statement format version.
+    pub version: u8,
+    /// Numeric lane identifier.
+    pub lane_id: LaneId,
+    /// Active lane incarnation for this lane-local height namespace.
+    pub lane_incarnation: Hash,
+    /// Numeric dataspace identifier.
+    pub dataspace_id: DataSpaceId,
+    /// Lane-local block height.
+    pub block_height: u64,
+    /// Hash of the global block header that carried the lane execution.
+    pub block_header_hash: HashOf<BlockHeader>,
+    /// Exact DA commitment advertised by that header.
+    pub da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
+    /// Canonical standalone lane-block descriptor hash.
+    pub lane_block_descriptor_hash: Hash,
+    /// Exact dataspace manifest root used for proof policy.
+    pub manifest_root: [u8; 32],
+    /// Complete post-execution settlement effect.
+    pub settlement_commitment: LaneBlockCommitment,
+    /// Domain-separated hash of the settlement effect.
+    pub settlement_hash: HashOf<LaneBlockCommitment>,
+    /// Total RBC bytes attributed to this lane block.
+    pub rbc_bytes_total: u64,
+}
+
+impl LaneFinalityStatement {
+    /// Compute the domain-separated hash signed by the lane-finality committee.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneRelayError::Encode`] if canonical Norito encoding fails.
+    pub fn hash(&self) -> Result<Hash, LaneRelayError> {
+        let bytes = norito::encode_canonical(self)?;
+        Ok(domain_separated_hash(
+            LANE_FINALITY_STATEMENT_DOMAIN_V1,
+            &bytes,
+        ))
+    }
 }
 
 /// Presence state for structurally valid relay `FastPQ` metadata.
@@ -143,23 +196,22 @@ pub struct LaneRelayEnvelopeRef {
     pub dataspace_id: DataSpaceId,
     /// Numeric lane identifier.
     pub lane_id: LaneId,
-    /// Block height associated with the settlement commitment.
+    /// Active incarnation of the lane-local height namespace.
+    pub lane_incarnation: Hash,
+    /// Lane-local block height associated with the finalized effect.
     pub block_height: u64,
-    /// Norito hash of the settlement payload.
-    pub settlement_hash: HashOf<LaneBlockCommitment>,
 }
 
 impl LaneRelayEnvelopeRef {
     /// Return the canonical contract-state key for this verified lane relay.
     #[must_use]
     pub fn relay_state_key(&self) -> String {
-        let suffix = Hash::new(self.settlement_hash.as_ref());
         format!(
             "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_{}_{}_{}_{}",
             self.dataspace_id.as_u64(),
             self.lane_id.as_u32(),
+            hex::encode(self.lane_incarnation.as_ref()),
             self.block_height,
-            hex::encode(suffix.as_ref()),
         )
     }
 }
@@ -180,6 +232,14 @@ pub struct VerifiedLaneRelayRecord {
     /// `FastPQ` statement digest verified during registration.
     #[norito(default)]
     pub fastpq_statement_digest: [u8; 32],
+    /// Canonical lane-finality statement hash authenticated by the QC.
+    pub lane_finality_statement_hash: Hash,
+    /// Pre-execution state root proven by `FastPQ`.
+    pub fastpq_old_root: [u8; 32],
+    /// Post-execution state root proven by `FastPQ`.
+    pub fastpq_new_root: [u8; 32],
+    /// Lane-finality statement hash proven as the `FastPQ` transaction-set root.
+    pub fastpq_tx_set_hash: [u8; 32],
     /// Deterministic digest of the embedded `FastPQ` proof payload.
     pub fastpq_proof_digest: Hash,
     /// Block height where the relay proof was verified and persisted.
@@ -246,17 +306,7 @@ pub struct LaneFastpqProofMaterial {
 #[derive(Clone, Debug, Encode)]
 struct LaneRelayFastpqClaim {
     version: u8,
-    lane_id: LaneId,
-    lane_incarnation: Hash,
-    dataspace_id: DataSpaceId,
-    block_height: u64,
-    block_header: BlockHeader,
-    qc: Option<Qc>,
-    da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
-    lane_block_descriptor_hash: Option<Hash>,
-    manifest_root: [u8; 32],
-    settlement_commitment: LaneBlockCommitment,
-    settlement_hash: HashOf<LaneBlockCommitment>,
+    lane_finality_statement_hash: Hash,
 }
 
 #[derive(Clone, Debug, Encode)]
@@ -273,36 +323,25 @@ struct LaneRelayMergeHint {
     lane_block_descriptor_hash: Option<Hash>,
     settlement_hash: HashOf<LaneBlockCommitment>,
     rbc_bytes_total: u64,
+    lane_finality_statement_hash: Hash,
 }
 
 /// Compute the canonical claim digest that a FASTPQ lane-relay proof must bind.
 ///
-/// The encoded claim includes the relayed block coordinates, header/QC, manifest
-/// root, settlement commitment, and settlement hash. Because fee receipts are
-/// part of [`LaneBlockCommitment`], any receipt mutation changes this digest.
+/// The encoded claim binds the canonical lane-finality statement. Because the
+/// statement contains the exact descriptor, manifest, DA commitment, settlement
+/// effect, and RBC accounting, proof validity cannot authorize an alternate
+/// effect and remains subordinate to the lane committee's finality signature.
 ///
 /// # Errors
-/// Returns [`LaneRelayError::InvalidFastpqProof`] when the relay lacks a
-/// manifest root, or [`LaneRelayError::Encode`] if canonical encoding fails.
+/// Returns a [`LaneRelayError`] when the finality statement is incomplete or
+/// inconsistent, or [`LaneRelayError::Encode`] if canonical encoding fails.
 pub fn lane_relay_fastpq_claim_digest(
     envelope: &LaneRelayEnvelope,
 ) -> Result<Hash, LaneRelayError> {
-    let manifest_root = envelope
-        .manifest_root
-        .ok_or(LaneRelayError::InvalidFastpqProof)?;
     let claim = LaneRelayFastpqClaim {
-        version: 2,
-        lane_id: envelope.lane_id,
-        lane_incarnation: envelope.lane_incarnation,
-        dataspace_id: envelope.dataspace_id,
-        block_height: envelope.block_height,
-        block_header: envelope.block_header,
-        qc: envelope.qc.clone(),
-        da_commitment_hash: envelope.da_commitment_hash,
-        lane_block_descriptor_hash: envelope.lane_block_descriptor_hash,
-        manifest_root,
-        settlement_commitment: envelope.settlement_commitment.clone(),
-        settlement_hash: envelope.settlement_hash,
+        version: 1,
+        lane_finality_statement_hash: envelope.lane_finality_statement_hash()?,
     };
     let bytes = norito::encode_canonical(&claim)?;
     Ok(domain_separated_hash(
@@ -470,7 +509,10 @@ impl LaneRelayQuorumContext {
 }
 
 impl LaneRelayEnvelope {
-    /// Domain-separated mode tag used for lane relay QC signatures.
+    /// Domain-separated context tag used for standalone lane-block QC signatures.
+    ///
+    /// Relay-finality QCs must use [`Self::lane_finality_qc_mode_tag`] instead;
+    /// this context-only tag does not authenticate a post-execution effect.
     #[must_use]
     pub fn lane_qc_mode_tag_for(
         lane_id: LaneId,
@@ -484,10 +526,156 @@ impl LaneRelayEnvelope {
         )
     }
 
-    /// Domain-separated mode tag expected for this relay's lane QC.
+    /// Derive the canonical post-execution lane-finality statement.
+    ///
+    /// The statement excludes both proof carriers, so callers may derive it on
+    /// an unsigned envelope and attach the QC and `FastPQ` proof afterward.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LaneRelayError`] if the envelope is structurally invalid,
+    /// lacks a non-zero descriptor or manifest root, or cannot be encoded.
+    pub fn lane_finality_statement(&self) -> Result<LaneFinalityStatement, LaneRelayError> {
+        self.verify()?;
+        let lane_block_descriptor_hash = self
+            .lane_block_descriptor_hash
+            .ok_or(LaneRelayError::MissingLaneBlockDescriptorHash)?;
+        if lane_block_descriptor_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err(LaneRelayError::ZeroLaneBlockDescriptorHash);
+        }
+        let manifest_root = self
+            .manifest_root
+            .ok_or(LaneRelayError::MissingManifestRoot)?;
+        if manifest_root.iter().all(|byte| *byte == 0) {
+            return Err(LaneRelayError::ZeroManifestRoot);
+        }
+        Ok(LaneFinalityStatement {
+            version: 1,
+            lane_id: self.lane_id,
+            lane_incarnation: self.lane_incarnation,
+            dataspace_id: self.dataspace_id,
+            block_height: self.block_height,
+            block_header_hash: self.block_header.hash(),
+            da_commitment_hash: self.da_commitment_hash,
+            lane_block_descriptor_hash,
+            manifest_root,
+            settlement_commitment: self.settlement_commitment.clone(),
+            settlement_hash: self.settlement_hash,
+            rbc_bytes_total: self.rbc_bytes_total,
+        })
+    }
+
+    /// Compute the canonical post-execution lane-finality statement hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LaneRelayError`] when statement derivation or encoding fails.
+    pub fn lane_finality_statement_hash(&self) -> Result<Hash, LaneRelayError> {
+        self.lane_finality_statement()?.hash()
+    }
+
+    /// Build the exact mode tag whose QC signature authenticates this effect.
+    ///
+    /// The returned tag is consumed by the existing QC vote preimage, so every
+    /// aggregate signature commits the canonical statement hash without adding
+    /// a second, potentially divergent signature format.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LaneRelayError`] when the finality statement is incomplete.
+    pub fn lane_finality_qc_mode_tag(&self, base_mode_tag: &str) -> Result<String, LaneRelayError> {
+        let context_tag =
+            Self::lane_qc_mode_tag_for(self.lane_id, self.dataspace_id, base_mode_tag);
+        let statement_hash = self.lane_finality_statement_hash()?;
+        Ok(format!(
+            "{context_tag}::lane-finality:v1:{}",
+            hex::encode(statement_hash.as_ref())
+        ))
+    }
+
+    /// Parse a canonical lane-finality QC mode tag and return its statement hash.
+    ///
+    /// The parser rejects alternate separators, uppercase hexadecimal, extra
+    /// fields, and context tags for a different lane or dataspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneRelayError::QcFinalityStatementMismatch`] unless `mode_tag`
+    /// is the one canonical encoding for the supplied context.
+    pub fn parse_lane_finality_qc_mode_tag(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        base_mode_tag: &str,
+        mode_tag: &str,
+    ) -> Result<Hash, LaneRelayError> {
+        let context_tag = Self::lane_qc_mode_tag_for(lane_id, dataspace_id, base_mode_tag);
+        let prefix = format!("{context_tag}::lane-finality:v1:");
+        let encoded_hash = mode_tag
+            .strip_prefix(&prefix)
+            .ok_or(LaneRelayError::QcFinalityStatementMismatch)?;
+        let is_lower_hex = |byte: u8| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f');
+        if encoded_hash.len() != Hash::LENGTH * 2 || !encoded_hash.bytes().all(is_lower_hex) {
+            return Err(LaneRelayError::QcFinalityStatementMismatch);
+        }
+        encoded_hash
+            .parse::<Hash>()
+            .map_err(|_| LaneRelayError::QcFinalityStatementMismatch)
+    }
+
+    /// Require the attached QC to carry the exact statement-bound mode tag.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneRelayError::MissingQc`] if no QC is attached and
+    /// [`LaneRelayError::QcFinalityStatementMismatch`] if its signed tag differs.
+    pub fn verify_lane_finality_qc_mode_tag(
+        &self,
+        base_mode_tag: &str,
+    ) -> Result<(), LaneRelayError> {
+        let qc = self.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
+        let observed = Self::parse_lane_finality_qc_mode_tag(
+            self.lane_id,
+            self.dataspace_id,
+            base_mode_tag,
+            &qc.mode_tag,
+        )?;
+        if observed == self.lane_finality_statement_hash()? {
+            Ok(())
+        } else {
+            Err(LaneRelayError::QcFinalityStatementMismatch)
+        }
+    }
+
+    /// Return whether two envelopes describe the exact same finality effect.
+    ///
+    /// QC aggregation and proof carriers are deliberately ignored: they can be
+    /// enriched independently, but no merge-relevant field may change at a
+    /// fixed `(lane, dataspace, incarnation, height)` coordinate.
     #[must_use]
-    pub fn lane_qc_mode_tag(&self, base_mode_tag: &str) -> String {
-        Self::lane_qc_mode_tag_for(self.lane_id, self.dataspace_id, base_mode_tag)
+    pub fn same_finality_effect(&self, other: &Self) -> bool {
+        let same_qc_roots = match (&self.qc, &other.qc) {
+            (Some(left), Some(right)) => {
+                left.parent_state_root == right.parent_state_root
+                    && left.post_state_root == right.post_state_root
+            }
+            _ => true,
+        };
+        self.lane_id == other.lane_id
+            && self.lane_incarnation == other.lane_incarnation
+            && self.dataspace_id == other.dataspace_id
+            && self.block_height == other.block_height
+            && self.block_header == other.block_header
+            && self.da_commitment_hash == other.da_commitment_hash
+            && self.lane_block_descriptor_hash == other.lane_block_descriptor_hash
+            && self.settlement_commitment == other.settlement_commitment
+            && self.settlement_hash == other.settlement_hash
+            && self.rbc_bytes_total == other.rbc_bytes_total
+            && self.manifest_root == other.manifest_root
+            && same_qc_roots
     }
 
     /// Create an envelope and derive the settlement hash from the payload.
@@ -566,8 +754,8 @@ impl LaneRelayEnvelope {
         LaneRelayEnvelopeRef {
             dataspace_id: self.dataspace_id,
             lane_id: self.lane_id,
+            lane_incarnation: self.lane_incarnation,
             block_height: self.block_height,
-            settlement_hash: self.settlement_hash,
         }
     }
 
@@ -647,6 +835,7 @@ impl LaneRelayEnvelope {
                     && qc.view == self.block_header.view_change_index()
                     && qc.subject_block_hash == self.block_header.hash()
             })
+            && self.lane_finality_statement().is_ok()
             && self.has_fastpq_proof_material()
     }
 
@@ -658,8 +847,9 @@ impl LaneRelayEnvelope {
     /// and [`LaneRelayError::Encode`] if the canonical hint payload cannot be encoded.
     pub fn merge_hint_root(&self) -> Result<Hash, LaneRelayError> {
         let qc = self.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
+        let lane_finality_statement_hash = self.lane_finality_statement_hash()?;
         let hint = LaneRelayMergeHint {
-            version: 2,
+            version: 3,
             lane_id: self.lane_id,
             lane_incarnation: self.lane_incarnation,
             dataspace_id: self.dataspace_id,
@@ -671,6 +861,7 @@ impl LaneRelayEnvelope {
             lane_block_descriptor_hash: self.lane_block_descriptor_hash,
             settlement_hash: self.settlement_hash,
             rbc_bytes_total: self.rbc_bytes_total,
+            lane_finality_statement_hash,
         };
         let bytes = norito::encode_canonical(&hint)?;
         Ok(domain_separated_hash(
@@ -893,10 +1084,18 @@ impl LaneRelayEnvelope {
 impl VerifiedLaneRelayRecord {
     /// Construct a verified relay record from the canonical verified inputs.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor mirrors the canonical verified proof record"
+    )]
     pub fn new(
         relay_envelope: LaneRelayEnvelope,
         proof_payload_hash: Hash,
         fastpq_statement_digest: [u8; 32],
+        lane_finality_statement_hash: Hash,
+        fastpq_old_root: [u8; 32],
+        fastpq_new_root: [u8; 32],
+        fastpq_tx_set_hash: [u8; 32],
         fastpq_proof_digest: Hash,
         verified_at_height: u64,
         manifest_root: [u8; 32],
@@ -907,6 +1106,10 @@ impl VerifiedLaneRelayRecord {
             relay_envelope,
             proof_payload_hash,
             fastpq_statement_digest,
+            lane_finality_statement_hash,
+            fastpq_old_root,
+            fastpq_new_root,
+            fastpq_tx_set_hash,
             fastpq_proof_digest,
             verified_at_height,
             manifest_root,
@@ -1109,6 +1312,21 @@ pub enum LaneRelayError {
     /// DA commitment hash in the envelope does not match the block header.
     #[error("DA commitment hash in envelope does not match block header")]
     DaCommitmentHashMismatch,
+    /// Finality statement is missing the standalone lane-block descriptor hash.
+    #[error("lane finality statement requires a lane block descriptor hash")]
+    MissingLaneBlockDescriptorHash,
+    /// Finality statement carries the reserved all-zero lane-block descriptor hash.
+    #[error("lane finality statement lane block descriptor hash must be non-zero")]
+    ZeroLaneBlockDescriptorHash,
+    /// Finality statement is missing the dataspace manifest root.
+    #[error("lane finality statement requires a manifest root")]
+    MissingManifestRoot,
+    /// Finality statement carries the reserved all-zero manifest root.
+    #[error("lane finality statement manifest root must be non-zero")]
+    ZeroManifestRoot,
+    /// QC mode tag does not authenticate the canonical lane-finality statement.
+    #[error("QC does not authenticate the canonical lane finality statement")]
+    QcFinalityStatementMismatch,
     /// Norito encoding failed while hashing the settlement.
     #[error(transparent)]
     Encode(#[from] norito::core::Error),
@@ -1181,6 +1399,11 @@ impl PartialEq for LaneRelayError {
             | (QcSubjectMismatch, QcSubjectMismatch)
             | (QcHeightMismatch, QcHeightMismatch)
             | (DaCommitmentHashMismatch, DaCommitmentHashMismatch)
+            | (MissingLaneBlockDescriptorHash, MissingLaneBlockDescriptorHash)
+            | (ZeroLaneBlockDescriptorHash, ZeroLaneBlockDescriptorHash)
+            | (MissingManifestRoot, MissingManifestRoot)
+            | (ZeroManifestRoot, ZeroManifestRoot)
+            | (QcFinalityStatementMismatch, QcFinalityStatementMismatch)
             | (MissingQc, MissingQc)
             | (AggregateSignatureInvalid, AggregateSignatureInvalid)
             | (MissingFastpqProof, MissingFastpqProof)
@@ -1324,6 +1547,11 @@ impl LaneRelayError {
             LaneRelayError::QcSubjectMismatch => "qc_subject_mismatch",
             LaneRelayError::QcHeightMismatch => "qc_height_mismatch",
             LaneRelayError::DaCommitmentHashMismatch => "da_commitment_hash_mismatch",
+            LaneRelayError::MissingLaneBlockDescriptorHash => "missing_lane_block_descriptor_hash",
+            LaneRelayError::ZeroLaneBlockDescriptorHash => "zero_lane_block_descriptor_hash",
+            LaneRelayError::MissingManifestRoot => "missing_manifest_root",
+            LaneRelayError::ZeroManifestRoot => "zero_manifest_root",
+            LaneRelayError::QcFinalityStatementMismatch => "qc_finality_statement_mismatch",
             LaneRelayError::InvalidValidatorSet { .. } => "invalid_validator_set",
             LaneRelayError::MissingQc => "missing_qc",
             LaneRelayError::SignerBitmapLengthMismatch { .. } => "signer_bitmap_length_mismatch",
@@ -1399,7 +1627,10 @@ mod tests {
     fn build_envelope(height: u64, qc: Option<Qc>) -> LaneRelayEnvelope {
         let settlement = sample_commitment(height, 3, 2);
         let header = sample_header(height, None);
-        LaneRelayEnvelope::new(header, qc, None, settlement, 0).expect("envelope")
+        LaneRelayEnvelope::new(header, qc, None, settlement, 0)
+            .expect("envelope")
+            .with_lane_block_descriptor_hash(Some(Hash::new(b"test-lane-block-descriptor")))
+            .with_manifest_root(Some([0x42; 32]))
     }
 
     fn checked_account_id() -> AccountId {
@@ -1438,6 +1669,7 @@ mod tests {
     fn relay_digest_domains_are_unique_and_bind_identical_payloads() {
         let domains = [
             LANE_RELAY_FASTPQ_CLAIM_DIGEST_DOMAIN_V1,
+            LANE_FINALITY_STATEMENT_DOMAIN_V1,
             LANE_RELAY_MERGE_HINT_DOMAIN_V1,
             LANE_RELAY_SETTLEMENT_HASH_DOMAIN_V1,
             FEE_SPONSOR_VAULT_SOURCE_STATE_ROOT_DOMAIN_V1,
@@ -1488,6 +1720,87 @@ mod tests {
             .expect("changed merge hint root");
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn lane_finality_qc_tag_strictly_binds_the_exact_effect() {
+        let mut envelope = build_envelope(6, None);
+        let tag = envelope
+            .lane_finality_qc_mode_tag("permissioned")
+            .expect("complete lane finality statement");
+        let statement_hash = envelope
+            .lane_finality_statement_hash()
+            .expect("lane finality statement hash");
+        assert_eq!(
+            LaneRelayEnvelope::parse_lane_finality_qc_mode_tag(
+                envelope.lane_id,
+                envelope.dataspace_id,
+                "permissioned",
+                &tag,
+            )
+            .expect("canonical finality tag"),
+            statement_hash
+        );
+
+        let hash_offset = tag
+            .len()
+            .checked_sub(Hash::LENGTH * 2)
+            .expect("finality tag contains a fixed-width hash");
+        let mut uppercase = tag.clone().into_bytes();
+        uppercase[hash_offset] = b'A';
+        let uppercase = String::from_utf8(uppercase).expect("finality tag remains ASCII");
+        assert_eq!(
+            LaneRelayEnvelope::parse_lane_finality_qc_mode_tag(
+                envelope.lane_id,
+                envelope.dataspace_id,
+                "permissioned",
+                &uppercase,
+            ),
+            Err(LaneRelayError::QcFinalityStatementMismatch)
+        );
+        for legacy in [
+            String::new(),
+            LaneRelayEnvelope::lane_qc_mode_tag_for(
+                envelope.lane_id,
+                envelope.dataspace_id,
+                "permissioned",
+            ),
+        ] {
+            assert_eq!(
+                LaneRelayEnvelope::parse_lane_finality_qc_mode_tag(
+                    envelope.lane_id,
+                    envelope.dataspace_id,
+                    "permissioned",
+                    &legacy,
+                ),
+                Err(LaneRelayError::QcFinalityStatementMismatch)
+            );
+        }
+        assert_eq!(
+            LaneRelayEnvelope::parse_lane_finality_qc_mode_tag(
+                envelope.lane_id,
+                envelope.dataspace_id,
+                "permissioned",
+                &format!("{tag}:extra"),
+            ),
+            Err(LaneRelayError::QcFinalityStatementMismatch)
+        );
+
+        let mut qc = qc_with_bitmap(vec![0b0000_0001], 6, vec![0xCC; 48]);
+        qc.mode_tag = tag;
+        envelope.qc = Some(qc);
+        envelope
+            .verify_lane_finality_qc_mode_tag("permissioned")
+            .expect("QC tag authenticates the original effect");
+
+        envelope.settlement_commitment.tx_count =
+            envelope.settlement_commitment.tx_count.saturating_add(1);
+        envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)
+            .expect("mutated settlement remains hashable");
+        assert_eq!(
+            envelope.verify_lane_finality_qc_mode_tag("permissioned"),
+            Err(LaneRelayError::QcFinalityStatementMismatch)
+        );
     }
 
     #[test]
@@ -1654,11 +1967,17 @@ mod tests {
         let second = relay_ref.relay_state_key();
 
         assert_eq!(first, second);
-        assert!(first.starts_with("pkdeploy_verified_lane_relay_2_3_7_"));
+        assert_eq!(
+            first,
+            format!(
+                "pkdeploy_verified_lane_relay_2_3_{}_7",
+                hex::encode(relay_ref.lane_incarnation.as_ref())
+            )
+        );
         assert!(!first.contains('/'));
-        let suffix = first.rsplit('_').next().expect("hash suffix");
-        assert_eq!(suffix.len(), 64);
-        assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
+        let incarnation = first.split('_').nth_back(1).expect("incarnation segment");
+        assert_eq!(incarnation.len(), 64);
+        assert!(incarnation.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 
     fn qc_with_bitmap(bitmap: Vec<u8>, height: u64, signature: Vec<u8>) -> Qc {

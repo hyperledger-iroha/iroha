@@ -1153,10 +1153,23 @@ fn record_production_merge_candidate_for_persistence_retry(
         target_dsids: vec![dataspace_id.as_u64()],
         effect_binding: None,
     };
+    let lane_finality_statement_hash = envelope
+        .lane_finality_statement_hash()
+        .expect("merge-ready relay carries a finality statement");
+    let (fastpq_old_root, fastpq_new_root) = envelope
+        .qc
+        .as_ref()
+        .map_or(([0; 32], [0; 32]), |qc| {
+            (qc.parent_state_root.into(), qc.post_state_root.into())
+        });
     let record = VerifiedLaneRelayRecord::new(
         envelope.clone(),
         material.proof_digest,
         Hash::new(b"v2 merge persistence retry statement").into(),
+        lane_finality_statement_hash,
+        fastpq_old_root,
+        fastpq_new_root,
+        lane_finality_statement_hash.into(),
         Hash::new(b"v2 merge persistence retry inner proof"),
         material.verified_at_height,
         manifest_root,

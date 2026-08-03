@@ -8,6 +8,8 @@ directories; module-controlled ``__file__`` attributes are never used to
 discover trusted files.
 """
 
+from __future__ import annotations
+
 import base64
 import csv
 import hashlib
@@ -622,6 +624,17 @@ def _assert_contiguous_local_records(
             "fresh wheel local records do not contiguously cover "
             "the pre-central payload"
         )
+
+
+def seal_wheel(wheel_path: Path) -> FileSeal:
+    """Return a stable seal for one canonical private wheel candidate."""
+
+    _payload, seal = _read_stable_regular_file(
+        wheel_path,
+        label="fresh private wheel",
+        max_bytes=MAX_WHEEL_BYTES,
+    )
+    return seal
 
 
 def preflight_wheel(
@@ -1961,6 +1974,14 @@ def verify_current_environment(
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--seal":
+        try:
+            seal = seal_wheel(Path(sys.argv[2]))
+        except (OSError, VerificationError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(seal.render())
+        return 0
     if len(sys.argv) == 4 and sys.argv[1] == "--preflight":
         try:
             wheel = preflight_wheel(Path(sys.argv[2]), sys.argv[3])
@@ -1972,7 +1993,7 @@ def main() -> int:
     if len(sys.argv) != 6:
         raise SystemExit(
             "usage: verify_privacy_python_wheel.py "
-            "[--preflight] PRIVATE_VENV_OR_WHEEL PRIVATE_WHEEL_OR_SEAL "
+            "[--seal|--preflight] PRIVATE_VENV_OR_WHEEL PRIVATE_WHEEL_OR_SEAL "
             "EXPECTED_WHEEL_SEAL [NORITO_ROOT TORII_ROOT]"
         )
     try:

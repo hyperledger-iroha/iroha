@@ -1,6 +1,7 @@
 import { Buffer } from "buffer";
 
 export const CONTRACT_ADDRESS_V1_VERSION = 1;
+export const CONTRACT_ADDRESS_HRP = "irohac";
 
 const BECH32M_CONSTANT = 0x2bc830a3;
 const BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
@@ -11,12 +12,6 @@ const BECH32_GENERATORS = Object.freeze([
   0x3d4233dd,
   0x2a1462b3,
 ]);
-
-export function contractAddressHrp(chainDiscriminant) {
-  if (chainDiscriminant === 753n) return "sorac";
-  if (chainDiscriminant === 369n) return "tairac";
-  return `c${chainDiscriminant.toString(16)}`;
-}
 
 function convertToBase32(bytes) {
   let accumulator = 0;
@@ -93,6 +88,11 @@ export function parseCanonicalContractAddress(value, context = "contractAddress"
   })) {
     throw new TypeError(`${context} has an invalid Bech32 human-readable prefix`);
   }
+  if (hrp !== CONTRACT_ADDRESS_HRP) {
+    throw new TypeError(
+      `${context} must use the canonical ${CONTRACT_ADDRESS_HRP} prefix`,
+    );
+  }
   const values = [];
   for (const character of value.slice(separator + 1)) {
     const index = BECH32_CHARSET.indexOf(character);
@@ -116,19 +116,6 @@ export function parseCanonicalContractAddress(value, context = "contractAddress"
     hrp,
     dataspaceId: payload.readBigUInt64BE(1),
   });
-}
-
-/** Parse a canonical address and require the HRP for one chain discriminant. */
-export function requireContractAddressForChain(
-  value,
-  chainDiscriminant,
-  context = "contractAddress",
-) {
-  const parsed = parseCanonicalContractAddress(value, context);
-  if (parsed.hrp !== contractAddressHrp(chainDiscriminant)) {
-    throw new TypeError(`${context} belongs to a different chain discriminant`);
-  }
-  return parsed;
 }
 
 /** Encode a canonical Bech32m literal from a validated HRP and V1 payload. */

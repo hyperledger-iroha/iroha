@@ -6,8 +6,9 @@ These guidelines apply to the `scripts/` directory.
 - Shell and Python helpers that back CI (`ci/`, `buildkite/`), release automation, fixture regeneration, GPU experiments, etc.
 - `test_env.py` provisions a local multi-peer network that is consumed by the Python test suites and manual QA.
 - `requirements.txt` is the exact pinned Python dependency set shared by the
-  scripts (BLAKE3, pytest, requests, the pre-3.11 TOML backport, and
-  `tomli_w`). Its security-patched pytest and HTTP stack require Python 3.10+
+  scripts (BLAKE3, JSON Schema validation, pytest, requests, the pre-3.11 TOML
+  backport, and `tomli_w`). Its security-patched pytest and HTTP stack require
+  Python 3.10+
   even though dependency-free helpers may retain an older syntax floor.
   Install it with `python3 -m pip install -r scripts/requirements.txt` before
   running helpers that import Python modules.

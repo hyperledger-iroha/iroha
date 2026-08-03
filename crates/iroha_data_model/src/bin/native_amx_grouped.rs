@@ -616,17 +616,17 @@ fn application_evidence(
     leaf.validate()?;
     let leaf_hash = HashOf::new(&leaf);
     let tree = [leaf_hash].into_iter().collect::<MerkleTree<_>>();
-    let typed_root = tree
-        .root()
-        .ok_or("singleton Native AMX manifest must have a root")?;
-    let manifest_root = Hash::from(typed_root);
+    let manifest_commitment = tree
+        .commitment()
+        .ok_or("singleton Native AMX manifest must have a commitment")?;
+    if manifest_commitment.leaf_count().get() != u64::from(APPLICATION_MANIFEST_LEAF_COUNT) {
+        return Err("Native AMX manifest tree count differs from the execution commitment".into());
+    }
+    let manifest_root = Hash::from(*manifest_commitment.root());
     let proof = tree
         .get_proof(0)
         .ok_or("singleton Native AMX manifest must have a proof")?;
-    if !proof
-        .clone()
-        .verify(&leaf_hash, &typed_root, usize::BITS as usize - 1)
-    {
+    if !proof.verify(&leaf_hash, &manifest_commitment) {
         return Err("generated Native AMX manifest proof does not verify".into());
     }
     let execution_commitment =
@@ -1736,6 +1736,14 @@ fn negative_controls(
             vec![mutation(
                 "replace",
                 "/golden/application_evidence/manifest_artifacts/0/manifest_root",
+                Some(forged_hash.clone()),
+            )],
+        ),
+        evidence_control(
+            "manifest_leaf_hash_tampering",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/manifest_artifacts/0/leaf_hash",
                 Some(forged_hash.clone()),
             )],
         ),

@@ -369,12 +369,12 @@ def test_algorithm_labels_reject_control_and_confusable_native_inputs(label: str
         normalize_crypto_algorithm(label)
 
 
-def test_asset_definition_id_builds_canonical_address_from_domain_and_name() -> None:
+def test_asset_definition_id_derivation_is_one_way() -> None:
     asset = crypto_module.AssetDefinitionId.from_domain_and_name("boi.is", "ds")
 
     assert asset.canonical_address() == "56HTweMpySR2JErjpkisQ2FBTGnN"
     assert asset.value == "56HTweMpySR2JErjpkisQ2FBTGnN"
-    assert asset.domain.value == "boi.is"
+    assert not hasattr(asset, "domain")
 
 
 @pytest.mark.parametrize(

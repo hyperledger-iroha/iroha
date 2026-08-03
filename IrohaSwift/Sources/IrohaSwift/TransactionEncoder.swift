@@ -501,23 +501,27 @@ enum SingleInstructionSwiftNoritoEncoder {
             authorityId: authority
         )
         let executable = try encodeBatchExecutable(entries)
-        var transactionPayload = CanonicalNoritoWriter()
-        transactionPayload.writeField(CanonicalNorito.encodeString(ids.chainId))
-        transactionPayload.writeField(try CanonicalNorito.encodeAccountId(ids.authorityId))
-        transactionPayload.writeField(CanonicalNorito.encodeUInt64(creationTimeMs))
+        // `ChainId` is a tuple-newtype around its canonical string.
+        var chainIdPayload = CompactNoritoWriter()
+        chainIdPayload.writeField(CompactNorito.encodeString(ids.chainId))
+
+        var transactionPayload = CompactNoritoWriter()
+        transactionPayload.writeField(chainIdPayload.data)
+        transactionPayload.writeField(try CanonicalNorito.encodeCompactAccountId(ids.authorityId))
+        transactionPayload.writeField(CompactNorito.encodeUInt64(creationTimeMs))
         transactionPayload.writeField(executable)
         transactionPayload.writeField(
-            try CanonicalNorito.encodeOption(resolvedTtlMs, encode: CanonicalNorito.encodeUInt64)
+            try CompactNorito.encodeOption(resolvedTtlMs, encode: CompactNorito.encodeUInt64)
         )
         transactionPayload.writeField(
-            try CanonicalNorito.encodeOption(nonce, encode: CanonicalNorito.encodeUInt32)
+            try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32)
         )
-        transactionPayload.writeField(try feePayment.canonicalNorito())
+        transactionPayload.writeField(try feePayment.compactNorito())
         transactionPayload.writeField(encodeEmptyMetadata())
         transactionPayload.writeField(encodeNoneOption())
 
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload.data))
-        let signed = encodeSignedTransaction(
+        let signed = encodeCompactSignedTransaction(
             signature: signature,
             transactionPayload: transactionPayload.data
         )
@@ -713,27 +717,24 @@ enum SingleInstructionSwiftNoritoEncoder {
     }
 
     private static func encodeBatchExecutable(_ entries: [TransactionBatchEntry]) throws -> Data {
-        var sequence = CanonicalNoritoWriter()
-        sequence.writeLength(UInt64(entries.count))
+        var sequence = CompactNoritoWriter()
+        sequence.writeUInt64LE(UInt64(entries.count))
         for entry in entries {
-            var item = CanonicalNoritoWriter()
+            var item = CompactNoritoWriter()
             switch entry {
             case let .instruction(frame):
                 item.writeUInt32LE(0)
-                var instruction = CanonicalNoritoWriter()
-                instruction.writeField(CanonicalNorito.encodeString(frame.wireName))
-                instruction.writeField(CanonicalNorito.encodeBytesVec(frame.framedPayload))
-                item.writeField(instruction.data)
+                item.writeField(frame.compactInstructionBoxPayload())
             case let .contractCall(invocation):
                 item.writeUInt32LE(1)
-                var call = CanonicalNoritoWriter()
-                call.writeField(CanonicalNorito.encodeString(invocation.contractAddress))
+                var call = CompactNoritoWriter()
+                call.writeField(CompactNorito.encodeString(invocation.contractAddress))
                 call.writeField(invocation.expectedCodeHash)
-                call.writeField(CanonicalNorito.encodeString(invocation.entrypoint))
+                call.writeField(CompactNorito.encodeString(invocation.entrypoint))
                 call.writeField(
-                    try CanonicalNorito.encodeOption(
+                    try CompactNorito.encodeOption(
                         invocation.arguments,
-                        encode: CanonicalNorito.encodeBytesVec
+                        encode: CompactNorito.encodeBytesVec
                     )
                 )
                 item.writeField(call.data)
@@ -741,10 +742,27 @@ enum SingleInstructionSwiftNoritoEncoder {
             sequence.writeField(item.data)
         }
 
-        var executable = CanonicalNoritoWriter()
+        var executable = CompactNoritoWriter()
         executable.writeUInt32LE(4)
         executable.writeField(sequence.data)
         return executable.data
+    }
+
+    private static func encodeCompactSignedTransaction(
+        signature: Data,
+        transactionPayload: Data
+    ) -> Data {
+        // `SignedTransaction.signature` contains the `TransactionSignature`
+        // tuple-newtype. Its sole field wraps the transparent
+        // `SignatureOf<TransactionPayload>`/`Signature` byte-vector payload.
+        var transactionSignature = CompactNoritoWriter()
+        transactionSignature.writeField(CompactNorito.encodeConstVec(signature))
+
+        var signedTransaction = CompactNoritoWriter()
+        signedTransaction.writeField(transactionSignature.data)
+        signedTransaction.writeField(transactionPayload)
+        signedTransaction.writeField(encodeNoneOption())
+        return signedTransaction.data
     }
 
     private static func encodeSignedTransaction(signature: Data,

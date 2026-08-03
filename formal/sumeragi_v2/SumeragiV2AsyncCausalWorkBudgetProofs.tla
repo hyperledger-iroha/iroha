@@ -181,7 +181,9 @@ BY SMTT(180)
        InstallLockedFetchSuccessors, InstallLockedFetchSuccessor,
        InstallCommitSignSuccessors, InstallCommitSignSuccessor,
        InstallProposalSuccessor, AsyncCandidateFrom,
-       AsyncCandidateAtConsumerWithOrigin,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorSemanticPhase,
+       AsyncCandidateSuccessorProposalRound,
        AsyncCandidateWithIdentityAndOrigin, SequenceSet
 
 (***************************************************************************
@@ -265,7 +267,9 @@ BY CommandSuccessorsHaveBoundedLength,
        InstallLockedFetchSuccessors, InstallLockedFetchSuccessor,
        InstallCommitSignSuccessors, InstallCommitSignSuccessor,
        InstallProposalSuccessor, AsyncCandidateFrom,
-       AsyncCandidateAtConsumerWithOrigin,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorSemanticPhase,
+       AsyncCandidateSuccessorProposalRound,
        AsyncCandidateWithIdentityAndOrigin,
        SequenceSet, AsyncCandidateSet
 
@@ -359,10 +363,11 @@ AsyncCausalEpisodeFrozenPredecessorOrigins(node, cutoffOrdinal) ==
   LET physicalCut ==
         AsyncCausalEpisodeTargetPhysicalCut(node, cutoffOrdinal)
   IN {record.origin:
-        record \in AsyncCandidateLifecycleAdmissions,
-        /\ record.node = node
-        /\ record.ordinal <= cutoffOrdinal
-        /\ record.sourcePhysicalOrdinal < physicalCut}
+        record \in
+          {owned \in AsyncCandidateLifecycleAdmissions:
+             /\ owned.node = node
+             /\ owned.ordinal <= cutoffOrdinal
+             /\ owned.sourcePhysicalOrdinal < physicalCut}}
 
 (***************************************************************************
 Frozen physical-ingress transfer budget.
@@ -557,7 +562,7 @@ AsyncCausalEpisodeServeReachDebt(node, cutoffOrdinal) ==
 AsyncCausalEpisodeStructuralRank(node, cutoffOrdinal) ==
   <<AsyncCausalEpisodeCandidateWorkBudget(node, cutoffOrdinal),
     <<AsyncCausalEpisodeServeWorkBudget(node, cutoffOrdinal),
-      AsyncCausalEpisodeServeReachDebt(node, cutoffOrdinal)>>>
+      AsyncCausalEpisodeServeReachDebt(node, cutoffOrdinal)>>>>
 
 AsyncCausalEpisodeServeRankCarrier == Nat \X Nat
 AsyncCausalEpisodeStructuralRankCarrier ==
@@ -814,7 +819,8 @@ BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
        AsyncAllVars
 
 THEOREM AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish ==
-  \A node \in ValidatorIds, origin, cutoffOrdinal \in Nat \ {0}:
+  \A origin:
+    \A node \in ValidatorIds, cutoffOrdinal \in Nat \ {0}:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCausalEpisodeLifecycleCutOwned(
@@ -868,7 +874,8 @@ BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
        AsyncAllVars
 
 THEOREM AsyncCausalEpisodeOwnedLifecycleServeCutCannotReplenish ==
-  \A node \in ValidatorIds, origin, cutoffOrdinal \in Nat \ {0}:
+  \A origin:
+    \A node \in ValidatorIds, cutoffOrdinal \in Nat \ {0}:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCausalEpisodeLifecycleCutOwned(
@@ -924,10 +931,10 @@ BY AsyncCausalEpisodeFrozenOriginsCannotReplenish,
        CandidateScheduled, AsyncAllVars
 
 THEOREM AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget ==
-  \A node \in ValidatorIds,
-     origin,
-     cutoffOrdinal \in Nat \ {0},
-     serviced \in AsyncCandidateSet:
+  \A origin:
+    \A node \in ValidatorIds,
+       cutoffOrdinal \in Nat \ {0},
+       serviced \in AsyncCandidateSet:
     /\ gst
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
@@ -1180,24 +1187,25 @@ cell.  This named projection keeps that otherwise easy-to-miss case explicit
 for both the ordinary and indexed historical providers.
 ***************************************************************************)
 THEOREM AsyncCausalEpisodeIngressOwnerDepartureStrictlyDescends ==
-  \A candidate \in AsyncCandidateSet, identity:
-    LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
-        rank == AsyncCausalEpisodeStructuralRank(
-                  candidate.node, cutoffOrdinal)
-    IN /\ AsyncStrongTypeInvariant
-       /\ AsyncProgressOwnershipInvariant
-       /\ ProtectedCandidateOwned(candidate)
-       /\ identity
-            \in AsyncCausalEpisodeServeIngressIdentities(
-                 candidate.node, cutoffOrdinal)
-       /\ [AsyncNext]_AsyncAllVars
-       /\ ProtectedCandidateOwned(candidate)'
-       /\ identity
-            \notin AsyncCausalEpisodeServeIngressIdentities(
-                     candidate.node, cutoffOrdinal)'
-       => <<AsyncCausalEpisodeStructuralRank(
-               candidate.node, cutoffOrdinal)', rank>>
-            \in AsyncCausalEpisodeStructuralRankOrdering
+  \A identity:
+    \A candidate \in AsyncCandidateSet:
+      LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
+          rank == AsyncCausalEpisodeStructuralRank(
+                    candidate.node, cutoffOrdinal)
+      IN /\ AsyncStrongTypeInvariant
+         /\ AsyncProgressOwnershipInvariant
+         /\ ProtectedCandidateOwned(candidate)
+         /\ identity
+              \in AsyncCausalEpisodeServeIngressIdentities(
+                   candidate.node, cutoffOrdinal)
+         /\ [AsyncNext]_AsyncAllVars
+         /\ ProtectedCandidateOwned(candidate)'
+         /\ identity
+              \notin AsyncCausalEpisodeServeIngressIdentities(
+                       candidate.node, cutoffOrdinal)'
+         => <<AsyncCausalEpisodeStructuralRank(
+                 candidate.node, cutoffOrdinal)', rank>>
+              \in AsyncCausalEpisodeStructuralRankOrdering
 BY AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
    AsyncCausalEpisodeServeCutCannotReplenish,
    FS_CardinalityType, FS_Subset, IsaT(1200)

@@ -4,7 +4,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
-import static org.hyperledger.iroha.android.client.TransactionCompatibilityMockResponses.compatibleCapabilities;
 
 import java.lang.reflect.Field;
 import java.net.URI;
@@ -21,6 +20,7 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import okio.ByteString;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutor;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnector;
@@ -108,7 +108,7 @@ public final class AndroidOkHttpClientRefactorTests {
 
   private static void restTelemetryParity(final TelemetryOptions options) throws Exception {
     try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(compatibleCapabilities());
+      server.enqueue(TransactionCompatibilityTestSupport.compatibleCapabilitiesResponse());
       server.enqueue(new MockResponse().setResponseCode(202).setBody("{\"status\":\"ok\"}"));
       server.start();
 
@@ -126,8 +126,15 @@ public final class AndroidOkHttpClientRefactorTests {
 
       okTransport.submitTransaction(tx).get(2, TimeUnit.SECONDS);
 
-      final TelemetryRecord submitRequest = okSink.awaitRequest();
-      assertRequestFields(submitRequest, "/v1/pipeline/transactions", "POST");
+      final RecordedRequest capabilities = server.takeRequest(1, TimeUnit.SECONDS);
+      TransactionCompatibilityTestSupport.assertCompatibleCapabilitiesRequest(capabilities);
+      final RecordedRequest submission = server.takeRequest(1, TimeUnit.SECONDS);
+      assertNotNull("mock server must observe the transaction submission", submission);
+      assertEquals("POST", submission.getMethod());
+      assertEquals("/v1/pipeline/transactions", submission.getPath());
+
+      final TelemetryRecord okRequest = okSink.awaitRequest();
+      assertRequestFields(okRequest, "/v1/pipeline/transactions", "POST");
 
       final TelemetryRecord submitResponse = okSink.awaitResponse();
       assertEquals(202, submitResponse.statusCode().orElseThrow());

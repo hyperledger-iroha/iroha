@@ -1,22 +1,28 @@
 #[test]
 fn transfer_rejects_when_issuer_policy_requires_binding_for_destination() {
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let domain_id: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
     let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    let mut asset_def = {
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    }
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    let mut asset_def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
     .build(&ALICE_ID);
     let issuer_policy = AssetIssuerUsagePolicyV1 {
         require_subject_binding: true,
-        subject_bindings: BTreeMap::from([(ALICE_ID.clone(), AssetSubjectBindingV1::default())]),
+        subject_bindings: BTreeMap::from([(
+            ALICE_ID.clone(),
+            AssetSubjectBindingV1::default(),
+        )]),
     };
     asset_def.metadata_mut().insert(
         ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
@@ -56,11 +62,13 @@ fn transfer_rejects_when_issuer_policy_requires_binding_for_destination() {
 fn transfer_accepts_any_matching_allowed_domain_membership() {
     let denied_domain_id: DomainId =
         DomainId::try_new("wonderland", "universal").expect("domain id");
-    let allowed_domain_id: DomainId = DomainId::try_new("oasis", "universal").expect("domain id");
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        denied_domain_id.clone(),
-        "rose".parse().unwrap(),
-    );
+    let allowed_domain_id: DomainId =
+        DomainId::try_new("oasis", "universal").expect("domain id");
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            denied_domain_id.clone(),
+            "rose".parse().unwrap(),
+        );
 
     let mut denied_domain_metadata = Metadata::default();
     denied_domain_metadata.insert(
@@ -91,14 +99,18 @@ fn transfer_accepts_any_matching_allowed_domain_membership() {
     );
     let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
 
-    let mut asset_def = {
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    }
+    let mut asset_def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
     .build(&ALICE_ID);
     let binding = AssetSubjectBindingV1 {
-        allowed_domains: BTreeSet::from([denied_domain_id.clone(), allowed_domain_id.clone()]),
+        allowed_domains: BTreeSet::from([
+            denied_domain_id.clone(),
+            allowed_domain_id.clone(),
+        ]),
         allowed_dataspaces: BTreeSet::new(),
     };
     let issuer_policy = AssetIssuerUsagePolicyV1 {
@@ -154,11 +166,13 @@ fn transfer_accepts_any_matching_allowed_domain_membership() {
 
 #[test]
 fn transfer_rejects_when_bound_domain_policy_denies_asset() {
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let domain_id: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let mut domain_metadata = Metadata::default();
     let domain_policy = DomainAssetUsagePolicyV1 {
         allowed_assets: BTreeSet::new(),
@@ -187,11 +201,12 @@ fn transfer_rejects_when_bound_domain_policy_denies_asset() {
     );
     let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
 
-    let mut asset_def = {
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    }
+    let mut asset_def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
     .build(&ALICE_ID);
     let binding = AssetSubjectBindingV1 {
         allowed_domains: BTreeSet::from([domain_id.clone()]),
@@ -242,14 +257,15 @@ fn transfer_rejects_when_bound_domain_policy_denies_asset() {
 
 #[test]
 fn transfer_rejects_when_dataspace_manifest_denies_bound_asset() {
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let domain_id: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let dsid = DataSpaceId::new(7);
     let uaid_alice = iroha_data_model::nexus::UniversalAccountId::from_hash(
         iroha_crypto::Hash::new(b"uaid:alice"),
     );
-    let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(iroha_crypto::Hash::new(
-        b"uaid:bob",
-    ));
+    let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
+        iroha_crypto::Hash::new(b"uaid:bob"),
+    );
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account = NewAccount::new(ALICE_ID.clone())
         .with_uaid(Some(uaid_alice))
@@ -258,16 +274,17 @@ fn transfer_rejects_when_dataspace_manifest_denies_bound_asset() {
         .with_uaid(Some(uaid_bob))
         .build(&BOB_ID);
 
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    let mut asset_def = {
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    }
-    .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted)
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+    let mut asset_def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "rose".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+        Some(domain_id.clone()),
+    )
     .build(&ALICE_ID);
     let binding = AssetSubjectBindingV1 {
         allowed_domains: BTreeSet::new(),
@@ -311,26 +328,30 @@ fn transfer_rejects_when_dataspace_manifest_denies_bound_asset() {
     stx.world.current_dataspace_id = Some(dsid);
 
     let mut alice_manifest_record =
-        crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
-            version: iroha_data_model::nexus::ManifestVersion::default(),
-            uaid: uaid_alice,
-            dataspace: dsid,
-            issued_ms: 1,
-            activation_epoch: 0,
-            expiry_epoch: None,
-            entries: Vec::new(),
-        });
+        crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
+            AssetPermissionManifest {
+                version: iroha_data_model::nexus::ManifestVersion::default(),
+                uaid: uaid_alice,
+                dataspace: dsid,
+                issued_ms: 1,
+                activation_epoch: 0,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            },
+        );
     alice_manifest_record.lifecycle.mark_activated(0);
     let mut bob_manifest_record =
-        crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
-            version: iroha_data_model::nexus::ManifestVersion::default(),
-            uaid: uaid_bob,
-            dataspace: dsid,
-            issued_ms: 1,
-            activation_epoch: 0,
-            expiry_epoch: None,
-            entries: Vec::new(),
-        });
+        crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
+            AssetPermissionManifest {
+                version: iroha_data_model::nexus::ManifestVersion::default(),
+                uaid: uaid_bob,
+                dataspace: dsid,
+                issued_ms: 1,
+                activation_epoch: 0,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            },
+        );
     bob_manifest_record.lifecycle.mark_activated(0);
     let mut alice_set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
     alice_set.upsert(alice_manifest_record);

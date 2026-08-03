@@ -1,8 +1,8 @@
-//! Fixed-profile Jindo commitment, batched opening, and verification.
+//! Revised Jindo ΠSplit → ΠAgg → ΠQuad implementation.
 //!
-//! This is a clean-room implementation of Figures 1--5 of ePrint 2026/044,
-//! including the paper's generalized sixteen-slot CELPC encoding.  The
-//! transcript and wire are Iroha-specific, closed, and versioned.
+//! This is a clean-room native-Rust implementation of the current paper's
+//! univariate coefficient-encoding specialization. The transcript and wire
+//! are Iroha-specific and intentionally have no legacy decoder.
 
 use iroha_data_model::privacy::{
     IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
@@ -16,223 +16,285 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::privacy_engines::p256::TranscriptBindingV1;
 
 use super::{
-    JINDO_ENCODING_SLOTS_V1, JINDO_MAX_COEFFICIENTS_V1, JINDO_RING_DEGREE_V1,
+    JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1,
+    JINDO_MAX_BATCH_SIZE_V1, JINDO_MAX_COEFFICIENTS_V1, JINDO_RING_DEGREE_V1,
     JindoCanonicalPolynomialErrorV1,
     codec::{JINDO_PROOF_BYTES_V1, JindoEvaluationProofV1, JindoProofCodecErrorV1},
     crs::{commit_key_v1, crs_digest_v1},
-    encoding::{decode_coefficient_slots_v1, encode_coefficient_slots_v1},
+    encoding::{
+        decode_coefficient_slots_v1, decode_exact_coefficient_slots_v1, encode_coefficient_slots_v1,
+    },
     field::JindoFieldElementV1,
     norm::{
         JINDO_DECOMPOSED_NORM_SQUARED_BOUND_V1, JINDO_RESPONSE_NORM_SQUARED_BOUND_V1,
         two_norm_squared_is_below_v1,
     },
-    parameters::{JINDO_PARAMETER_MANIFEST_V1, JINDO_PARAMETERS_V1, JindoGaussianWidthV1},
+    parameters::{
+        JINDO_PARAMETER_MANIFEST_V1, JINDO_PARAMETERS_V1, JINDO_SOURCE_PROVENANCE_V1,
+        JindoGaussianWidthV1,
+    },
     ring::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
     },
     sampling::{
-        JindoSamplingErrorV1, health_checked_jindo_rng_v1, randomized_encode_coefficient_slots_v1,
-        sample_gaussian_polynomial_v1, sample_uniform_field_element_v1,
+        JindoSamplingErrorV1, accept_aggregation_rejection_v1, health_checked_jindo_rng_v1,
+        sample_gaussian_polynomial_v1, sample_mlwe_polynomial_v1,
+        sample_uniform_encoding_polynomial_v1,
     },
-    transcript::{JindoTranscriptErrorV1, JindoTranscriptV1},
+    transcript::{JindoShortChallengeV1, JindoTranscriptErrorV1, JindoTranscriptV1},
     validate_canonical_polynomial_v1,
 };
 
-/// Exact native proof byte width for this Jindo profile.
+/// Exact byte length of a canonical native Jindo proof.
 pub const JINDO_NATIVE_PROOF_BYTES_V1: usize = JINDO_PROOF_BYTES_V1;
-/// Exact clean-room source profile implemented by this engine.
-pub const JINDO_SOURCE_PROFILE_V1: &[u8] = b"eprint-2026-044-v1-figures-1-5";
-/// Exact native proof suite.
-pub const JINDO_SUITE_V1: &[u8] = b"iroha-jindo-batched-univariate-opening-v1";
+/// Reviewed source and parameter profile implemented by this protocol version.
+pub const JINDO_SOURCE_PROFILE_V1: &[u8] =
+    b"eprint-2026-044-current-figures-2-7-univariate-coefficient-specialization";
+/// Domain identifier for this Jindo protocol suite.
+pub const JINDO_SUITE_V1: &[u8] = b"iroha-jindo-current-pisplit-piagg-piquad-v1";
 
-/// Opaque opening produced together with one public commitment.
+const JINDO_INNER_MODULUS_PRODUCT_V1: u128 =
+    JINDO_INNER_MODULI_V1[0].modulus() as u128 * JINDO_INNER_MODULI_V1[1].modulus() as u128;
+const JINDO_INNER_BALANCED_MAX_V1: u128 = JINDO_INNER_MODULUS_PRODUCT_V1 / 2;
+const JINDO_AGGREGATED_COEFFICIENT_ABS_BOUND_V1: u128 = JindoGaussianWidthV1::AggregateMask
+    .tail_radius() as u128
+    + JINDO_MAX_BATCH_SIZE_V1 as u128
+        * JINDO_PARAMETERS_V1.challenge_weight as u128
+        * JINDO_ENCODING_BASE_V1 as u128;
+const JINDO_FINAL_RESPONSE_COEFFICIENT_ABS_BOUND_V1: u128 =
+    JINDO_PARAMETERS_V1.challenge_weight as u128 * JINDO_AGGREGATED_COEFFICIENT_ABS_BOUND_V1;
+const JINDO_EXACT_PARTIAL_ACCUMULATOR_ABS_BOUND_V1: u128 = (JINDO_PARAMETERS_V1.rows as u128 + 1)
+    * JINDO_ENCODING_EXPONENT_V1 as u128
+    * JINDO_AGGREGATED_COEFFICIENT_ABS_BOUND_V1
+    * JINDO_ENCODING_BASE_V1 as u128;
+const JINDO_OUTER_RELATION_POLYNOMIALS_V1: usize =
+    JINDO_PARAMETERS_V1.inner_msis_rank + JINDO_PARAMETERS_V1.outer_msis_rank;
+const JINDO_INNER_RELATION_POLYNOMIALS_V1: usize = JINDO_PARAMETERS_V1.rows
+    + 1
+    + JINDO_PARAMETERS_V1.mlwe_rank
+    + JINDO_PARAMETERS_V1.inner_msis_rank
+    + JINDO_PARAMETERS_V1.inner_msis_rank;
+
+const _: () = {
+    // Each pre-challenge mask coefficient and each aggregated response
+    // coefficient has a unique balanced inner-RNS lift. Exact split
+    // evaluation then stays far inside `i128`; the final partial is admitted
+    // only when its exact lift also stays inside the balanced inner interval.
+    assert!(JINDO_AGGREGATED_COEFFICIENT_ABS_BOUND_V1 < JINDO_INNER_BALANCED_MAX_V1);
+    assert!(JINDO_FINAL_RESPONSE_COEFFICIENT_ABS_BOUND_V1 < JINDO_INNER_BALANCED_MAX_V1);
+    assert!(JINDO_EXACT_PARTIAL_ACCUMULATOR_ABS_BOUND_V1 < i128::MAX as u128);
+    assert!(JINDO_OUTER_RELATION_POLYNOMIALS_V1 == 7);
+    assert!(JINDO_INNER_RELATION_POLYNOMIALS_V1 == 15);
+};
+
 #[derive(Clone)]
+/// Secret opening material for a Jindo polynomial commitment.
+///
+/// The opening is returned by [`commit_polynomial_v1`] and must match the
+/// corresponding witness and commitment passed to [`prove_batched_evaluation_v1`].
 pub struct JindoOpeningV1 {
     polynomial: Zeroizing<Vec<JindoFieldElementV1>>,
-    encoded_columns: Zeroizing<Vec<Vec<JindoRnsPolynomialV1>>>,
-    mlwe_columns: Zeroizing<Vec<Vec<JindoRnsPolynomialV1>>>,
-    rounded_inner_commitments: Zeroizing<Vec<JindoRnsPolynomialV1>>,
+    blinder: Zeroizing<Vec<JindoFieldElementV1>>,
+    encoded: Zeroizing<Vec<JindoRnsPolynomialV1>>,
+    mlwe: Zeroizing<Vec<JindoRnsPolynomialV1>>,
+    inner_commitments: Zeroizing<Vec<JindoRnsPolynomialV1>>,
     commitment_encoding: Vec<u8>,
 }
 
 impl core::fmt::Debug for JindoOpeningV1 {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("JindoOpeningV1([REDACTED])")
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("JindoOpeningV1([REDACTED])")
     }
 }
-
 impl Drop for JindoOpeningV1 {
     fn drop(&mut self) {
         self.commitment_encoding.zeroize();
     }
 }
 
-/// Consensus binding field selected by a Jindo diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Consensus-bound transcript field that failed validation.
 pub enum JindoBindingFieldV1 {
-    /// Exact chain identifier.
+    /// Chain identifier.
     ChainId,
-    /// Zero-based privacy action index.
+    /// Transaction action index.
     ActionIndex,
-    /// Digest of the complete typed public statement.
+    /// Digest of the public statement.
     StatementDigest,
-    /// Governed parameter-set identifier.
+    /// Privacy parameter identifier.
     ParameterId,
-    /// Digest of the governed parameter set.
+    /// Digest of the privacy parameters.
     ParameterDigest,
-    /// Digest of the native verifier artifact.
+    /// Digest of the verifier implementation.
     VerifierDigest,
-    /// Digest of the typed statement schema.
+    /// Digest of the statement schema.
     StatementSchemaDigest,
-    /// Digest of the admitted native engine manifest.
+    /// Digest of the privacy-engine manifest.
     EngineManifestDigest,
-    /// Digest of the transparent commitment matrices.
+    /// Digest of the transparent common reference string.
     CrsDigest,
 }
 
-/// Native Jindo failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+/// Failure while committing, proving, or verifying with Jindo.
 pub enum JindoErrorV1 {
-    /// The statement or witness contains no polynomial or exceeds the fixed batch.
-    #[error("Jindo polynomial count {count} is outside 1..={max}")]
+    /// The polynomial batch does not have the protocol's exact size.
+    #[error("Jindo requires exactly {expected} polynomials, got {count}")]
     InvalidPolynomialCount {
-        /// Observed polynomial count.
+        /// Actual polynomial count.
         count: usize,
-        /// Compiled first-release maximum.
-        max: usize,
+        /// Required polynomial count.
+        expected: usize,
     },
-    /// A polynomial used the empty vector instead of the unique `[0]` zero
-    /// polynomial encoding.
+    /// A polynomial contains no coefficients.
     #[error("Jindo polynomial {index} is empty")]
     EmptyPolynomial {
-        /// Zero-based polynomial index.
+        /// Index of the empty polynomial.
         index: usize,
     },
-    /// A witness polynomial exceeds the fixed degree bound.
+    /// A polynomial exceeds the protocol's coefficient limit.
     #[error("Jindo polynomial {index} has {count} coefficients; maximum is {max}")]
     PolynomialTooLarge {
-        /// Zero-based polynomial index.
+        /// Index of the oversized polynomial.
         index: usize,
-        /// Observed coefficient count.
+        /// Actual coefficient count.
         count: usize,
-        /// Compiled first-release maximum.
+        /// Maximum accepted coefficient count.
         max: usize,
     },
-    /// A witness coefficient is not the unique little-endian field encoding.
+    /// A polynomial coefficient is not a canonical field element.
     #[error("Jindo polynomial {polynomial_index} coefficient {coefficient_index} is non-canonical")]
     NonCanonicalCoefficient {
-        /// Zero-based polynomial index.
+        /// Index of the polynomial containing the coefficient.
         polynomial_index: usize,
-        /// Zero-based coefficient index.
+        /// Index of the non-canonical coefficient.
         coefficient_index: usize,
     },
-    /// A polynomial used a redundant high zero coefficient.
+    /// A polynomial uses a non-canonical trailing zero coefficient.
     #[error("Jindo polynomial {index} has a trailing zero coefficient")]
     TrailingZeroCoefficient {
-        /// Zero-based polynomial index.
+        /// Index of the polynomial with the trailing zero.
         index: usize,
     },
-    /// The evaluation point is not a canonical coefficient-field element.
+    /// The statement's evaluation point is not canonically encoded.
     #[error("Jindo statement evaluation point is non-canonical")]
     NonCanonicalEvaluationPoint,
-    /// A claimed evaluation is not a canonical coefficient-field element.
+    /// A claimed evaluation is not canonically encoded.
     #[error("Jindo statement claim {index} is non-canonical")]
     NonCanonicalClaim {
-        /// Zero-based claim index.
+        /// Index of the non-canonical claim.
         index: usize,
     },
-    /// The public claim and commitment vectors have different lengths.
-    #[error("Jindo claimed-evaluation count differs from polynomial count")]
+    /// The number of claimed evaluations differs from the exact batch size.
+    #[error("Jindo claimed-evaluation count differs from the exact batch")]
     ClaimCountMismatch,
-    /// The supplied secret-opening and commitment vectors have different lengths.
-    #[error("Jindo opening count differs from polynomial count")]
+    /// The number of commitment openings differs from the exact batch size.
+    #[error("Jindo opening count differs from the exact batch")]
     OpeningCountMismatch,
-    /// A secret opening does not belong to its witness and public commitment.
+    /// An opening does not match its witness polynomial or public commitment.
     #[error("Jindo opening {index} belongs to another polynomial or commitment")]
     OpeningMismatch {
-        /// Zero-based opening index.
+        /// Index of the mismatched opening.
         index: usize,
     },
-    /// A supplied witness does not evaluate to its public claim.
+    /// A witness polynomial does not evaluate to its public claim.
     #[error("Jindo witness polynomial {index} does not evaluate to its public claim")]
     ClaimMismatch {
-        /// Zero-based witness index.
+        /// Index of the mismatched witness polynomial.
         index: usize,
     },
-    /// A public commitment has the wrong width or an out-of-range coefficient.
+    /// A public commitment does not have the canonical fixed-width encoding.
     #[error("Jindo commitment {index} has a malformed fixed encoding")]
     InvalidCommitmentEncoding {
-        /// Zero-based commitment index.
+        /// Index of the malformed commitment.
         index: usize,
     },
-    /// The all-zero public commitment sentinel was supplied.
+    /// A public commitment uses the forbidden all-zero sentinel.
     #[error("Jindo commitment {index} is the all-zero sentinel")]
     ZeroCommitment {
-        /// Zero-based commitment index.
+        /// Index of the all-zero commitment.
         index: usize,
     },
-    /// A public commitment repeats an earlier batch member.
+    /// A public commitment duplicates an earlier commitment in the batch.
     #[error("Jindo commitment {index} duplicates an earlier commitment")]
     DuplicateCommitment {
-        /// Zero-based duplicate commitment index.
+        /// Index of the duplicate commitment.
         index: usize,
     },
-    /// The statement omitted the mandatory transaction-intent binding.
+    /// The transaction-intent digest required by the binding is zero.
     #[error("Jindo transaction-intent digest must be non-zero")]
     ZeroTransactionIntentDigest,
-    /// The first-release one-action transaction profile was violated.
+    /// The action index is not valid for the first protocol release.
     #[error("Jindo first-release action index must be zero, got {index}")]
     InvalidActionIndex {
-        /// Observed action index.
+        /// Unsupported action index.
         index: u32,
     },
-    /// Commitment rounding produced a coefficient outside the canonical wire.
+    /// A rounded commitment coefficient cannot be represented canonically.
     #[error("Jindo rounded commitment coefficient cannot fit the canonical wire")]
     RoundedCommitmentOutOfRange,
-    /// A runtime transcript binding differs from the typed statement.
+    /// A supplied consensus binding field differs from the statement metadata.
     #[error("Jindo consensus binding mismatches {field:?}")]
     BindingMismatch {
-        /// Exact mismatching binding field.
+        /// Binding field that differs.
         field: JindoBindingFieldV1,
     },
-    /// Canonical statement hashing failed.
+    /// Canonical encoding of the public statement failed.
     #[error("Jindo statement digest could not be canonically encoded")]
     StatementEncoding,
-    /// Prover-only bounded randomness generation failed.
+    /// Sampling prover randomness failed.
     #[error("Jindo prover randomness failed: {0}")]
     Sampling(JindoSamplingErrorV1),
-    /// Canonical Fiat--Shamir transcript construction failed.
+    /// Constructing or deriving the Fiat--Shamir transcript failed.
     #[error("Jindo transcript failed: {0}")]
     Transcript(JindoTranscriptErrorV1),
-    /// Strict fixed-width proof decoding failed.
+    /// Encoding or decoding the canonical proof failed.
     #[error("Jindo proof encoding failed: {0}")]
     ProofCodec(JindoProofCodecErrorV1),
-    /// The outer rounded lattice commitment or its strict norm check failed.
-    #[error("Jindo outer commitment relation failed")]
+    /// Exact coefficient evaluation exceeded the reviewed integer bound.
+    #[error("Jindo exact coefficient evaluation exceeded its reviewed integer bound")]
+    ExactEvaluationArithmeticOverflow,
+    /// The ΠSplit augmented-evaluation relation is not satisfied.
+    #[error("Jindo ΠSplit augmented-evaluation relation failed")]
+    SplitRelation,
+    /// The ΠAgg outer commitment relation is not satisfied.
+    #[error("Jindo ΠAgg outer commitment relation failed")]
     OuterCommitmentRelation,
-    /// The inner rounded lattice commitment or its strict norm check failed.
-    #[error("Jindo inner commitment relation failed")]
+    /// The ΠQuad inner commitment relation is not satisfied.
+    #[error("Jindo ΠQuad inner commitment relation failed")]
     InnerCommitmentRelation,
-    /// The encoded evaluation response is inconsistent with its partials.
-    #[error("Jindo evaluation-response consistency relation failed")]
+    /// The ΠQuad response-consistency relation is not satisfied.
+    #[error("Jindo ΠQuad response consistency relation failed")]
     EvaluationConsistency,
-    /// The decoded partials do not equal the claimed batched evaluation.
-    #[error("Jindo claimed polynomial evaluation relation failed")]
+    /// The ΠAgg partial-evaluation relation is not satisfied.
+    #[error("Jindo ΠAgg partial-evaluation relation failed")]
     EvaluationRelation,
-    /// A locally produced proof failed the same public verifier.
+    /// The aggregation rejection/no-wrap loop exhausted its fixed budget.
+    #[error("Jindo aggregation rejection/no-wrap loop exhausted its fixed budget")]
+    AggregationRejectionBudgetExhausted,
+    /// The prover's mandatory local verification rejected its generated proof.
     #[error("Jindo prover produced a proof rejected by its own verifier")]
     ProverSelfCheck,
 }
 
 impl From<JindoSamplingErrorV1> for JindoErrorV1 {
-    fn from(value: JindoSamplingErrorV1) -> Self {
-        Self::Sampling(value)
+    fn from(v: JindoSamplingErrorV1) -> Self {
+        Self::Sampling(v)
     }
 }
-
+impl From<JindoTranscriptErrorV1> for JindoErrorV1 {
+    fn from(v: JindoTranscriptErrorV1) -> Self {
+        Self::Transcript(v)
+    }
+}
+impl From<JindoProofCodecErrorV1> for JindoErrorV1 {
+    fn from(v: JindoProofCodecErrorV1) -> Self {
+        Self::ProofCodec(v)
+    }
+}
 impl From<JindoCanonicalPolynomialErrorV1> for JindoErrorV1 {
-    fn from(error: JindoCanonicalPolynomialErrorV1) -> Self {
-        match error {
+    fn from(v: JindoCanonicalPolynomialErrorV1) -> Self {
+        match v {
             JindoCanonicalPolynomialErrorV1::Empty { polynomial_index } => Self::EmptyPolynomial {
                 index: polynomial_index,
             },
@@ -260,30 +322,18 @@ impl From<JindoCanonicalPolynomialErrorV1> for JindoErrorV1 {
     }
 }
 
-impl From<JindoTranscriptErrorV1> for JindoErrorV1 {
-    fn from(value: JindoTranscriptErrorV1) -> Self {
-        Self::Transcript(value)
-    }
-}
-
-impl From<JindoProofCodecErrorV1> for JindoErrorV1 {
-    fn from(value: JindoProofCodecErrorV1) -> Self {
-        Self::ProofCodec(value)
-    }
-}
-
-/// Return the digest of the exact transparent CRS matrices.
 #[must_use]
+/// Returns the digest of the compiled transparent common reference string.
 pub fn jindo_crs_digest_v1() -> [u8; 32] {
     crs_digest_v1()
 }
 
-/// Evaluate one degree-bounded polynomial at a canonical field point.
+/// Evaluates a canonical Jindo polynomial at a canonical field point.
 ///
 /// # Errors
 ///
-/// Returns an error for an empty, oversized, trailing-zero, or non-canonical
-/// polynomial, or for a non-canonical evaluation point.
+/// Returns an error if the polynomial or evaluation point is not canonical or
+/// if the polynomial violates the protocol's size constraints.
 pub fn evaluate_polynomial_v1(
     coefficients: &[PrivacyJindoFieldElementV1],
     evaluation_point: PrivacyJindoFieldElementV1,
@@ -296,8 +346,11 @@ pub fn evaluate_polynomial_v1(
     ))
 }
 
-/// Commit one canonically encoded degree-bounded polynomial with fresh
-/// evaluation-hiding randomness.
+/// Commits to a canonical Jindo polynomial and returns its secret opening.
+///
+/// # Errors
+///
+/// Returns an error if the polynomial is invalid or randomness sampling fails.
 pub fn commit_polynomial_v1<R>(
     coefficients: &[PrivacyJindoFieldElementV1],
     rng: &mut R,
@@ -306,8 +359,8 @@ where
     R: CryptoRng + RngCore,
 {
     let polynomial = parse_polynomial(coefficients, 0)?;
-    let mut checked_rng = health_checked_jindo_rng_v1(rng)?;
-    commit_parsed_polynomial_v1(polynomial, &mut checked_rng)
+    let mut rng = health_checked_jindo_rng_v1(rng)?;
+    commit_parsed_polynomial_v1(polynomial, &mut rng)
 }
 
 pub(super) fn commit_polynomial_with_checked_rng_v1<R>(
@@ -317,8 +370,7 @@ pub(super) fn commit_polynomial_with_checked_rng_v1<R>(
 where
     R: CryptoRng + RngCore,
 {
-    let polynomial = parse_polynomial(coefficients, 0)?;
-    commit_parsed_polynomial_v1(polynomial, rng)
+    commit_parsed_polynomial_v1(parse_polynomial(coefficients, 0)?, rng)
 }
 
 fn commit_parsed_polynomial_v1<R>(
@@ -328,109 +380,83 @@ fn commit_parsed_polynomial_v1<R>(
 where
     R: CryptoRng + RngCore,
 {
-    let (first_row, last_row) = split_boundary_rows(&polynomial, rng)?;
-
-    let mut encoded_columns = Zeroizing::new(vec![
-        Vec::with_capacity(JINDO_PARAMETERS_V1.rows),
-        Vec::with_capacity(JINDO_PARAMETERS_V1.rows),
-    ]);
-    encoded_columns[0].push(randomized_encode_coefficient_slots_v1(
-        first_row.as_ref(),
-        JindoGaussianWidthV1::EcdBlind,
-        rng,
-    )?);
-    for row in 1..(JINDO_PARAMETERS_V1.rows - 1) {
-        let start = row * JINDO_ENCODING_SLOTS_V1;
-        let end = start + JINDO_ENCODING_SLOTS_V1;
-        encoded_columns[0].push(randomized_encode_coefficient_slots_v1(
-            &polynomial[start..end],
-            JindoGaussianWidthV1::Ecd,
-            rng,
-        )?);
-    }
-    encoded_columns[0].push(randomized_encode_coefficient_slots_v1(
-        last_row.as_ref(),
-        JindoGaussianWidthV1::Ecd,
-        rng,
-    )?);
-
+    let mut encoded = Zeroizing::new(Vec::with_capacity(JINDO_PARAMETERS_V1.rows + 1));
     for row in 0..JINDO_PARAMETERS_V1.rows {
-        let mut mask = Zeroizing::new([JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1]);
-        for value in mask.iter_mut() {
-            *value = sample_uniform_field_element_v1(rng)?;
-        }
-        let width = if row == 0 {
-            JindoGaussianWidthV1::MaskBlind
-        } else {
-            JindoGaussianWidthV1::Mask
-        };
-        encoded_columns[1].push(randomized_encode_coefficient_slots_v1(
-            mask.as_ref(),
-            width,
-            rng,
-        )?);
+        let start = row * JINDO_ENCODING_SLOTS_V1;
+        encoded.push(
+            encode_coefficient_slots_v1(&polynomial[start..start + JINDO_ENCODING_SLOTS_V1])
+                .expect("fixed row length"),
+        );
     }
+    encoded.push(sample_uniform_encoding_polynomial_v1(rng)?);
+    let blinder =
+        Zeroizing::new(decode_coefficient_slots_v1(&encoded[JINDO_PARAMETERS_V1.rows]).to_vec());
 
-    let mut mlwe_columns = Zeroizing::new(Vec::with_capacity(JINDO_PARAMETERS_V1.columns + 1));
-    for column in 0..=JINDO_PARAMETERS_V1.columns {
-        let width = if column == JINDO_PARAMETERS_V1.columns {
-            JindoGaussianWidthV1::MaskMlwe
-        } else {
-            JindoGaussianWidthV1::Mlwe
-        };
-        let value_count = JINDO_PARAMETERS_V1.mlwe_rank + JINDO_PARAMETERS_V1.inner_msis_rank;
-        mlwe_columns.push(Vec::with_capacity(value_count));
-        for _ in 0..value_count {
-            mlwe_columns[column].push(sample_gaussian_polynomial_v1(
-                width,
-                JINDO_INNER_MODULI_V1,
-                rng,
-            )?);
-        }
+    let count = JINDO_PARAMETERS_V1.mlwe_rank + JINDO_PARAMETERS_V1.inner_msis_rank;
+    let mut mlwe = Zeroizing::new(Vec::with_capacity(count));
+    for _ in 0..count {
+        mlwe.push(sample_mlwe_polynomial_v1(rng)?);
     }
-
-    let rounded_inner_commitments = Zeroizing::new(compute_rounded_inner_commitments(
-        &encoded_columns,
-        &mlwe_columns,
-    ));
-    let public_coefficients = compute_public_commitment(&rounded_inner_commitments)?;
-    let commitment_encoding = encode_public_commitment(&public_coefficients);
-    if commitment_encoding.iter().all(|byte| *byte == 0) {
+    let inner_commitments = Zeroizing::new(compute_inner_commitments(&encoded, &mlwe));
+    let outer = compute_outer_commitment(&inner_commitments);
+    let commitment_encoding = encode_public_commitment(&outer)?;
+    if commitment_encoding.iter().all(|b| *b == 0) {
         return Err(JindoErrorV1::ZeroCommitment { index: 0 });
     }
-    let commitment = PrivacyJindoLatticeCommitmentV1::new(commitment_encoding.clone());
     Ok((
-        commitment,
+        PrivacyJindoLatticeCommitmentV1::new(commitment_encoding.clone()),
         JindoOpeningV1 {
             polynomial,
-            encoded_columns,
-            mlwe_columns,
-            rounded_inner_commitments,
+            blinder,
+            encoded,
+            mlwe,
+            inner_commitments,
             commitment_encoding,
         },
     ))
 }
 
-/// Produce one canonical batched proof for the supplied public statement.
+/// Proves the exact batched-evaluation statement with fresh operating-system randomness.
+///
+/// # Errors
+///
+/// Returns an error if the statement, binding, witnesses, commitments, or
+/// openings are invalid, or if proof generation or its mandatory self-check
+/// fails.
 pub fn prove_batched_evaluation_v1(
     statement: &IrohaJindoPolynomialCommitmentStatementV1,
     witness_polynomials: &[Vec<PrivacyJindoFieldElementV1>],
     openings: &[JindoOpeningV1],
     binding: &TranscriptBindingV1<'_>,
 ) -> Result<Vec<u8>, JindoErrorV1> {
+    let mut os_rng = rand_core_06::OsRng;
+    let mut rng = health_checked_jindo_rng_v1(&mut os_rng)?;
+    prove_batched_evaluation_with_checked_rng_v1(
+        statement,
+        witness_polynomials,
+        openings,
+        binding,
+        &mut rng,
+    )
+}
+
+pub(super) fn prove_batched_evaluation_with_checked_rng_v1<R>(
+    statement: &IrohaJindoPolynomialCommitmentStatementV1,
+    witness_polynomials: &[Vec<PrivacyJindoFieldElementV1>],
+    openings: &[JindoOpeningV1],
+    binding: &TranscriptBindingV1<'_>,
+    rng: &mut R,
+) -> Result<Vec<u8>, JindoErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
     let public = validate_statement_and_binding(statement, binding)?;
-    if witness_polynomials.len() != public.batch_count {
-        return Err(JindoErrorV1::InvalidPolynomialCount {
-            count: witness_polynomials.len(),
-            max: JINDO_PARAMETERS_V1.max_batch_size,
-        });
-    }
-    if openings.len() != public.batch_count {
+    require_exact_batch(witness_polynomials.len())?;
+    if openings.len() != JINDO_MAX_BATCH_SIZE_V1 {
         return Err(JindoErrorV1::OpeningCountMismatch);
     }
-
-    for (index, coefficients) in witness_polynomials.iter().enumerate() {
-        let polynomial = parse_polynomial(coefficients, index)?;
+    for index in 0..JINDO_MAX_BATCH_SIZE_V1 {
+        let polynomial = parse_polynomial(&witness_polynomials[index], index)?;
         if evaluate_polynomial(&polynomial, public.evaluation_point) != public.claims[index] {
             return Err(JindoErrorV1::ClaimMismatch { index });
         }
@@ -444,70 +470,149 @@ pub fn prove_batched_evaluation_v1(
     }
 
     let mut transcript = statement_transcript(statement, binding)?;
-    let batch_challenges = batch_challenges(&mut transcript, public.batch_count)?;
-    let rounded_inner_commitments = combine_rounded_inner(openings, &batch_challenges.outer);
-    let encoded_columns =
-        Zeroizing::new(combine_encoded_columns(openings, &batch_challenges.inner));
-    let mlwe_columns = Zeroizing::new(combine_mlwe_columns(openings, &batch_challenges.inner));
-
+    let blind_evaluations: Vec<_> = openings
+        .iter()
+        .map(|opening| evaluate_polynomial(&opening.blinder, public.evaluation_point))
+        .collect();
+    absorb_fields(
+        &mut transcript,
+        b"split-blind-evaluation",
+        &blind_evaluations,
+    )?;
+    let x_star = transcript.field_challenge(b"split-x-star", 0)?;
+    let x_star_ring = encode_scalar(x_star);
     let left = evaluation_left_vector(public.evaluation_point);
-    let mut partials = Vec::with_capacity(JINDO_PARAMETERS_V1.columns);
-    for column in 0..JINDO_PARAMETERS_V1.columns {
-        partials.push(inner_product_encoded(&left, &encoded_columns[column]));
+    let mut split_evaluations =
+        Vec::with_capacity(JINDO_MAX_BATCH_SIZE_V1 * JINDO_ENCODING_SLOTS_V1);
+    for opening in openings {
+        split_evaluations.extend(split_evaluation(&opening.encoded, &left, &x_star_ring)?);
     }
-    let partial_mask = inner_product_encoded(&left, &encoded_columns[JINDO_PARAMETERS_V1.columns]);
-    absorb_partial_commitments(&mut transcript, &partials, &partial_mask)?;
-    let evaluation_challenge = transcript.challenge(b"evaluation-column", 0)?;
-    let evaluation_challenge_inner = evaluation_challenge.polynomial(JINDO_INNER_MODULI_V1);
+    verify_split_relations(&public, &blind_evaluations, &split_evaluations, x_star)?;
+    absorb_fields(&mut transcript, b"split-evaluation", &split_evaluations)?;
+    let aggregation_base = transcript;
 
-    let encode_responses = encoded_columns[JINDO_PARAMETERS_V1.columns]
-        .iter()
-        .zip(&encoded_columns[0])
-        .map(|(mask, value)| {
-            let mut response = mask.clone();
-            response.add_assign(
-                &value.mul(&evaluation_challenge_inner, JINDO_INNER_MODULI_V1),
+    let mut accepted_state = None;
+    for _ in 0..JINDO_PARAMETERS_V1.max_rejection_attempts {
+        let mut mask_encoded = Zeroizing::new(Vec::with_capacity(JINDO_PARAMETERS_V1.rows + 1));
+        for _ in 0..=JINDO_PARAMETERS_V1.rows {
+            mask_encoded.push(sample_gaussian_polynomial_v1(
+                JindoGaussianWidthV1::AggregateMask,
                 JINDO_INNER_MODULI_V1,
-            );
-            response
-        })
-        .collect();
-    let mlwe_responses = mlwe_columns[JINDO_PARAMETERS_V1.columns]
-        .iter()
-        .zip(&mlwe_columns[0])
-        .map(|(mask, value)| {
-            let mut response = mask.clone();
-            response.add_assign(
-                &value.mul(&evaluation_challenge_inner, JINDO_INNER_MODULI_V1),
+                &mut *rng,
+            )?);
+        }
+        let mut mask_mlwe = Zeroizing::new(Vec::with_capacity(
+            JINDO_PARAMETERS_V1.mlwe_rank + JINDO_PARAMETERS_V1.inner_msis_rank,
+        ));
+        for _ in 0..(JINDO_PARAMETERS_V1.mlwe_rank + JINDO_PARAMETERS_V1.inner_msis_rank) {
+            mask_mlwe.push(sample_gaussian_polynomial_v1(
+                JindoGaussianWidthV1::AggregateMask,
                 JINDO_INNER_MODULI_V1,
-            );
-            response
-        })
-        .collect();
+                &mut *rng,
+            )?);
+        }
+        let mask_inner = compute_inner_commitments(&mask_encoded, &mask_mlwe);
+        let mask_commitments = compute_outer_commitment(&mask_inner);
+        let mask_split_evaluation = split_evaluation(&mask_encoded, &left, &x_star_ring)?;
 
+        let mut trial = aggregation_base.clone();
+        absorb_polynomials(
+            &mut trial,
+            b"aggregation-mask-commitment",
+            &mask_commitments,
+        )?;
+        absorb_fields(
+            &mut trial,
+            b"aggregation-mask-evaluation",
+            &mask_split_evaluation,
+        )?;
+        let alpha = sparse_challenges(&mut trial, b"aggregation-alpha", JINDO_MAX_BATCH_SIZE_V1)?;
+        let no_mask_encoded = combine_opening_polynomials(openings, &alpha, |o| &o.encoded);
+        let no_mask_mlwe = combine_opening_polynomials(openings, &alpha, |o| &o.mlwe);
+        let exponent =
+            rejection_exponent(&mask_encoded, &no_mask_encoded, &mask_mlwe, &no_mask_mlwe)?;
+        if !accept_aggregation_rejection_v1(exponent, &mut *rng)? {
+            continue;
+        }
+
+        let encoded_responses =
+            add_polynomial_vectors(&mask_encoded, &no_mask_encoded, JINDO_INNER_MODULI_V1);
+        let mlwe_responses =
+            add_polynomial_vectors(&mask_mlwe, &no_mask_mlwe, JINDO_INNER_MODULI_V1);
+        let Some(partial) = response_partial_without_wrap(&encoded_responses, &left, &x_star_ring)?
+        else {
+            // The reference implementation's ambient basis establishes the
+            // exact integer value before reducing to the proof basis. Only a
+            // unique balanced lift is allowed onto the proof wire.
+            continue;
+        };
+        let combined_inner_no_mask =
+            combine_opening_polynomials(openings, &alpha, |o| &o.inner_commitments);
+        let inner_commitments =
+            add_polynomial_vectors(&mask_inner, &combined_inner_no_mask, JINDO_OUTER_MODULI_V1);
+        accepted_state = Some((
+            trial,
+            alpha,
+            mask_commitments,
+            mask_split_evaluation,
+            encoded_responses,
+            mlwe_responses,
+            inner_commitments,
+            partial,
+        ));
+        break;
+    }
+    let Some((
+        mut transcript,
+        _alpha,
+        mask_commitments,
+        mask_split_evaluation,
+        aggregated_encoded,
+        aggregated_mlwe,
+        inner_commitments,
+        partial,
+    )) = accepted_state
+    else {
+        return Err(JindoErrorV1::AggregationRejectionBudgetExhausted);
+    };
+
+    absorb_polynomials(
+        &mut transcript,
+        b"quadratic-partial",
+        core::slice::from_ref(&partial),
+    )?;
+    let c = transcript.sparse_challenge(b"quadratic-column", 0)?;
+    let c_inner = c.inner_polynomial();
+    let encode_responses = aggregated_encoded
+        .iter()
+        .map(|v| v.mul(&c_inner, JINDO_INNER_MODULI_V1))
+        .collect();
+    let mlwe_responses = aggregated_mlwe
+        .iter()
+        .map(|v| v.mul(&c_inner, JINDO_INNER_MODULI_V1))
+        .collect();
     let proof = JindoEvaluationProofV1::new(
-        u8::try_from(public.batch_count).expect("Jindo batch count fits u8"),
-        rounded_inner_commitments,
-        partials,
-        partial_mask,
+        mask_commitments,
+        mask_split_evaluation,
+        vec![partial],
         encode_responses,
         mlwe_responses,
+        inner_commitments,
+        blind_evaluations,
+        split_evaluations,
     )?;
     let encoded = proof.encode();
-    if verify_batched_evaluation_v1(
-        statement,
-        &encoded,
-        binding,
-        u32::try_from(encoded.len()).expect("fixed Jindo proof length fits u32"),
-    )
-    .is_err()
-    {
-        return Err(JindoErrorV1::ProverSelfCheck);
-    }
+    verify_batched_evaluation_v1(statement, &encoded, binding, encoded.len() as u32)
+        .map_err(|_| JindoErrorV1::ProverSelfCheck)?;
     Ok(encoded)
 }
 
-/// Verify one exact canonical Jindo batched opening.
+/// Verifies a canonical proof for an exact batched-evaluation statement.
+///
+/// # Errors
+///
+/// Returns an error if the statement or consensus binding is invalid, the
+/// proof wire is malformed or too large, or any Jindo relation fails.
 pub fn verify_batched_evaluation_v1(
     statement: &IrohaJindoPolynomialCommitmentStatementV1,
     proof_bytes: &[u8],
@@ -515,43 +620,72 @@ pub fn verify_batched_evaluation_v1(
     max_proof_bytes: u32,
 ) -> Result<(), JindoErrorV1> {
     let public = validate_statement_and_binding(statement, binding)?;
-    let proof =
-        JindoEvaluationProofV1::decode_exact(proof_bytes, public.batch_count, max_proof_bytes)?;
-    let commitments: Vec<_> = statement
+    let proof = JindoEvaluationProofV1::decode_exact(
+        proof_bytes,
+        JINDO_MAX_BATCH_SIZE_V1,
+        max_proof_bytes,
+    )?;
+    let commitments = statement
         .polynomial_commitments
         .iter()
         .enumerate()
-        .map(|(index, commitment)| parse_public_commitment(commitment, index))
-        .collect::<Result<_, _>>()?;
-
+        .map(|(i, c)| parse_public_commitment(c, i))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut transcript = statement_transcript(statement, binding)?;
-    let batch_challenges = batch_challenges(&mut transcript, public.batch_count)?;
-    absorb_partial_commitments(&mut transcript, &proof.partials, &proof.partial_mask)?;
-    let evaluation_challenge = transcript.challenge(b"evaluation-column", 0)?;
-    let evaluation_challenge_inner = evaluation_challenge.polynomial(JINDO_INNER_MODULI_V1);
-    let evaluation_challenge_outer = evaluation_challenge.polynomial(JINDO_OUTER_MODULI_V1);
+    absorb_fields(
+        &mut transcript,
+        b"split-blind-evaluation",
+        &proof.blind_evaluations,
+    )?;
+    let x_star = transcript.field_challenge(b"split-x-star", 0)?;
+    absorb_fields(
+        &mut transcript,
+        b"split-evaluation",
+        &proof.split_evaluations,
+    )?;
+    absorb_polynomials(
+        &mut transcript,
+        b"aggregation-mask-commitment",
+        &proof.mask_commitments,
+    )?;
+    absorb_fields(
+        &mut transcript,
+        b"aggregation-mask-evaluation",
+        &proof.mask_split_evaluation,
+    )?;
+    let alpha = sparse_challenges(
+        &mut transcript,
+        b"aggregation-alpha",
+        JINDO_MAX_BATCH_SIZE_V1,
+    )?;
+    absorb_polynomials(&mut transcript, b"quadratic-partial", &proof.partials)?;
+    let c = transcript.sparse_challenge(b"quadratic-column", 0)?;
 
-    verify_outer_relation(&proof, &commitments, &batch_challenges.outer)?;
-    verify_inner_relation(&proof, &evaluation_challenge_outer)?;
-    verify_consistency_relation(&proof, public.evaluation_point, &evaluation_challenge_inner)?;
-    verify_evaluation_relation(
-        &proof,
-        public.evaluation_point,
-        &public.claims,
-        &batch_challenges.scalars,
-    )
+    verify_split_relations(
+        &public,
+        &proof.blind_evaluations,
+        &proof.split_evaluations,
+        x_star,
+    )?;
+    verify_outer_relation(&proof, &commitments, &alpha)?;
+    verify_inner_relation(&proof, &c)?;
+    verify_consistency_relation(&proof, public.evaluation_point, x_star, &c)?;
+    verify_evaluation_relation(&proof, &alpha)
 }
 
 struct ParsedPublicStatementV1 {
-    batch_count: usize,
     evaluation_point: JindoFieldElementV1,
     claims: Vec<JindoFieldElementV1>,
 }
 
-struct BatchChallengesV1 {
-    inner: Vec<JindoRnsPolynomialV1>,
-    outer: Vec<JindoRnsPolynomialV1>,
-    scalars: Vec<JindoFieldElementV1>,
+fn require_exact_batch(count: usize) -> Result<(), JindoErrorV1> {
+    if count != JINDO_MAX_BATCH_SIZE_V1 {
+        return Err(JindoErrorV1::InvalidPolynomialCount {
+            count,
+            expected: JINDO_MAX_BATCH_SIZE_V1,
+        });
+    }
+    Ok(())
 }
 
 fn validate_statement_and_binding(
@@ -561,21 +695,15 @@ fn validate_statement_and_binding(
     binding
         .validate()
         .map_err(JindoTranscriptErrorV1::Binding)?;
-    let batch_count = statement.polynomial_commitments.len();
-    if batch_count == 0 || batch_count > JINDO_PARAMETERS_V1.max_batch_size {
-        return Err(JindoErrorV1::InvalidPolynomialCount {
-            count: batch_count,
-            max: JINDO_PARAMETERS_V1.max_batch_size,
-        });
-    }
-    if statement.claimed_evaluations.len() != batch_count {
+    require_exact_batch(statement.polynomial_commitments.len())?;
+    if statement.claimed_evaluations.len() != JINDO_MAX_BATCH_SIZE_V1 {
         return Err(JindoErrorV1::ClaimCountMismatch);
     }
     for (index, commitment) in statement.polynomial_commitments.iter().enumerate() {
-        let _ = parse_public_commitment(commitment, index)?;
+        parse_public_commitment(commitment, index)?;
         if statement.polynomial_commitments[..index]
             .iter()
-            .any(|earlier| earlier.encoding == commitment.encoding)
+            .any(|v| v.encoding == commitment.encoding)
         {
             return Err(JindoErrorV1::DuplicateCommitment { index });
         }
@@ -587,12 +715,11 @@ fn validate_statement_and_binding(
         .claimed_evaluations
         .iter()
         .enumerate()
-        .map(|(index, value)| {
-            JindoFieldElementV1::from_canonical_bytes(value.encoding)
+        .map(|(index, v)| {
+            JindoFieldElementV1::from_canonical_bytes(v.encoding)
                 .ok_or(JindoErrorV1::NonCanonicalClaim { index })
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     let context = &statement.context;
     if context.transaction_intent_digest.is_zero() {
         return Err(JindoErrorV1::ZeroTransactionIntentDigest);
@@ -648,16 +775,15 @@ fn validate_statement_and_binding(
             field: JindoBindingFieldV1::CrsDigest,
         });
     }
-    let statement_digest = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone())
+    let digest = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone())
         .digest()
         .map_err(|_| JindoErrorV1::StatementEncoding)?;
-    if binding.statement_digest != *statement_digest.as_bytes() {
+    if binding.statement_digest != *digest.as_bytes() {
         return Err(JindoErrorV1::BindingMismatch {
             field: JindoBindingFieldV1::StatementDigest,
         });
     }
     Ok(ParsedPublicStatementV1 {
-        batch_count,
         evaluation_point,
         claims,
     })
@@ -667,260 +793,136 @@ fn statement_transcript(
     statement: &IrohaJindoPolynomialCommitmentStatementV1,
     binding: &TranscriptBindingV1<'_>,
 ) -> Result<JindoTranscriptV1, JindoErrorV1> {
-    let mut transcript = JindoTranscriptV1::new(binding, crs_digest_v1())?;
-    transcript.append_message(b"suite", JINDO_SUITE_V1)?;
-    transcript.append_message(b"source_profile", JINDO_SOURCE_PROFILE_V1)?;
-    transcript.append_message(b"parameter_manifest", JINDO_PARAMETER_MANIFEST_V1)?;
-    transcript.append_message(
-        b"batch_count",
-        &u32::try_from(statement.polynomial_commitments.len())
-            .expect("Jindo batch count fits u32")
-            .to_be_bytes(),
+    let mut t = JindoTranscriptV1::new(binding, crs_digest_v1())?;
+    t.append_message(b"suite", JINDO_SUITE_V1)?;
+    t.append_message(b"source-profile", JINDO_SOURCE_PROFILE_V1)?;
+    t.append_message(b"source-provenance", JINDO_SOURCE_PROVENANCE_V1)?;
+    t.append_message(b"parameter-manifest", JINDO_PARAMETER_MANIFEST_V1)?;
+    t.append_message(
+        b"batch-count",
+        &(JINDO_MAX_BATCH_SIZE_V1 as u32).to_be_bytes(),
     )?;
-    for (index, commitment) in statement.polynomial_commitments.iter().enumerate() {
-        transcript.append_message(&indexed_label(b"commitment", index), &commitment.encoding)?;
+    for (i, c) in statement.polynomial_commitments.iter().enumerate() {
+        t.append_message(&indexed_label(b"commitment", i), &c.encoding)?;
     }
-    transcript.append_message(b"evaluation_point", &statement.evaluation_point.encoding)?;
-    for (index, claim) in statement.claimed_evaluations.iter().enumerate() {
-        transcript.append_message(&indexed_label(b"claim", index), &claim.encoding)?;
+    t.append_message(b"evaluation-point", &statement.evaluation_point.encoding)?;
+    for (i, y) in statement.claimed_evaluations.iter().enumerate() {
+        t.append_message(&indexed_label(b"claim", i), &y.encoding)?;
     }
-    Ok(transcript)
-}
-
-fn batch_challenges(
-    transcript: &mut JindoTranscriptV1,
-    batch_count: usize,
-) -> Result<BatchChallengesV1, JindoErrorV1> {
-    let mut inner = Vec::with_capacity(batch_count);
-    let mut outer = Vec::with_capacity(batch_count);
-    let mut scalars = Vec::with_capacity(batch_count);
-    if batch_count == 1 {
-        let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
-        coefficients[0] = 1;
-        inner.push(JindoRnsPolynomialV1::from_balanced_coefficients(
-            coefficients,
-            JINDO_INNER_MODULI_V1,
-        ));
-        outer.push(JindoRnsPolynomialV1::from_balanced_coefficients(
-            coefficients,
-            JINDO_OUTER_MODULI_V1,
-        ));
-        scalars.push(JindoFieldElementV1::ONE);
-    } else {
-        for index in 0..batch_count {
-            let challenge = transcript.challenge(
-                b"batch-polynomial",
-                u32::try_from(index).expect("Jindo batch index fits u32"),
-            )?;
-            let inner_challenge = challenge.polynomial(JINDO_INNER_MODULI_V1);
-            scalars.push(decode_coefficient_slots_v1(&inner_challenge)[0]);
-            inner.push(inner_challenge);
-            outer.push(challenge.polynomial(JINDO_OUTER_MODULI_V1));
-        }
-    }
-    Ok(BatchChallengesV1 {
-        inner,
-        outer,
-        scalars,
-    })
-}
-
-fn absorb_partial_commitments(
-    transcript: &mut JindoTranscriptV1,
-    partials: &[JindoRnsPolynomialV1],
-    partial_mask: &JindoRnsPolynomialV1,
-) -> Result<(), JindoErrorV1> {
-    for (index, partial) in partials.iter().enumerate() {
-        let encoded = encode_rns_polynomial(partial);
-        transcript.append_message(&indexed_label(b"partial", index), &encoded)?;
-    }
-    let encoded = encode_rns_polynomial(partial_mask);
-    transcript.append_message(b"partial_mask", &encoded)?;
-    Ok(())
-}
-
-fn indexed_label(prefix: &[u8], index: usize) -> Vec<u8> {
-    let mut label = Vec::with_capacity(prefix.len() + 4);
-    label.extend_from_slice(prefix);
-    label.extend_from_slice(
-        &u32::try_from(index)
-            .expect("fixed Jindo index fits u32")
-            .to_be_bytes(),
-    );
-    label
+    Ok(t)
 }
 
 fn parse_polynomial(
-    coefficients: &[PrivacyJindoFieldElementV1],
-    polynomial_index: usize,
+    values: &[PrivacyJindoFieldElementV1],
+    index: usize,
 ) -> Result<Zeroizing<Vec<JindoFieldElementV1>>, JindoErrorV1> {
-    validate_canonical_polynomial_v1(coefficients, polynomial_index).map_err(JindoErrorV1::from)?;
-    let mut polynomial = Zeroizing::new(vec![JindoFieldElementV1::ZERO; JINDO_MAX_COEFFICIENTS_V1]);
-    for (coefficient_index, coefficient) in coefficients.iter().enumerate() {
-        polynomial[coefficient_index] = JindoFieldElementV1::from_canonical_bytes(
-            coefficient.encoding,
-        )
-        .ok_or(JindoErrorV1::NonCanonicalCoefficient {
-            polynomial_index,
-            coefficient_index,
-        })?;
+    validate_canonical_polynomial_v1(values, index)?;
+    let mut out = Zeroizing::new(vec![JindoFieldElementV1::ZERO; JINDO_MAX_COEFFICIENTS_V1]);
+    for (coefficient_index, value) in values.iter().enumerate() {
+        out[coefficient_index] = JindoFieldElementV1::from_canonical_bytes(value.encoding).ok_or(
+            JindoErrorV1::NonCanonicalCoefficient {
+                polynomial_index: index,
+                coefficient_index,
+            },
+        )?;
     }
-    Ok(polynomial)
+    Ok(out)
 }
 
-fn split_boundary_rows<R>(
-    polynomial: &[JindoFieldElementV1],
-    rng: &mut R,
-) -> Result<
-    (
-        Zeroizing<[JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1]>,
-        Zeroizing<[JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1]>,
-    ),
-    JindoErrorV1,
->
-where
-    R: CryptoRng + RngCore,
-{
-    let mut last = Zeroizing::new([JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1]);
-    for value in &mut last[..JINDO_ENCODING_SLOTS_V1 - 1] {
-        *value = sample_uniform_field_element_v1(rng)?;
-    }
-    let mut first = Zeroizing::new([JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1]);
-    first[0] = polynomial[0];
-    for index in 1..JINDO_ENCODING_SLOTS_V1 {
-        first[index] = polynomial[index] - last[index - 1];
-    }
-    Ok((first, last))
-}
-
-fn compute_rounded_inner_commitments(
-    encoded_columns: &[Vec<JindoRnsPolynomialV1>],
-    mlwe_columns: &[Vec<JindoRnsPolynomialV1>],
+fn compute_inner_commitments(
+    encoded: &[JindoRnsPolynomialV1],
+    mlwe: &[JindoRnsPolynomialV1],
 ) -> Vec<JindoRnsPolynomialV1> {
     let key = commit_key_v1();
-    let mut rounded =
-        Vec::with_capacity(JINDO_PARAMETERS_V1.inner_msis_rank * (JINDO_PARAMETERS_V1.columns + 1));
-    for column in 0..=JINDO_PARAMETERS_V1.columns {
-        for row in 0..JINDO_PARAMETERS_V1.inner_msis_rank {
-            let mut commitment = JindoRnsPolynomialV1::zero();
-            for (matrix, value) in key.inner[row].iter().zip(&encoded_columns[column]) {
-                commitment.add_assign(
-                    &matrix.mul(value, JINDO_INNER_MODULI_V1),
+    (0..JINDO_PARAMETERS_V1.inner_msis_rank)
+        .map(|row| {
+            let mut value = JindoRnsPolynomialV1::zero();
+            for (matrix, secret) in key.inner[row].iter().zip(encoded) {
+                value.add_assign(
+                    &matrix.mul(secret, JINDO_INNER_MODULI_V1),
                     JINDO_INNER_MODULI_V1,
                 );
             }
-            for (matrix, value) in key.mlwe[row]
+            for (matrix, secret) in key.mlwe[row]
                 .iter()
-                .zip(&mlwe_columns[column][..JINDO_PARAMETERS_V1.mlwe_rank])
+                .zip(&mlwe[..JINDO_PARAMETERS_V1.mlwe_rank])
             {
-                commitment.add_assign(
-                    &matrix.mul(value, JINDO_INNER_MODULI_V1),
+                value.add_assign(
+                    &matrix.mul(secret, JINDO_INNER_MODULI_V1),
                     JINDO_INNER_MODULI_V1,
                 );
             }
-            commitment.add_assign(
-                &mlwe_columns[column][JINDO_PARAMETERS_V1.mlwe_rank + row],
+            value.add_assign(
+                &mlwe[JINDO_PARAMETERS_V1.mlwe_rank + row],
                 JINDO_INNER_MODULI_V1,
             );
-            rounded.push(round_and_change_basis(
-                &commitment,
+            cut_power_of_two_and_change_basis(
+                &value,
                 JINDO_INNER_MODULI_V1,
                 JINDO_OUTER_MODULI_V1,
                 JINDO_PARAMETERS_V1.log_inner_cutoff,
-            ));
-        }
-    }
-    rounded
+            )
+        })
+        .collect()
 }
 
-fn compute_public_commitment(
-    rounded_inner_commitments: &[JindoRnsPolynomialV1],
-) -> Result<Vec<i32>, JindoErrorV1> {
+fn compute_outer_commitment(inner: &[JindoRnsPolynomialV1]) -> Vec<JindoRnsPolynomialV1> {
     let key = commit_key_v1();
-    let mut coefficients =
-        Vec::with_capacity(JINDO_PARAMETERS_V1.outer_msis_rank * JINDO_RING_DEGREE_V1);
-    for row in 0..JINDO_PARAMETERS_V1.outer_msis_rank {
-        let mut commitment = JindoRnsPolynomialV1::zero();
-        for (matrix, value) in key.outer[row].iter().zip(rounded_inner_commitments) {
-            commitment.add_assign(
-                &matrix.mul(value, JINDO_OUTER_MODULI_V1),
+    (0..JINDO_PARAMETERS_V1.outer_msis_rank)
+        .map(|row| {
+            let mut value = JindoRnsPolynomialV1::zero();
+            for (matrix, secret) in key.outer[row].iter().zip(inner) {
+                value.add_assign(
+                    &matrix.mul(secret, JINDO_OUTER_MODULI_V1),
+                    JINDO_OUTER_MODULI_V1,
+                );
+            }
+            cut_power_of_two_and_change_basis(
+                &value,
                 JINDO_OUTER_MODULI_V1,
-            );
-        }
-        for coefficient_index in 0..JINDO_RING_DEGREE_V1 {
-            let value = floor_div_power_of_two(
-                commitment.balanced_coefficient(coefficient_index, JINDO_OUTER_MODULI_V1),
+                JINDO_OUTER_MODULI_V1,
                 JINDO_PARAMETERS_V1.log_outer_cutoff,
-            );
+            )
+        })
+        .collect()
+}
+
+fn encode_public_commitment(polynomials: &[JindoRnsPolynomialV1]) -> Result<Vec<u8>, JindoErrorV1> {
+    let mut out = Vec::with_capacity(IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1);
+    for polynomial in polynomials {
+        for index in 0..JINDO_RING_DEGREE_V1 {
             let value =
-                i32::try_from(value).map_err(|_| JindoErrorV1::RoundedCommitmentOutOfRange)?;
+                i32::try_from(polynomial.balanced_coefficient(index, JINDO_OUTER_MODULI_V1))
+                    .map_err(|_| JindoErrorV1::RoundedCommitmentOutOfRange)?;
             if !(IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1
                 ..=IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1)
                 .contains(&value)
             {
                 return Err(JindoErrorV1::RoundedCommitmentOutOfRange);
             }
-            coefficients.push(value);
+            out.extend_from_slice(&value.to_le_bytes());
         }
     }
-    Ok(coefficients)
-}
-
-fn floor_div_power_of_two(value: i128, exponent: u32) -> i128 {
-    value.div_euclid(1_i128 << exponent)
-}
-
-fn round_and_change_basis(
-    polynomial: &JindoRnsPolynomialV1,
-    source_moduli: [JindoPrimeModulusV1; 2],
-    destination_moduli: [JindoPrimeModulusV1; 2],
-    exponent: u32,
-) -> JindoRnsPolynomialV1 {
-    let coefficients = core::array::from_fn(|index| {
-        floor_div_power_of_two(
-            polynomial.balanced_coefficient(index, source_moduli),
-            exponent,
-        )
-    });
-    JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, destination_moduli)
-}
-
-fn change_basis(
-    polynomial: &JindoRnsPolynomialV1,
-    source_moduli: [JindoPrimeModulusV1; 2],
-    destination_moduli: [JindoPrimeModulusV1; 2],
-) -> JindoRnsPolynomialV1 {
-    let coefficients =
-        core::array::from_fn(|index| polynomial.balanced_coefficient(index, source_moduli));
-    JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, destination_moduli)
-}
-
-fn encode_public_commitment(coefficients: &[i32]) -> Vec<u8> {
-    let mut encoding = Vec::with_capacity(IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1);
-    for coefficient in coefficients {
-        encoding.extend_from_slice(&coefficient.to_le_bytes());
-    }
-    debug_assert_eq!(encoding.len(), IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1);
-    encoding
+    Ok(out)
 }
 
 fn parse_public_commitment(
-    commitment: &PrivacyJindoLatticeCommitmentV1,
+    c: &PrivacyJindoLatticeCommitmentV1,
     index: usize,
 ) -> Result<Vec<JindoRnsPolynomialV1>, JindoErrorV1> {
-    if commitment.encoding.len() != IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1 {
+    if c.encoding.len() != IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1 {
         return Err(JindoErrorV1::InvalidCommitmentEncoding { index });
     }
-    let mut polynomials = Vec::with_capacity(JINDO_PARAMETERS_V1.outer_msis_rank);
-    let mut any_nonzero = false;
+    let mut any = false;
+    let mut out = Vec::with_capacity(JINDO_PARAMETERS_V1.outer_msis_rank);
     for row in 0..JINDO_PARAMETERS_V1.outer_msis_rank {
         let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
-        for (coefficient_index, coefficient) in coefficients.iter_mut().enumerate() {
-            let offset = (row * JINDO_RING_DEGREE_V1 + coefficient_index) * 4;
+        for (column, coefficient) in coefficients.iter_mut().enumerate() {
+            let offset = (row * JINDO_RING_DEGREE_V1 + column) * 4;
             let value = i32::from_le_bytes(
-                commitment.encoding[offset..offset + 4]
+                c.encoding[offset..offset + 4]
                     .try_into()
-                    .expect("commitment width prevalidated"),
+                    .expect("width checked"),
             );
             if !(IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1
                 ..=IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1)
@@ -928,136 +930,262 @@ fn parse_public_commitment(
             {
                 return Err(JindoErrorV1::InvalidCommitmentEncoding { index });
             }
-            any_nonzero |= value != 0;
+            any |= value != 0;
             *coefficient = i128::from(value);
         }
-        polynomials.push(JindoRnsPolynomialV1::from_balanced_coefficients(
+        out.push(JindoRnsPolynomialV1::from_balanced_coefficients(
             coefficients,
             JINDO_OUTER_MODULI_V1,
         ));
     }
-    if !any_nonzero {
+    if !any {
         return Err(JindoErrorV1::ZeroCommitment { index });
     }
-    Ok(polynomials)
+    Ok(out)
 }
 
-fn combine_rounded_inner(
+fn evaluation_left_vector(x: JindoFieldElementV1) -> Vec<JindoRnsPolynomialV1> {
+    (0..JINDO_PARAMETERS_V1.rows)
+        .map(|row| {
+            encode_scalar(field_pow(
+                x,
+                row * JINDO_PARAMETERS_V1.columns * JINDO_ENCODING_SLOTS_V1,
+            ))
+        })
+        .collect()
+}
+fn encode_scalar(value: JindoFieldElementV1) -> JindoRnsPolynomialV1 {
+    encode_coefficient_slots_v1(&[value]).expect("one slot")
+}
+
+fn split_evaluation(
+    encoded: &[JindoRnsPolynomialV1],
+    left: &[JindoRnsPolynomialV1],
+    x_star: &JindoRnsPolynomialV1,
+) -> Result<Vec<JindoFieldElementV1>, JindoErrorV1> {
+    // The Go oracle uses its third ambient CRT prime for this step. Evaluate
+    // the same integer polynomial exactly instead of decoding a potentially
+    // wrapped two-prime residue.
+    Ok(
+        decode_exact_coefficient_slots_v1(&exact_augmented_evaluation_coefficients(
+            encoded, left, x_star,
+        )?)
+        .to_vec(),
+    )
+}
+
+fn exact_augmented_evaluation_coefficients(
+    encoded: &[JindoRnsPolynomialV1],
+    left: &[JindoRnsPolynomialV1],
+    x_star: &JindoRnsPolynomialV1,
+) -> Result<[i128; JINDO_RING_DEGREE_V1], JindoErrorV1> {
+    debug_assert_eq!(encoded.len(), JINDO_PARAMETERS_V1.rows + 1);
+    debug_assert_eq!(left.len(), JINDO_PARAMETERS_V1.rows);
+    let mut value = [0_i128; JINDO_RING_DEGREE_V1];
+    for row in 0..JINDO_PARAMETERS_V1.rows {
+        add_exact_encoded_scalar_product(&mut value, &encoded[row], &left[row])?;
+    }
+    add_exact_encoded_scalar_product(&mut value, &encoded[JINDO_PARAMETERS_V1.rows], x_star)?;
+    Ok(value)
+}
+
+fn add_exact_encoded_scalar_product(
+    accumulator: &mut [i128; JINDO_RING_DEGREE_V1],
+    polynomial: &JindoRnsPolynomialV1,
+    encoded_scalar: &JindoRnsPolynomialV1,
+) -> Result<(), JindoErrorV1> {
+    // Coefficient encoding of one scalar has exactly eight possible nonzero
+    // digits, at offsets `0, 128, ..., 896`. This is the fixed-profile
+    // negacyclic convolution, performed over the integers.
+    for digit in 0..JINDO_ENCODING_EXPONENT_V1 {
+        let scalar_index = digit * JINDO_ENCODING_SLOTS_V1;
+        let scalar = encoded_scalar.balanced_coefficient(scalar_index, JINDO_INNER_MODULI_V1);
+        for polynomial_index in 0..JINDO_RING_DEGREE_V1 {
+            let product = polynomial
+                .balanced_coefficient(polynomial_index, JINDO_INNER_MODULI_V1)
+                .checked_mul(scalar)
+                .ok_or(JindoErrorV1::ExactEvaluationArithmeticOverflow)?;
+            let unfolded_index = polynomial_index + scalar_index;
+            let (target_index, contribution) = if unfolded_index < JINDO_RING_DEGREE_V1 {
+                (unfolded_index, product)
+            } else {
+                (
+                    unfolded_index - JINDO_RING_DEGREE_V1,
+                    product
+                        .checked_neg()
+                        .ok_or(JindoErrorV1::ExactEvaluationArithmeticOverflow)?,
+                )
+            };
+            accumulator[target_index] = accumulator[target_index]
+                .checked_add(contribution)
+                .ok_or(JindoErrorV1::ExactEvaluationArithmeticOverflow)?;
+        }
+    }
+    Ok(())
+}
+
+fn response_partial_without_wrap(
+    encoded: &[JindoRnsPolynomialV1],
+    left: &[JindoRnsPolynomialV1],
+    x_star: &JindoRnsPolynomialV1,
+) -> Result<Option<JindoRnsPolynomialV1>, JindoErrorV1> {
+    let coefficients = exact_augmented_evaluation_coefficients(encoded, left, x_star)?;
+    if !coefficients_have_unique_inner_balanced_lift(&coefficients) {
+        return Ok(None);
+    }
+    let exact =
+        JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, JINDO_INNER_MODULI_V1);
+    debug_assert_eq!(exact, response_partial(encoded, left, x_star));
+    Ok(Some(exact))
+}
+
+fn coefficients_have_unique_inner_balanced_lift(
+    coefficients: &[i128; JINDO_RING_DEGREE_V1],
+) -> bool {
+    coefficients
+        .iter()
+        .all(|coefficient| coefficient.unsigned_abs() <= JINDO_INNER_BALANCED_MAX_V1)
+}
+
+fn response_partial(
+    encoded: &[JindoRnsPolynomialV1],
+    left: &[JindoRnsPolynomialV1],
+    x_star: &JindoRnsPolynomialV1,
+) -> JindoRnsPolynomialV1 {
+    let mut value = JindoRnsPolynomialV1::zero();
+    for row in 0..JINDO_PARAMETERS_V1.rows {
+        value.add_assign(
+            &encoded[row].mul(&left[row], JINDO_INNER_MODULI_V1),
+            JINDO_INNER_MODULI_V1,
+        );
+    }
+    value.add_assign(
+        &encoded[JINDO_PARAMETERS_V1.rows].mul(x_star, JINDO_INNER_MODULI_V1),
+        JINDO_INNER_MODULI_V1,
+    );
+    value
+}
+
+fn sparse_challenges(
+    t: &mut JindoTranscriptV1,
+    label: &[u8],
+    count: usize,
+) -> Result<Vec<JindoShortChallengeV1>, JindoErrorV1> {
+    (0..count)
+        .map(|i| t.sparse_challenge(label, i as u32).map_err(Into::into))
+        .collect()
+}
+fn combine_opening_polynomials<F>(
     openings: &[JindoOpeningV1],
-    challenges: &[JindoRnsPolynomialV1],
+    alpha: &[JindoShortChallengeV1],
+    field: F,
+) -> Vec<JindoRnsPolynomialV1>
+where
+    F: Fn(&JindoOpeningV1) -> &[JindoRnsPolynomialV1],
+{
+    let count = field(&openings[0]).len();
+    let moduli = if count == JINDO_PARAMETERS_V1.inner_msis_rank {
+        JINDO_OUTER_MODULI_V1
+    } else {
+        JINDO_INNER_MODULI_V1
+    };
+    let mut out = vec![JindoRnsPolynomialV1::zero(); count];
+    for (opening, challenge) in openings.iter().zip(alpha) {
+        let polynomial = challenge.polynomial(moduli);
+        for (target, source) in out.iter_mut().zip(field(opening)) {
+            target.add_assign(&source.mul(&polynomial, moduli), moduli);
+        }
+    }
+    out
+}
+fn add_polynomial_vectors(
+    left: &[JindoRnsPolynomialV1],
+    right: &[JindoRnsPolynomialV1],
+    moduli: [JindoPrimeModulusV1; 2],
 ) -> Vec<JindoRnsPolynomialV1> {
-    let mut combined = vec![
-        JindoRnsPolynomialV1::zero();
-        JINDO_PARAMETERS_V1.inner_msis_rank * (JINDO_PARAMETERS_V1.columns + 1)
-    ];
-    for (opening, challenge) in openings.iter().zip(challenges) {
-        for (output, value) in combined
-            .iter_mut()
-            .zip(opening.rounded_inner_commitments.iter())
-        {
-            output.add_assign(
-                &value.mul(challenge, JINDO_OUTER_MODULI_V1),
-                JINDO_OUTER_MODULI_V1,
-            );
-        }
-    }
-    combined
-}
-
-fn combine_encoded_columns(
-    openings: &[JindoOpeningV1],
-    challenges: &[JindoRnsPolynomialV1],
-) -> Vec<Vec<JindoRnsPolynomialV1>> {
-    let mut combined = vec![
-        vec![JindoRnsPolynomialV1::zero(); JINDO_PARAMETERS_V1.rows];
-        JINDO_PARAMETERS_V1.columns + 1
-    ];
-    for (opening, challenge) in openings.iter().zip(challenges) {
-        for (output_column, input_column) in combined.iter_mut().zip(opening.encoded_columns.iter())
-        {
-            for (output, value) in output_column.iter_mut().zip(input_column) {
-                output.add_assign(
-                    &value.mul(challenge, JINDO_INNER_MODULI_V1),
-                    JINDO_INNER_MODULI_V1,
-                );
-            }
-        }
-    }
-    combined
-}
-
-fn combine_mlwe_columns(
-    openings: &[JindoOpeningV1],
-    challenges: &[JindoRnsPolynomialV1],
-) -> Vec<Vec<JindoRnsPolynomialV1>> {
-    let mut combined = vec![
-        vec![
-            JindoRnsPolynomialV1::zero();
-            JINDO_PARAMETERS_V1.mlwe_rank + JINDO_PARAMETERS_V1.inner_msis_rank
-        ];
-        JINDO_PARAMETERS_V1.columns + 1
-    ];
-    for (opening, challenge) in openings.iter().zip(challenges) {
-        for (output_column, input_column) in combined.iter_mut().zip(opening.mlwe_columns.iter()) {
-            for (output, value) in output_column.iter_mut().zip(input_column) {
-                output.add_assign(
-                    &value.mul(challenge, JINDO_INNER_MODULI_V1),
-                    JINDO_INNER_MODULI_V1,
-                );
-            }
-        }
-    }
-    combined
-}
-
-fn evaluation_left_vector(evaluation_point: JindoFieldElementV1) -> Vec<JindoRnsPolynomialV1> {
-    let mut field_values = vec![JindoFieldElementV1::ONE; JINDO_PARAMETERS_V1.rows];
-    let stride = field_pow(evaluation_point, JINDO_ENCODING_SLOTS_V1);
-    for row in 1..JINDO_PARAMETERS_V1.rows {
-        field_values[row] = field_values[row - 1] * stride;
-    }
-    field_values[JINDO_PARAMETERS_V1.rows - 1] = evaluation_point;
-    field_values
-        .into_iter()
-        .map(|value| {
-            encode_coefficient_slots_v1(&[value])
-                .expect("one field element fits the fixed CELPC slot vector")
+    left.iter()
+        .zip(right)
+        .map(|(a, b)| {
+            let mut v = a.clone();
+            v.add_assign(b, moduli);
+            v
         })
         .collect()
 }
 
-fn inner_product_encoded(
-    left: &[JindoRnsPolynomialV1],
-    right: &[JindoRnsPolynomialV1],
-) -> JindoRnsPolynomialV1 {
-    let mut result = JindoRnsPolynomialV1::zero();
-    for (left, right) in left.iter().zip(right) {
-        result.add_assign(
-            &left.mul(right, JINDO_INNER_MODULI_V1),
-            JINDO_INNER_MODULI_V1,
-        );
+fn rejection_exponent(
+    mask_encoded: &[JindoRnsPolynomialV1],
+    value_encoded: &[JindoRnsPolynomialV1],
+    mask_mlwe: &[JindoRnsPolynomialV1],
+    value_mlwe: &[JindoRnsPolynomialV1],
+) -> Result<i128, JindoErrorV1> {
+    let mut total = 0_i128;
+    for (mask, value) in mask_encoded
+        .iter()
+        .chain(mask_mlwe)
+        .zip(value_encoded.iter().chain(value_mlwe))
+    {
+        for index in 0..JINDO_RING_DEGREE_V1 {
+            let y = mask.balanced_coefficient(index, JINDO_INNER_MODULI_V1);
+            let v = value.balanced_coefficient(index, JINDO_INNER_MODULI_V1);
+            let term = v
+                .checked_mul(v)
+                .and_then(|sq| {
+                    y.checked_mul(v)
+                        .and_then(|yv| yv.checked_mul(2).and_then(|twice| sq.checked_add(twice)))
+                })
+                .ok_or(JindoSamplingErrorV1::ArithmeticOverflow)?;
+            total = total
+                .checked_sub(term)
+                .ok_or(JindoSamplingErrorV1::ArithmeticOverflow)?;
+        }
     }
-    result
+    Ok(total)
+}
+
+fn verify_split_relations(
+    public: &ParsedPublicStatementV1,
+    blinds: &[JindoFieldElementV1],
+    splits: &[JindoFieldElementV1],
+    x_star: JindoFieldElementV1,
+) -> Result<(), JindoErrorV1> {
+    if blinds.len() != 4 || splits.len() != 4 * JINDO_ENCODING_SLOTS_V1 {
+        return Err(JindoErrorV1::SplitRelation);
+    }
+    for i in 0..4 {
+        let expected = public.claims[i] + x_star * blinds[i];
+        let actual = splits[i * JINDO_ENCODING_SLOTS_V1..(i + 1) * JINDO_ENCODING_SLOTS_V1]
+            .iter()
+            .rev()
+            .fold(JindoFieldElementV1::ZERO, |sum, value| {
+                sum * public.evaluation_point + *value
+            });
+        if expected != actual {
+            return Err(JindoErrorV1::SplitRelation);
+        }
+    }
+    Ok(())
 }
 
 fn verify_outer_relation(
     proof: &JindoEvaluationProofV1,
     commitments: &[Vec<JindoRnsPolynomialV1>],
-    batch_challenges: &[JindoRnsPolynomialV1],
+    alpha: &[JindoShortChallengeV1],
 ) -> Result<(), JindoErrorV1> {
     let key = commit_key_v1();
-    let mut relation = proof.rounded_inner_commitments.clone();
+    let mut relation = proof.inner_commitments.clone();
+    relation.reserve(JINDO_PARAMETERS_V1.outer_msis_rank);
     for row in 0..JINDO_PARAMETERS_V1.outer_msis_rank {
-        let mut batched_commitment = JindoRnsPolynomialV1::zero();
-        for (commitment, challenge) in commitments.iter().zip(batch_challenges) {
-            batched_commitment.add_assign(
-                &commitment[row].mul(challenge, JINDO_OUTER_MODULI_V1),
+        let mut commitment = proof.mask_commitments[row].clone();
+        for (public, challenge) in commitments.iter().zip(alpha) {
+            commitment.add_assign(
+                &public[row].mul(&challenge.outer_polynomial(), JINDO_OUTER_MODULI_V1),
                 JINDO_OUTER_MODULI_V1,
             );
         }
-        let mut residual = batched_commitment
+        let mut residual = commitment
             .scale_power_of_two(JINDO_PARAMETERS_V1.log_outer_cutoff, JINDO_OUTER_MODULI_V1);
-        for (matrix, value) in key.outer[row].iter().zip(&proof.rounded_inner_commitments) {
+        for (matrix, value) in key.outer[row].iter().zip(&proof.inner_commitments) {
             residual.sub_assign(
                 &matrix.mul(value, JINDO_OUTER_MODULI_V1),
                 JINDO_OUTER_MODULI_V1,
@@ -1065,6 +1193,7 @@ fn verify_outer_relation(
         }
         relation.push(residual);
     }
+    debug_assert_eq!(relation.len(), JINDO_OUTER_RELATION_POLYNOMIALS_V1);
     if !two_norm_squared_is_below_v1(
         &relation,
         JINDO_OUTER_MODULI_V1,
@@ -1077,25 +1206,21 @@ fn verify_outer_relation(
 
 fn verify_inner_relation(
     proof: &JindoEvaluationProofV1,
-    evaluation_challenge_outer: &JindoRnsPolynomialV1,
+    c: &JindoShortChallengeV1,
 ) -> Result<(), JindoErrorV1> {
     let key = commit_key_v1();
-    let mut relation = Vec::with_capacity(
-        JINDO_PARAMETERS_V1.rows
-            + JINDO_PARAMETERS_V1.mlwe_rank
-            + 2 * JINDO_PARAMETERS_V1.inner_msis_rank,
-    );
+    let c_inner = c.inner_polynomial();
+    let mut relation = Vec::with_capacity(JINDO_INNER_RELATION_POLYNOMIALS_V1);
     relation.extend(proof.encode_responses.iter().cloned());
     relation.extend(proof.mlwe_responses.iter().cloned());
     for row in 0..JINDO_PARAMETERS_V1.inner_msis_rank {
-        let real = &proof.rounded_inner_commitments[row];
-        let mask = &proof.rounded_inner_commitments[JINDO_PARAMETERS_V1.inner_msis_rank + row];
-        let mut combined = mask.clone();
-        combined.add_assign(
-            &real.mul(evaluation_challenge_outer, JINDO_OUTER_MODULI_V1),
+        let embedded = change_basis(
+            &proof.inner_commitments[row],
             JINDO_OUTER_MODULI_V1,
+            JINDO_INNER_MODULI_V1,
         );
-        let mut residual = change_basis(&combined, JINDO_OUTER_MODULI_V1, JINDO_INNER_MODULI_V1)
+        let mut residual = embedded
+            .mul(&c_inner, JINDO_INNER_MODULI_V1)
             .scale_power_of_two(JINDO_PARAMETERS_V1.log_inner_cutoff, JINDO_INNER_MODULI_V1);
         for (matrix, value) in key.inner[row].iter().zip(&proof.encode_responses) {
             residual.sub_assign(
@@ -1118,6 +1243,7 @@ fn verify_inner_relation(
         );
         relation.push(residual);
     }
+    debug_assert_eq!(relation.len(), JINDO_INNER_RELATION_POLYNOMIALS_V1);
     if !two_norm_squared_is_below_v1(
         &relation,
         JINDO_INNER_MODULI_V1,
@@ -1130,935 +1256,240 @@ fn verify_inner_relation(
 
 fn verify_consistency_relation(
     proof: &JindoEvaluationProofV1,
-    evaluation_point: JindoFieldElementV1,
-    evaluation_challenge: &JindoRnsPolynomialV1,
+    x: JindoFieldElementV1,
+    x_star: JindoFieldElementV1,
+    c: &JindoShortChallengeV1,
 ) -> Result<(), JindoErrorV1> {
-    let left = evaluation_left_vector(evaluation_point);
-    let mut relation = inner_product_encoded(&left, &proof.encode_responses);
+    let left = evaluation_left_vector(x);
+    let x_star = encode_scalar(x_star);
+    let mut relation = response_partial(&proof.encode_responses, &left, &x_star);
     relation.sub_assign(
-        &proof.partials[0].mul(evaluation_challenge, JINDO_INNER_MODULI_V1),
+        &proof.partials[0].mul(&c.inner_polynomial(), JINDO_INNER_MODULI_V1),
         JINDO_INNER_MODULI_V1,
     );
-    relation.sub_assign(&proof.partial_mask, JINDO_INNER_MODULI_V1);
     if !relation.is_zero() {
         return Err(JindoErrorV1::EvaluationConsistency);
     }
     Ok(())
 }
-
 fn verify_evaluation_relation(
     proof: &JindoEvaluationProofV1,
-    evaluation_point: JindoFieldElementV1,
-    claims: &[JindoFieldElementV1],
-    batch_scalars: &[JindoFieldElementV1],
+    alpha: &[JindoShortChallengeV1],
 ) -> Result<(), JindoErrorV1> {
-    let decoded = decode_coefficient_slots_v1(&proof.partials[0]);
-    let mut actual = JindoFieldElementV1::ZERO;
-    let mut power = JindoFieldElementV1::ONE;
-    for value in decoded {
-        actual = actual + power * value;
-        power = power * evaluation_point;
+    let mut expected =
+        encode_coefficient_slots_v1(&proof.mask_split_evaluation).expect("fixed slots");
+    for (split, challenge) in proof
+        .split_evaluations
+        .chunks_exact(JINDO_ENCODING_SLOTS_V1)
+        .zip(alpha)
+    {
+        let encoded = encode_coefficient_slots_v1(split).expect("fixed slots");
+        expected.add_assign(
+            &encoded.mul(&challenge.inner_polynomial(), JINDO_INNER_MODULI_V1),
+            JINDO_INNER_MODULI_V1,
+        );
     }
-    let expected = claims
-        .iter()
-        .zip(batch_scalars)
-        .fold(JindoFieldElementV1::ZERO, |sum, (claim, scalar)| {
-            sum + *claim * *scalar
-        });
-    if actual != expected {
+    if decode_coefficient_slots_v1(&expected) != decode_coefficient_slots_v1(&proof.partials[0]) {
         return Err(JindoErrorV1::EvaluationRelation);
     }
     Ok(())
 }
 
-fn evaluate_polynomial(
-    polynomial: &[JindoFieldElementV1],
-    point: JindoFieldElementV1,
-) -> JindoFieldElementV1 {
-    polynomial
-        .iter()
-        .rev()
-        .fold(JindoFieldElementV1::ZERO, |value, coefficient| {
-            value * point + *coefficient
-        })
+/// Apply the paper/oracle `Pow2Cutter.CutTo` map coefficient-wise.
+///
+/// For a centered integer `x`, the upstream algebra subtracts the canonical
+/// residue modulo `2^exponent` and divides the result by `2^exponent`. This is
+/// exactly Euclidean floor division, including for negative coefficients; it
+/// is deliberately not nearest-integer rounding.
+fn cut_power_of_two_and_change_basis(
+    p: &JindoRnsPolynomialV1,
+    source: [JindoPrimeModulusV1; 2],
+    dest: [JindoPrimeModulusV1; 2],
+    exponent: u32,
+) -> JindoRnsPolynomialV1 {
+    let coefficients = core::array::from_fn(|i| {
+        cut_power_of_two_coefficient(p.balanced_coefficient(i, source), exponent)
+    });
+    JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, dest)
 }
 
+fn cut_power_of_two_coefficient(value: i128, exponent: u32) -> i128 {
+    value.div_euclid(1_i128 << exponent)
+}
+fn change_basis(
+    p: &JindoRnsPolynomialV1,
+    source: [JindoPrimeModulusV1; 2],
+    dest: [JindoPrimeModulusV1; 2],
+) -> JindoRnsPolynomialV1 {
+    JindoRnsPolynomialV1::from_balanced_coefficients(
+        core::array::from_fn(|i| p.balanced_coefficient(i, source)),
+        dest,
+    )
+}
+fn evaluate_polynomial(
+    poly: &[JindoFieldElementV1],
+    x: JindoFieldElementV1,
+) -> JindoFieldElementV1 {
+    poly.iter()
+        .rev()
+        .fold(JindoFieldElementV1::ZERO, |v, c| v * x + *c)
+}
 fn field_pow(mut base: JindoFieldElementV1, mut exponent: usize) -> JindoFieldElementV1 {
-    let mut result = JindoFieldElementV1::ONE;
+    let mut out = JindoFieldElementV1::ONE;
     while exponent != 0 {
         if exponent & 1 == 1 {
-            result = result * base;
+            out = out * base
         }
         base = base * base;
-        exponent >>= 1;
+        exponent >>= 1
     }
-    result
+    out
 }
-
-fn opening_has_fixed_shape(opening: &JindoOpeningV1) -> bool {
-    opening.polynomial.len() == JINDO_MAX_COEFFICIENTS_V1
-        && opening.encoded_columns.len() == JINDO_PARAMETERS_V1.columns + 1
-        && opening
-            .encoded_columns
-            .iter()
-            .all(|column| column.len() == JINDO_PARAMETERS_V1.rows)
-        && opening.mlwe_columns.len() == JINDO_PARAMETERS_V1.columns + 1
-        && opening.mlwe_columns.iter().all(|column| {
-            column.len() == JINDO_PARAMETERS_V1.mlwe_rank + JINDO_PARAMETERS_V1.inner_msis_rank
-        })
-        && opening.rounded_inner_commitments.len()
-            == JINDO_PARAMETERS_V1.inner_msis_rank * (JINDO_PARAMETERS_V1.columns + 1)
-        && opening.commitment_encoding.len() == IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1
+fn opening_has_fixed_shape(o: &JindoOpeningV1) -> bool {
+    o.polynomial.len() == 256
+        && o.blinder.len() == 128
+        && o.encoded.len() == 3
+        && o.mlwe.len() == 8
+        && o.inner_commitments.len() == 4
+        && o.commitment_encoding.len() == IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1
 }
-
-fn encode_rns_polynomial(polynomial: &JindoRnsPolynomialV1) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(2 * JINDO_RING_DEGREE_V1 * 8);
-    for residue in polynomial.residues().iter().flatten() {
-        bytes.extend_from_slice(&residue.to_le_bytes());
+fn indexed_label(prefix: &[u8], index: usize) -> Vec<u8> {
+    let mut v = prefix.to_vec();
+    v.extend_from_slice(&(index as u32).to_be_bytes());
+    v
+}
+fn encode_rns(p: &JindoRnsPolynomialV1) -> Vec<u8> {
+    let mut v = Vec::with_capacity(2 * JINDO_RING_DEGREE_V1 * 8);
+    for x in p.residues().iter().flatten() {
+        v.extend_from_slice(&x.to_le_bytes())
     }
-    bytes
+    v
+}
+fn absorb_polynomials(
+    t: &mut JindoTranscriptV1,
+    prefix: &[u8],
+    values: &[JindoRnsPolynomialV1],
+) -> Result<(), JindoErrorV1> {
+    for (i, v) in values.iter().enumerate() {
+        t.append_message(&indexed_label(prefix, i), &encode_rns(v))?
+    }
+    Ok(())
+}
+fn absorb_fields(
+    t: &mut JindoTranscriptV1,
+    prefix: &[u8],
+    values: &[JindoFieldElementV1],
+) -> Result<(), JindoErrorV1> {
+    for (i, v) in values.iter().enumerate() {
+        t.append_message(&indexed_label(prefix, i), &v.to_canonical_bytes())?
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::privacy::{
-        PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-        PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
-    };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
     use super::*;
-    use crate::privacy_engines::jindo::{
-        JINDO_MAX_BATCH_SIZE_V1,
-        codec::{
-            JINDO_PROOF_HEADER_BYTES_V1, JINDO_PROOF_INNER_POLYNOMIALS_V1,
-            JINDO_PROOF_OUTER_POLYNOMIALS_V1, JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1,
-        },
-        ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1},
-    };
 
-    #[derive(Clone)]
-    struct TestRng(u64);
-
-    impl TestRng {
-        const fn new(seed: u64) -> Self {
-            Self(seed)
-        }
-    }
-
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            self.next_u64() as u32
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            let mut value = self.0;
-            value ^= value >> 12;
-            value ^= value << 25;
-            value ^= value >> 27;
-            self.0 = value;
-            value.wrapping_mul(0x2545_f491_4f6c_dd1d)
-        }
-
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            for chunk in destination.chunks_mut(8) {
-                let bytes = self.next_u64().to_le_bytes();
-                chunk.copy_from_slice(&bytes[..chunk.len()]);
-            }
-        }
-
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
-            Ok(())
-        }
-    }
-
-    impl CryptoRng for TestRng {}
-
-    struct NonCanonicalFieldRng;
-
-    impl RngCore for NonCanonicalFieldRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::MAX
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            u64::MAX
-        }
-
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(u8::MAX);
-        }
-
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
-            Ok(())
-        }
-    }
-
-    impl CryptoRng for NonCanonicalFieldRng {}
-
-    struct PanicRng;
-
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
-            panic!("non-canonical polynomial reached Jindo randomness")
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            panic!("non-canonical polynomial reached Jindo randomness")
-        }
-
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("non-canonical polynomial reached Jindo randomness")
-        }
-
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
-            panic!("non-canonical polynomial reached Jindo randomness")
-        }
-    }
-
-    impl CryptoRng for PanicRng {}
-
-    fn field(value: u64) -> PrivacyJindoFieldElementV1 {
-        let mut encoding = [0_u8; 32];
-        encoding[..8].copy_from_slice(&value.to_le_bytes());
-        PrivacyJindoFieldElementV1::new(encoding)
-    }
-
-    fn field_modulus_encoding() -> [u8; 32] {
-        let mut encoding = [0_u8; 32];
-        for (chunk, limb) in encoding
-            .chunks_exact_mut(core::mem::size_of::<u64>())
-            .zip(JindoFieldElementV1::MODULUS)
-        {
-            chunk.copy_from_slice(&limb.to_le_bytes());
-        }
-        encoding
-    }
-
-    fn field_modulus_plus_one_encoding() -> [u8; 32] {
-        let mut encoding = field_modulus_encoding();
-        encoding[0] = encoding[0]
-            .checked_add(1)
-            .expect("Jindo modulus low byte leaves room for one");
-        encoding
-    }
-
-    fn context() -> PrivacyStatementContextV1 {
-        PrivacyStatementContextV1 {
-            chain_id: "jindo-native-test".parse().expect("chain id"),
-            action_index: 0,
-            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([1; 32]),
-            parameter_id: PrivacyParameterIdV1::new([2; 32]),
-            parameter_digest: PrivacyParameterDigestV1::new([3; 32]),
-            verifier_digest: PrivacyVerifierDigestV1::new([4; 32]),
-            statement_schema_digest: PrivacyStatementSchemaDigestV1::new([5; 32]),
-            engine_manifest_digest: PrivacyEngineManifestDigestV1::new([6; 32]),
-        }
-    }
-
-    fn binding(statement: &IrohaJindoPolynomialCommitmentStatementV1) -> TranscriptBindingV1<'_> {
-        let digest = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone())
-            .digest()
-            .expect("statement digest");
-        TranscriptBindingV1 {
-            chain_id: statement.context.chain_id.as_str().as_bytes(),
-            genesis_hash: [7; 32],
-            action_index: statement.context.action_index,
-            statement_digest: *digest.as_bytes(),
-            parameter_id: *statement.context.parameter_id.as_bytes(),
-            parameter_digest: *statement.context.parameter_digest.as_bytes(),
-            verifier_digest: *statement.context.verifier_digest.as_bytes(),
-            statement_schema_digest: *statement.context.statement_schema_digest.as_bytes(),
-            engine_manifest_digest: *statement.context.engine_manifest_digest.as_bytes(),
-            generator_digest: crs_digest_v1(),
-        }
-    }
-
-    fn commit_statement(
-        polynomials: &[Vec<PrivacyJindoFieldElementV1>],
-        evaluation_point: PrivacyJindoFieldElementV1,
-        seed: u64,
-    ) -> (
-        IrohaJindoPolynomialCommitmentStatementV1,
-        Vec<JindoOpeningV1>,
-    ) {
-        let mut rng = TestRng::new(seed);
-        let mut commitments = Vec::with_capacity(polynomials.len());
-        let mut claims = Vec::with_capacity(polynomials.len());
-        let mut openings = Vec::with_capacity(polynomials.len());
-        for polynomial in polynomials {
-            let (commitment, opening) =
-                commit_polynomial_v1(polynomial, &mut rng).expect("commitment");
-            commitments.push(commitment);
-            openings.push(opening);
-            claims.push(
-                evaluate_polynomial_v1(polynomial, evaluation_point).expect("canonical evaluation"),
+    #[test]
+    fn exact_batch_boundary_rejects_every_other_count() {
+        for count in [0, 1, 3, 5] {
+            assert_eq!(
+                require_exact_batch(count),
+                Err(JindoErrorV1::InvalidPolynomialCount { count, expected: 4 })
             );
         }
-        (
-            IrohaJindoPolynomialCommitmentStatementV1 {
-                context: context(),
-                polynomial_commitments: commitments,
-                evaluation_point,
-                claimed_evaluations: claims,
-            },
-            openings,
-        )
+        assert_eq!(require_exact_batch(4), Ok(()));
     }
 
-    fn prove_fixture(
-        polynomials: &[Vec<PrivacyJindoFieldElementV1>],
-        evaluation_point: PrivacyJindoFieldElementV1,
-        seed: u64,
-    ) -> (IrohaJindoPolynomialCommitmentStatementV1, Vec<u8>) {
-        let (statement, openings) = commit_statement(polynomials, evaluation_point, seed);
-        let proof =
-            prove_batched_evaluation_v1(&statement, polynomials, &openings, &binding(&statement))
-                .expect("proof");
-        (statement, proof)
-    }
-
-    fn assert_verification_rejected(
-        label: &str,
-        statement: &IrohaJindoPolynomialCommitmentStatementV1,
-        proof: &[u8],
-        binding: &TranscriptBindingV1<'_>,
-    ) {
-        let result = verify_batched_evaluation_v1(
-            statement,
-            proof,
-            binding,
-            u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+    #[test]
+    fn proof_wire_and_source_are_current_only() {
+        assert_eq!(JINDO_NATIVE_PROOF_BYTES_V1, 331_912);
+        assert!(
+            core::str::from_utf8(JINDO_SOURCE_PROFILE_V1)
+                .unwrap()
+                .contains("figures-2-7")
         );
-        assert!(result.is_err(), "{label} unexpectedly verified");
+        assert!(
+            !core::str::from_utf8(JINDO_SOURCE_PROFILE_V1)
+                .unwrap()
+                .contains("v1-figures")
+        );
     }
 
-    fn perturb_polynomial(
-        polynomial: &mut JindoRnsPolynomialV1,
-        moduli: [JindoPrimeModulusV1; 2],
-        magnitude: i128,
-    ) {
+    #[test]
+    fn rejection_exponent_matches_direct_small_relation() {
+        let mut y = [0_i128; JINDO_RING_DEGREE_V1];
+        y[0] = 3;
+        let mut v = [0_i128; JINDO_RING_DEGREE_V1];
+        v[0] = -2;
+        let y = JindoRnsPolynomialV1::from_balanced_coefficients(y, JINDO_INNER_MODULI_V1);
+        let v = JindoRnsPolynomialV1::from_balanced_coefficients(v, JINDO_INNER_MODULI_V1);
+        assert_eq!(rejection_exponent(&[y], &[v], &[], &[]).unwrap(), 8);
+    }
+
+    #[test]
+    fn response_and_exact_evaluation_bounds_close_the_rns_no_wrap_argument() {
+        assert_eq!(
+            JINDO_INNER_MODULUS_PRODUCT_V1,
+            4_951_760_149_791_787_244_536_621_057
+        );
+        assert_eq!(
+            JINDO_AGGREGATED_COEFFICIENT_ABS_BOUND_V1,
+            57_689_755_457_215_973
+        );
+        assert_eq!(
+            JINDO_FINAL_RESPONSE_COEFFICIENT_ABS_BOUND_V1,
+            2_019_141_441_002_559_055
+        );
+        assert_eq!(
+            JINDO_EXACT_PARTIAL_ACCUMULATOR_ABS_BOUND_V1,
+            5_000_488_397_053_106_056_781_240_832
+        );
+        assert!(JINDO_FINAL_RESPONSE_COEFFICIENT_ABS_BOUND_V1 < JINDO_INNER_BALANCED_MAX_V1);
+        assert!(JINDO_EXACT_PARTIAL_ACCUMULATOR_ABS_BOUND_V1 < i128::MAX as u128);
+        assert!(
+            JINDO_EXACT_PARTIAL_ACCUMULATOR_ABS_BOUND_V1 > JINDO_INNER_BALANCED_MAX_V1,
+            "the exact partial needs the explicit balanced-lift admission check"
+        );
+
         let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
-        coefficients[0] = magnitude;
-        polynomial.add_assign(
-            &JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, moduli),
-            moduli,
-        );
+        coefficients[0] = JINDO_INNER_BALANCED_MAX_V1 as i128;
+        coefficients[1] = -(JINDO_INNER_BALANCED_MAX_V1 as i128);
+        assert!(coefficients_have_unique_inner_balanced_lift(&coefficients));
+        coefficients[2] = (JINDO_INNER_BALANCED_MAX_V1 + 1) as i128;
+        assert!(!coefficients_have_unique_inner_balanced_lift(&coefficients));
     }
 
     #[test]
-    fn single_polynomial_commit_open_verify_roundtrip() {
-        let polynomial = vec![field(3), field(5), field(7), field(11)];
-        let evaluation_point = field(13);
-        let claim =
-            evaluate_polynomial_v1(&polynomial, evaluation_point).expect("canonical evaluation");
-        let (commitment, opening) =
-            commit_polynomial_v1(&polynomial, &mut TestRng::new(0x1234_5678_9abc_def0))
-                .expect("commitment");
-        assert_eq!(format!("{opening:?}"), "JindoOpeningV1([REDACTED])");
-
-        let statement = IrohaJindoPolynomialCommitmentStatementV1 {
-            context: context(),
-            polynomial_commitments: vec![commitment],
-            evaluation_point,
-            claimed_evaluations: vec![claim],
-        };
-        let binding = binding(&statement);
-        let proof = prove_batched_evaluation_v1(&statement, &[polynomial], &[opening], &binding)
-            .expect("proof");
-        assert_eq!(proof.len(), JINDO_PROOF_BYTES_V1);
-        verify_batched_evaluation_v1(
-            &statement,
-            &proof,
-            &binding,
-            u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-        )
-        .expect("valid proof");
+    fn verifier_relation_dimensions_match_figures_six_and_seven() {
+        assert_eq!(JINDO_OUTER_RELATION_POLYNOMIALS_V1, 4 + 3);
+        assert_eq!(JINDO_INNER_RELATION_POLYNOMIALS_V1, 3 + 8 + 4);
     }
 
     #[test]
-    fn two_polynomial_batch_and_zero_evaluation_point_roundtrip() {
-        let polynomials = vec![
-            vec![field(0)],
-            vec![field(5), field(7), field(11), field(13), field(17)],
-        ];
-        let (statement, proof) = prove_fixture(&polynomials, field(0), 0x2234_5678_9abc_def0);
-        assert_eq!(statement.claimed_evaluations, vec![field(0), field(5)]);
-        verify_batched_evaluation_v1(
-            &statement,
-            &proof,
-            &binding(&statement),
-            u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-        )
-        .expect("valid two-polynomial proof at zero");
-
-        let mut duplicate = statement.clone();
-        duplicate.polynomial_commitments[1] = duplicate.polynomial_commitments[0].clone();
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &duplicate,
-                &proof,
-                &binding(&duplicate),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::DuplicateCommitment { index: 1 })
-        );
-    }
-
-    #[test]
-    fn canonical_polynomial_rule_is_shared_by_evaluate_commit_and_prove() {
-        let zero = vec![field(0)];
-        assert_eq!(
-            evaluate_polynomial_v1(&zero, field(29)),
-            Ok(field(0)),
-            "[0] is the unique zero-polynomial encoding"
-        );
-
-        let exact_cap = vec![field(1); JINDO_MAX_COEFFICIENTS_V1];
-        assert_eq!(
-            evaluate_polynomial_v1(&exact_cap, field(0)),
-            Ok(field(1)),
-            "a non-zero leading coefficient at the exact cap is canonical"
-        );
-
-        let mut trailing_zero_at_cap = exact_cap.clone();
-        trailing_zero_at_cap[JINDO_MAX_COEFFICIENTS_V1 - 1] = field(0);
-        let oversized = vec![field(1); JINDO_MAX_COEFFICIENTS_V1 + 1];
-        let noncanonical_modulus = vec![PrivacyJindoFieldElementV1::new(field_modulus_encoding())];
-        let noncanonical_modulus_plus_one = vec![PrivacyJindoFieldElementV1::new(
-            field_modulus_plus_one_encoding(),
-        )];
-
-        for (label, polynomial, expected) in [
-            (
-                "empty",
-                Vec::new(),
-                JindoErrorV1::EmptyPolynomial { index: 0 },
-            ),
-            (
-                "redundant zero polynomial",
-                vec![field(0), field(0)],
-                JindoErrorV1::TrailingZeroCoefficient { index: 0 },
-            ),
-            (
-                "trailing zero at cap",
-                trailing_zero_at_cap,
-                JindoErrorV1::TrailingZeroCoefficient { index: 0 },
-            ),
-            (
-                "over coefficient cap",
-                oversized,
-                JindoErrorV1::PolynomialTooLarge {
-                    index: 0,
-                    count: JINDO_MAX_COEFFICIENTS_V1 + 1,
-                    max: JINDO_MAX_COEFFICIENTS_V1,
-                },
-            ),
-            (
-                "field modulus",
-                noncanonical_modulus,
-                JindoErrorV1::NonCanonicalCoefficient {
-                    polynomial_index: 0,
-                    coefficient_index: 0,
-                },
-            ),
-            (
-                "field modulus plus one",
-                noncanonical_modulus_plus_one,
-                JindoErrorV1::NonCanonicalCoefficient {
-                    polynomial_index: 0,
-                    coefficient_index: 0,
-                },
-            ),
+    fn power_of_two_cut_matches_upstream_algebra_at_signed_boundaries() {
+        let expected = [-2_i128, -1, -1, -1, 0, 0, 0, 1, 1];
+        for exponent in [
+            JINDO_PARAMETERS_V1.log_inner_cutoff,
+            JINDO_PARAMETERS_V1.log_outer_cutoff,
         ] {
-            assert_eq!(
-                evaluate_polynomial_v1(&polynomial, field(31)),
-                Err(expected),
-                "{label} reached polynomial evaluation"
-            );
-            let commit_error = commit_polynomial_v1(&polynomial, &mut PanicRng)
-                .expect_err("non-canonical polynomial reached prover randomness");
-            assert_eq!(commit_error, expected, "{label} returned the wrong error");
-        }
-
-        let canonical = vec![field(37), field(41), field(43)];
-        let (statement, openings) = commit_statement(
-            core::slice::from_ref(&canonical),
-            field(47),
-            0x2a34_5678_9abc_def0,
-        );
-        for (label, polynomial, expected) in [
-            (
-                "empty",
-                Vec::new(),
-                JindoErrorV1::EmptyPolynomial { index: 0 },
-            ),
-            (
-                "trailing zero",
-                {
-                    let mut value = canonical.clone();
-                    value.push(field(0));
-                    value
-                },
-                JindoErrorV1::TrailingZeroCoefficient { index: 0 },
-            ),
-            (
-                "noncanonical coefficient",
-                {
-                    let mut value = canonical.clone();
-                    value[1] = PrivacyJindoFieldElementV1::new(field_modulus_plus_one_encoding());
-                    value
-                },
-                JindoErrorV1::NonCanonicalCoefficient {
-                    polynomial_index: 0,
-                    coefficient_index: 1,
-                },
-            ),
-        ] {
-            assert_eq!(
-                prove_batched_evaluation_v1(
-                    &statement,
-                    &[polynomial],
-                    &openings,
-                    &binding(&statement),
-                ),
-                Err(expected),
-                "{label} reached the Jindo proving transcript"
-            );
-        }
-    }
-
-    #[test]
-    fn canonical_adversarial_mutations_reach_and_fail_every_proof_relation() {
-        let polynomials = vec![vec![field(3), field(5), field(7), field(11)]];
-        let (statement, proof_bytes) =
-            prove_fixture(&polynomials, field(13), 0x3234_5678_9abc_def0);
-        let decoded = JindoEvaluationProofV1::decode_exact(
-            &proof_bytes,
-            1,
-            u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-        )
-        .expect("canonical proof");
-
-        let mut mutations = Vec::new();
-        for index in [0, JINDO_PROOF_OUTER_POLYNOMIALS_V1 - 1] {
-            let mut proof = decoded.clone();
-            perturb_polynomial(
-                &mut proof.rounded_inner_commitments[index],
-                JINDO_OUTER_MODULI_V1,
+            let power = 1_i128 << exponent;
+            let inputs = [
+                -power - 1,
+                -power,
+                -power + 1,
+                -1,
+                0,
                 1,
+                power - 1,
+                power,
+                power + 1,
+            ];
+            assert_eq!(
+                inputs.map(|value| cut_power_of_two_coefficient(value, exponent)),
+                expected,
+                "Pow2Cutter.CutTo boundary drift at exponent {exponent}"
             );
-            mutations.push(("rounded-inner-commitment", proof.encode()));
         }
-        {
-            let mut proof = decoded.clone();
-            perturb_polynomial(&mut proof.partials[0], JINDO_INNER_MODULI_V1, 1);
-            mutations.push(("evaluation-partial", proof.encode()));
-        }
-        {
-            let mut proof = decoded.clone();
-            perturb_polynomial(&mut proof.partial_mask, JINDO_INNER_MODULI_V1, 1);
-            mutations.push(("evaluation-partial-mask", proof.encode()));
-        }
-        for index in [0, decoded.encode_responses.len() - 1] {
-            let mut proof = decoded.clone();
-            perturb_polynomial(&mut proof.encode_responses[index], JINDO_INNER_MODULI_V1, 1);
-            mutations.push(("encoded-column-response", proof.encode()));
-        }
-        for index in [0, 31] {
-            let mut proof = decoded.clone();
-            perturb_polynomial(&mut proof.mlwe_responses[index], JINDO_INNER_MODULI_V1, 1);
-            mutations.push(("mlwe-response", proof.encode()));
-        }
-        // The final inner-MSIS-rank responses are explicit short-error
-        // witnesses in an approximate lattice relation. A unit perturbation
-        // can legitimately remain within the norm ball, so cross the strict
-        // norm ceiling while retaining a canonical RNS encoding.
-        for index in [32, decoded.mlwe_responses.len() - 1] {
-            let mut proof = decoded.clone();
-            perturb_polynomial(
-                &mut proof.mlwe_responses[index],
-                JINDO_INNER_MODULI_V1,
-                1_i128 << 80,
-            );
-            mutations.push(("mlwe-short-error-norm", proof.encode()));
-        }
-
-        assert_eq!(mutations.len(), 10);
-        for (label, mutation) in mutations {
-            assert_eq!(mutation.len(), JINDO_PROOF_BYTES_V1);
-            JindoEvaluationProofV1::decode_exact(
-                &mutation,
-                1,
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            )
-            .expect("mutation remains canonically encoded");
-            assert_verification_rejected(label, &statement, &mutation, &binding(&statement));
-        }
-    }
-
-    #[test]
-    fn proof_caps_lengths_headers_and_noncanonical_residues_fail_closed() {
-        let polynomials = vec![vec![field(19), field(23), field(29)]];
-        let (statement, proof) = prove_fixture(&polynomials, field(31), 0x4234_5678_9abc_def0);
-        let exact_cap = u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length");
-        verify_batched_evaluation_v1(&statement, &proof, &binding(&statement), exact_cap)
-            .expect("exact cap");
-        assert!(matches!(
-            verify_batched_evaluation_v1(&statement, &proof, &binding(&statement), exact_cap - 1),
-            Err(JindoErrorV1::ProofCodec(
-                JindoProofCodecErrorV1::TooLarge { .. }
-            ))
-        ));
-
-        for (label, malformed) in [
-            ("truncated", proof[..proof.len() - 1].to_vec()),
-            ("trailing", {
-                let mut bytes = proof.clone();
-                bytes.push(0);
-                bytes
-            }),
-            ("magic", {
-                let mut bytes = proof.clone();
-                bytes[0] ^= 1;
-                bytes
-            }),
-            ("version", {
-                let mut bytes = proof.clone();
-                bytes[4] = 2;
-                bytes
-            }),
-            ("batch-count", {
-                let mut bytes = proof.clone();
-                bytes[5] = 2;
-                bytes
-            }),
-            ("flags", {
-                let mut bytes = proof.clone();
-                bytes[6] = 1;
-                bytes
-            }),
-            ("reserved", {
-                let mut bytes = proof.clone();
-                bytes[7] = 1;
-                bytes
-            }),
-        ] {
-            assert_verification_rejected(label, &statement, &malformed, &binding(&statement));
-        }
-
-        let mut noncanonical_outer = proof.clone();
-        noncanonical_outer[JINDO_PROOF_HEADER_BYTES_V1..JINDO_PROOF_HEADER_BYTES_V1 + 8]
-            .copy_from_slice(&JINDO_OUTER_MODULI_V1[0].modulus().to_le_bytes());
-        assert_verification_rejected(
-            "noncanonical outer residue",
-            &statement,
-            &noncanonical_outer,
-            &binding(&statement),
-        );
-
-        let inner_start = JINDO_PROOF_HEADER_BYTES_V1
-            + JINDO_PROOF_OUTER_POLYNOMIALS_V1 * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1;
-        let mut noncanonical_inner = proof.clone();
-        noncanonical_inner[inner_start..inner_start + 8]
-            .copy_from_slice(&JINDO_INNER_MODULI_V1[0].modulus().to_le_bytes());
-        assert_verification_rejected(
-            "noncanonical inner residue",
-            &statement,
-            &noncanonical_inner,
-            &binding(&statement),
-        );
-        assert_eq!(
-            JINDO_PROOF_OUTER_POLYNOMIALS_V1 + JINDO_PROOF_INNER_POLYNOMIALS_V1,
-            96
-        );
-    }
-
-    #[test]
-    fn every_consensus_binding_and_public_statement_axis_rejects_replay() {
-        let polynomials = vec![vec![field(37), field(41), field(43), field(47)]];
-        let (statement, proof) = prove_fixture(&polynomials, field(53), 0x5234_5678_9abc_def0);
-        let valid = binding(&statement);
-
-        macro_rules! reject_binding_mutation {
-            ($label:literal, $field:ident, $value:expr) => {{
-                let mut mutated = valid;
-                mutated.$field = $value;
-                assert_verification_rejected($label, &statement, &proof, &mutated);
-            }};
-        }
-        reject_binding_mutation!("genesis", genesis_hash, [8; 32]);
-        reject_binding_mutation!("action", action_index, 1);
-        reject_binding_mutation!("statement digest", statement_digest, [8; 32]);
-        reject_binding_mutation!("parameter id", parameter_id, [8; 32]);
-        reject_binding_mutation!("parameter digest", parameter_digest, [8; 32]);
-        reject_binding_mutation!("verifier digest", verifier_digest, [8; 32]);
-        reject_binding_mutation!("schema digest", statement_schema_digest, [8; 32]);
-        reject_binding_mutation!("manifest digest", engine_manifest_digest, [8; 32]);
-        reject_binding_mutation!("CRS digest", generator_digest, [8; 32]);
-        let mut wrong_chain = valid;
-        wrong_chain.chain_id = b"jindo-replay-chain";
-        assert_verification_rejected("chain", &statement, &proof, &wrong_chain);
-
-        macro_rules! reject_statement_mutation {
-            ($label:literal, $mutation:expr) => {{
-                let mut mutated = statement.clone();
-                $mutation(&mut mutated);
-                assert_verification_rejected($label, &mutated, &proof, &binding(&mutated));
-            }};
-        }
-        reject_statement_mutation!(
-            "claim",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                value.claimed_evaluations[0] = field(59);
-            }
-        );
-        reject_statement_mutation!(
-            "evaluation point",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                value.evaluation_point = field(61);
-            }
-        );
-        reject_statement_mutation!(
-            "transaction intent",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                value.context.transaction_intent_digest =
-                    PrivacyTransactionIntentDigestV1::new([9; 32]);
-            }
-        );
-        reject_statement_mutation!(
-            "chain context",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                value.context.chain_id = "jindo-other-chain".parse().expect("chain id");
-            }
-        );
-        reject_statement_mutation!(
-            "parameter id context",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                value.context.parameter_id = PrivacyParameterIdV1::new([9; 32]);
-            }
-        );
-        reject_statement_mutation!(
-            "parameter digest context",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                value.context.parameter_digest = PrivacyParameterDigestV1::new([9; 32]);
-            }
-        );
-        reject_statement_mutation!(
-            "verifier digest context",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                value.context.verifier_digest = PrivacyVerifierDigestV1::new([9; 32]);
-            }
-        );
-        reject_statement_mutation!(
-            "schema digest context",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                value.context.statement_schema_digest =
-                    PrivacyStatementSchemaDigestV1::new([9; 32]);
-            }
-        );
-        reject_statement_mutation!(
-            "manifest digest context",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                value.context.engine_manifest_digest = PrivacyEngineManifestDigestV1::new([9; 32]);
-            }
-        );
-        reject_statement_mutation!(
-            "commitment",
-            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
-                let first: [u8; 4] = value.polynomial_commitments[0].encoding[..4]
-                    .try_into()
-                    .expect("coefficient");
-                let replacement = if i32::from_le_bytes(first) == 0 {
-                    1_i32
-                } else {
-                    0_i32
-                };
-                value.polynomial_commitments[0].encoding[..4]
-                    .copy_from_slice(&replacement.to_le_bytes());
-            }
-        );
-    }
-
-    #[test]
-    fn malformed_statements_witnesses_openings_and_rng_are_rejected() {
-        let polynomial = vec![field(67), field(71), field(73)];
-        let (statement, openings) = commit_statement(
-            core::slice::from_ref(&polynomial),
-            field(79),
-            0x6234_5678_9abc_def0,
-        );
-
-        let mut no_commitments = statement.clone();
-        no_commitments.polynomial_commitments.clear();
-        no_commitments.claimed_evaluations.clear();
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &no_commitments,
-                &[],
-                &binding(&no_commitments),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::InvalidPolynomialCount {
-                count: 0,
-                max: JINDO_MAX_BATCH_SIZE_V1,
-            })
-        );
-
-        let mut wrong_claim_count = statement.clone();
-        wrong_claim_count.claimed_evaluations.clear();
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &wrong_claim_count,
-                &[],
-                &binding(&wrong_claim_count),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::ClaimCountMismatch)
-        );
-
-        let mut short_commitment = statement.clone();
-        short_commitment.polynomial_commitments[0].encoding.pop();
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &short_commitment,
-                &[],
-                &binding(&short_commitment),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::InvalidCommitmentEncoding { index: 0 })
-        );
-
-        let mut zero_commitment = statement.clone();
-        zero_commitment.polynomial_commitments[0].encoding.fill(0);
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &zero_commitment,
-                &[],
-                &binding(&zero_commitment),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::ZeroCommitment { index: 0 })
-        );
-
-        let mut out_of_range_commitment = statement.clone();
-        out_of_range_commitment.polynomial_commitments[0].encoding[..4]
-            .copy_from_slice(&i32::MAX.to_le_bytes());
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &out_of_range_commitment,
-                &[],
-                &binding(&out_of_range_commitment),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::InvalidCommitmentEncoding { index: 0 })
-        );
-
-        let mut noncanonical_point = statement.clone();
-        noncanonical_point.evaluation_point =
-            PrivacyJindoFieldElementV1::new(field_modulus_encoding());
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &noncanonical_point,
-                &[],
-                &binding(&noncanonical_point),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::NonCanonicalEvaluationPoint)
-        );
-
-        let mut noncanonical_claim = statement.clone();
-        noncanonical_claim.claimed_evaluations[0] =
-            PrivacyJindoFieldElementV1::new(field_modulus_encoding());
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &noncanonical_claim,
-                &[],
-                &binding(&noncanonical_claim),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::NonCanonicalClaim { index: 0 })
-        );
-
-        let mut zero_intent = statement.clone();
-        zero_intent.context.transaction_intent_digest =
-            PrivacyTransactionIntentDigestV1::new([0; 32]);
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &zero_intent,
-                &[],
-                &binding(&zero_intent),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::ZeroTransactionIntentDigest)
-        );
-
-        let mut wrong_action = statement.clone();
-        wrong_action.context.action_index = 1;
-        assert_eq!(
-            verify_batched_evaluation_v1(
-                &wrong_action,
-                &[],
-                &binding(&wrong_action),
-                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
-            ),
-            Err(JindoErrorV1::InvalidActionIndex { index: 1 })
-        );
-
-        let oversized = vec![field(1); JINDO_MAX_COEFFICIENTS_V1 + 1];
-        assert!(matches!(
-            evaluate_polynomial_v1(&oversized, field(1)),
-            Err(JindoErrorV1::PolynomialTooLarge { .. })
-        ));
-        let mut noncanonical_witness = polynomial.clone();
-        noncanonical_witness[1] = PrivacyJindoFieldElementV1::new(field_modulus_encoding());
-        assert_eq!(
-            prove_batched_evaluation_v1(
-                &statement,
-                &[noncanonical_witness],
-                &openings,
-                &binding(&statement),
-            ),
-            Err(JindoErrorV1::NonCanonicalCoefficient {
-                polynomial_index: 0,
-                coefficient_index: 1,
-            })
-        );
-        let mut wrong_witness = polynomial.clone();
-        wrong_witness[0] = field(83);
-        assert_eq!(
-            prove_batched_evaluation_v1(
-                &statement,
-                &[wrong_witness],
-                &openings,
-                &binding(&statement),
-            ),
-            Err(JindoErrorV1::ClaimMismatch { index: 0 })
-        );
-
-        let (_, wrong_openings) = commit_statement(
-            &[vec![field(89), field(97)]],
-            field(79),
-            0x7234_5678_9abc_def0,
-        );
-        assert_eq!(
-            prove_batched_evaluation_v1(
-                &statement,
-                &[polynomial],
-                &wrong_openings,
-                &binding(&statement),
-            ),
-            Err(JindoErrorV1::OpeningMismatch { index: 0 })
-        );
-
-        assert!(matches!(
-            commit_polynomial_v1(&[field(1)], &mut NonCanonicalFieldRng),
-            Err(JindoErrorV1::Sampling(
-                JindoSamplingErrorV1::RandomnessHealthCheckFailed
-            ))
-        ));
     }
 }

@@ -232,17 +232,6 @@ mod tests {
             ))
     }
 
-    fn zk_ams_activation() -> PrivacyProtocolActivationRecordV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
-            .expect("fixed ZK-AMS profile derives")
-            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-                PrivacyProposedLifecycleV1 {
-                    proposed_at_height: 100,
-                    activate_at_height: 400,
-                },
-            ))
-    }
-
     fn jindo_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
             .expect("fixed Jindo parameters derive")
@@ -477,6 +466,42 @@ mod tests {
     }
 
     #[test]
+    fn compiled_profile_catalog_cache_returns_owned_isolated_clones() {
+        let canonical = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
+        canonical.validate().expect("canonical compiled catalog");
+        assert_eq!(canonical.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        let canonical_archive =
+            norito::encode_canonical(&canonical).expect("canonical compiled catalog archive");
+
+        let mut caller_owned = canonical;
+        caller_owned.protocols.rotate_left(1);
+        assert!(
+            caller_owned.validate().is_err(),
+            "mutating one returned clone must make only that caller's copy noncanonical"
+        );
+
+        let subsequent =
+            compiled_privacy_profile_catalog_v1().expect("subsequent compiled profile catalog");
+        subsequent
+            .validate()
+            .expect("the cached canonical catalog must remain valid");
+        assert_eq!(subsequent.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert!(
+            subsequent
+                .protocols
+                .iter()
+                .map(|row| row.protocol_id)
+                .eq(PrivacyProtocolIdV1::ALL)
+        );
+        assert_eq!(
+            norito::encode_canonical(&subsequent)
+                .expect("subsequent canonical compiled catalog archive"),
+            canonical_archive,
+            "a caller mutation must not alias or modify the immutable cache"
+        );
+    }
+
+    #[test]
     fn local_compiled_profile_catalog_archive_rejects_canonical_substitution() {
         use PrivacyCompiledProfileCatalogArchiveValidationStatusV1 as Status;
 
@@ -527,7 +552,6 @@ mod tests {
             PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            PrivacyProtocolIdV1::IrohaZkAmsV1,
             PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
             PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
@@ -932,11 +956,55 @@ mod tests {
             ),
             (
                 BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1,
-                &b"keygen->holder-sample-r->blind-request"[..],
+                &b"atomic-height-aware-Fresh-to-Processing-before-one-master64"[..],
             ),
             (
                 BOOTLE_LANTERN_NATIVE_PRODUCER_SCHEMA_V1,
-                &b"bounded-fail-closed-no-fallback"[..],
+                &b"cached-completed-replay-does-not-touch-rng"[..],
+            ),
+            (
+                BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1,
+                &b"issuer-generated-one-shot-issuance-authorization-digest"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
+                &b"ILA1:fixed320"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
+                &b"ILR1:fixed3176"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
+                &b"ILQ1:fixed71576"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_WIRE_SCHEMA_V1,
+                &b"caller-cap-before-exact-length-before-allocation"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1,
+                &b"authorization-state:Fresh-Processing-Completed-or-Failed"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1,
+                &b"closed-purpose-enum:no-caller-selected-labels"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1,
+                &b"canonical-process-lease+unix-nonblocking-exclusive-flock-held-for-lifetime"[..],
+            ),
+            (
+                BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
+                &b"H_i[j]=h[8*j+i]"[..],
+            ),
+            (
+                BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
+                &b"arbitrary-R512-target"[..],
+            ),
+            (
+                BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
+                &b"sign-cache:issuance-local-persistent"[..],
             ),
         ] {
             assert!(
@@ -952,6 +1020,51 @@ mod tests {
             BOOTLE_LANTERN_APPLICATION_MODULUS_V1 * 5
         );
         assert_eq!(BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1, 4_096);
+        assert_eq!(CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1, 16);
+        assert_eq!(
+            CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1,
+            RANDOMNESS_NORM_SQUARED_BOUND_V1
+        );
+        assert_eq!(MAX_CREDENTIAL_RANDOMNESS_VECTOR_ATTEMPTS_V1, 64);
+        assert_eq!(MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1, 256);
+        assert_eq!(
+            MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1,
+            BOOTLE_LANTERN_FALCON512_DEFAULT_KEYGEN_CANDIDATES_V1
+        );
+        assert_eq!(MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1, 4);
+        assert_eq!(MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1, 4_096);
+        assert_eq!(MAX_BOOTLE_LANTERN_PREIMAGE_ATTEMPTS_V1, 64);
+        assert_eq!(BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1, 3_310);
+        assert_eq!(BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_RECORDS_V1, 1_000_000);
+        assert_eq!(
+            BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_TOTAL_BYTES_V1,
+            3_310_000_000
+        );
+        assert_eq!(BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_RECORDS_V1, 4_096);
+        assert_eq!(
+            BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_TOTAL_BYTES_V1,
+            13_557_760
+        );
+        assert_eq!(
+            BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_RETENTION_BLOCKS_V1,
+            4_096
+        );
+        assert_eq!(BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1, 320);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_BYTES_V1, 71_576);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_HEADER_BYTES_V1, 16);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_MAGIC_V1, *b"ILQ1");
+        assert_eq!(BLIND_ISSUANCE_REQUEST_VERSION_V1, 1);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_PURPOSE_TAG_V1, 1);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_TARGET_POLYNOMIALS_V1, 8);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_RING_DEGREE_V1, 64);
+        assert_eq!(BLIND_ISSUANCE_RESPONSE_BYTES_V1, 3_176);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_PROOF_MAGIC_V1, *b"ILB1");
+        assert_eq!(BLIND_ISSUANCE_REQUEST_PROOF_PURPOSE_TAG_V1, 1);
+        assert_eq!(
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1,
+            b"iroha.privacy.bootle-lantern.credential-scope-digest.v1"
+        );
+        assert_ne!(bootle_lantern_issuer_profile_digest_v1(), [0; 32]);
         assert_eq!(BOOTLE_LANTERN_PROOF_BYTES_V1, 70_344);
         assert!(
             u64::try_from(BOOTLE_LANTERN_PROOF_BYTES_V1).expect("proof size fits u64")
@@ -976,11 +1089,11 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "c27b9c1fd4fcb0f157fbd2b5c4894ef0c78b15acf0c450512051c8dee8b69380".to_owned(),
-                "bfc9ca1f8ebb1973832be82566946d0713bddaeccdd88937427a376ad6a96ec9".to_owned(),
-                "7e4b05295311d3758e8facc0b68a365fbeac957af9153646867258198539532d".to_owned(),
+                "55bea016d0919cde8d24b54bb35eb01f7578a9a91189aececa34c7fc1b90e75c".to_owned(),
+                "6a0b33463d71f6aec27ad330ae4424e3ed317a841dc1a0d79c5389905072ffc9".to_owned(),
+                "7733ada1295556a13c3f626f270d1287324e28e987613d97e1e1605ff4d22ce8".to_owned(),
                 "9c7c4f65128a4d924955b8b0fb6bfcc56ec34d14224ddfefebe32771c19a9e54".to_owned(),
-                "588a0496f64fd6b4ea3c292db0f713c3c4325b33198cc5e2a99240730302504d".to_owned(),
+                "e613fbbaf3e0470524a2924e72e5f8adc93c3950a26c5a4e9af8b7a74b88078b".to_owned(),
             ),
             "every consensus-critical Bootle/Lantern binding is a pinned KAT"
         );
@@ -1065,7 +1178,7 @@ mod tests {
             bootle_lantern_parameter_digest_v1(&public_parameter_seed, &sampling_profile_digest);
         assert_eq!(
             hex::encode(governed),
-            "bfc9ca1f8ebb1973832be82566946d0713bddaeccdd88937427a376ad6a96ec9"
+            "6a0b33463d71f6aec27ad330ae4424e3ed317a841dc1a0d79c5389905072ffc9"
         );
         for index in 0..sampling_profile_digest.len() {
             let mut mutated_sampling_profile_digest = sampling_profile_digest;
@@ -1305,119 +1418,58 @@ mod tests {
     }
 
     #[test]
-    fn zk_ams_profile_is_deterministic_complete_and_bounded() {
-        let first =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1).expect("profile");
-        let second =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1).expect("profile");
-        assert_eq!(first, second);
+    fn zk_ams_profile_is_unavailable_until_every_mkhe_gate_closes() {
+        let expected = CompiledPrivacyProfileErrorV1::EngineUnavailable {
+            protocol_id: PrivacyProtocolIdV1::IrohaZkAmsV1,
+        };
         assert_eq!(
-            first.proof_system_id,
-            PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1),
+            Err(expected)
         );
         assert_eq!(
-            first.engine_id,
-            PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1),
+            Err(expected),
+            "the unavailable result must be deterministic"
         );
-        assert_eq!(
-            first.protocol_limits,
-            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
-                max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
-                max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
-            })
-        );
-        assert!(
-            MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1
-                <= TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
-        );
-        assert!(
-            MAX_ZK_AMS_LSAG_PROOF_BYTES_V1 <= TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
-        );
+
+        let candidate = zk_ams_release_candidate_profile_material_v1()
+            .expect("release-candidate profile material derives independently of activation");
+        assert_eq!(candidate.protocol_id, PrivacyProtocolIdV1::IrohaZkAmsV1);
         for digest in [
-            *first.parameter_id.as_bytes(),
-            *first.parameter_digest.as_bytes(),
-            *first.verifier_digest.as_bytes(),
-            *first.statement_schema_digest.as_bytes(),
-            *first.engine_manifest_digest.as_bytes(),
+            *candidate.parameter_id.as_bytes(),
+            *candidate.parameter_digest.as_bytes(),
+            *candidate.verifier_digest.as_bytes(),
+            *candidate.statement_schema_digest.as_bytes(),
+            *candidate.engine_manifest_digest.as_bytes(),
         ] {
             assert_ne!(digest, [0; 32]);
         }
-        assert_eq!(
-            (
-                hex::encode(first.parameter_id.as_bytes()),
-                hex::encode(first.parameter_digest.as_bytes()),
-                hex::encode(first.verifier_digest.as_bytes()),
-                hex::encode(first.statement_schema_digest.as_bytes()),
-                hex::encode(first.engine_manifest_digest.as_bytes()),
-            ),
-            (
-                "920c5417cbaa3c125c41e031e8fa53d7c201e5b904020d5e03eadde2136fa4de".to_owned(),
-                "6b5afbf974893db00c7def8c28d74789b0f02f3b13bbc38cb5c1459fb12fbaa7".to_owned(),
-                "e334ad9c4ef471b25219e33e86160578e5211e433124380cffedcb2a19db2674".to_owned(),
-                "909f50519c111b8ce1e708a66c4501e8d43773a6cae9f0c79c78143fa397e523".to_owned(),
-                "91d538a2b9905b037adbbc20271ae1fd758a3bca7d53ab1bb35111c79be004d1".to_owned(),
-            )
-        );
-    }
 
-    #[test]
-    fn zk_ams_compiled_profile_rejects_every_binding_mismatch() {
-        let valid = zk_ams_activation();
-        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
-        let mutations: [(
-            CompiledPrivacyProfileValidationErrorV1,
-            fn(&mut PrivacyProtocolActivationRecordV1),
-        ); 8] = [
-            (
-                CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
-                |record| {
-                    record.proof_system_id =
-                        PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256;
-                },
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
-                |record| record.engine_id = PrivacyEngineIdV1::NativeVega,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch,
-                |record| record.parameter_id.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ParameterDigestMismatch,
-                |record| record.parameter_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::VerifierDigestMismatch,
-                |record| record.verifier_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::StatementSchemaDigestMismatch,
-                |record| record.statement_schema_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch,
-                |record| record.engine_manifest_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
-                |record| {
-                    record.protocol_limits =
-                        PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
-                            max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1 + 1,
-                            max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
-                        });
-                },
-            ),
-        ];
-        for (expected, mutate) in mutations {
-            let mut changed = valid;
-            mutate(&mut changed);
-            assert_eq!(
-                validate_compiled_privacy_activation_v1(&changed),
-                Err(expected)
-            );
-        }
+        let candidate_activation = candidate.activation_record(
+            PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+                proposed_at_height: 100,
+                activate_at_height: 400,
+            }),
+        );
+        assert_eq!(
+            validate_compiled_privacy_activation_v1(&candidate_activation),
+            Err(CompiledPrivacyProfileValidationErrorV1::Profile(expected)),
+            "release-candidate material must never bypass the production readiness gate",
+        );
+
+        let readiness =
+            iroha_zkp_halo2::vega::zk_ams_mkhe_readiness_v1().expect("candidate readiness derives");
+        assert!(readiness.parameter_gate);
+        assert!(readiness.noise_gate);
+        assert!(readiness.security_gate);
+        assert!(!readiness.resource_gate);
+        assert!(!readiness.wire_gate);
+        assert!(!readiness.malicious_party_gate);
+        assert!(!readiness.decryption_share_gate);
+        assert!(readiness.packing_gate);
+        assert!(!readiness.phase23_gate);
+        assert!(!readiness.release_kat_gate);
+        assert!(!readiness.is_ready());
     }
 
     #[test]
@@ -1543,8 +1595,20 @@ mod tests {
             PrivacyProofSystemIdV1::JindoPolynomialCommitment
         );
         assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeJindo);
-        assert_eq!(JINDO_NATIVE_PROOF_BYTES_V1, 393_224);
+        assert_eq!(JINDO_NATIVE_PROOF_BYTES_V1, 331_912);
         assert_ne!(jindo_crs_digest_v1(), [0; 32]);
+        let provenance = core::str::from_utf8(JINDO_SOURCE_PROVENANCE_V1)
+            .expect("Jindo source provenance is ASCII");
+        assert!(provenance.contains("revision-2026-06-02"));
+        assert!(provenance.contains("ringo-snark@805eab27"));
+        let wire = core::str::from_utf8(JINDO_PROOF_WIRE_LABEL_V1)
+            .expect("Jindo proof wire label is ASCII");
+        for required in ["IJP2", "7-outer", "12-inner", "644-field", "no-IJP1"] {
+            assert!(
+                wire.contains(required),
+                "Jindo wire descriptor lost {required}"
+            );
+        }
         assert_eq!(
             first.protocol_limits,
             PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
@@ -1593,6 +1657,10 @@ mod tests {
         assert!(MAX_VEGA_PROOF_BYTES_V1 <= TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize);
         assert_ne!(vega_mdl_canonical_relation_digest_v1(), [0; 32]);
         assert_ne!(vega_mdl_compiled_profile_digest_v1(), [0; 32]);
+        assert_eq!(
+            vega_mdl_verifier_digest_v1().expect("canonical Vega-MC verifier digest"),
+            VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1,
+        );
         for digest in [
             *first.parameter_id.as_bytes(),
             *first.parameter_digest.as_bytes(),
@@ -1850,27 +1918,6 @@ mod tests {
             pgc_compiled.engine_manifest_digest
         );
 
-        let zk_ams_compiled =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1).expect("ZK-AMS profile");
-        let mut zk_ams = zk_ams_activation();
-        zk_ams.protocol_limits =
-            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
-                max_batch_size: 1,
-                max_ring_size: 16,
-            });
-        validate_compiled_privacy_activation_v1(&zk_ams).expect("lower ZK-AMS policy");
-        assert_eq!(zk_ams.parameter_id, zk_ams_compiled.parameter_id);
-        assert_eq!(zk_ams.parameter_digest, zk_ams_compiled.parameter_digest);
-        assert_eq!(zk_ams.verifier_digest, zk_ams_compiled.verifier_digest);
-        assert_eq!(
-            zk_ams.statement_schema_digest,
-            zk_ams_compiled.statement_schema_digest
-        );
-        assert_eq!(
-            zk_ams.engine_manifest_digest,
-            zk_ams_compiled.engine_manifest_digest
-        );
-
         let jindo_compiled =
             compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
                 .expect("Jindo profile");
@@ -1954,30 +2001,6 @@ mod tests {
                 },
             );
         invalid.push(pgc_bad_closed_set);
-
-        let mut zk_ams_batch_over = zk_ams_activation();
-        zk_ams_batch_over.protocol_limits =
-            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
-                max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1 + 1,
-                max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
-            });
-        invalid.push(zk_ams_batch_over);
-
-        let mut zk_ams_ring_over = zk_ams_activation();
-        zk_ams_ring_over.protocol_limits =
-            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
-                max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
-                max_ring_size: ZK_AMS_MAX_RING_SIZE_V1 + 1,
-            });
-        invalid.push(zk_ams_ring_over);
-
-        let mut zk_ams_bad_closed_set = zk_ams_activation();
-        zk_ams_bad_closed_set.protocol_limits =
-            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
-                max_batch_size: 1,
-                max_ring_size: 17,
-            });
-        invalid.push(zk_ams_bad_closed_set);
 
         let mut zero_verange = verange_activation();
         zero_verange.protocol_limits = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(

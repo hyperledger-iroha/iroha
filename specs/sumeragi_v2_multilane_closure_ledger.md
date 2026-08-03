@@ -255,27 +255,26 @@ is pre-encoded and receives a one-shot exact-path/exact-bytes transition
 authorization; the authorization is consumed and its projection rechecked at
 the atomic synced replacement. The source ledger also binds the underlying
 temporary-file write, file sync, rename, persisted-file sync, symlink check, and
-directory sync order. These are bounded production seams, not the still-missing
-complete Rust trace-extraction theorem.
+directory sync order. The source-bound production trace-extraction certificate
+now maps these seams to the complete model-action inventory; fresh backend and
+mutation evidence remains required before this row can close.
 The durable merge-source, canonical WSV commit, and post-carrier Queue cleanup
 consumers check their named projections against that same group identity. The
 pre-Kura reservation-batch direct-release linearization point separately
 consumes its composed projection after locked V4/V5, FIFO, group, and committee
-revalidation. Other production linearization points do not yet extract and
-consume the relation, so the end-to-end refinement remains open.
+revalidation. The certificate source-binds the remaining named production
+linearization points and fails closed when any action loses its checked
+producer or move-only consumer.
 
-This row is deliberately **not** a production-refinement claim. When run, TLC
-can exhaust the stated finite model and Apalache can typecheck/bound its
-abstract actions; neither checker proves that Rust filesystem/restart traces
-refine those actions. Current schema-5 static checks execute neither engine.
-For clarity, production trace extraction is not implemented; the open theorem
-must extract the actual QueuePlan journal V4, reservation journal V5, Kura,
-recovery, Commit, WSV, and Release linearization points into the implemented
-pre/post-state and terminal-owner relations. Schema 5 of
-`multilane_source_bindings.json` deliberately classifies this as
-`composed_state_action_relation_no_trace_extraction`: its exact
-version/field/order/relation bindings detect drift but are insufficient to
-promote this row or a release status. See
+This row remains **evidence-open**. When run, TLC can exhaust the stated finite
+model and Apalache can typecheck/bound its abstract actions; neither a static
+source check nor a certificate generated without fresh backend transcripts can
+close the row. Schema 5 of `multilane_source_bindings.json` classifies the
+implemented mapping as
+`composed_state_action_relation_with_source_bound_trace_extraction`: its exact
+version/field/order/relation bindings detect drift, while the release gate must
+still authenticate the current positive runs and every named mutation
+counterexample. See
 `formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md`.
 
 ## Native AMX application closure
@@ -403,8 +402,9 @@ height jump or ABA trace.
 grouping.
 `Kura::native_amx_participant_application_evidence_for_block_under_publication_guard`
 joins ordered source/entrypoint/result membership to the participant proposal
-and settlement. `State::native_amx_participant_frontier_marker_payloads`
-publishes the replicated frontier.
+and settlement. `State::native_amx_participant_frontier_markers` derives the
+replicated frontier, which `StateBlock::stage_native_amx_participant_frontiers`
+encodes only after the durable evidence token authenticates the same markers.
 
 **Closure condition.** Require 1–4,096 ordered, unique sources; exact
 transaction count and timestamp; the current source exactly once; zero
@@ -716,7 +716,7 @@ output backpressure, successful durable-handoff urgent wake-up, predecessor
 drop, successor retry, frozen exact recipients, and final Kura revalidation.
 Fresh same-day isolated Rust 1.93.1 locked/offline slices passed the 18 exact
 Kura replica tests and four exact configuration tests. Those focused runs and
-source anchors are not the complete 472-test `G-UNIT` receipt, and no
+source anchors are not the complete 474-test `G-UNIT` receipt, and no
 multi-peer body-pruning corridor was run, so this row's evidence remains Open.
 
 **Formal obligation and mutation.** `ML-MUT-KURA-01` now owns the source-bound
@@ -1096,7 +1096,10 @@ duplication, stale retention, or premature carrier authorization.
 `plan_lane_reservation_ownership` and then
 `apply_lane_reservation_reconciliation_plan` from
 `crates/iroha_core/src/sumeragi/v2_apply.rs` through
-`crates/iroha_core/src/sumeragi/v2_runner.rs`. The immutable plan classifies
+`crates/iroha_core/src/sumeragi/v2_runner.rs`. Before the first Queue ownership
+snapshot, `reconcile_pending_autonomous_lifecycle_terminal_outcomes` runs with
+the Queue startup gate closed and requires a second Kura inventory readback to
+contain zero Pending outcomes. The immutable plan classifies
 every reservation group together against State, Kura's bounded autonomous
 evidence classifier, pending merge entries, and exact committed carrier
 indices. Missing canonical bodies enter authenticated, fixed-chunk
@@ -1106,11 +1109,25 @@ then retains one authenticated owner, releases orphans in original enqueue
 order, resumes terminal Commit/ForgetCommit, and opens the Queue startup gate
 only after all groups and crash barriers have completed.
 
+Kura's versioned, hash-protected lifecycle outcome records distinguish
+Pending from Complete. Pending is a durable recovery source, never Queue
+terminal authority. Canonical recovery separately reconstructs the complete
+carrier outcome set, authenticates every `ApplyCarrier` group, and performs
+one all-group Queue preflight before any cleanup; release recovery requires
+the exact retirement/finalization authority. Kura may promote Pending to
+Complete only by consuming positive Queue terminal evidence.
+
 **Closure condition.** Replace the production false stub with exact,
 bounded, authenticated ownership reconciliation. Retain only reservations
 matched by current-incarnation durable payload/certified-bundle/global
 application state. Release every other reservation exactly once in original
-enqueue order. Prune only terminal forgotten reservations.
+enqueue order. Prune only terminal forgotten reservations. Recovery must not
+use Pending as terminal ownership, must not clean up a prefix of a canonical
+carrier batch before every later group has passed semantic authentication and
+Queue preflight, and must not complete a release without the exact
+retirement/finalization authority. Keep the startup gate closed through the
+terminal sweep, require zero Pending outcomes on the final readback, and only
+then take the first Queue ownership snapshot.
 
 **Focused and adversarial tests.** Restart after queue reserve, payload fsync,
 availability QC, Prepare QC, Commit QC, certified-bundle fsync, merge-QC
@@ -1129,8 +1146,22 @@ regression (`1/1`), the startup-replay binding regressions (`2/2`), the bounded
 historical namespace/accounting suite (`6/6`), first-merge crash-window repair
 (`1/1`), Native post-WSV retention (`1/1`), and authenticated geometry refresh
 (`1/1`) under isolated Rust 1.93.1 locked/offline execution. These 12 focused
-tests are mapped row evidence, not the complete 472-test `G-UNIT` receipt, so
+tests are mapped row evidence, not the complete 474-test `G-UNIT` receipt, so
 this row's evidence remains Open.
+
+The source-bound focused inventory also includes
+`startup_reconciles_lifecycle_before_lane_work_activation` and
+`terminal_sweep_source_binds_chain_route_and_empty_post_readback` in
+`crates/iroha_core/src/sumeragi/tests/v2_runner_lifecycle_startup_order.rs`,
+`generation_takeover_runs_crash_recover_and_rehydrate_then_stutters` and
+`prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side` plus
+`empty_queue_reconciliation_returns_the_same_checked_receipt` in
+`crates/iroha_core/src/sumeragi/tests/v2_lifecycle_recovery.rs`,
+`lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered` in
+`crates/iroha_core/src/kura/tests/07e_autonomous_lifecycle_and_canonical_artifact_tests.rs`,
+and the Queue group preflight/prefix-replay regressions in
+`crates/iroha_core/src/queue/lane_reservation_tests.rs`. This inventory is a
+static source binding; it is not a fresh test receipt.
 
 **Formal obligation and mutation.** Invariant `MLRestartOwnershipPartition`
 states that startup reconstruction preserves the single-owner partition.
@@ -1152,7 +1183,25 @@ owner until every reservation group has passed preflight;
 `MLRecoveredCarrierLengthAuthenticated` requires the exact complete-wire
 length to be Commit-QC-signed and cross-checked against retained Kura/index
 evidence before allocation; `ML-MUT-AUT-11` lets a recovery peer inflate that
-length.
+length. Invariant `MLTerminalOutcomeJoinAuthenticated` separates the durable
+Pending source, canonical cleanup or exact release authority, physical Queue
+terminal fact, positive Queue evidence, and Kura Complete promotion;
+`ML-MUT-AUT-12` grants terminal ownership from Pending, omits release
+finalization authority, or completes without positive Queue evidence.
+Invariant `MLCanonicalTerminalBatchAtomic` requires complete carrier-outcome
+reconstruction, independent authentication of every group, and one all-group
+preflight before any Queue cleanup; `ML-MUT-AUT-13` recovers a Pending prefix
+or omits a later conflicting group. Invariant `MLTerminalStartupSweepOrder`
+requires the closed-gate sweep and zero-Pending readback before the first
+Queue ownership snapshot; `ML-MUT-AUT-14` snapshots early or leaves Pending
+after the sweep. Invariant `MLLocalProducerRecoveryRequiresQueueOwner`
+requires a nonterminal retained attempt produced by the local validator to
+carry its exact current Queue reservation group before Crash/Recover, while
+an observer may recover from exact local Kura custody with an empty local
+Queue. The network-ingress startup fence remains independent of Queue's
+observed owner-quarantine bit, which may be false for that empty observer
+snapshot; `ML-MUT-AUT-15` drops the local producer's Queue group immediately
+before recovery.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, and `G-12P`.
 
@@ -1426,7 +1475,7 @@ core-jvm (`15`), and mirrored Java (`10`). JavaScript uses the dedicated
 `sumeragiDiagnosticsContract.test.js` entrypoint instead of a monolithic
 name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The suite-source manifest SHA-256 is
-`4b9a0022f70196acec62e7d885092cb4e8ffd1dbe023b7a1646759eb6b4fc5d7`.
+`531b5d5f56c3863a4ea11ed40b6868aebb280b2563863c909b69b94f880dfc12`.
 These source contracts do not close the still-unrun aggregate `G-SDK` gate.
 
 **Differential release invariant and negative control.**
@@ -1487,19 +1536,19 @@ fixture.
 `ci/run_native_amx_v2_grouped_sdk_parity.sh` source-binds the exact fixture and
 OpenAPI, Python, JavaScript source/distribution, Swift, Kotlin, and Java
 consumers. Fresh Rust generation of the protocol-4 corpus matches the checked-
-in JSON byte-for-byte. It contains 54 negative controls: 45 validate receipt
-groups and nine validate application evidence. The corpus includes
+in JSON byte-for-byte. It contains 55 negative controls: 45 validate receipt
+groups and 10 validate application evidence. The corpus includes
 `execution_commitment_merge_carrier_wrong_version` and
 `execution_commitment_missing_merge_carrier_field`, plus the four-mutation
 `coherent_duplicate_validator_set` and
 `coherent_over_quorum_requirement` controls; `bounds.validators_max` is 128.
 The harness and source-bound release inventory both require that exact count.
 The synchronized fixture SHA-256 is
-`fcbfa3f23d26b0f5e0eefba37e9bfd98919fc73b94458cdd40cccc6fd7643a28`
+`8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`
 and the current suite-source manifest SHA-256 is
-`4d47c737e694213be7bc715e365524b6a11027e99df6ece96f471fdbda678f3f`.
-The source inventories now require OpenAPI 7, Python 60, JavaScript 58, Swift
-3, Kotlin 6, and Java 5 tests. Previously recorded direct grouped results
+`4c21e1fcf5589a3c8177c3ef533542655cdbe6082d726c0fb8ee2bcdf56df913`.
+The source inventories now require OpenAPI 7, Python 62, JavaScript 59, Swift
+4, Kotlin 6, and Java 5 tests. Previously recorded direct grouped results
 predate this refreshed fixture and do not attest it; one complete archived
 harness replay remains unexecuted, so this row's evidence is still Open.
 
@@ -1598,18 +1647,18 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The focused source inventory is now internally consistent. The nine arrays in
-`scripts/run_sumeragi_v2_release_gates.sh` contain exactly 472 unique required
-tests: 266 core, 143 queue-journal, 13 configuration, eight data-model, 39
+`scripts/run_sumeragi_v2_release_gates.sh` contain exactly 474 unique required
+tests: 268 core, 143 queue-journal, 13 configuration, eight data-model, 39
 Torii, one Torii-shared, and two integration. The runner and
 `ci/check_sumeragi_v2_multilane_release_inventory.sh` both require that exact
-472-row shape, including grouped Native prevote-budget rejection before
+474-row shape, including grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection,
 atomic grouped reservation commit, checked snapshot replay file/owner sealing,
 exact QueuePlan obligation authentication, ApplyCarrier authorization, and
 canonical historical autonomous recovery into exactly-once merge application.
-The G-UNIT static inventory checks establish exact `472/472` source consistency and also
+The G-UNIT static inventory checks establish exact `474/474` source consistency and also
 source-binds the synchronized 54-control grouped corpus. On 2026-07-31, pinned
 Rust 1.93.1 locked/offline
 execution from isolated source `/tmp/iroha-kura-final3.dvOYAN` and isolated
@@ -1621,7 +1670,7 @@ isolated checkpoint also passed `cargo check -p iroha_core --lib`; the
 post-reader-refactor reruns covered startup binding and B/A/B recovery. Earlier
 same-day isolated slices passed the 18 Kura replica tests and four
 configuration tests. These are focused partial results, not a fresh archived
-execution of all 472 required tests, so `G-UNIT` stays Open.
+execution of all 474 required tests, so `G-UNIT` stays Open.
 
 ### G-FORMAL — source-bound models and expected mutations
 
@@ -1643,8 +1692,8 @@ source hash drift, then archive model, configuration, tool-version, result,
 and source hashes. Existing generic Sumeragi models are not substitutes for
 these multilane models.
 
-The current schema-5 binding registry contains 30 conceptual rows: 25 TLA
-counterexample rows with 99 exact mutation configurations, two static-release
+The current schema-5 binding registry contains 34 conceptual rows: 29 TLA
+counterexample rows with 106 exact mutation configurations, two static-release
 rows, and three differential-release rows. Its Native startup bindings name
 `LaneApplicationEvidenceRepairSummary::publication_count`, explicit ordinary
 pair repairs, read-only certified frontier/artifact access, reverse merge-
@@ -1762,19 +1811,19 @@ negative or substitute a hand-authored fixture.
 
 The Rust generator, checked-in protocol-4 grouped corpus, wire TSV, harness
 count, and static release inventory are now synchronized. The grouped corpus
-contains exactly 54 negative controls and hashes to
-`fcbfa3f23d26b0f5e0eefba37e9bfd98919fc73b94458cdd40cccc6fd7643a28`;
+contains exactly 55 negative controls and hashes to
+`8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`;
 the source-suite manifest hashes to
-`4d47c737e694213be7bc715e365524b6a11027e99df6ece96f471fdbda678f3f`.
-The current grouped harness inventories OpenAPI `7`, Python `60`, JavaScript
-`58`, Swift `3`, Kotlin `6`, and Java `5` tests. The previously recorded direct
+`4c21e1fcf5589a3c8177c3ef533542655cdbe6082d726c0fb8ee2bcdf56df913`.
+The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
+`59`, Swift `4`, Kotlin `6`, and Java `5` tests. The previously recorded direct
 subset results—OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56`—predate
 the refreshed fixture and do not attest it. The separate JavaScript
 status/diagnostics contract remains `44/44`. The exact no-skip diagnostics
 release inventories are Rust `14`, Python `114`, JavaScript
 source/distribution `88`, Swift `17`, Kotlin `15`, and Java `10`; their
 suite-source manifest SHA-256 is
-`4b9a0022f70196acec62e7d885092cb4e8ffd1dbe023b7a1646759eb6b4fc5d7`.
+`531b5d5f56c3863a4ea11ed40b6868aebb280b2563863c909b69b94f880dfc12`.
 No complete source-and-distribution aggregate harness replay was run for this
 evidence refresh. `G-SDK` therefore stays Open despite the resolved generation
 drift and static inventory consistency.
@@ -1817,7 +1866,7 @@ diagnostics must be added here or mapped to a ledger row before release.
   `status.md` and `roadmap.md` remain historical and are not evidence.
 - The former grouped JSON/general wire TSV drift is resolved: fresh Rust
   generation matches both checked-in protocol-4 artifacts byte-for-byte, the
-  grouped harness and release inventory require 54 negatives, and
+  grouped harness and release inventory require 55 negatives, and
   `ML-API-04` is implemented. Complete cross-SDK evidence remains open under
   `G-SDK`.
 - Apart from the explicitly open `Crash`/`Recover` runner seam classified
@@ -1845,10 +1894,10 @@ diagnostics must be added here or mapped to a ledger row before release.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain open even though the exact 472-row
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain open even though the exact 474-row
   inventory, 54-control corpus, partial direct SDK subsets, and structural
   formal checker now pass. Focused Rust subsets now pass, but no complete
-  472-test execution, complete SDK harness, or formal-engine result was
+  474-test execution, complete SDK harness, or formal-engine result was
   produced by this refresh, and no static source list or focused slice is a
   release execution receipt.
 

@@ -22,6 +22,9 @@ from iroha_python import (
 from iroha_torii_client.client import (
     SumeragiDiagnosticsStatus as CanonicalSumeragiDiagnosticsStatus,
 )
+from iroha_torii_client.native_amx import (
+    compute_native_amx_application_manifest_singleton_root,
+)
 
 
 FIXTURE_PATH = (
@@ -137,11 +140,15 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
     require(artifact["version"] == 1 and leaf["version"] == 1, "artifact version")
     require(artifact["leaf_index"] == proof["leaf_index"] == 0, "proof position")
     require(proof["audit_path"] == [], "singleton proof path")
+    expected_manifest_root = compute_native_amx_application_manifest_singleton_root(
+        artifact["leaf_hash"]
+    )
     require(
-        artifact["manifest_leaf_count"] == 1
+        artifact["manifest_leaf_count"]
+        == execution["native_amx_application_manifest_count"]
         and artifact["manifest_root"]
         == execution["native_amx_application_manifest_root"]
-        == artifact["leaf_hash"],
+        == expected_manifest_root,
         "manifest root",
     )
     require(
@@ -365,6 +372,20 @@ def test_native_amx_source_and_entrypoint_domains_are_distinct_public_types() ->
     )
 
 
+def test_grouped_native_amx_v2_corpus_includes_required_controls() -> None:
+    identifiers = {
+        control["id"] for control in _fixture()["negative_controls"]
+    }
+    assert {
+        "coherent_forged_validator_set_hash",
+        "coherent_stale_descriptor_hash",
+        "coherent_stale_proposal_hash",
+        "coherent_stale_settlement_hash",
+        "manifest_leaf_hash_tampering",
+        "non_canonical_validator_peer_id",
+    }.issubset(identifiers)
+
+
 @pytest.mark.parametrize(
     "control",
     _fixture()["negative_controls"],
@@ -406,8 +427,10 @@ def test_grouped_native_amx_v2_negative_corpus(
             if (
                 context == "native AMX v2 attestation QC bls_aggregate_signature"
                 and length == 96
+                and isinstance(value, list)
+                and len(value) == 95
             ):
-                length = 95
+                return strict_byte_vector(value, 95, context)
             return strict_byte_vector(value, length, context)
 
         monkeypatch.setattr(

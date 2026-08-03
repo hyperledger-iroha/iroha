@@ -37,7 +37,13 @@ fn governance_state_with_accounts(
         iroha_data_model::account::Account::new(escrow_account.clone()).build(escrow_account);
     let slash =
         iroha_data_model::account::Account::new(slash_account.clone()).build(escrow_account);
-    let asset_def = AssetDefinition::numeric(voting_asset_id.clone()).build(escrow_account);
+    let asset_def = AssetDefinition::numeric(
+        voting_asset_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(escrow_account);
     // Seed balances: Alice 1_000, escrow 0, slash 0.
     let alice_asset = Asset::new(
         AssetId::new(voting_asset_id.clone(), ALICE_ID.clone()),
@@ -118,10 +124,11 @@ fn seed_slash_snapshot(
 #[test]
 #[allow(clippy::too_many_lines)]
 fn double_vote_slashes_plain_lock() {
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
     let (escrow_id, _) = gen_account_in("wonderland");
     let (slash_id, _) = gen_account_in("wonderland");
     let mut state = governance_state_with_accounts(def_id.clone(), &escrow_id, &slash_id);
@@ -277,10 +284,11 @@ fn double_vote_slashes_plain_lock() {
 
 #[test]
 fn restitution_restores_slashed_balance() {
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
     let (escrow_id, _) = gen_account_in("wonderland");
     let (slash_id, _) = gen_account_in("wonderland");
     let mut state = governance_state_with_accounts(def_id.clone(), &escrow_id, &slash_id);
@@ -371,7 +379,7 @@ fn restitution_restores_slashed_balance() {
 
 #[test]
 fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing() {
-    let def_id = AssetDefinitionId::new(
+    let def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain"),
         "xor".parse().expect("asset name"),
     );
@@ -455,11 +463,11 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
 #[test]
 fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain");
-    let old_definition_id = AssetDefinitionId::new(
+    let old_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "old_xor".parse().expect("old asset name"),
     );
-    let live_definition_id = AssetDefinitionId::new(
+    let live_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "live_xor".parse().expect("live asset name"),
     );
@@ -483,8 +491,20 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
             iroha_data_model::account::Account::new(live_receiver.clone()).build(&alice),
         ],
         [
-            AssetDefinition::numeric(old_definition_id.clone()).build(&alice),
-            AssetDefinition::numeric(live_definition_id.clone()).build(&alice),
+            AssetDefinition::numeric(
+                old_definition_id.clone(),
+                "old_xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&alice),
+            AssetDefinition::numeric(
+                live_definition_id.clone(),
+                "live_xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&alice),
         ],
         [
             Asset::new(old_escrow_asset_id.clone(), Quantity::from(10_u64)),

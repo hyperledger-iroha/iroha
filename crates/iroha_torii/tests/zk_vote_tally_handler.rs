@@ -177,6 +177,14 @@ async fn vote_tally_handler_returns_finalized_tally() {
     stx.apply();
     block.commit().expect("commit block");
 
+    let expected_view = state.view();
+    let expected_height = u64::try_from(expected_view.height()).expect("height fits u64");
+    let expected_hash = expected_view
+        .latest_block_hash()
+        .map(|hash| hex::encode(hash.as_ref()))
+        .expect("committed block hash");
+    drop(expected_view);
+
     // Call Torii handler directly
     let req = ZkVoteGetTallyRequestDto {
         election_id: eid.clone(),
@@ -197,6 +205,16 @@ async fn vote_tally_handler_returns_finalized_tally() {
         v.get("finalized").and_then(norito::json::Value::as_bool),
         Some(true)
     );
+    assert_eq!(
+        v.get("evaluated_block_height")
+            .and_then(norito::json::Value::as_u64),
+        Some(expected_height)
+    );
+    assert_eq!(
+        v.get("evaluated_block_hash")
+            .and_then(norito::json::Value::as_str),
+        Some(expected_hash.as_str())
+    );
     let tally = v
         .get("tally")
         .and_then(|x| x.as_array())
@@ -204,4 +222,29 @@ async fn vote_tally_handler_returns_finalized_tally() {
         .unwrap_or_default();
     let ints: Vec<u64> = tally.into_iter().filter_map(|x| x.as_u64()).collect();
     assert_eq!(ints, vec![5, 8]);
+
+    let norito_response = handle_v1_zk_vote_tally(
+        State(state),
+        Some(http::HeaderValue::from_static("application/x-norito")),
+        NoritoJson(ZkVoteGetTallyRequestDto { election_id: eid }),
+    )
+    .await
+    .expect("Norito handler response")
+    .into_response();
+    assert_eq!(
+        norito_response.headers().get(http::header::CONTENT_TYPE),
+        Some(&http::HeaderValue::from_static("application/x-norito"))
+    );
+    let bytes = norito_response
+        .into_body()
+        .collect()
+        .await
+        .expect("read Norito body")
+        .to_bytes();
+    let decoded: iroha_torii::ZkVoteGetTallyResponseDto =
+        norito::decode_from_bytes(&bytes).expect("decode Norito tally response");
+    assert_eq!(decoded.evaluated_block_height, expected_height);
+    assert_eq!(decoded.evaluated_block_hash, expected_hash);
+    assert!(decoded.finalized);
+    assert_eq!(decoded.tally, vec![5, 8]);
 }

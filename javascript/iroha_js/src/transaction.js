@@ -68,6 +68,7 @@ import {
   normalizeAssetId,
 } from "./instructionBuilders.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
+import { createRegisterAssetDefinitionInstructionBuilder } from "./assetDefinitionRegistration.js";
 
 const submissionAbortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
@@ -2913,48 +2914,11 @@ export function buildRegisterMultisigTransaction({
 /**
  * Build instructions combining an asset definition registration with an optional mint.
  */
-function buildRegisterAssetDefinitionInstructions({
-  assetDefinition,
-  mints = [],
-}) {
-  const instructions = [];
-  const assetDefinitionId = normalizeTransactionAssetDefinitionId(
-    assetDefinition.assetDefinitionId,
-    "assetDefinition.assetDefinitionId",
-  );
-  const defaultConfidentialPolicy = {
-    mode: "TransparentOnly",
-    vk_set_hash: null,
-    poseidon_params_id: null,
-    pedersen_params_id: null,
-    pending_transition: null,
-  };
-  const confidentialPolicy =
-    assetDefinition.confidentialPolicy === undefined
-      ? defaultConfidentialPolicy
-      : { ...defaultConfidentialPolicy, ...assetDefinition.confidentialPolicy };
-  instructions.push({
-    Register: {
-      AssetDefinition: {
-        id: assetDefinitionId,
-        logo: assetDefinition.logo ?? null,
-        metadata: assetDefinition.metadata ?? {},
-        mintable: assetDefinition.mintable ?? "Infinitely",
-        spec: assetDefinition.spec ?? { scale: null },
-        confidential_policy: confidentialPolicy,
-      },
-    },
+const buildRegisterAssetDefinitionInstructions =
+  createRegisterAssetDefinitionInstructionBuilder({
+    normalizeTransactionAssetDefinitionId,
+    buildMintAssetInstruction,
   });
-  mints.forEach((mint) => {
-    instructions.push(
-      buildMintAssetInstruction({
-        assetHoldingId: mint.assetHoldingId ?? mint.assetId,
-        quantity: mint.quantity,
-      }),
-    );
-  });
-  return instructions;
-}
 
 function resolveAssetHoldingIdForMint(
   assetDefinitionId,

@@ -2082,7 +2082,7 @@ mod tests {
                 proof: vec![1, 2, 3],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),

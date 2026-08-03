@@ -1189,6 +1189,7 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
         }
         Ok(Some(row))
     }
+
     /// Constant writer-source product terminal.
     pub(crate) const fn terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.terminal

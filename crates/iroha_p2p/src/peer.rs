@@ -363,6 +363,8 @@ impl SoranetHandshakeConfig {
             relay_capabilities: self.relay_capabilities.as_slice(),
             kem_id: self.kem_id,
             sig_id: self.sig_id,
+            transport_alpn: b"iroha-p2p/1",
+            tls_server_name: "iroha-quic",
             resume_hash: self
                 .resume_hash
                 .as_ref()
@@ -15529,7 +15531,7 @@ mod state {
             let (client_finish, secrets) = match client_handle_relay_hello(
                 client_state,
                 &relay_hello,
-                &key_pair,
+                expected_peer_id.public_key(),
                 &runtime_params,
                 &mut rng,
             ) {
@@ -16047,36 +16049,7 @@ mod state {
         // Keep handshake-state tests at their stable libtest paths outside this production file.
         include!("peer_state_tests.rs");
 
-        #[test]
-        fn peer_admission_requires_an_exact_typed_consensus_mode() {
-            let caps = ConsensusHandshakeCaps {
-                mode: ConsensusMode::Permissioned,
-                proto_version: 2,
-                consensus_fingerprint: [0xA5; 32],
-                config: consensus_caps([0x5A; 32]),
-            };
-            let matching = build_consensus_meta(Some(&caps));
-            enforce_consensus_caps(Some(&caps), &matching)
-                .expect("identical typed consensus mode must be admitted");
-
-            let mut mismatched = matching;
-            mismatched.mode = Some(ConsensusMode::Npos);
-            let error = enforce_consensus_caps(Some(&caps), &mismatched)
-                .expect_err("a different typed consensus mode must be rejected");
-            let crate::Error::HandshakeConsensusMismatch { reason } = error else {
-                panic!("unexpected consensus-mode mismatch error: {error:?}");
-            };
-            assert!(reason.contains(ConsensusMode::Permissioned.tag()));
-            assert!(reason.contains(ConsensusMode::Npos.tag()));
-
-            let mut missing = matching;
-            missing.mode = None;
-            assert!(matches!(
-                enforce_consensus_caps(Some(&caps), &missing),
-                Err(crate::Error::HandshakeConsensusMismatch { reason })
-                    if reason == "missing consensus mode"
-            ));
-        }
+        include!("peer_consensus_mode_test.rs");
     }
 }
 

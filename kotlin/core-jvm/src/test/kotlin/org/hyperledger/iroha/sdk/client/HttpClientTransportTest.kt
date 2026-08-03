@@ -523,7 +523,7 @@ class HttpClientTransportTest {
                   "items": [
                     {
                       "policy_id": "phone#retail",
-                      "owner": "sorau1NpOwner",
+                      "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
                       "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
@@ -565,8 +565,8 @@ class HttpClientTransportTest {
 
         val cases = listOf(
             "identifier policy list.items[0].owner" to canonical.replace(
-                "\"owner\": \"sorau1NpOwner\"",
-                "\"owner\": \" sorau1NpOwner\"",
+                "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
+                "\"owner\": \" sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
             ),
             "identifier policy list.items[0].normalization" to canonical.replace(
                 "\"normalization\": \"phone_e164\"",
@@ -870,7 +870,7 @@ class HttpClientTransportTest {
             },
             "full-bootstrap verifier commitment drift" to { operationVectors ->
                 val material = mutableObj(operationVectors, "full_bootstrap_material")
-                material["vk_commitment_hex"] = string(material, "expected_statement_digest_hex")
+                material["vk_commitment_hex"] = string(material, "parameter_digest_hex")
             },
             "noncanonical full-bootstrap material digest" to { operationVectors ->
                 val material = mutableObj(operationVectors, "full_bootstrap_material")
@@ -988,7 +988,7 @@ class HttpClientTransportTest {
                   "code_hash_hex": "${"44".repeat(32)}",
                   "abi_hash_hex": "${"55".repeat(32)}",
                   "creation_time_ms": 1712345678901,
-                  "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                  "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                   "entrypoint": "contribute",
                   "transaction_ttl_ms": 60000,
                   "transaction_payload_b64": "$transactionPayloadB64",
@@ -999,7 +999,7 @@ class HttpClientTransportTest {
                     "transport": "torii",
                     "dataspace": "router",
                     "contract_alias": "router::universal",
-                    "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                    "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                     "code_hash_hex": "${"44".repeat(32)}",
                     "abi_hash_hex": "${"55".repeat(32)}",
                     "entrypoint": "contribute",
@@ -1467,7 +1467,7 @@ class HttpClientTransportTest {
             transport.prepareContractCall(
                 authority = "alice",
                 feePayment = testFeePayment(5_000L),
-                contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 contractAlias = "router::universal",
                 entrypoint = "contribute",
             )
@@ -1521,7 +1521,7 @@ class HttpClientTransportTest {
 
     @Test
     fun getGovernanceContractParsesResponse() {
-        val contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        val contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -1574,7 +1574,7 @@ class HttpClientTransportTest {
         assertEquals(1, response.items.size)
         val item = response.items.first()
         assertEquals("identifier_lookup_retail", item.programId)
-        assertEquals("sorau1NpOwner", item.owner)
+        assertEquals("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", item.owner)
         assertTrue(item.active)
         assertEquals(item.resolverPublicKey, item.outputOpeningPublicKey)
         assertEquals("signed", item.verificationMode)
@@ -1600,8 +1600,8 @@ class HttpClientTransportTest {
                 "\"program_id\": \" identifier_lookup_retail\"",
             ),
             "ram-lfe program policy list.items[0].owner" to canonical.replace(
-                "\"owner\": \"sorau1NpOwner\"",
-                "\"owner\": \"sorau1NpOwner \"",
+                "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
+                "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV \"",
             ),
             "ram-lfe program policy list.items[0].resolver_public_key" to canonical.replace(
                 "\"resolver_public_key\": \"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\"",
@@ -1658,7 +1658,7 @@ class HttpClientTransportTest {
               "items": [
                 {
                   "program_id": "identifier_lookup_retail",
-                  "owner": "sorau1NpOwner",
+                  "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "active": true,
                   "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                   "backend": "bfv-programmed-sha3-256-v1",
@@ -1924,9 +1924,7 @@ class HttpClientTransportTest {
         assertEquals(quoteId, quote.quoteId)
         assertEquals(quoteId, quote.leaseIdHex)
         assertEquals(meteringKey, quote.meteringPublicKeyHex)
-        assertEquals("iroha_data_model::isi::vpn::OpenVpnLeaseEscrow", quote.openLeaseInstruction?.wireId)
-        assertEquals(1, quote.txInstructions.size)
-        assertEquals(quote.openLeaseInstruction?.payloadHex, quote.txInstructions.first().payloadHex)
+        assertEquals("iroha_data_model::isi::vpn::OpenVpnLeaseEscrow", quote.openLeaseInstruction.wireId)
 
         val request = executor.lastRequest
         assertEquals("POST", request.method)
@@ -3397,14 +3395,17 @@ class HttpClientTransportTest {
               "tunnel_addresses": ["10.208.0.2/32"],
               "mtu_bytes": 1280,
               "display_billing_label": "standard XOR",
-              "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "settlement_grace_secs": 120,
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
-              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
+              "relay_id_hex": "$validEd25519PublicKeyHex",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
+              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}"
             }
         """.trimIndent()
 
@@ -3421,8 +3422,8 @@ class HttpClientTransportTest {
               "lease_secs": 600,
               "quote_expires_at_ms": 1700000600000,
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "route_pushes": ["0.0.0.0/0"],
               "excluded_routes": [],
@@ -3432,18 +3433,17 @@ class HttpClientTransportTest {
               "meter_family": "soranet.vpn.standard",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
+              "relay_id_hex": "$meteringKey",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}",
               "metering_public_key_hex": "$meteringKey",
               "open_lease_instruction": {
                 "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
                 "payload_hex": "cafe"
-              },
-              "tx_instructions": [
-                {
-                  "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
-                  "payload_hex": "cafe"
-                }
-              ]
+              }
             }
         """.trimIndent()
 
@@ -3464,12 +3464,17 @@ class HttpClientTransportTest {
               "payment_reference": "$sessionId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
+              "relay_id_hex": "$validEd25519PublicKeyHex",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}",
               "route_pushes": ["0.0.0.0/0"],
               "excluded_routes": [],
               "dns_servers": ["1.1.1.1"],
@@ -3492,17 +3497,10 @@ class HttpClientTransportTest {
               "settle_lease_instruction": {
                 "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
                 "payload_hex": "f00d"
-              },
-              "tx_instructions": [
-                {
-                  "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
-                  "payload_hex": "f00d"
-                }
-              ]"""
+              }"""
         } else {
             """,
-              "settle_lease_instruction": null,
-              "tx_instructions": []"""
+              "settle_lease_instruction": null"""
         }
         return """
             {
@@ -3521,8 +3519,8 @@ class HttpClientTransportTest {
               "quote_id": "$sessionId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
-              "operator_account_id": "sorauOperator",
+              "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "operator_account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "lease_fee": "1000000.25",
               "earned_fee": "$earned",
               "refunded_fee": "$refunded",
@@ -4092,7 +4090,6 @@ class HttpClientTransportTest {
             "verifier_key_material_commitment_hex",
             "vk_commitment_hex",
             "expected_material_digest_hex",
-            "expected_statement_digest_hex",
         )
         val digestValues = digestFields.map { field ->
             val value = string(material, field)
@@ -4116,10 +4113,6 @@ class HttpClientTransportTest {
             uniqueDigestValues.size,
             uniqueDigestValues.toSet().size,
             "full-bootstrap material digest roles must be unique",
-        )
-        assertTrue(
-            string(material, "expected_material_digest_hex") != string(material, "expected_statement_digest_hex"),
-            "full-bootstrap material and statement digests must differ",
         )
     }
 

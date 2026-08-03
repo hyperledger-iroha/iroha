@@ -10,7 +10,11 @@ pub use receiver_snapshot::*;
 pub use status::*;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, SignatureOf};
+#[cfg(test)]
+use iroha_crypto::KeyPair;
+use iroha_crypto::{
+    Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key,
+};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
@@ -50,7 +54,7 @@ pub const OFFLINE_REJECTION_REASON_PREFIX: &str = "offline_reason::";
 /// only: it is never an acceptance, commit, rollback, or clawback gate.
 pub const KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1: &str = "cash_handoff_v1";
 /// Domain-separation tag for deterministic offline escrow derivation.
-pub const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow";
+pub const OFFLINE_ESCROW_ACCOUNT_DOMAIN: &str = "iroha.offline.escrow.v1";
 /// Stable public Norito schema name for the first-release Torii top-up request.
 pub const OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME: &str = "iroha.torii.v1.offline.top_up.request";
 /// Stable public Norito schema name for the first-release Torii redemption request.
@@ -192,9 +196,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V2: &str =
 /// Domain separator for the compact V5 field-neutral recursive-state boundary.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V5: &[u8] =
     b"iroha:kagemusha:recursive-state-boundary:v5";
-/// Source-compatible domain name for the retained V2 state-boundary carrier.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V1: &[u8] =
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V5;
 /// Shared verifier role id for confidential transfer evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2: &str = "confidential_transfer_v2_verifier_record";
 /// Verifier role for public-to-confidential Kagemusha top-up shielding.
@@ -252,10 +253,10 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21;
 /// Exact schema identifier for the degree-parameterized artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v4";
-/// Exact schema of the independently pinned reviewed dirty source closure.
+/// Exact schema of the independently pinned reviewed clean source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1: &str = "iroha.reviewed-source-closure.v1";
-/// Maximum untracked regular-file entries in one reviewed source closure.
-pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1: usize = 100_000;
+/// Maximum untracked regular-file entries in a first-release source closure.
+pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1: usize = 0;
 /// Maximum ignored root `Cargo.lock` bytes admitted by the reviewed closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V1: u64 = 16 * 1024 * 1024;
 /// Degree-parameterized Pasta-cycle backend selected only by ABI 21 releases.
@@ -305,15 +306,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5: u16 = 5;
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5: u32 = 5;
 /// Exact number of unreduced `u32` limbs carried between both Pasta fields.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5: usize = 138;
-/// Source-compatible name for the state-boundary version used by the retained V2 carrier.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2: u16 =
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5;
-/// Source-compatible name for the state layout used by the retained V2 carrier.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2: u32 =
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-/// Source-compatible name for the state size used by the retained V2 carrier.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2: usize =
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5;
 /// Proof-envelope version for the authenticated dynamic-layout V4 wire.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4: u16 = 5;
 /// Version of the degree-parameterized recursive-spend artifact manifest.
@@ -325,6 +317,26 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.candidate.v4";
 /// Version of the immutable pre-evidence ABI-21 candidate record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4: u16 = 4;
+/// Schema identifier for the canonical actual-recursion qualification receipt.
+pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_SCHEMA_V4: &str =
+    "kagemusha.offline.recursive_spend.qualification_receipt.v4";
+/// First-release version of the canonical actual-recursion qualification receipt.
+pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_VERSION_V4: u16 = 1;
+/// Canonical candidate/final inventory file carrying actual recursive proof pairs.
+pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4: &str =
+    "recursive-step-two-qualification-v4.norito";
+/// Maximum canonical qualification receipt size, including two bounded proof pairs.
+pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4: usize =
+    2 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 16 * 1024;
+/// Domain separator for the candidate-plus-receipt release identity.
+pub const KAGEMUSHA_RECURSIVE_SPEND_QUALIFIED_CANDIDATE_DOMAIN_V4: &[u8] =
+    b"iroha:kagemusha:recursive-spend-qualified-candidate:v4";
+/// Absolute first-release memory ceiling for candidate generation and publication.
+pub const KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4: u64 =
+    64 * 1024 * 1024 * 1024;
+/// Mandatory in-process physical-footprint enforcement profile.
+pub const KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4: &str =
+    "self-physical-footprint-v1";
 /// Schema identifier for the configured Kagemusha release-signing policy.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1: &str =
     "kagemusha.offline.recursive_spend.release_policy.v1";
@@ -543,7 +555,7 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2: &str =
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito";
 /// Canonical V4 release name for the unchanged typed finality roster payload.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4: &str = "topup-finality-roster-v4.norito";
-/// Maximum canonical roster artifact size; one full 4,096-validator window is
+/// Maximum canonical roster artifact size; one full 31-validator window is
 /// pinned below this bound by an exact maximum wire-shape test.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Native-width mirror of [`KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2`].
@@ -801,14 +813,42 @@ pub fn offline_escrow_account_id(
     chain_id: &ChainId,
     definition_id: &AssetDefinitionId,
 ) -> AccountId {
-    let seed_material = format!(
-        "{OFFLINE_ESCROW_SEED_LABEL}|{}|{definition_id}",
-        chain_id.as_str()
-    );
-    let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
-    let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
-        .expect("fixed Offline escrow Ed25519 account seed must derive");
-    AccountId::new(keypair.public_key().clone())
+    let definition_id = definition_id.to_string();
+    AccountId::new(derive_non_signing_ed25519_public_key(
+        OFFLINE_ESCROW_ACCOUNT_DOMAIN.as_bytes(),
+        &[chain_id.as_str().as_bytes(), definition_id.as_bytes()],
+    ))
+}
+
+#[cfg(test)]
+mod offline_escrow_account_tests {
+    use super::*;
+    use crate::domain::DomainId;
+
+    #[test]
+    fn derivation_is_stable_without_a_public_signing_seed() {
+        let chain_id = ChainId::from("offline-custody-chain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        let custody = offline_escrow_account_id(&chain_id, &definition_id);
+        assert_eq!(
+            custody,
+            offline_escrow_account_id(&chain_id, &definition_id)
+        );
+
+        let legacy_seed_material =
+            format!("iroha.offline.escrow|{}|{definition_id}", chain_id.as_str());
+        let legacy_seed: [u8; Hash::LENGTH] = Hash::new(legacy_seed_material).into();
+        let legacy_keypair = KeyPair::try_from_seed(legacy_seed.to_vec(), Algorithm::Ed25519)
+            .expect("legacy public seed derives");
+        assert_ne!(
+            custody,
+            AccountId::new(legacy_keypair.public_key().clone()),
+            "offline custody must not expose a signing key through public seed derivation"
+        );
+    }
 }
 
 #[model]
@@ -1433,7 +1473,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct KagemushaRecursiveSpendStateBoundaryV2 {
+    pub struct KagemushaRecursiveSpendStateBoundaryV5 {
         /// State-boundary layout version.
         pub layout_version: u16,
         /// All 138 canonical `u32` limbs, including compact branch-history accumulators.
@@ -1665,7 +1705,7 @@ mod model {
         pub path_bytes_base64: String,
     }
 
-    /// Canonical independently reviewed dirty source closure for one candidate.
+    /// Canonical independently reviewed clean source closure for one candidate.
     ///
     /// Its JSON representation matches the reviewed descriptor: SHA-256 fields,
     /// including those in untracked-file entries, are lowercase hex strings.
@@ -1678,11 +1718,11 @@ mod model {
     pub struct KagemushaReviewedSourceClosureV1 {
         /// Exact reviewed-source-closure schema.
         pub schema: String,
-        /// Signed base commit against which the tracked binary diff is defined.
+        /// Signed commit against which the necessarily empty tracked diff is defined.
         pub base_commit: String,
         /// Exact checked-out source commit; first release requires `base_commit`.
         pub source_commit: String,
-        /// Derived dirty state; first release requires `true`.
+        /// Derived dirty state; first release requires `false`.
         pub source_repo_dirty: bool,
         /// Producer full-tree SHA-256 of tracked, untracked, and `Cargo.lock` bytes.
         #[cfg_attr(
@@ -1715,7 +1755,7 @@ mod model {
             norito(with = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub ignored_cargo_lock_sha256: [u8; 32],
-        /// Cross-repository tracked-diff/untracked-manifest fingerprint.
+        /// Fingerprint proving the tracked diff and untracked manifest are empty.
         #[cfg_attr(
             feature = "json",
             norito(with = "crate::json_helpers::fixed_bytes_hex")
@@ -1749,7 +1789,7 @@ mod model {
         pub source_tree_sha256: [u8; 32],
         /// Whether the exact build tree differed from `source_commit`.
         pub source_repo_dirty: bool,
-        /// Complete independently pinned reviewed dirty source closure.
+        /// Complete independently pinned reviewed clean source closure.
         pub reviewed_source_closure: KagemushaReviewedSourceClosureV1,
         /// SHA-256 of the exact canonical descriptor JSON bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -1766,6 +1806,16 @@ mod model {
         pub withdrawal_height: u64,
         /// Exact measured upper bound for one canonical V4 proof-pair payload.
         pub max_proof_bytes: u32,
+        /// Effective in-process physical-memory ceiling used for generation and publication.
+        pub generation_memory_limit_bytes: u64,
+        /// Exact mandatory in-process memory enforcement profile.
+        pub generation_memory_enforcement_profile: String,
+        /// SHA-256 of the canonical actual-recursion qualification receipt.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub qualification_receipt_sha256: [u8; 32],
+        /// Domain-separated identity of the immutable candidate and qualification receipt.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub qualified_candidate_sha256: [u8; 32],
         /// Eq then Ep V4 recursive-step profiles.
         pub profiles: Vec<KagemushaPastaCycleProofProfileV4>,
         /// Release-bound validator roster reference.
@@ -1783,10 +1833,10 @@ mod model {
 
     /// Immutable ABI-21 candidate captured before external review and device evidence exist.
     ///
-    /// The embedded manifest commits the independently reviewed dirty source
+    /// The embedded manifest commits the independently reviewed clean source
     /// closure, network parameters, inline circuit configuration, exact eight
     /// recursive artifacts, and finality roster. Its benchmark, review, and
-    /// attestation digest slots must all be zero.
+    /// qualification and external-evidence digest slots must all be zero.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1800,6 +1850,41 @@ mod model {
         pub version: u16,
         /// Complete pre-evidence manifest with its three promotion digest slots zeroed.
         pub manifest: KagemushaRecursiveSpendArtifactManifestV4,
+    }
+
+    /// Canonical proof-bearing receipt proving one exact candidate reached step two.
+    ///
+    /// Counters, parent cardinality, semantic statements, and terminal decisions
+    /// are deliberately absent. Consumers must derive them from these exact proof
+    /// pairs while authenticating every candidate artifact role.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaRecursiveSpendQualificationReceiptV4 {
+        /// Exact receipt schema identifier.
+        pub(super) schema: String,
+        /// Receipt layout version.
+        pub(super) version: u16,
+        /// SHA-256 of the exact canonical unsigned candidate record.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub(super) candidate_sha256: [u8; 32],
+        /// SHA-256 of the candidate's exact canonical unsigned manifest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub(super) manifest_sha256: [u8; 32],
+        /// Exact in-process physical-memory ceiling committed by the candidate.
+        pub(super) generation_memory_limit_bytes: u64,
+        /// Exact mandatory in-process memory enforcement profile.
+        pub(super) generation_memory_enforcement_profile: String,
+        /// Framed then payload SHA-256 for all eight canonical artifact roles.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
+        pub(super) artifact_role_digests: [[u8; 32]; 16],
+        /// Exact canonical Eq/Ep initialization proof pair bytes.
+        pub(super) initialization_pair: Vec<u8>,
+        /// Exact canonical Eq/Ep one-parent child proof pair bytes.
+        pub(super) append_pair: Vec<u8>,
     }
 
     /// Immutable release identity reviewed before evidence finalization.
@@ -1817,6 +1902,12 @@ mod model {
         /// SHA-256 of the canonical immutable pre-evidence candidate.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],
+        /// SHA-256 of the canonical actual-recursion qualification receipt.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub qualification_receipt_sha256: [u8; 32],
+        /// Domain-separated identity of the candidate and qualification receipt.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub qualified_candidate_sha256: [u8; 32],
         /// Exact release generation copied from the candidate.
         pub generation: String,
         /// Exact source revision copied from the candidate.
@@ -1824,7 +1915,7 @@ mod model {
         /// Exact source-tree identity copied from the candidate.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
-        /// Exact reviewed dirty-tree state copied from the candidate.
+        /// Exact reviewed clean-tree state copied from the candidate (`false`).
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the candidate.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -1985,6 +2076,12 @@ mod model {
         /// SHA-256 of the canonical V4 manifest with its attestation slot zeroed.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub manifest_subject_sha256: [u8; 32],
+        /// SHA-256 of the canonical actual-recursion qualification receipt.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub qualification_receipt_sha256: [u8; 32],
+        /// Domain-separated identity of the candidate and qualification receipt.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub qualified_candidate_sha256: [u8; 32],
         /// Exact release generation copied from the V4 manifest.
         pub generation: String,
         /// Exact source revision copied from the V4 manifest.
@@ -1992,7 +2089,7 @@ mod model {
         /// Exact source-tree identity copied from the V4 manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
-        /// Exact dirty-tree state copied from the V4 manifest.
+        /// Exact clean-tree state copied from the V4 manifest (`false`).
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -2113,6 +2210,12 @@ mod model {
         /// SHA-256 of the immutable pre-evidence candidate record.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],
+        /// SHA-256 of the canonical actual-recursion qualification receipt.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub qualification_receipt_sha256: [u8; 32],
+        /// Domain-separated identity of the candidate and qualification receipt.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub qualified_candidate_sha256: [u8; 32],
         /// SHA-256 of the complete canonical V4 manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
@@ -2344,7 +2447,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub step_ep_verifier_key_sha256: [u8; 32],
         /// Canonical cross-field state boundary exposed by the proof.
-        pub state_boundary: KagemushaRecursiveSpendStateBoundaryV2,
+        pub state_boundary: KagemushaRecursiveSpendStateBoundaryV5,
         /// Canonical adapter-owned V4 Eq/Ep proof-pair bytes.
         pub proof: ProofBox,
     }
@@ -4831,7 +4934,7 @@ impl KagemushaNoteMembershipWitnessV2 {
     }
 }
 
-impl KagemushaRecursiveSpendStateBoundaryV2 {
+impl KagemushaRecursiveSpendStateBoundaryV5 {
     /// Construct the field-neutral boundary from the complete exact state.
     ///
     /// # Errors
@@ -4934,6 +5037,35 @@ impl KagemushaPastaPublicLayoutV4 {
 }
 
 impl KagemushaStepCircuitParamsV4 {
+    /// Construct and validate the single reviewed first-release generation profile.
+    ///
+    /// Eq and Ep deliberately share this parameter carrier: parity-specific
+    /// circuit identities and keys remain separate, while their authenticated
+    /// Halo2 geometry is identical.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] if the reviewed constants no longer
+    /// form the admitted compact profile.
+    pub fn reviewed_first_release_generation_profile() -> Result<Self, KagemushaValidationError> {
+        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
+        let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)?;
+        let params = Self {
+            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+            k,
+            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
+            num_fixed: 1,
+            lookup_bits: k - 1,
+            num_instance_columns: 1,
+            public_input_limbs: layout.instance_column_limbs,
+            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
+            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
+        };
+        params.validate_release_generation_profile()?;
+        Ok(params)
+    }
+
     /// Validate the complete authenticated layout and return its public ABI.
     ///
     /// # Errors
@@ -5348,7 +5480,7 @@ impl KagemushaReviewedSourceClosureV1 {
         if self.schema != KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1
             || !is_kagemusha_source_commit(&self.base_commit)
             || self.base_commit != self.source_commit
-            || !self.source_repo_dirty
+            || self.source_repo_dirty
             || !nonzero_digests
             || untracked_count != Some(self.untracked_path_mode_blob_oid_manifest.len())
             || untracked_count.is_none_or(|count| {
@@ -5421,7 +5553,7 @@ impl KagemushaReviewedSourceClosureV1 {
         let empty_sha256: [u8; 32] = Sha256::digest([]).into();
         let derived_dirty =
             self.tracked_binary_diff_sha256 != empty_sha256 || self.untracked_file_count != 0;
-        if combined_sha256 != self.combined_source_fingerprint_sha256 || !derived_dirty {
+        if combined_sha256 != self.combined_source_fingerprint_sha256 || derived_dirty {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "pasta_cycle.v4.reviewed_source_closure.fingerprint",
             });
@@ -5444,7 +5576,7 @@ impl KagemushaReviewedSourceClosureV1 {
         append_python_ascii_json_string(&mut out, &self.schema);
         out.push_str(",\"source_commit\":");
         append_python_ascii_json_string(&mut out, &self.source_commit);
-        out.push_str(",\"source_repo_dirty\":true,\"source_tree_sha256\":\"");
+        out.push_str(",\"source_repo_dirty\":false,\"source_tree_sha256\":\"");
         out.push_str(&hex::encode(self.source_tree_sha256));
         out.push_str("\",\"tracked_binary_diff_sha256\":\"");
         out.push_str(&hex::encode(self.tracked_binary_diff_sha256));
@@ -5522,9 +5654,9 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
 
     /// Reconstruct the byte-exact immutable candidate that preceded this finalized manifest.
     ///
-    /// Finalization fills only the two evidence digests and the release-attestation
-    /// digest. Clearing exactly those fields must therefore recover a valid, clean
-    /// candidate; a closure mismatch or otherwise invalid finalized manifest fails closed.
+    /// Finalization fills the qualification identities, two external-evidence
+    /// digests, and release-attestation digest. Clearing exactly those fields
+    /// must therefore recover a valid candidate.
     ///
     /// # Errors
     ///
@@ -5534,6 +5666,8 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
     ) -> Result<KagemushaRecursiveSpendCandidateV4, KagemushaValidationError> {
         self.validate()?;
         let mut manifest = self.clone();
+        manifest.qualification_receipt_sha256 = [0; 32];
+        manifest.qualified_candidate_sha256 = [0; 32];
         manifest.benchmark_evidence_sha256 = [0; 32];
         manifest.cryptographic_review_sha256 = [0; 32];
         manifest.release_attestation_sha256 = [0; 32];
@@ -5569,7 +5703,7 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || !is_kagemusha_portable_identifier(&self.generation)
             || !is_kagemusha_source_commit(&self.source_commit)
             || self.source_tree_sha256 == [0; 32]
-            || !self.source_repo_dirty
+            || self.source_repo_dirty
             || !reviewed_source_closure_valid
             || !is_kagemusha_chain_id(&self.chain_id)
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
@@ -5582,10 +5716,19 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || self.profiles[0].parity != KagemushaPastaCycleParityV1::StepEq
             || self.profiles[1].parity != KagemushaPastaCycleParityV1::StepEp
             || self.topup_finality_roster_artifact.artifact_generation != self.generation
+            || self.generation_memory_limit_bytes == 0
+            || self.generation_memory_limit_bytes
+                > KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4
+            || self.generation_memory_enforcement_profile
+                != KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4
+            || (finalized && self.qualification_receipt_sha256 == [0; 32])
+            || (finalized && self.qualified_candidate_sha256 == [0; 32])
             || (finalized && self.benchmark_evidence_sha256 == [0; 32])
             || (finalized && self.cryptographic_review_sha256 == [0; 32])
             || (finalized && self.release_attestation_sha256 == [0; 32])
             || (!finalized && self.benchmark_evidence_sha256 != [0; 32])
+            || (!finalized && self.qualification_receipt_sha256 != [0; 32])
+            || (!finalized && self.qualified_candidate_sha256 != [0; 32])
             || (!finalized && self.cryptographic_review_sha256 != [0; 32])
             || (!finalized && self.release_attestation_sha256 != [0; 32])
         {
@@ -5624,6 +5767,8 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
         }
         if finalized {
             for evidence_digest in [
+                self.qualification_receipt_sha256,
+                self.qualified_candidate_sha256,
                 self.benchmark_evidence_sha256,
                 self.cryptographic_review_sha256,
             ] {
@@ -5638,8 +5783,37 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
                     field: "pasta_cycle.v4.artifact_manifest.evidence_sha256",
                 });
             }
+            let candidate = self.immutable_candidate_unchecked_for_qualification()?;
+            let expected_qualified_candidate =
+                kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                    candidate.sha256()?,
+                    self.qualification_receipt_sha256,
+                );
+            if self.qualified_candidate_sha256 != expected_qualified_candidate {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.artifact_manifest.qualified_candidate",
+                });
+            }
         }
         Ok(())
+    }
+
+    fn immutable_candidate_unchecked_for_qualification(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendCandidateV4, KagemushaValidationError> {
+        let mut manifest = self.clone();
+        manifest.qualification_receipt_sha256 = [0; 32];
+        manifest.qualified_candidate_sha256 = [0; 32];
+        manifest.benchmark_evidence_sha256 = [0; 32];
+        manifest.cryptographic_review_sha256 = [0; 32];
+        manifest.release_attestation_sha256 = [0; 32];
+        let candidate = KagemushaRecursiveSpendCandidateV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest,
+        };
+        candidate.validate()?;
+        Ok(candidate)
     }
 
     /// Build the non-circular V4 subject signed by every release authority.
@@ -5666,6 +5840,8 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
         Ok(KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
             manifest_subject_sha256: Sha256::digest(subject_bytes).into(),
+            qualification_receipt_sha256: self.qualification_receipt_sha256,
+            qualified_candidate_sha256: self.qualified_candidate_sha256,
             generation: self.generation.clone(),
             source_commit: self.source_commit.clone(),
             source_tree_sha256: self.source_tree_sha256,
@@ -5705,6 +5881,69 @@ impl KagemushaRecursiveSpendCandidateV4 {
         Ok(Sha256::digest(norito::encode_canonical(self)?).into())
     }
 
+    /// Return framed then payload identities for all eight canonical artifact roles.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when the candidate or its role inventory is invalid.
+    pub fn artifact_role_digests(&self) -> Result<[[u8; 32]; 16], KagemushaValidationError> {
+        self.validate()?;
+        let canonical_roles = [
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+            ),
+        ];
+        let mut digests = [[0_u8; 32]; 16];
+        for (index, (parity, kind)) in canonical_roles.into_iter().enumerate() {
+            let descriptor = self
+                .manifest
+                .profiles
+                .iter()
+                .find(|profile| profile.parity == parity)
+                .and_then(|profile| {
+                    profile
+                        .artifacts
+                        .iter()
+                        .find(|descriptor| descriptor.kind == kind)
+                })
+                .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.candidate.artifact_roles",
+                })?;
+            digests[2 * index] = descriptor.sha256;
+            digests[2 * index + 1] = descriptor.payload_sha256;
+        }
+        Ok(digests)
+    }
+
     /// Build the exact candidate-bound subject signed by cryptographic reviewers.
     ///
     /// # Errors
@@ -5712,10 +5951,25 @@ impl KagemushaRecursiveSpendCandidateV4 {
     /// Returns [`KagemushaValidationError`] when the signing subject is invalid or cannot be encoded canonically.
     pub fn cryptographic_review_subject(
         &self,
+        qualification_receipt_sha256: [u8; 32],
+        qualified_candidate_sha256: [u8; 32],
     ) -> Result<KagemushaRecursiveSpendCryptographicReviewSubjectV4, KagemushaValidationError> {
         let candidate_sha256 = self.sha256()?;
+        if qualification_receipt_sha256 == [0; 32]
+            || qualified_candidate_sha256
+                != kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                    candidate_sha256,
+                    qualification_receipt_sha256,
+                )
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.qualified_candidate",
+            });
+        }
         Ok(KagemushaRecursiveSpendCryptographicReviewSubjectV4 {
             candidate_sha256,
+            qualification_receipt_sha256,
+            qualified_candidate_sha256,
             generation: self.manifest.generation.clone(),
             source_commit: self.manifest.source_commit.clone(),
             source_tree_sha256: self.manifest.source_tree_sha256,
@@ -5727,6 +5981,202 @@ impl KagemushaRecursiveSpendCandidateV4 {
             asset: self.manifest.asset.clone(),
             bridge_abi_version: self.manifest.bridge_abi_version,
         })
+    }
+}
+
+/// Derive the non-circular identity of one candidate and its proof-bearing receipt.
+#[must_use]
+pub fn kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+    candidate_sha256: [u8; 32],
+    qualification_receipt_sha256: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(KAGEMUSHA_RECURSIVE_SPEND_QUALIFIED_CANDIDATE_DOMAIN_V4);
+    hasher.update([0]);
+    hasher.update(candidate_sha256);
+    hasher.update(qualification_receipt_sha256);
+    hasher.finalize().into()
+}
+
+impl KagemushaRecursiveSpendQualificationReceiptV4 {
+    /// Construct a receipt from the two exact proof-pair byte strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when the candidate or either bounded pair is invalid.
+    pub fn new(
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        initialization_pair: Vec<u8>,
+        append_pair: Vec<u8>,
+    ) -> Result<Self, KagemushaValidationError> {
+        let candidate_sha256 = candidate.sha256()?;
+        let manifest_sha256 = Sha256::digest(norito::encode_canonical(&candidate.manifest)?).into();
+        let receipt = Self {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_VERSION_V4,
+            candidate_sha256,
+            manifest_sha256,
+            generation_memory_limit_bytes: candidate.manifest.generation_memory_limit_bytes,
+            generation_memory_enforcement_profile: candidate
+                .manifest
+                .generation_memory_enforcement_profile
+                .clone(),
+            artifact_role_digests: candidate.artifact_role_digests()?,
+            initialization_pair,
+            append_pair,
+        };
+        receipt.validate_against_candidate(candidate)?;
+        Ok(receipt)
+    }
+
+    /// Decode canonical, bounded Norito bytes and bind every receipt field to a candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] for missing, oversized, non-canonical,
+    /// malformed, role-substituted, or candidate-substituted receipt bytes.
+    pub fn decode_canonical_against_candidate(
+        bytes: &[u8],
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+    ) -> Result<Self, KagemushaValidationError> {
+        if bytes.is_empty()
+            || bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.qualification_receipt.bytes",
+            });
+        }
+        let limits = norito::core::DecodeLimits::new(
+            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
+            4 * KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
+            32,
+        );
+        let receipt: Self = norito::decode_canonical_with_limits(bytes, limits).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.qualification_receipt.canonical",
+            }
+        })?;
+        receipt.validate_against_candidate(candidate)?;
+        Ok(receipt)
+    }
+
+    /// Validate structural bounds and exact candidate, manifest, and role identities.
+    ///
+    /// Proof counters and parent semantics are intentionally not trusted here;
+    /// the Core terminal verifier must derive them from both proof byte strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when any receipt identity or bound differs.
+    pub fn validate_against_candidate(
+        &self,
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+    ) -> Result<(), KagemushaValidationError> {
+        let candidate_sha256 = candidate.sha256()?;
+        let manifest_sha256: [u8; 32] =
+            Sha256::digest(norito::encode_canonical(&candidate.manifest)?).into();
+        let maximum_pair_bytes =
+            usize::try_from(candidate.manifest.max_proof_bytes).map_err(|_| {
+                KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.qualification_receipt.pair_bound",
+                }
+            })?;
+        let encoded_size_is_bounded = norito::encode_canonical(self).is_ok_and(|bytes| {
+            bytes.len() <= KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4
+        });
+        if self.schema != KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_SCHEMA_V4
+            || self.version != KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_VERSION_V4
+            || self.candidate_sha256 != candidate_sha256
+            || self.manifest_sha256 != manifest_sha256
+            || self.generation_memory_limit_bytes
+                != candidate.manifest.generation_memory_limit_bytes
+            || self.generation_memory_enforcement_profile
+                != candidate.manifest.generation_memory_enforcement_profile
+            || self.artifact_role_digests != candidate.artifact_role_digests()?
+            || self.initialization_pair.is_empty()
+            || self.initialization_pair.len() > maximum_pair_bytes
+            || self.append_pair.is_empty()
+            || self.append_pair.len() > maximum_pair_bytes
+            || self.initialization_pair == self.append_pair
+            || !encoded_size_is_bounded
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.qualification_receipt",
+            });
+        }
+        Ok(())
+    }
+
+    /// SHA-256 of the exact canonical receipt after candidate binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when validation or canonical encoding fails.
+    pub fn canonical_sha256_against_candidate(
+        &self,
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+    ) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_against_candidate(candidate)?;
+        Ok(Sha256::digest(norito::encode_canonical(self)?).into())
+    }
+
+    /// Domain-separated identity of this exact candidate and receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when validation or canonical encoding fails.
+    pub fn qualified_candidate_sha256(
+        &self,
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+    ) -> Result<[u8; 32], KagemushaValidationError> {
+        Ok(kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+            candidate.sha256()?,
+            self.canonical_sha256_against_candidate(candidate)?,
+        ))
+    }
+
+    /// Exact canonical initialization proof pair.
+    #[must_use]
+    pub fn initialization_pair(&self) -> &[u8] {
+        &self.initialization_pair
+    }
+
+    /// Exact canonical one-parent child proof pair.
+    #[must_use]
+    pub fn append_pair(&self) -> &[u8] {
+        &self.append_pair
+    }
+
+    /// Exact candidate identity embedded in this receipt.
+    #[must_use]
+    pub const fn candidate_sha256(&self) -> [u8; 32] {
+        self.candidate_sha256
+    }
+
+    /// Exact manifest identity embedded in this receipt.
+    #[must_use]
+    pub const fn manifest_sha256(&self) -> [u8; 32] {
+        self.manifest_sha256
+    }
+
+    /// Exact in-process physical-memory ceiling bound by this receipt.
+    #[must_use]
+    pub const fn generation_memory_limit_bytes(&self) -> u64 {
+        self.generation_memory_limit_bytes
+    }
+
+    /// Exact mandatory in-process memory enforcement profile bound by this receipt.
+    #[must_use]
+    pub fn generation_memory_enforcement_profile(&self) -> &str {
+        &self.generation_memory_enforcement_profile
+    }
+
+    /// Framed then payload digests for the eight exact artifact roles.
+    #[must_use]
+    pub const fn artifact_role_digests(&self) -> [[u8; 32]; 16] {
+        self.artifact_role_digests
     }
 }
 
@@ -5754,13 +6204,20 @@ impl KagemushaRecursiveSpendCryptographicReviewPayloadV4 {
     /// Returns [`KagemushaValidationError`] when the supplied inputs fail canonical validation or required contextual bindings.
     pub fn approved(
         candidate: &KagemushaRecursiveSpendCandidateV4,
+        qualification_receipt_sha256: [u8; 32],
+        qualified_candidate_sha256: [u8; 32],
         report_sha256: [u8; 32],
         check_evidence_sha256: [[u8; 32];
             KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_CHECK_COUNT_V4],
     ) -> Result<Self, KagemushaValidationError> {
-        let subject = candidate.cryptographic_review_subject()?;
+        let subject = candidate.cryptographic_review_subject(
+            qualification_receipt_sha256,
+            qualified_candidate_sha256,
+        )?;
         let mut evidence_digests = std::collections::BTreeSet::new();
         evidence_digests.insert(subject.candidate_sha256);
+        evidence_digests.insert(subject.qualification_receipt_sha256);
+        evidence_digests.insert(subject.qualified_candidate_sha256);
         if report_sha256 == [0; 32] || !evidence_digests.insert(report_sha256) {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "pasta_cycle.v4.cryptographic_review_evidence",
@@ -5879,9 +6336,11 @@ impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
     fn validate_against_candidate(
         &self,
         candidate: &KagemushaRecursiveSpendCandidateV4,
+        qualification_receipt_sha256: [u8; 32],
+        qualified_candidate_sha256: [u8; 32],
     ) -> Result<Vec<PublicKey>, KagemushaReleaseVerificationError> {
         let expected_subject = candidate
-            .cryptographic_review_subject()
+            .cryptographic_review_subject(qualification_receipt_sha256, qualified_candidate_sha256)
             .map_err(|_| KagemushaReleaseVerificationError::InvalidCryptographicReview)?;
         let expected_artifact_roles =
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.map(str::to_owned);
@@ -5906,6 +6365,8 @@ impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
 
         let mut evidence_digests = std::collections::BTreeSet::new();
         evidence_digests.insert(self.payload.subject.candidate_sha256);
+        evidence_digests.insert(self.payload.subject.qualification_receipt_sha256);
+        evidence_digests.insert(self.payload.subject.qualified_candidate_sha256);
         if self.payload.report_sha256 == [0; 32]
             || !evidence_digests.insert(self.payload.report_sha256)
         {
@@ -5951,6 +6412,8 @@ impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
     pub fn validate_canonical_bytes_against_candidate(
         bytes: &[u8],
         candidate: &KagemushaRecursiveSpendCandidateV4,
+        qualification_receipt_sha256: [u8; 32],
+        qualified_candidate_sha256: [u8; 32],
     ) -> Result<Vec<PublicKey>, KagemushaReleaseVerificationError> {
         if bytes.is_empty()
             || bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4
@@ -5968,16 +6431,27 @@ impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
         );
         let evidence: Self = norito::decode_canonical_with_limits(bytes, decode_limits)
             .map_err(|_| KagemushaReleaseVerificationError::InvalidCryptographicReview)?;
-        evidence.validate_against_candidate(candidate)
+        evidence.validate_against_candidate(
+            candidate,
+            qualification_receipt_sha256,
+            qualified_candidate_sha256,
+        )
     }
 
     fn authenticate_canonical_bytes(
         bytes: &[u8],
         candidate: &KagemushaRecursiveSpendCandidateV4,
+        qualification_receipt_sha256: [u8; 32],
+        qualified_candidate_sha256: [u8; 32],
         policy: &KagemushaRecursiveSpendReleasePolicyV1,
     ) -> Result<Vec<PublicKey>, KagemushaReleaseVerificationError> {
         policy.validate()?;
-        let reviewer_keys = Self::validate_canonical_bytes_against_candidate(bytes, candidate)?;
+        let reviewer_keys = Self::validate_canonical_bytes_against_candidate(
+            bytes,
+            candidate,
+            qualification_receipt_sha256,
+            qualified_candidate_sha256,
+        )?;
         let role = KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview;
         let role_policy = policy
             .role_policy(role)
@@ -6138,6 +6612,8 @@ impl KagemushaAuthenticatedReleaseV4 {
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::authenticate_canonical_bytes(
                 cryptographic_review,
                 &candidate,
+                manifest.qualification_receipt_sha256,
+                manifest.qualified_candidate_sha256,
                 policy,
             )?;
         let authenticated = Self::verify_attestation(manifest, policy, attestation)?;
@@ -6195,6 +6671,8 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
     pub fn validate(&self) -> Result<(), KagemushaReleaseVerificationError> {
         let digests = [
             self.candidate_sha256,
+            self.qualification_receipt_sha256,
+            self.qualified_candidate_sha256,
             self.manifest_sha256,
             self.release_attestation_sha256,
             self.release_policy_sha256,
@@ -6252,6 +6730,8 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
             .and_then(|candidate| candidate.sha256())
             .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
         if self.candidate_sha256 != candidate_sha256
+            || self.qualification_receipt_sha256 != release.manifest().qualification_receipt_sha256
+            || self.qualified_candidate_sha256 != release.manifest().qualified_candidate_sha256
             || self.generation != release.manifest().generation
             || self.manifest_sha256 != release.manifest_sha256()
             || self.release_attestation_sha256 != release.release_attestation_sha256()
@@ -6279,6 +6759,11 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
             .sha256()
             .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
         if self.candidate_sha256 != candidate_sha256
+            || self.qualified_candidate_sha256
+                != kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                    candidate_sha256,
+                    self.qualification_receipt_sha256,
+                )
             || candidate.manifest.generation != release.manifest().generation
             || candidate.manifest.source_commit != release.manifest().source_commit
             || candidate.manifest.source_tree_sha256 != release.manifest().source_tree_sha256
@@ -6353,9 +6838,15 @@ impl KagemushaRecursiveSpendReleaseRecordV4 {
         KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
             &self.cryptographic_review_summary,
             &candidate,
+            self.manifest.qualification_receipt_sha256,
+            self.manifest.qualified_candidate_sha256,
         )?;
         if attestation_sha256 != self.manifest.release_attestation_sha256
             || self.promotion_record.generation != self.manifest.generation
+            || self.promotion_record.qualification_receipt_sha256
+                != self.manifest.qualification_receipt_sha256
+            || self.promotion_record.qualified_candidate_sha256
+                != self.manifest.qualified_candidate_sha256
             || self.promotion_record.manifest_sha256 != manifest_sha256
             || self.promotion_record.release_attestation_sha256 != attestation_sha256
             || self.promotion_record.max_proof_bytes != self.manifest.max_proof_bytes
@@ -7213,16 +7704,8 @@ mod kagemusha_v4_artifact_contract_tests {
 
     fn reviewed_source_closure() -> KagemushaReviewedSourceClosureV1 {
         let source_commit = "1234567890abcdef1234567890abcdef12345678".to_owned();
-        let entry = KagemushaReviewedSourceClosureManifestEntryV1 {
-            blob_sha256: digest(b"reviewed untracked source bytes"),
-            git_blob_oid: "abcdef1234567890abcdef1234567890abcdef12".to_owned(),
-            git_mode: "100644".to_owned(),
-            path: "reviewed-untracked-source.rs".to_owned(),
-            path_bytes_base64: BASE64_STANDARD.encode(b"reviewed-untracked-source.rs"),
-        };
-        let entry_json = kagemusha_reviewed_source_manifest_entry_json(&entry);
-        let manifest_sha256 = Sha256::digest(format!("{entry_json}\n")).into();
-        let tracked_binary_diff_sha256 = digest(b"reviewed tracked binary diff");
+        let manifest_sha256 = Sha256::digest([]).into();
+        let tracked_binary_diff_sha256 = Sha256::digest([]).into();
         let mut combined = Sha256::new();
         combined.update(KAGEMUSHA_REVIEWED_SOURCE_DIFF_DOMAIN_V1);
         combined.update(KAGEMUSHA_REVIEWED_SOURCE_TRACKED_DIFF_DOMAIN_V1);
@@ -7233,11 +7716,11 @@ mod kagemusha_v4_artifact_contract_tests {
             schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned(),
             base_commit: source_commit.clone(),
             source_commit,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             source_tree_sha256: digest(b"v4 artifact test source tree"),
             tracked_binary_diff_sha256,
-            untracked_file_count: 1,
-            untracked_path_mode_blob_oid_manifest: vec![entry],
+            untracked_file_count: 0,
+            untracked_path_mode_blob_oid_manifest: Vec::new(),
             untracked_path_mode_blob_oid_manifest_sha256: manifest_sha256,
             ignored_cargo_lock_size_bytes: 123,
             ignored_cargo_lock_sha256: digest(b"reviewed ignored Cargo.lock"),
@@ -7254,32 +7737,54 @@ mod kagemusha_v4_artifact_contract_tests {
             "\"source_tree_sha256\":\"{}\"",
             hex::encode(closure.source_tree_sha256)
         )));
-        assert!(json.contains(&format!(
-            "\"blob_sha256\":\"{}\"",
-            hex::encode(closure.untracked_path_mode_blob_oid_manifest[0].blob_sha256)
-        )));
+        assert!(json.contains("\"source_repo_dirty\":false"));
+        assert!(json.contains("\"untracked_file_count\":0"));
 
         let decoded: KagemushaReviewedSourceClosureV1 =
             norito::json::from_str(&json).expect("decode canonical hex descriptor JSON");
         assert_eq!(decoded, closure);
     }
 
+    #[test]
+    fn first_release_reviewed_source_closure_rejects_every_dirty_shape() {
+        assert_eq!(KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1, 0);
+        let recompute_combined = |closure: &mut KagemushaReviewedSourceClosureV1| {
+            let mut combined = Sha256::new();
+            combined.update(KAGEMUSHA_REVIEWED_SOURCE_DIFF_DOMAIN_V1);
+            combined.update(KAGEMUSHA_REVIEWED_SOURCE_TRACKED_DIFF_DOMAIN_V1);
+            combined.update(closure.tracked_binary_diff_sha256);
+            combined.update(KAGEMUSHA_REVIEWED_SOURCE_UNTRACKED_MANIFEST_DOMAIN_V1);
+            combined.update(closure.untracked_path_mode_blob_oid_manifest_sha256);
+            closure.combined_source_fingerprint_sha256 = combined.finalize().into();
+        };
+
+        let mut tracked = reviewed_source_closure();
+        tracked.source_repo_dirty = true;
+        tracked.tracked_binary_diff_sha256 = digest(b"forbidden tracked diff");
+        recompute_combined(&mut tracked);
+        assert!(tracked.validate().is_err());
+
+        let mut untracked = reviewed_source_closure();
+        let entry = KagemushaReviewedSourceClosureManifestEntryV1 {
+            blob_sha256: digest(b"forbidden untracked bytes"),
+            git_blob_oid: "abcdef1234567890abcdef1234567890abcdef12".to_owned(),
+            git_mode: "100644".to_owned(),
+            path: "forbidden-untracked.rs".to_owned(),
+            path_bytes_base64: BASE64_STANDARD.encode(b"forbidden-untracked.rs"),
+        };
+        let entry_json = kagemusha_reviewed_source_manifest_entry_json(&entry);
+        untracked.source_repo_dirty = true;
+        untracked.untracked_file_count = 1;
+        untracked.untracked_path_mode_blob_oid_manifest = vec![entry];
+        untracked.untracked_path_mode_blob_oid_manifest_sha256 =
+            Sha256::digest(format!("{entry_json}\n")).into();
+        recompute_combined(&mut untracked);
+        assert!(untracked.validate().is_err());
+    }
+
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
-        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
-        let layout =
-            KagemushaPastaPublicLayoutV4::for_ipa_round_count(k).expect("test V4 public layout");
-        KagemushaStepCircuitParamsV4 {
-            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-            k,
-            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
-            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
-            num_fixed: 1,
-            lookup_bits: k - 1,
-            num_instance_columns: 1,
-            public_input_limbs: layout.instance_column_limbs,
-            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
-        }
+        KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
+            .expect("reviewed first-release circuit profile")
     }
 
     fn artifact(
@@ -7357,7 +7862,7 @@ mod kagemusha_v4_artifact_contract_tests {
         let reviewed_source_closure_descriptor_sha256 = reviewed_source_closure
             .canonical_descriptor_sha256()
             .expect("reviewed source closure descriptor");
-        KagemushaRecursiveSpendArtifactManifestV4 {
+        let mut manifest = KagemushaRecursiveSpendArtifactManifestV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
@@ -7366,11 +7871,11 @@ mod kagemusha_v4_artifact_contract_tests {
             generation: "v4-artifact-test-release".to_owned(),
             source_commit: reviewed_source_closure.source_commit.clone(),
             source_tree_sha256: reviewed_source_closure.source_tree_sha256,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             chain_id: ChainId::from("v4-artifact-test-chain"),
-            asset: AssetDefinitionId::new(
+            asset: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("test domain"),
                 "rose".parse().expect("test asset name"),
             ),
@@ -7378,6 +7883,12 @@ mod kagemusha_v4_artifact_contract_tests {
             activation_height: 1,
             withdrawal_height: 100,
             max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
+            generation_memory_limit_bytes:
+                KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            generation_memory_enforcement_profile:
+                KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
+            qualification_receipt_sha256: [0; 32],
+            qualified_candidate_sha256: [0; 32],
             profiles: vec![
                 profile(KagemushaPastaCycleParityV1::StepEq, &params, 1),
                 profile(KagemushaPastaCycleParityV1::StepEp, &params, 11),
@@ -7392,16 +7903,38 @@ mod kagemusha_v4_artifact_contract_tests {
                 artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
                 required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             },
-            benchmark_evidence_sha256: digest(b"v4 artifact test benchmark"),
-            cryptographic_review_sha256: digest(b"v4 artifact test review"),
-            release_attestation_sha256: digest(b"v4 artifact test attestation"),
-        }
+            benchmark_evidence_sha256: [0; 32],
+            cryptographic_review_sha256: [0; 32],
+            release_attestation_sha256: [0; 32],
+        };
+        let candidate = KagemushaRecursiveSpendCandidateV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest: manifest.clone(),
+        };
+        let candidate_sha256 = candidate.sha256().expect("test candidate identity");
+        manifest.qualification_receipt_sha256 = qualification_receipt_sha256();
+        manifest.qualified_candidate_sha256 =
+            kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate_sha256,
+                manifest.qualification_receipt_sha256,
+            );
+        manifest.benchmark_evidence_sha256 = digest(b"v4 artifact test benchmark");
+        manifest.cryptographic_review_sha256 = digest(b"v4 artifact test review");
+        manifest.release_attestation_sha256 = digest(b"v4 artifact test attestation");
+        manifest
+    }
+
+    fn qualification_receipt_sha256() -> [u8; 32] {
+        digest(b"v4 artifact test qualification receipt")
     }
 
     fn unsigned_candidate(
         template: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> KagemushaRecursiveSpendCandidateV4 {
         let mut manifest = template.clone();
+        manifest.qualification_receipt_sha256 = [0; 32];
+        manifest.qualified_candidate_sha256 = [0; 32];
         manifest.benchmark_evidence_sha256 = [0; 32];
         manifest.cryptographic_review_sha256 = [0; 32];
         manifest.release_attestation_sha256 = [0; 32];
@@ -7418,8 +7951,15 @@ mod kagemusha_v4_artifact_contract_tests {
         candidate: &KagemushaRecursiveSpendCandidateV4,
         reviewers: &[&KeyPair],
     ) -> Vec<u8> {
+        let receipt_sha256 = qualification_receipt_sha256();
+        let qualified_candidate_sha256 = kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+            candidate.sha256().expect("test candidate identity"),
+            receipt_sha256,
+        );
         let payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
             candidate,
+            receipt_sha256,
+            qualified_candidate_sha256,
             digest(b"complete independent cryptographic review report"),
             [
                 digest(b"constraint coverage evidence"),
@@ -7494,7 +8034,217 @@ mod kagemusha_v4_artifact_contract_tests {
         );
     }
 
+    #[test]
+    fn qualified_candidate_identity_has_a_fixed_domain_separated_preimage() {
+        let candidate_sha256 = [0x11; 32];
+        let receipt_sha256 = [0x22; 32];
+        let expected = [
+            0xe6, 0xde, 0xb4, 0xe8, 0xf6, 0xeb, 0x72, 0xac, 0x38, 0x79, 0x70, 0x33, 0x4f, 0xf1,
+            0xae, 0xc0, 0xb6, 0xe9, 0x18, 0xa4, 0xd7, 0x7a, 0x0b, 0xc7, 0x19, 0xb2, 0x5a, 0x89,
+            0x02, 0xb2, 0x33, 0xb3,
+        ];
+        let mut independent = Sha256::new();
+        independent.update(KAGEMUSHA_RECURSIVE_SPEND_QUALIFIED_CANDIDATE_DOMAIN_V4);
+        independent.update([0]);
+        independent.update(candidate_sha256);
+        independent.update(receipt_sha256);
+        assert_eq!(<[u8; 32]>::from(independent.finalize()), expected);
+        assert_eq!(
+            kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate_sha256,
+                receipt_sha256,
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn qualification_receipt_binds_canonical_role_order_and_candidate() {
+        let candidate = unsigned_candidate(&manifest());
+        let canonical_roles = [
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+            ),
+        ];
+        let role_digests = candidate
+            .artifact_role_digests()
+            .expect("canonical candidate role identities");
+        for (index, (parity, kind)) in canonical_roles.into_iter().enumerate() {
+            let descriptor = candidate
+                .manifest
+                .profiles
+                .iter()
+                .find(|profile| profile.parity == parity)
+                .and_then(|profile| {
+                    profile
+                        .artifacts
+                        .iter()
+                        .find(|artifact| artifact.kind == kind)
+                })
+                .expect("canonical candidate role");
+            assert_eq!(role_digests[2 * index], descriptor.sha256);
+            assert_eq!(role_digests[2 * index + 1], descriptor.payload_sha256);
+        }
+
+        let receipt =
+            KagemushaRecursiveSpendQualificationReceiptV4::new(&candidate, vec![0x41], vec![0x42])
+                .expect("structurally valid qualification receipt");
+        let encoded = norito::encode_canonical(&receipt).expect("canonical receipt bytes");
+        assert_eq!(
+            KagemushaRecursiveSpendQualificationReceiptV4::decode_canonical_against_candidate(
+                &encoded, &candidate,
+            )
+            .expect("decode exact receipt"),
+            receipt
+        );
+        #[cfg(feature = "json")]
+        {
+            let json = norito::json::to_json(&receipt).expect("qualification receipt JSON");
+            let decoded: KagemushaRecursiveSpendQualificationReceiptV4 =
+                norito::json::from_str(&json).expect("decode qualification receipt JSON");
+            assert_eq!(decoded, receipt);
+            decoded
+                .validate_against_candidate(&candidate)
+                .expect("JSON receipt remains candidate-bound");
+        }
+
+        let mut reordered = receipt.clone();
+        reordered.artifact_role_digests.swap(0, 2);
+        assert!(reordered.validate_against_candidate(&candidate).is_err());
+        let mut substituted_digest = receipt.clone();
+        substituted_digest.artifact_role_digests[0][0] ^= 1;
+        assert!(
+            substituted_digest
+                .validate_against_candidate(&candidate)
+                .is_err()
+        );
+        let mut substituted_memory_limit = receipt.clone();
+        substituted_memory_limit.generation_memory_limit_bytes -= 1;
+        assert!(
+            substituted_memory_limit
+                .validate_against_candidate(&candidate)
+                .is_err()
+        );
+        let mut substituted_memory_profile = receipt.clone();
+        substituted_memory_profile.generation_memory_enforcement_profile =
+            "substituted-profile".to_owned();
+        assert!(
+            substituted_memory_profile
+                .validate_against_candidate(&candidate)
+                .is_err()
+        );
+
+        let mut other_candidate = candidate.clone();
+        other_candidate.manifest.chain_id = ChainId::from("other-v4-artifact-test-chain");
+        other_candidate
+            .validate()
+            .expect("independently valid substituted candidate");
+        assert!(
+            receipt
+                .validate_against_candidate(&other_candidate)
+                .is_err()
+        );
+
+        let mut noncanonical = encoded;
+        noncanonical.push(0);
+        assert!(
+            KagemushaRecursiveSpendQualificationReceiptV4::decode_canonical_against_candidate(
+                &noncanonical,
+                &candidate,
+            )
+            .is_err()
+        );
+        let oversized =
+            vec![0_u8; KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4 + 1];
+        assert!(
+            KagemushaRecursiveSpendQualificationReceiptV4::decode_canonical_against_candidate(
+                &oversized, &candidate,
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn qualification_receipt_json_rejects_wrong_digest_cardinality_and_encoding() {
+        let candidate = unsigned_candidate(&manifest());
+        let receipt =
+            KagemushaRecursiveSpendQualificationReceiptV4::new(&candidate, vec![0x41], vec![0x42])
+                .expect("structurally valid qualification receipt");
+
+        for malformed_len in [15_usize, 17] {
+            let mut value =
+                norito::json::to_value(&receipt).expect("qualification receipt JSON value");
+            let digests = value
+                .as_object_mut()
+                .and_then(|object| object.get_mut("artifact_role_digests"))
+                .and_then(norito::json::Value::as_array_mut)
+                .expect("qualification receipt digest array");
+            if malformed_len < digests.len() {
+                digests.truncate(malformed_len);
+            } else {
+                let digest = digests[0].clone();
+                digests.push(digest);
+            }
+            let error =
+                norito::json::from_value::<KagemushaRecursiveSpendQualificationReceiptV4>(value)
+                    .expect_err("qualification receipt digest cardinality must be exact");
+            assert!(
+                error
+                    .to_string()
+                    .contains("expected exactly 16 array elements"),
+                "unexpected qualification receipt cardinality error: {error}",
+            );
+        }
+
+        for malformed_digest in ["00".repeat(31), "gg".repeat(32)] {
+            let mut value =
+                norito::json::to_value(&receipt).expect("qualification receipt JSON value");
+            let digest = value
+                .as_object_mut()
+                .and_then(|object| object.get_mut("artifact_role_digests"))
+                .and_then(norito::json::Value::as_array_mut)
+                .and_then(|digests| digests.first_mut())
+                .expect("qualification receipt digest");
+            *digest = norito::json::Value::String(malformed_digest);
+            norito::json::from_value::<KagemushaRecursiveSpendQualificationReceiptV4>(value)
+                .expect_err("qualification receipt digest must be exactly 32 bytes of hex");
+        }
+    }
+
     fn promoted_release() -> KagemushaRecursiveSpendPromotedReleaseV4 {
+        let finalized_manifest = manifest();
+        let candidate = unsigned_candidate(&finalized_manifest);
+        let candidate_sha256 = candidate.sha256().expect("test candidate identity");
         let approved_signers = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
             KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
@@ -7513,7 +8263,9 @@ mod kagemusha_v4_artifact_contract_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: "v4-artifact-test-release".to_owned(),
-            candidate_sha256: digest(b"v4 promotion candidate"),
+            candidate_sha256,
+            qualification_receipt_sha256: finalized_manifest.qualification_receipt_sha256,
+            qualified_candidate_sha256: finalized_manifest.qualified_candidate_sha256,
             manifest_sha256: digest(b"v4 promotion manifest"),
             release_attestation_sha256: digest(b"v4 promotion attestation"),
             release_policy_sha256: digest(b"v4 promotion policy"),
@@ -7612,7 +8364,7 @@ mod kagemusha_v4_artifact_contract_tests {
 
     fn retired_top_up_fixture() -> RetiredTopUpUnsignedFixture {
         let chain_id = ChainId::from("v4-wire-test-chain");
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("test domain"),
             "rose".parse().expect("test asset name"),
         );
@@ -7759,6 +8511,18 @@ mod kagemusha_v4_artifact_contract_tests {
         reviewed
             .validate_release_generation_profile()
             .expect("reviewed compact degree-17 generation profile");
+        let encoded = norito::to_bytes(&reviewed).expect("encode reviewed circuit profile");
+        let decoded: KagemushaStepCircuitParamsV4 =
+            norito::decode_from_bytes(&encoded).expect("decode reviewed circuit profile");
+        assert_eq!(decoded, reviewed);
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("re-encode reviewed circuit profile"),
+            encoded,
+            "the constructor must remain a canonical Norito release input"
+        );
+        assert_eq!(reviewed.version, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4);
+        assert_eq!(reviewed.k, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4);
+        assert_eq!(reviewed.public_input_limbs, 66);
         assert_eq!(reviewed.max_parent_proof_bytes, 93_120);
         assert_eq!(
             KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,
@@ -8017,7 +8781,7 @@ mod kagemusha_v4_artifact_contract_tests {
             b"iroha:kagemusha:recursive-state-boundary:v5"
         );
         assert_eq!(
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V5,
             KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V5
         );
     }
@@ -8029,8 +8793,8 @@ mod kagemusha_v4_artifact_contract_tests {
         let [vesta_profile, pallas_profile] = manifest.profiles.as_slice() else {
             panic!("test manifest must have Eq/Ep profiles");
         };
-        let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
         let mut envelope = KagemushaPastaCycleProofEnvelopeV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
             proof_backend: manifest.proof_backend.clone(),
@@ -8053,8 +8817,8 @@ mod kagemusha_v4_artifact_contract_tests {
                 .expect("Ep params identity"),
             step_eq_verifier_key_sha256: vesta_profile.artifacts[2].payload_sha256,
             step_ep_verifier_key_sha256: pallas_profile.artifacts[2].payload_sha256,
-            state_boundary: KagemushaRecursiveSpendStateBoundaryV2 {
-                layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2,
+            state_boundary: KagemushaRecursiveSpendStateBoundaryV5 {
+                layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5,
                 state_limbs,
             },
             proof: ProofBox::new(manifest.proof_backend.clone(), vec![0xA5]),
@@ -8244,12 +9008,19 @@ mod kagemusha_v4_artifact_contract_tests {
     )]
     fn v4_cryptographic_review_is_canonical_signed_and_candidate_bound() {
         let candidate = unsigned_candidate(&manifest());
+        let qualification_receipt_sha256 = qualification_receipt_sha256();
+        let qualified_candidate_sha256 = kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+            candidate.sha256().expect("test candidate identity"),
+            qualification_receipt_sha256,
+        );
         let reviewer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
         let review_bytes = signed_review_bytes(&candidate, &[&reviewer]);
         assert_eq!(
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 &review_bytes,
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
             )
             .expect("canonical signed review"),
             vec![reviewer.public_key().clone()]
@@ -8258,6 +9029,8 @@ mod kagemusha_v4_artifact_contract_tests {
         assert!(
             KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
                 [0; 32],
                 [
                     [0x91; 32], [0x92; 32], [0x93; 32], [0x94; 32], [0x95; 32], [0x96; 32]
@@ -8269,6 +9042,8 @@ mod kagemusha_v4_artifact_contract_tests {
         assert!(
             KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
                 [0x90; 32],
                 [[0x91; 32]; KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_CHECK_COUNT_V4],
             )
@@ -8281,6 +9056,8 @@ mod kagemusha_v4_artifact_contract_tests {
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 &oversized_review,
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
             ),
             Err(KagemushaReleaseVerificationError::EvidenceMismatch {
                 role: KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
@@ -8291,6 +9068,8 @@ mod kagemusha_v4_artifact_contract_tests {
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 b"approved by independent review",
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
@@ -8304,6 +9083,8 @@ mod kagemusha_v4_artifact_contract_tests {
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 &review_bytes,
                 &wrong_candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
@@ -8323,6 +9104,8 @@ mod kagemusha_v4_artifact_contract_tests {
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 &alternate_review_bytes,
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
@@ -8333,6 +9116,8 @@ mod kagemusha_v4_artifact_contract_tests {
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 &norito::encode_canonical(&rejected).expect("rejected review bytes"),
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
@@ -8344,6 +9129,8 @@ mod kagemusha_v4_artifact_contract_tests {
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 &norito::encode_canonical(&failed_check).expect("failed-check review bytes"),
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
@@ -8355,6 +9142,8 @@ mod kagemusha_v4_artifact_contract_tests {
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 &norito::encode_canonical(&duplicate_digest).expect("duplicate-digest review bytes"),
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
             ),
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
@@ -8368,6 +9157,8 @@ mod kagemusha_v4_artifact_contract_tests {
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
                 &norito::encode_canonical(&invalid_signature).expect("invalid-signature review bytes"),
                 &candidate,
+                qualification_receipt_sha256,
+                qualified_candidate_sha256,
             ),
             Err(KagemushaReleaseVerificationError::InvalidSignature {
                 role: KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
@@ -8385,6 +9176,8 @@ mod kagemusha_v4_artifact_contract_tests {
         );
 
         let mut candidate_manifest = finalized.clone();
+        candidate_manifest.qualification_receipt_sha256 = [0; 32];
+        candidate_manifest.qualified_candidate_sha256 = [0; 32];
         candidate_manifest.benchmark_evidence_sha256 = [0; 32];
         candidate_manifest.cryptographic_review_sha256 = [0; 32];
         candidate_manifest.release_attestation_sha256 = [0; 32];
@@ -8582,891 +9375,7 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 }
 
-#[cfg(test)]
-mod device_authority_p256_tests {
-    use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
-
-    use super::*;
-    use crate::domain::DomainId;
-
-    const P256_ORDER: [u8; 32] = [
-        0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63,
-        0x25, 0x51,
-    ];
-    const P256_HALF_ORDER: [u8; 32] = [
-        0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42, 0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31,
-        0x92, 0xa8,
-    ];
-
-    fn signing_key(seed: u8) -> SigningKey {
-        SigningKey::from_bytes((&[seed; 32]).into()).expect("non-zero P-256 test scalar")
-    }
-
-    fn device_public_key(key: &SigningKey) -> KagemushaDevicePublicKeyV2 {
-        KagemushaDevicePublicKeyV2::from_sec1_bytes(
-            key.verifying_key().to_encoded_point(false).as_bytes(),
-        )
-        .expect("canonical uncompressed test key")
-    }
-
-    fn sign(key: &SigningKey, message: &[u8]) -> KagemushaDeviceSignatureV2 {
-        let signature: P256Signature = key.sign(message);
-        let signature = signature.normalize_s().unwrap_or(signature);
-        KagemushaDeviceSignatureV2::from_raw_bytes(signature.to_bytes().as_slice())
-            .expect("canonical low-S test signature")
-    }
-
-    fn scalar_pair(r: [u8; 32], s: [u8; 32]) -> [u8; 64] {
-        let mut raw = [0_u8; 64];
-        raw[..32].copy_from_slice(&r);
-        raw[32..].copy_from_slice(&s);
-        raw
-    }
-
-    fn one() -> [u8; 32] {
-        let mut value = [0_u8; 32];
-        value[31] = 1;
-        value
-    }
-
-    fn account(seed: u8) -> AccountId {
-        AccountId::new(
-            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-                .expect("deterministic account key")
-                .public_key()
-                .clone(),
-        )
-    }
-
-    fn asset(name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
-            DomainId::try_new("offline", "universal").expect("test domain"),
-            name.parse().expect("test asset name"),
-        )
-    }
-
-    fn placeholder_signature() -> KagemushaDeviceSignatureV2 {
-        KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), one()))
-            .expect("valid low-S placeholder")
-    }
-
-    fn authorization(
-        assertion_key: &SigningKey,
-        ios_authenticator_data: Option<Vec<u8>>,
-    ) -> KagemushaRequestAuthorizationV2 {
-        let hardware_assertion = ios_authenticator_data.map_or_else(
-            || {
-                KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
-                    KagemushaAndroidKeyMintHardwareAssertionV1 {
-                        signature: placeholder_signature(),
-                    },
-                )
-            },
-            |authenticator_data| {
-                KagemushaOnlineHardwareAssertionV1::IosAppAttest(
-                    KagemushaIosAppAttestHardwareAssertionV1 {
-                        authenticator_data,
-                        signature: placeholder_signature(),
-                    },
-                )
-            },
-        );
-        let mut authorization = KagemushaRequestAuthorizationV2 {
-            authority: account(21),
-            device_id: "hardware-device-21".to_owned(),
-            asset_definition_id: asset("cash"),
-            operation_id: [0x21; 32],
-            issued_at_ms: 1_800_000_000_000,
-            expires_at_ms: 1_800_000_030_000,
-            nonce: [0x22; 32],
-            payload_digest: [0x23; 32],
-            registration_hash: [0x24; 32],
-            hardware_assertion,
-        };
-        let signing_bytes = authorization
-            .signing_bytes()
-            .expect("authorization signing bytes");
-        let signed_message = match &authorization.hardware_assertion {
-            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(_) => signing_bytes,
-            KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) => [
-                assertion.authenticator_data.as_slice(),
-                signing_bytes.as_slice(),
-            ]
-            .concat(),
-        };
-        authorization.set_hardware_signature(sign(assertion_key, &signed_message));
-        authorization
-    }
-
-    fn recipient_payment_request(
-        receiver_key: &SigningKey,
-        issued_at_ms: u64,
-        expires_at_ms: u64,
-    ) -> KagemushaRecipientPaymentRequestV2 {
-        let chain_id: ChainId = "kagemusha-request-boundary".parse().expect("test chain id");
-        let asset = asset("cash");
-        let amount = KagemushaScaledAmountV2::new(500, 2).expect("test amount");
-        let receiver_public_key = device_public_key(receiver_key);
-        let payload = KagemushaRecipientPaymentRequestSigningPayloadV2 {
-            chain_id: chain_id.clone(),
-            asset: asset.clone(),
-            amount,
-            recipient: account(51),
-            recipient_key_reference: kagemusha_receiver_key_reference_v2(&receiver_public_key)
-                .expect("receiver key reference"),
-            receiver_device_id: "receiver-device-51".to_owned(),
-            receiver_public_key,
-            request_id: [0x51; 32],
-            issued_at_ms,
-            expires_at_ms,
-            recipient_output: KagemushaSpendableNoteDescriptorV2 {
-                chain_id,
-                asset,
-                note_commitment: [0x52; 32],
-                spend_nullifier: [0x53; 32],
-                amount,
-            },
-            sender_output_prover_material: vec![0x54],
-        };
-        let signature = sign(
-            receiver_key,
-            &payload.signing_bytes().expect("request signing bytes"),
-        );
-        KagemushaRecipientPaymentRequestV2::from_signed_payload(payload, signature)
-            .expect("signed recipient request")
-    }
-
-    fn recipient_payment_bundle(
-        request: &KagemushaRecipientPaymentRequestV2,
-    ) -> KagemushaRecursiveSpendBundleV4 {
-        let anchor = KagemushaRecursiveSpendTopUpAnchorRefV2 {
-            topup_operation_id: [0x55; 32],
-            anchor_digest: [0x56; 32],
-        };
-        let lineage_root =
-            kagemusha_recursive_spend_lineage_root_v2(anchor.anchor_digest).expect("lineage root");
-        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-            generation: "acknowledgement-expiry-test".to_owned(),
-            manifest_sha256: [0x57; 32],
-        };
-        let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
-            KagemushaPastaCycleParityV1::StepEq,
-            artifact_binding.manifest_sha256,
-        );
-        let recipient_request_digest = request.digest().expect("request digest");
-        let operation_id = [0x58; 32];
-        let statement = KagemushaRecursiveSpendPublicStatementV4 {
-            chain_id: request.chain_id().clone(),
-            asset: request.asset().clone(),
-            asset_scale: request.amount().scale,
-            final_root: [0x59; 32],
-            next_zero_leaf_index: 1,
-            topup_anchor_refs: vec![anchor],
-            proof_step_count: 2,
-            peer_hop_count: 1,
-            current_note: request.recipient_output().clone(),
-            branch_claims: vec![
-                KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
-                    .expect("root branch claim"),
-            ],
-            transition: Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(
-                KagemushaRecursiveSpendPeerSplitTransitionV4 {
-                    binding_digest: [0x5a; 32],
-                    branch: KagemushaRecursiveSpendBranchV2::Recipient,
-                    recipient_request_digest,
-                    operation_id,
-                    parent_max_proof_step_count: 1,
-                    parent_max_peer_hop_count: 0,
-                },
-            )),
-            artifact_binding: artifact_binding.clone(),
-            verifier_key_id: verifier_key_id.clone(),
-        };
-        let public_statement_digest = statement.digest().expect("statement digest");
-        let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
-        let proof_envelope = KagemushaPastaCycleProofEnvelopeV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
-            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
-            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
-            step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4.to_owned(),
-            step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4.to_owned(),
-            artifact_generation: artifact_binding.generation,
-            manifest_sha256: artifact_binding.manifest_sha256,
-            step_eq_parameter_generation: "ack-expiry-eq-params".to_owned(),
-            step_ep_parameter_generation: "ack-expiry-ep-params".to_owned(),
-            step_eq_circuit_params_sha256: [0x5b; 32],
-            step_ep_circuit_params_sha256: [0x5c; 32],
-            step_eq_verifier_key_sha256: [0x5d; 32],
-            step_ep_verifier_key_sha256: [0x5e; 32],
-            state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)
-                .expect("state boundary"),
-            proof: ProofBox::new(
-                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.into(),
-                vec![0x5f],
-            ),
-        };
-        let mut operation_limbs = [0; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
-        operation_limbs[0] = 1;
-        let bundle = KagemushaRecursiveSpendBundleV4 {
-            statement,
-            operation: KagemushaRecursiveSpendOperationVectorV4 {
-                limbs: operation_limbs,
-            },
-            recursive_proof: KagemushaRecursiveSpendProofV4 {
-                verifier_key_id,
-                public_statement_digest,
-                proof_envelope,
-            },
-        };
-        bundle
-            .validate_public_binding()
-            .expect("recipient bundle binding");
-        bundle
-    }
-
-    fn receiver_acknowledgement(
-        receiver_key: &SigningKey,
-        request: &KagemushaRecipientPaymentRequestV2,
-        bundle: &KagemushaRecursiveSpendBundleV4,
-        accepted_at_ms: u64,
-    ) -> KagemushaReceiverAcknowledgementV2 {
-        let KagemushaRecursiveSpendTransitionV4::PeerSplit(transition) = bundle
-            .statement
-            .transition
-            .as_ref()
-            .expect("peer-split transition")
-        else {
-            panic!("recipient bundle must carry a peer-split transition")
-        };
-        let payload = KagemushaReceiverAcknowledgementPayloadV2 {
-            operation_id: transition.operation_id,
-            recipient_request_digest: request.digest().expect("request digest"),
-            payment_bundle_digest: bundle.digest().expect("bundle digest"),
-            recipient_commitment: request.recipient_output().note_commitment,
-            accepted_at_ms,
-            receiver_device_id: request.receiver_device_id().to_owned(),
-            receiver_key_reference: kagemusha_receiver_key_reference_v2(
-                request.receiver_public_key(),
-            )
-            .expect("receiver key reference"),
-            receiver_public_key: *request.receiver_public_key(),
-        };
-        let signature = sign(
-            receiver_key,
-            &payload
-                .signing_bytes()
-                .expect("acknowledgement signing bytes"),
-        );
-        KagemushaReceiverAcknowledgementV2 { payload, signature }
-    }
-
-    #[test]
-    fn device_public_key_accepts_only_canonical_uncompressed_p256() {
-        let key = signing_key(7);
-        let canonical = key.verifying_key().to_encoded_point(false);
-        let parsed =
-            KagemushaDevicePublicKeyV2::from_sec1_bytes(canonical.as_bytes()).expect("valid key");
-        parsed.validate().expect("decoded key revalidates");
-        assert_eq!(parsed.as_sec1_bytes().as_slice(), canonical.as_bytes());
-
-        for malformed in [
-            Vec::new(),
-            canonical.as_bytes()[..64].to_vec(),
-            [canonical.as_bytes(), &[0_u8]].concat(),
-            key.verifying_key()
-                .to_encoded_point(true)
-                .as_bytes()
-                .to_vec(),
-            vec![0_u8; 65],
-        ] {
-            assert!(
-                KagemushaDevicePublicKeyV2::from_sec1_bytes(&malformed).is_err(),
-                "malformed key unexpectedly accepted: {} bytes",
-                malformed.len()
-            );
-        }
-
-        let mut wrong_prefix = canonical.as_bytes().to_vec();
-        wrong_prefix[0] = 0x06;
-        assert!(KagemushaDevicePublicKeyV2::from_sec1_bytes(&wrong_prefix).is_err());
-
-        let mut off_curve = canonical.as_bytes().to_vec();
-        off_curve[64] ^= 0x02;
-        assert!(KagemushaDevicePublicKeyV2::from_sec1_bytes(&off_curve).is_err());
-
-        assert_eq!(
-            norito::codec::Encode::encode(&parsed),
-            canonical.as_bytes(),
-            "the key newtype must be wire-transparent"
-        );
-
-        // Invalid points are rejected by serialization and deserialization,
-        // not merely by higher-level request validation.
-        let malformed = KagemushaDevicePublicKeyV2([0_u8; 65]);
-        assert!(norito::encode_canonical(&malformed).is_err());
-        let mut malformed_bytes = &[0_u8; 65][..];
-        assert!(
-            <KagemushaDevicePublicKeyV2 as norito::codec::Decode>::decode(&mut malformed_bytes)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn device_signature_rejects_bad_width_scalars_and_high_s() {
-        for malformed in [vec![], vec![0_u8; 63], vec![0_u8; 65]] {
-            assert!(KagemushaDeviceSignatureV2::from_raw_bytes(&malformed).is_err());
-        }
-        let der = P256Signature::from_slice(&scalar_pair(one(), one()))
-            .expect("valid scalar pair")
-            .to_der();
-        assert!(KagemushaDeviceSignatureV2::from_raw_bytes(der.as_bytes()).is_err());
-        assert!(KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair([0; 32], one())).is_err());
-        assert!(KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), [0; 32])).is_err());
-        assert!(
-            KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(P256_ORDER, one())).is_err()
-        );
-        assert!(
-            KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), P256_ORDER)).is_err()
-        );
-        let mut high_s = P256_HALF_ORDER;
-        high_s[31] += 1;
-        let high_s = scalar_pair(one(), high_s);
-        assert!(KagemushaDeviceSignatureV2::from_raw_bytes(&high_s).is_err());
-
-        let malformed = KagemushaDeviceSignatureV2(high_s);
-        assert!(norito::encode_canonical(&malformed).is_err());
-        let mut malformed_bytes = malformed.0.as_slice();
-        assert!(
-            <KagemushaDeviceSignatureV2 as norito::codec::Decode>::decode(&mut malformed_bytes)
-                .is_err()
-        );
-
-        let valid = KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), one()))
-            .expect("valid low-S signature");
-        assert_eq!(
-            norito::codec::Encode::encode(&valid),
-            scalar_pair(one(), one()),
-            "the signature newtype must be wire-transparent"
-        );
-    }
-
-    #[test]
-    fn ecdsa_sha256_verification_is_key_and_message_bound() {
-        let key = signing_key(9);
-        let wrong_key = signing_key(10);
-        let public_key = device_public_key(&key);
-        let message = b"kagemusha fixed P-256 authority";
-        let signature = sign(&key, message);
-        signature
-            .verify(&public_key, message)
-            .expect("valid signature");
-        assert!(
-            signature
-                .verify(&public_key, b"substituted message")
-                .is_err()
-        );
-        assert!(
-            signature
-                .verify(&device_public_key(&wrong_key), message)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn signed_requests_acknowledgements_and_archives_ignore_ambient_norito_layout() {
-        let issued_at_ms = 1_800_000_000_000;
-        let expires_at_ms = issued_at_ms + 30_000;
-        let receiver_key = signing_key(13);
-        let authorization = authorization(&signing_key(14), None);
-        let request = recipient_payment_request(&receiver_key, issued_at_ms, expires_at_ms);
-        let bundle = recipient_payment_bundle(&request);
-        let acknowledgement =
-            receiver_acknowledgement(&receiver_key, &request, &bundle, issued_at_ms + 1);
-
-        let expected_authorization_signing_bytes = authorization
-            .signing_bytes()
-            .expect("canonical authorization signing bytes");
-        let expected_request_signing_bytes = request
-            .signing_payload()
-            .signing_bytes()
-            .expect("canonical recipient-request signing bytes");
-        let expected_request_digest = request
-            .digest()
-            .expect("canonical recipient-request digest");
-        let expected_bundle_digest = bundle.digest().expect("canonical bundle digest");
-        let expected_acknowledgement_signing_bytes = acknowledgement
-            .payload
-            .signing_bytes()
-            .expect("canonical acknowledgement signing bytes");
-        let expected_acknowledgement_digest = acknowledgement
-            .digest()
-            .expect("canonical acknowledgement digest");
-        let expected_acknowledgement_archive = acknowledgement
-            .canonical_archive_for_payment_v4(&request, &bundle)
-            .expect("canonical acknowledgement archive");
-
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-        authorization
-            .validate_for_payload(authorization.payload_digest)
-            .expect("authorization remains valid under alternate ambient layout");
-        request
-            .validate_public_binding()
-            .expect("recipient request remains valid under alternate ambient layout");
-        bundle
-            .validate_public_binding()
-            .expect("bundle remains valid under alternate ambient layout");
-        acknowledgement
-            .validate_for_payment_v4(&request, &bundle)
-            .expect("acknowledgement remains valid under alternate ambient layout");
-        assert_eq!(
-            authorization
-                .signing_bytes()
-                .expect("authorization signing bytes under alternate ambient layout"),
-            expected_authorization_signing_bytes
-        );
-        assert_eq!(
-            request
-                .signing_payload()
-                .signing_bytes()
-                .expect("recipient-request signing bytes under alternate ambient layout"),
-            expected_request_signing_bytes
-        );
-        assert_eq!(
-            request
-                .digest()
-                .expect("recipient-request digest under alternate ambient layout"),
-            expected_request_digest
-        );
-        assert_eq!(
-            bundle
-                .digest()
-                .expect("bundle digest under alternate ambient layout"),
-            expected_bundle_digest
-        );
-        assert_eq!(
-            acknowledgement
-                .payload
-                .signing_bytes()
-                .expect("acknowledgement signing bytes under alternate ambient layout"),
-            expected_acknowledgement_signing_bytes
-        );
-        assert_eq!(
-            acknowledgement
-                .digest()
-                .expect("acknowledgement digest under alternate ambient layout"),
-            expected_acknowledgement_digest
-        );
-        assert_eq!(
-            acknowledgement
-                .canonical_archive_for_payment_v4(&request, &bundle)
-                .expect("acknowledgement archive under alternate ambient layout"),
-            expected_acknowledgement_archive
-        );
-    }
-
-    #[test]
-    fn redeem_result_rejects_alternate_layout_and_compressed_expansion_archives() {
-        let receiver_request =
-            recipient_payment_request(&signing_key(15), 1_800_000_000_000, 1_800_000_030_000);
-        let bundle = recipient_payment_bundle(&receiver_request);
-        let authorization = authorization(&signing_key(16), None);
-        let amount = receiver_request.amount();
-        let public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
-            input_commitment_0: bundle.statement.current_note.note_commitment,
-            input_commitment_1: [0; 32],
-            nullifier_0: bundle.statement.current_note.spend_nullifier,
-            nullifier_1: [0; 32],
-            change_output_commitment: [0; 32],
-            root: bundle.statement.final_root,
-            public_amount: kagemusha_confidential_amount_encoding_v2(amount.atomic_units),
-            asset_tag: [0x61; 32],
-            chain_tag: [0x62; 32],
-        };
-        let backend = bundle.recursive_proof.verifier_key_id.backend.clone();
-        let request = KagemushaRecursiveSpendRedeemRequestV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-            bundle: bundle.clone(),
-            recipient: authorization.authority.clone(),
-            amount,
-            redeem_proof: ProofAttachment::new_ref(
-                backend.clone(),
-                ProofBox::new(backend, vec![0x63]),
-                bundle.recursive_proof.verifier_key_id.clone(),
-            ),
-            redemption: KagemushaRecursiveSpendRedemptionIntentV4 {
-                chain_id: bundle.statement.chain_id.clone(),
-                asset: bundle.statement.asset.clone(),
-                input_note: bundle.statement.current_note.clone(),
-                parent_branch_claims: bundle.statement.branch_claims.clone(),
-                parent_topup_anchor_refs: bundle.statement.topup_anchor_refs.clone(),
-                parent_proof_step_count: bundle.statement.proof_step_count,
-                parent_peer_hop_count: bundle.statement.peer_hop_count,
-                parent_bundle_digest: bundle.digest().expect("canonical parent bundle digest"),
-                input_root: bundle.statement.final_root,
-                recipient: authorization.authority.clone(),
-                public_amount: amount,
-                change_output: None,
-                change_artifact_binding: None,
-                unshield_public_inputs: public_inputs,
-                unshield_public_inputs_digest: public_inputs
-                    .digest()
-                    .expect("canonical unshield public-input digest"),
-                operation_id: authorization.operation_id,
-            },
-            offline_change: None,
-            block_height: 1,
-            operation_id: authorization.operation_id,
-            authorization,
-        };
-        let canonical_request_archive =
-            norito::encode_canonical(&request).expect("canonical redeem-request archive");
-        let alternate_request_archive = {
-            let alternate_flags =
-                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            to_bytes(&request).expect("alternate-layout redeem-request archive")
-        };
-        assert_ne!(alternate_request_archive, canonical_request_archive);
-        assert_eq!(
-            norito::decode_from_bytes::<KagemushaRecursiveSpendRedeemRequestV4>(
-                &alternate_request_archive,
-            )
-            .expect("alternate-layout redeem request remains structurally decodable"),
-            request
-        );
-
-        let result = KagemushaRecursiveSpendRedeemResultV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-            redeem_request_archive: alternate_request_archive,
-            offline_change_bundle: None,
-            offline_change_membership_witness: None,
-            offline_change_topup_provenance: None,
-            operation_id: request.operation_id,
-        };
-        assert!(matches!(
-            result.validate_public_binding(),
-            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "redeem_result.v4.request_archive",
-            })
-        ));
-
-        const NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
-        const NORITO_UNCOMPRESSED_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
-        let mut compressed_expansion_archive = canonical_request_archive;
-        compressed_expansion_archive[NORITO_COMPRESSION_OFFSET] = norito::Compression::Zstd as u8;
-        compressed_expansion_archive[NORITO_UNCOMPRESSED_LENGTH_OFFSET
-            ..NORITO_UNCOMPRESSED_LENGTH_OFFSET + std::mem::size_of::<u64>()]
-            .copy_from_slice(
-                &u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4)
-                    .expect("redeem ceiling fits u64")
-                    .to_le_bytes(),
-            );
-        let compressed_expansion_result = KagemushaRecursiveSpendRedeemResultV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-            redeem_request_archive: compressed_expansion_archive,
-            offline_change_bundle: None,
-            offline_change_membership_witness: None,
-            offline_change_topup_provenance: None,
-            operation_id: request.operation_id,
-        };
-        assert!(matches!(
-            compressed_expansion_result.validate_public_binding(),
-            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "redeem_result.v4.request_archive",
-            })
-        ));
-
-        let unshield_backend: iroha_schema::Ident = KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into();
-        let mut semantic_unshield = ProofAttachment::new_ref(
-            unshield_backend.clone(),
-            ProofBox::new(
-                unshield_backend.clone(),
-                vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4],
-            ),
-            VerifyingKeyId::new(unshield_backend, "unshield-v3-wire-limit"),
-        );
-        semantic_unshield.vk_commitment = Some([0x68; 32]);
-        validate_kagemusha_redeem_proof_attachment_v2(&semantic_unshield)
-            .expect("maximum-sized unshield proof remains structurally valid");
-        semantic_unshield.proof.bytes.push(0x65);
-        assert!(matches!(
-            validate_kagemusha_redeem_proof_attachment_v2(&semantic_unshield),
-            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "redeem_proof",
-            })
-        ));
-
-        let mut maximum_unshield = request.clone();
-        maximum_unshield.redeem_proof.proof.bytes =
-            vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
-        let maximum_unshield_archive = norito::encode_canonical(&maximum_unshield)
-            .expect("encode maximum-sized unshield request");
-        preflight_kagemusha_redeem_request_archive_v4(&maximum_unshield_archive)
-            .expect("wire preflight accepts the exact unshield limit");
-        let maximum_unsigned = maximum_unshield.unsigned_payload();
-        let maximum_unsigned_archive = norito::encode_canonical(&maximum_unsigned)
-            .expect("encode maximum-sized unsigned unshield fixture");
-        preflight_kagemusha_redeem_unsigned_archive_v4(&maximum_unsigned_archive)
-            .expect("unsigned wire preflight accepts the exact unshield limit");
-        let maximum_build_result = KagemushaRecursiveSpendRedeemBuildResultV4 {
-            operation_id: maximum_unsigned.operation_id,
-            unsigned: maximum_unsigned,
-            authorization_digest: [0x67; 32],
-            offline_change_bundle: None,
-            offline_change_membership_witness: None,
-            offline_change_topup_provenance: None,
-        };
-        let maximum_build_result_archive = norito::encode_canonical(&maximum_build_result)
-            .expect("encode maximum-sized redemption-build result fixture");
-        preflight_kagemusha_redeem_build_result_archive_v4(&maximum_build_result_archive)
-            .expect("build-result wire preflight accepts the exact unshield limit");
-        maximum_unshield.redeem_proof.proof.bytes.push(0x65);
-        let oversized_request_archive = norito::encode_canonical(&maximum_unshield)
-            .expect("encode oversized unshield request fixture");
-        assert!(matches!(
-            preflight_kagemusha_redeem_request_archive_v4(&oversized_request_archive),
-            Err(norito::Error::FieldLengthExceeded { length, limit })
-                if length == (KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4 + 1) as u64
-                    && limit == KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4 as u64
-        ));
-        let oversized_unsigned = maximum_unshield.unsigned_payload();
-        let oversized_unsigned_archive = norito::encode_canonical(&oversized_unsigned)
-            .expect("encode oversized unsigned unshield fixture");
-        assert!(matches!(
-            preflight_kagemusha_redeem_unsigned_archive_v4(&oversized_unsigned_archive),
-            Err(norito::Error::FieldLengthExceeded { .. })
-        ));
-        let oversized_build_result = KagemushaRecursiveSpendRedeemBuildResultV4 {
-            operation_id: oversized_unsigned.operation_id,
-            unsigned: oversized_unsigned,
-            authorization_digest: [0x67; 32],
-            offline_change_bundle: None,
-            offline_change_membership_witness: None,
-            offline_change_topup_provenance: None,
-        };
-        let oversized_build_result_archive = norito::encode_canonical(&oversized_build_result)
-            .expect("encode oversized redemption-build result fixture");
-        assert!(matches!(
-            preflight_kagemusha_redeem_build_result_archive_v4(&oversized_build_result_archive),
-            Err(norito::Error::FieldLengthExceeded { .. })
-        ));
-
-        let mut maximum_request = request;
-        maximum_request
-            .bundle
-            .recursive_proof
-            .proof_envelope
-            .proof
-            .bytes =
-            vec![0x64; KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize];
-        maximum_request.redeem_proof.proof.bytes =
-            vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
-        let mut change_bundle = maximum_request.bundle.clone();
-        change_bundle.recursive_proof.proof_envelope.proof.bytes =
-            vec![0x66; KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize];
-        maximum_request.offline_change = Some(KagemushaRecursiveSpendRedeemChangeBranchV4 {
-            output: change_bundle.statement.current_note.clone(),
-            branch_claims: change_bundle.statement.branch_claims.clone(),
-            bundle: change_bundle,
-        });
-        let maximum_archive =
-            norito::encode_canonical(&maximum_request).expect("maximum-shaped redeem request");
-        assert!(maximum_archive.len() <= KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4);
-        let decoded =
-            norito::decode_canonical_with_limits::<KagemushaRecursiveSpendRedeemRequestV4>(
-                &maximum_archive,
-                kagemusha_recursive_spend_redeem_decode_limits_v4(maximum_archive.len()),
-            )
-            .expect("maximum-shaped redeem request must fit the schema-bounded allocation budget");
-        assert_eq!(decoded, maximum_request);
-    }
-
-    #[test]
-    fn redeem_result_decode_limits_cover_the_exact_archive_ceiling() {
-        let limits = kagemusha_recursive_spend_redeem_decode_limits_v4(
-            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
-        );
-        assert_eq!(
-            limits.max_sequence_elements(),
-            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
-        );
-        assert_eq!(
-            limits.max_field_bytes(),
-            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
-        );
-        assert_eq!(
-            limits.max_total_elements(),
-            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4 * 2
-        );
-        assert_eq!(
-            limits.max_total_allocated_bytes(),
-            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
-                * (KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4
-                    + KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4)
-                + KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4
-        );
-        assert_eq!(
-            limits.max_nesting_depth(),
-            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4
-        );
-    }
-
-    #[test]
-    fn recipient_payment_request_expiry_is_exclusive() {
-        let issued_at_ms = 1_800_000_000_000;
-        let expires_at_ms = issued_at_ms + 30_000;
-        let request = recipient_payment_request(&signing_key(11), issued_at_ms, expires_at_ms);
-
-        request
-            .validate_at(issued_at_ms)
-            .expect("request is valid at issuance");
-        request
-            .validate_at(expires_at_ms - 1)
-            .expect("request is valid immediately before expiry");
-        assert!(request.validate_at(issued_at_ms - 1).is_err());
-        assert!(request.validate_at(expires_at_ms).is_err());
-        assert!(request.validate_at(expires_at_ms + 1).is_err());
-    }
-
-    #[test]
-    fn receiver_acknowledgement_expiry_is_exclusive() {
-        let issued_at_ms = 1_800_000_000_000;
-        let expires_at_ms = issued_at_ms + 30_000;
-        let receiver_key = signing_key(12);
-        let request = recipient_payment_request(&receiver_key, issued_at_ms, expires_at_ms);
-        let bundle = recipient_payment_bundle(&request);
-
-        receiver_acknowledgement(&receiver_key, &request, &bundle, expires_at_ms - 1)
-            .validate_for_payment_v4(&request, &bundle)
-            .expect("acknowledgement is valid immediately before expiry");
-        assert!(
-            receiver_acknowledgement(&receiver_key, &request, &bundle, expires_at_ms)
-                .validate_for_payment_v4(&request, &bundle)
-                .is_err(),
-            "acknowledgement at the exclusive expiry must fail closed",
-        );
-    }
-
-    #[test]
-    fn online_android_assertion_binds_every_authorization_coordinate_and_key() {
-        let key = signing_key(31);
-        let wrong_key = signing_key(32);
-        let authorization = authorization(&key, None);
-        let public_key = key.verifying_key().to_encoded_point(false);
-        authorization
-            .validate_for_payload(authorization.payload_digest)
-            .expect("valid authorization structure");
-        authorization
-            .verify_hardware_signature(public_key.as_bytes())
-            .expect("exact registered key verifies");
-        assert!(
-            authorization
-                .verify_hardware_signature(
-                    wrong_key.verifying_key().to_encoded_point(false).as_bytes(),
-                )
-                .is_err(),
-            "a substituted assertion key must fail",
-        );
-
-        let mut mutations = Vec::new();
-        let mut changed = authorization.clone();
-        changed.authority = account(22);
-        mutations.push(changed);
-        let mut changed = authorization.clone();
-        changed.device_id = "hardware-device-22".to_owned();
-        mutations.push(changed);
-        let mut changed = authorization.clone();
-        changed.asset_definition_id = asset("other_cash");
-        mutations.push(changed);
-        let mut changed = authorization.clone();
-        changed.operation_id = [0x31; 32];
-        mutations.push(changed);
-        let mut changed = authorization.clone();
-        changed.issued_at_ms += 1;
-        mutations.push(changed);
-        let mut changed = authorization.clone();
-        changed.expires_at_ms += 1;
-        mutations.push(changed);
-        let mut changed = authorization.clone();
-        changed.nonce = [0x32; 32];
-        mutations.push(changed);
-        let mut changed = authorization.clone();
-        changed.payload_digest = [0x33; 32];
-        mutations.push(changed);
-        let mut changed = authorization.clone();
-        changed.registration_hash = [0x34; 32];
-        mutations.push(changed);
-        let mut changed = authorization.clone();
-        changed.hardware_assertion = KagemushaOnlineHardwareAssertionV1::IosAppAttest(
-            KagemushaIosAppAttestHardwareAssertionV1 {
-                authenticator_data: vec![0; 37],
-                signature: match &authorization.hardware_assertion {
-                    KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(assertion) => {
-                        assertion.signature
-                    }
-                    KagemushaOnlineHardwareAssertionV1::IosAppAttest(_) => unreachable!(),
-                },
-            },
-        );
-        mutations.push(changed);
-
-        for mutation in mutations {
-            assert!(
-                mutation
-                    .verify_hardware_signature(public_key.as_bytes())
-                    .is_err(),
-                "every account/device/asset/platform/hash/time/operation coordinate is signed",
-            );
-        }
-    }
-
-    #[test]
-    fn online_ios_assertion_binds_authenticator_data_and_client_data_hash() {
-        let key = signing_key(41);
-        let mut authenticator_data = vec![0_u8; 37];
-        authenticator_data[..32].copy_from_slice(&[0x41; 32]);
-        authenticator_data[36] = 1;
-        let authorization = authorization(&key, Some(authenticator_data));
-        let public_key = key.verifying_key().to_encoded_point(false);
-        authorization
-            .verify_hardware_signature(public_key.as_bytes())
-            .expect("exact App Attest assertion verifies");
-
-        let mut changed_counter = authorization.clone();
-        let KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) =
-            &mut changed_counter.hardware_assertion
-        else {
-            unreachable!()
-        };
-        assertion.authenticator_data[36] = 2;
-        assert!(
-            changed_counter
-                .verify_hardware_signature(public_key.as_bytes())
-                .is_err(),
-            "the signature must bind the exact authenticatorData counter",
-        );
-
-        let mut wrong_length = authorization;
-        let KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) =
-            &mut wrong_length.hardware_assertion
-        else {
-            unreachable!()
-        };
-        assertion.authenticator_data.truncate(36);
-        assert!(
-            wrong_length
-                .validate_for_payload(wrong_length.payload_digest)
-                .is_err(),
-            "truncated assertion authData must fail at typed ingress",
-        );
-    }
-}
+include!("device_authority_p256_tests.rs");
 
 /// Derive the canonical public reference carried by a receiver payment request.
 ///

@@ -22,13 +22,21 @@ public sealed class PrivacyNativeTests
     public void ExactClosedRegistryIsStable()
     {
         Assert.Equal(21U, PrivacyNative.RequiredBridgeAbiVersion);
+        Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(PrivacyProtocolIdV1)));
         Assert.Equal(12, PrivacyProtocolsV1.All.Count);
         Assert.Equal(Expected, PrivacyProtocolsV1.All.Select(value => value.CanonicalLabel()));
         for (var index = 0; index < Expected.Length; index++)
         {
+            var protocol = PrivacyProtocolsV1.All[index];
+            var typedVariant = ProtocolRows[index][3];
+            Assert.Equal((uint)index, Convert.ToUInt32(protocol, CultureInfo.InvariantCulture));
             Assert.Equal(
-                PrivacyProtocolsV1.All[index],
+                protocol,
                 PrivacyProtocolsV1.ParseCanonicalLabel(Expected[index]));
+            Assert.Equal(typedVariant, protocol.CanonicalTypedVariantLabel());
+            Assert.Equal(
+                protocol,
+                PrivacyProtocolsV1.ParseCanonicalTypedVariantLabel(typedVariant));
         }
     }
 
@@ -53,6 +61,12 @@ public sealed class PrivacyNativeTests
         Assert.Equal(
             ProtocolRows.Select(row => row[2..5]),
             TypedEnvelopeRows.Select(row => row[1..4]));
+        Assert.Equal(
+            ProtocolRows.Select(row => row[3]),
+            PrivacyProtocolsV1.All.Select(value => value.CanonicalTypedVariantLabel()));
+        Assert.Equal(
+            ProtocolRows.Select(row => row[4]),
+            PrivacyProtocolsV1.All.Select(value => value.CanonicalTypedVariantLabel()));
         Assert.Equal(12, TypedEnvelopeRows.Count);
         foreach (var row in TypedEnvelopeRows)
         {
@@ -81,6 +95,40 @@ public sealed class PrivacyNativeTests
     {
         Assert.Throws<ArgumentException>(
             () => PrivacyProtocolsV1.ParseCanonicalLabel(rejected));
+    }
+
+    [Theory]
+    [InlineData("JindoLatticePcsZkV0")]
+    [InlineData("SisHintsAnoncredPqV0")]
+    [InlineData("SisWithHints")]
+    [InlineData("ZkAmsRecursiveAdmissionV0")]
+    [InlineData("VegaExistingCredentialZk")]
+    [InlineData("IrohaZkAmsV1 ")]
+    [InlineData("irohaZkAmsV1")]
+    [InlineData("")]
+    [InlineData("UnknownPrivacyProtocolV1")]
+    public void LegacyAndNonCanonicalTypedVariantsAreRejected(string rejected)
+    {
+        Assert.Throws<ArgumentException>(
+            () => PrivacyProtocolsV1.ParseCanonicalTypedVariantLabel(rejected));
+    }
+
+    [Fact]
+    public void NullLabelsAndUnknownUnsignedTagsAreRejected()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => PrivacyProtocolsV1.ParseCanonicalLabel(null!));
+        Assert.Throws<ArgumentNullException>(
+            () => PrivacyProtocolsV1.ParseCanonicalTypedVariantLabel(null!));
+
+        foreach (var tag in new[] { 12U, uint.MaxValue })
+        {
+            var protocol = (PrivacyProtocolIdV1)tag;
+            Assert.False(Enum.IsDefined(protocol));
+            Assert.Throws<ArgumentOutOfRangeException>(() => protocol.CanonicalLabel());
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => protocol.CanonicalTypedVariantLabel());
+        }
     }
 
     [Fact]
@@ -275,15 +323,50 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
-    public void RetiredGenericProofSurfaceIsAbsent()
+    public void RetiredGenericProofAndCapabilitySurfacesAreAbsent()
     {
-        var names = typeof(PrivacyNative)
+        var privacyType = typeof(PrivacyNative);
+        var names = privacyType
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Select(method => method.Name)
             .ToArray();
         Assert.DoesNotContain(names, name => name.Contains("ProofRequest", StringComparison.Ordinal));
         Assert.DoesNotContain(names, name => name.Contains("BuildProof", StringComparison.Ordinal));
         Assert.DoesNotContain(names, name => name.Contains("VerifyProof", StringComparison.Ordinal));
+        Assert.DoesNotContain("CapabilitiesV1", names);
+        Assert.DoesNotContain("ValidateCapabilitiesV1", names);
+        Assert.DoesNotContain("GetPrivacyCapabilities", names);
+
+        var publicFieldNames = privacyType
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Select(field => field.Name)
+            .ToArray();
+        foreach (var retiredField in new[]
+                 {
+                     "FfiVersionV1",
+                     "ProductionGateVersion",
+                     "StatusError",
+                     "ErrorUnsupportedAlgorithm",
+                     "ErrorProductionDisabled",
+                     "PrivacyNativeArchiveMaxBytes",
+                 })
+        {
+            Assert.DoesNotContain(retiredField, publicFieldNames);
+        }
+
+        var assembly = privacyType.Assembly;
+        foreach (var retiredType in new[]
+                 {
+                     "PrivacyCapabilitiesArchive",
+                     "PrivacyProofResultArchive",
+                     "PrivacyProofRequestArchive",
+                     "PrivacyCapabilities",
+                     "PrivacyProductionGate",
+                     "PrivacyCapabilityValidationStatusV1",
+                 })
+        {
+            Assert.Null(assembly.GetType($"Hyperledger.Iroha.Privacy.{retiredType}"));
+        }
     }
 
     private static IReadOnlyList<string[]> Rows(string kind)

@@ -15,7 +15,8 @@ use clap::Parser;
 
 use super::api::{
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerServerErrorV1, serve_runtime_provider_broker_v1,
+    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
+    serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_fallible_readiness_v1,
     serve_runtime_provider_broker_with_lifecycle_v1,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -123,6 +124,33 @@ impl RuntimeProviderBrokerDeploymentV1 {
         R: FnOnce(),
     {
         serve_runtime_provider_broker_with_lifecycle_v1(
+            &self.bindings,
+            self.backends,
+            lifecycle,
+            on_ready,
+        )
+        .map_err(RuntimeProviderBrokerLauncherErrorV1::Server)
+    }
+
+    /// Qualify every backend and serve with a fallible readiness publication.
+    ///
+    /// The broker remains in its starting state until `on_ready` returns
+    /// successfully. A callback failure requests shutdown, removes the bound
+    /// endpoint before the accept loop, and returns a payload-free server error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same fail-closed categories as [`Self::serve_with_lifecycle`]
+    /// plus [`RuntimeProviderBrokerServerErrorV1::ReadinessUnavailable`].
+    pub fn serve_with_fallible_readiness<R>(
+        self,
+        lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+        on_ready: R,
+    ) -> Result<(), RuntimeProviderBrokerLauncherErrorV1>
+    where
+        R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
+    {
+        serve_runtime_provider_broker_with_fallible_readiness_v1(
             &self.bindings,
             self.backends,
             lifecycle,
@@ -297,6 +325,53 @@ impl RuntimeProviderBrokerExecutableV1 {
         install_runtime_provider_broker_shutdown_signals_v1(Arc::clone(&self.lifecycle))?;
         self.serve(on_ready)
     }
+
+    /// Serve under the checked-in Linux `Type=notify` systemd contract.
+    ///
+    /// This is the credential-free process entry expected by
+    /// `iroha-runtime-provider-broker-v1.service`. It resolves the
+    /// systemd-provided `NOTIFY_SOCKET` before provider qualification, installs
+    /// SIGINT/SIGTERM handling, and publishes the exact `READY=1` datagram only
+    /// from the broker's post-qualification, post-bind readiness callback.
+    /// `NOTIFY_SOCKET` is supervisor transport metadata, not a provider or
+    /// credential selector.
+    ///
+    /// A missing, malformed, unreachable, or disappearing notification socket
+    /// fails closed. In particular, a send failure unwinds the freshly bound
+    /// broker endpoint before a client can be accepted and is converted back to
+    /// a payload-free error; transport-specific diagnostics remain inside the
+    /// notifier boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeProviderBrokerExecutableErrorV1::UnsupportedPlatform`]
+    /// outside Linux,
+    /// [`RuntimeProviderBrokerExecutableErrorV1::SystemdNotifyUnavailable`]
+    /// when the supervisor notification boundary cannot be resolved or used,
+    /// or preserves the ordinary signal and fail-closed serving categories.
+    pub fn serve_until_shutdown_signal_with_systemd_notify(
+        self,
+    ) -> Result<(), RuntimeProviderBrokerExecutableErrorV1> {
+        #[cfg(target_os = "linux")]
+        {
+            let notifier = RuntimeProviderBrokerSystemdNotifierV1::from_process_environment()?;
+            install_runtime_provider_broker_shutdown_signals_v1(Arc::clone(&self.lifecycle))?;
+            match self
+                .deployment
+                .serve_with_fallible_readiness(self.lifecycle, move || notifier.publish_ready())
+            {
+                Err(RuntimeProviderBrokerLauncherErrorV1::Server(
+                    RuntimeProviderBrokerServerErrorV1::ReadinessUnavailable,
+                )) => Err(RuntimeProviderBrokerExecutableErrorV1::SystemdNotifyUnavailable),
+                result => result.map_err(RuntimeProviderBrokerExecutableErrorV1::Launcher),
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = self;
+            Err(RuntimeProviderBrokerExecutableErrorV1::UnsupportedPlatform)
+        }
+    }
 }
 
 impl fmt::Debug for RuntimeProviderBrokerExecutableV1 {
@@ -328,6 +403,8 @@ pub enum RuntimeProviderBrokerExecutableErrorV1 {
     Launcher(RuntimeProviderBrokerLauncherErrorV1),
     /// SIGINT/SIGTERM handling could not be installed before serving.
     SignalUnavailable,
+    /// The Linux systemd readiness notification boundary was unavailable.
+    SystemdNotifyUnavailable,
 }
 
 impl fmt::Display for RuntimeProviderBrokerExecutableErrorV1 {
@@ -351,6 +428,8 @@ impl fmt::Display for RuntimeProviderBrokerExecutableErrorV1 {
             Self::Launcher(error) => fmt::Display::fmt(error, formatter),
             Self::SignalUnavailable => formatter
                 .write_str("runtime-provider broker shutdown signal listener is unavailable"),
+            Self::SystemdNotifyUnavailable => formatter
+                .write_str("runtime-provider broker systemd notification boundary is unavailable"),
         }
     }
 }
@@ -365,7 +444,8 @@ impl std::error::Error for RuntimeProviderBrokerExecutableErrorV1 {
             | Self::UntrustedCatalogPath
             | Self::CatalogUnavailable
             | Self::CatalogChanged
-            | Self::SignalUnavailable => None,
+            | Self::SignalUnavailable
+            | Self::SystemdNotifyUnavailable => None,
         }
     }
 }
@@ -568,6 +648,66 @@ fn install_runtime_provider_broker_shutdown_signals_v1(
     _lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
 ) -> Result<(), RuntimeProviderBrokerExecutableErrorV1> {
     Err(RuntimeProviderBrokerExecutableErrorV1::UnsupportedPlatform)
+}
+
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
+const SYSTEMD_READY_MESSAGE_V1: &[u8] = b"READY=1";
+
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
+struct RuntimeProviderBrokerSystemdNotifierV1 {
+    socket: std::os::unix::net::UnixDatagram,
+}
+
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
+impl RuntimeProviderBrokerSystemdNotifierV1 {
+    #[cfg(target_os = "linux")]
+    fn from_process_environment() -> Result<Self, RuntimeProviderBrokerExecutableErrorV1> {
+        let notify_socket = std::env::var_os("NOTIFY_SOCKET")
+            .ok_or(RuntimeProviderBrokerExecutableErrorV1::SystemdNotifyUnavailable)?;
+        Self::try_from_notify_socket(notify_socket.as_os_str())
+            .map_err(|()| RuntimeProviderBrokerExecutableErrorV1::SystemdNotifyUnavailable)
+    }
+
+    fn try_from_notify_socket(notify_socket: &std::ffi::OsStr) -> Result<Self, ()> {
+        use std::os::unix::{ffi::OsStrExt as _, net::UnixDatagram};
+
+        let raw = notify_socket.as_bytes();
+        if raw.is_empty() {
+            return Err(());
+        }
+        let socket = UnixDatagram::unbound().map_err(|_| ())?;
+        socket
+            .set_write_timeout(Some(std::time::Duration::from_secs(1)))
+            .map_err(|_| ())?;
+        if raw[0] == b'@' {
+            #[cfg(target_os = "linux")]
+            {
+                use std::{os::linux::net::SocketAddrExt as _, os::unix::net::SocketAddr};
+
+                if raw.len() == 1 {
+                    return Err(());
+                }
+                let address = SocketAddr::from_abstract_name(&raw[1..]).map_err(|_| ())?;
+                socket.connect_addr(&address).map_err(|_| ())?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            return Err(());
+        } else {
+            let path = Path::new(notify_socket);
+            if !path.is_absolute() {
+                return Err(());
+            }
+            socket.connect(path).map_err(|_| ())?;
+        }
+        Ok(Self { socket })
+    }
+
+    fn publish_ready(self) -> Result<(), RuntimeProviderBrokerReadinessErrorV1> {
+        match self.socket.send(SYSTEMD_READY_MESSAGE_V1) {
+            Ok(sent) if sent == SYSTEMD_READY_MESSAGE_V1.len() => Ok(()),
+            Ok(_) | Err(_) => Err(RuntimeProviderBrokerReadinessErrorV1),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -889,10 +1029,76 @@ mod tests {
             RuntimeProviderBrokerExecutableErrorV1::CatalogUnavailable,
             RuntimeProviderBrokerExecutableErrorV1::CatalogChanged,
             RuntimeProviderBrokerExecutableErrorV1::SignalUnavailable,
+            RuntimeProviderBrokerExecutableErrorV1::SystemdNotifyUnavailable,
         ] {
             assert!(!error.to_string().contains('/'));
             assert!(std::error::Error::source(&error).is_none());
         }
+
+        let readiness = RuntimeProviderBrokerReadinessErrorV1;
+        assert_eq!(
+            readiness.to_string(),
+            "runtime-provider broker readiness publication failed"
+        );
+        assert!(std::error::Error::source(&readiness).is_none());
+        let server = RuntimeProviderBrokerServerErrorV1::ReadinessUnavailable;
+        assert_eq!(
+            server.to_string(),
+            "runtime-provider broker readiness publication is unavailable"
+        );
+        assert!(std::error::Error::source(&server).is_none());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn systemd_notifier_rejects_noncanonical_socket_addresses() {
+        for address in ["", "relative.sock", "@"] {
+            assert!(
+                RuntimeProviderBrokerSystemdNotifierV1::try_from_notify_socket(
+                    std::ffi::OsStr::new(address),
+                )
+                .is_err(),
+                "invalid NOTIFY_SOCKET address must fail: {address:?}"
+            );
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn systemd_notifier_publishes_only_exact_ready_datagram() {
+        use std::os::unix::net::UnixDatagram;
+
+        let directory = tempfile::tempdir().expect("systemd notifier socket directory");
+        let path = directory.path().join("notify.sock");
+        let receiver = UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
+        receiver
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .expect("bound fake systemd receive timeout");
+        let notifier =
+            RuntimeProviderBrokerSystemdNotifierV1::try_from_notify_socket(path.as_os_str())
+                .expect("connect systemd notifier");
+
+        notifier.publish_ready().expect("publish READY=1");
+        let mut received = [0_u8; 32];
+        let received_len = receiver.recv(&mut received).expect("receive READY=1");
+        assert_eq!(&received[..received_len], SYSTEMD_READY_MESSAGE_V1);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn systemd_notifier_rejects_send_after_supervisor_disappears() {
+        use std::os::unix::net::UnixDatagram;
+
+        let directory = tempfile::tempdir().expect("systemd notifier socket directory");
+        let path = directory.path().join("notify.sock");
+        let receiver = UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
+        let notifier =
+            RuntimeProviderBrokerSystemdNotifierV1::try_from_notify_socket(path.as_os_str())
+                .expect("connect systemd notifier");
+        drop(receiver);
+        fs::remove_file(&path).expect("remove stopped systemd notification socket");
+
+        assert!(notifier.publish_ready().is_err());
     }
 
     #[test]

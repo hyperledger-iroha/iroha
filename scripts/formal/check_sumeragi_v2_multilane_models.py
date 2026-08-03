@@ -17,6 +17,22 @@ import sys
 from pathlib import Path
 from typing import Any
 
+FORMAL_CHECKER_DIR = Path(__file__).resolve().parent
+if str(FORMAL_CHECKER_DIR) not in sys.path:
+    sys.path.insert(0, str(FORMAL_CHECKER_DIR))
+
+from sumeragi_v2_multilane_autonomous_terminal_contract import (
+    AUTONOMOUS_TERMINAL_FORBIDDEN_SOURCE_CHECKS,
+    AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS,
+    AUTONOMOUS_TERMINAL_RAW_TEST_CHECKS,
+    AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS,
+    AUTONOMOUS_TERMINAL_TLA_RELATIVE,
+    AUTONOMOUS_TERMINAL_TEST_BINDINGS,
+    KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
+    validate_autonomous_terminal_recovery_contract,
+)
+from sumeragi_v2_multilane_cli import build_parser, report_validation
+
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 FORMAL_RELATIVE = Path("formal/sumeragi_v2")
@@ -109,6 +125,10 @@ EXPECTED_CLOSURE_INVARIANTS = {
         "MLHistoricalRecoveryContextExact",
         "MLHistoricalQueueGateOrder",
         "MLHistoricalAllGroupsPreflight",
+        "MLLocalProducerRecoveryRequiresQueueOwner",
+        "MLTerminalOutcomeJoinAuthenticated",
+        "MLCanonicalTerminalBatchAtomic",
+        "MLTerminalStartupSweepOrder",
         "MLStageEvidenceMonotonic",
     ),
     "SumeragiV2QueuePlanAdmissionRegistry": (
@@ -173,6 +193,85 @@ DIFFERENTIAL_RELEASE = "differential_release"
 RELEASE_INVARIANT_CLASSIFICATIONS = frozenset(
     (STATIC_RELEASE, DIFFERENTIAL_RELEASE)
 )
+DIAGNOSTIC_STABLE_GENERATION_STATE_RELATIVE = "crates/iroha_core/src/state.rs"
+DIAGNOSTIC_STABLE_GENERATION_HELPER_RELATIVE = (
+    "crates/iroha_core/src/state/diagnostic_state_generation.rs"
+)
+DIAGNOSTIC_STABLE_GENERATION_ATTEMPT_BOUND = (
+    "const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 4;"
+)
+DIAGNOSTIC_STABLE_GENERATION_HELPER_BINDING = (
+    DIAGNOSTIC_STABLE_GENERATION_HELPER_RELATIVE,
+    "method",
+    "State::derive_diagnostics_at_stable_state_generation",
+    (
+        "for _ in 0..DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS",
+        "let generation_before = self.state_view_generation();",
+        "if generation_before % 2 != 0",
+        "let result = derive();",
+        "let generation_after = self.state_view_generation();",
+        "is_stable_state_view_generation(generation_before, generation_after)",
+        "return result;",
+        "Err(generation_drift_error())",
+    ),
+)
+DIAGNOSTIC_STABLE_GENERATION_CONSUMER_BINDINGS = (
+    (
+        "SumeragiV2NativeApplicationEvidence",
+        DIAGNOSTIC_STABLE_GENERATION_STATE_RELATIVE,
+        "method",
+        "State::native_amx_participant_applications_diagnostics",
+        (
+            "derive_diagnostics_at_stable_state_generation",
+            "native_amx_participant_applications_diagnostics_once",
+            "MergeLedgerCommitError::ExecutionMarkerConflict",
+            "State generation changed repeatedly during bounded Native AMX participant diagnostics",
+        ),
+        (
+            "self.derive_diagnostics_at_stable_state_generation(",
+            "|| self.native_amx_participant_applications_diagnostics_once()",
+            "MergeLedgerCommitError::ExecutionMarkerConflict(",
+        ),
+    ),
+    (
+        "SumeragiV2AutonomousReservationCarrier",
+        DIAGNOSTIC_STABLE_GENERATION_STATE_RELATIVE,
+        "method",
+        "State::autonomous_lane_execution_diagnostics_inner",
+        (
+            "derive_diagnostics_at_stable_state_generation",
+            "autonomous_lane_execution_diagnostics_once",
+            "eyre!",
+            "State generation changed repeatedly during bounded autonomous lane execution diagnostics",
+        ),
+        (
+            "self.derive_diagnostics_at_stable_state_generation(",
+            "|| self.autonomous_lane_execution_diagnostics_once(queue)",
+            "eyre!(",
+        ),
+    ),
+)
+DIAGNOSTIC_STABLE_GENERATION_TEST_BINDINGS = (
+    (
+        "diagnostic_projection_retries_after_state_generation_change",
+        (
+            "derive_diagnostics_at_stable_state_generation",
+            "if attempt == 1",
+            "begin_state_view_write",
+            "observed, 2",
+            "attempts.get(), 2",
+        ),
+    ),
+    (
+        "diagnostic_projection_fails_closed_after_bounded_generation_drift",
+        (
+            "derive_diagnostics_at_stable_state_generation",
+            "begin_state_view_write",
+            "Err(\"diagnostic State generation did not stabilize\")",
+            "DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS",
+        ),
+    ),
+)
 NATIVE_SOURCE_CLAIM_MUTATION_CONFIGS = (
     "multilane_native_source_claim_equivocation_bug.cfg",
     "multilane_native_source_claim_source_id_drift_bug.cfg",
@@ -195,7 +294,7 @@ NATIVE_SOURCE_CLAIM_MUTATION_CONFIGS = (
     "multilane_native_source_claim_participant_lane_incarnation_drift_bug.cfg",
     "multilane_native_source_claim_participant_membership_drift_bug.cfg",
 )
-REVIEWED_MULTILANE_MUTATION_CONFIG_COUNT = 99
+REVIEWED_MULTILANE_MUTATION_CONFIG_COUNT = 106
 EXPECTED_CLOSURE_MUTATIONS = {
     "ML-MUT-NAT-01": (
         TLA_COUNTEREXAMPLE,
@@ -353,6 +452,37 @@ EXPECTED_CLOSURE_MUTATIONS = {
             "multilane_autonomous_inflated_recovery_wire_length_bug.cfg",
         ),
     ),
+    "ML-MUT-AUT-12": (
+        TLA_COUNTEREXAMPLE,
+        "MLTerminalOutcomeJoinAuthenticated",
+        (
+            "multilane_autonomous_pending_only_canonical_terminal_bug.cfg",
+            "multilane_autonomous_release_without_finalization_authority_bug.cfg",
+            "multilane_autonomous_complete_without_queue_evidence_bug.cfg",
+        ),
+    ),
+    "ML-MUT-AUT-13": (
+        TLA_COUNTEREXAMPLE,
+        "MLCanonicalTerminalBatchAtomic",
+        (
+            "multilane_autonomous_partial_terminal_unit_sweep_bug.cfg",
+        ),
+    ),
+    "ML-MUT-AUT-14": (
+        TLA_COUNTEREXAMPLE,
+        "MLTerminalStartupSweepOrder",
+        (
+            "multilane_autonomous_owned_group_mutation_before_planner_bug.cfg",
+            "multilane_autonomous_open_queue_before_deferred_carrier_apply_bug.cfg",
+        ),
+    ),
+    "ML-MUT-AUT-15": (
+        TLA_COUNTEREXAMPLE,
+        "MLLocalProducerRecoveryRequiresQueueOwner",
+        (
+            "multilane_autonomous_producer_recovery_without_queue_owner_bug.cfg",
+        ),
+    ),
     "ML-MUT-LIFE-01": (
         TLA_COUNTEREXAMPLE,
         "MLActivationAfterAtomicCreate",
@@ -466,9 +596,6 @@ FORBIDDEN_PRODUCTION_TOKENS = {
     ),
 }
 NATIVE_PREPUBLICATION_MODULE = "SumeragiV2NativeApplicationEvidence"
-KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE = (
-    "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
-)
 NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_BINDINGS = (
     (
         "crates/iroha_core/src/block.rs",
@@ -624,7 +751,10 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "plan.application_block_hash",
             "plan.manifest_leaf_count",
             "mode.permits_retention_cleanup()",
+            "preflight_native_amx_participant_application_plan_under_publication_guard",
             "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+            "read_back_native_amx_plan_manifests_under_publication_guard",
+            "manifest_readback.authenticates",
             "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
             "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
             "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
@@ -679,13 +809,18 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         "fn",
         "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
         (
+            "validate_native_amx_participant_application_receipt_artifact",
             "manifest_artifact_hash",
             "finality_artifact_hash",
             "native_amx_participant_receipt_matches_manifest_leaf",
             "preflight.incoming",
+            "ensure_prune_recovery_not_required",
             "get_durable_block_hash",
             "require_active_lane_artifact",
             "native_amx_evidence_namespace_for_entry",
+            "preflight.current",
+            "validate_native_amx_prepublication_transition_locked",
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE",
             "permit_retention_cleanup",
             "current != preflight.current",
             "validate_native_amx_prepublication_transition_locked",
@@ -875,7 +1010,8 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "State::native_amx_participant_frontier_markers",
             "token.authenticates_state_frontiers",
             "apply_without_execution_with_verified_v2_finality",
-            "certified_merge_queue_reservation_hashes(state_block.staged_merge_entry())",
+            "let staged_merge_queue_reservation_hashes = certified_merge_queue_reservation_hashes(",
+            "state_block.staged_merge_entry(),",
             "!staged_merge_queue_reservation_hashes.contains(transaction_hash)",
             "pending_autoscale_retirement_binding",
             "Box<dyn StateBlockCommitAuthorization>",
@@ -2326,7 +2462,7 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   "$AUTONOMOUS_MODULE" \\
   multilane_autonomous_reservation_carrier_fixed.cfg \\
   10 \\
-  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierCommitSurfaceExact, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLRecoveredCarrierBodyAuthenticated, MLRecoveredCarrierLengthAuthenticated, MLHistoricalRecoveryContextExact, MLHistoricalQueueGateOrder, MLHistoricalAllGroupsPreflight, MLStageEvidenceMonotonic\"""",
+  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierCommitSurfaceExact, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLRecoveredCarrierBodyAuthenticated, MLRecoveredCarrierLengthAuthenticated, MLHistoricalRecoveryContextExact, MLHistoricalQueueGateOrder, MLHistoricalAllGroupsPreflight, MLLocalProducerRecoveryRequiresQueueOwner, MLTerminalOutcomeJoinAuthenticated, MLCanonicalTerminalBatchAtomic, MLTerminalStartupSweepOrder, MLStageEvidenceMonotonic\"""",
         """run_positive \\
   queue-plan-admission-registry \\
   "$QUEUE_PLAN_ADMISSION_MODULE" \\
@@ -2401,6 +2537,13 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_autonomous_historical_context_drift_bug.cfg",
         "multilane_autonomous_open_queue_before_recovery_install_bug.cfg",
         "multilane_autonomous_partial_recovery_group_preflight_bug.cfg",
+        "multilane_autonomous_pending_only_canonical_terminal_bug.cfg",
+        "multilane_autonomous_release_without_finalization_authority_bug.cfg",
+        "multilane_autonomous_complete_without_queue_evidence_bug.cfg",
+        "multilane_autonomous_partial_terminal_unit_sweep_bug.cfg",
+        "multilane_autonomous_owned_group_mutation_before_planner_bug.cfg",
+        "multilane_autonomous_open_queue_before_deferred_carrier_apply_bug.cfg",
+        "multilane_autonomous_producer_recovery_without_queue_owner_bug.cfg",
         "multilane_autonomous_volatile_stage_diagnostics_bug.cfg",
         "multilane_queue_plan_split_route_public_acceptance_bug.cfg",
         "multilane_queue_plan_execution_before_global_cas_bug.cfg",
@@ -2507,6 +2650,8 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
             "safety_stake",
             "chain_epoch",
             "liveness",
+            "revision4_safety",
+            "revision4_liveness",
             "effective_lock_acquisition",
             "resume_locked_commit_witness",
             "multilane_autoscale_lifecycle_fixed",
@@ -2524,7 +2669,7 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
         if actual_allowed_configs != expected_allowed_configs:
             errors.append(
                 f"{tlc_runner}: default TLC matrix must contain the exact "
-                "thirteen reviewed positive/search configurations"
+                "fifteen reviewed positive/search configurations"
             )
         kura_tlc_dispatch = """      kura_replica_retention_fixed)
         "${common[@]}" SumeragiV2KuraReplicaRetention.tla
@@ -2602,6 +2747,11 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         TLC_MUTATION_RUNNER_RELATIVE,
         *FORMAL_WORKFLOW_RELATIVES,
         Path("scripts/formal/check_sumeragi_v2_multilane_models.py"),
+        Path("scripts/formal/sumeragi_v2_multilane_cli.py"),
+        Path(
+            "scripts/formal/"
+            "sumeragi_v2_multilane_autonomous_terminal_contract.py"
+        ),
         Path("scripts/formal/sumeragi_v2_multilane_queue_plan_contract.py"),
         Path(
             "scripts/formal/"
@@ -3266,6 +3416,140 @@ def _validate_native_participant_application_classifier_contract(
             cursor = position
 
 
+def _validate_stable_generation_diagnostics_contract(
+    root: Path, models: Any, errors: list[str]
+) -> None:
+    """Bind both diagnostic projections to one bounded stable-State cut."""
+
+    if not isinstance(models, list):
+        return
+    models_by_module = {
+        model.get("module"): model
+        for model in models
+        if isinstance(model, dict) and _nonempty_string(model.get("module"))
+    }
+    helper_relative, helper_kind, helper_symbol, helper_tokens = (
+        DIAGNOSTIC_STABLE_GENERATION_HELPER_BINDING
+    )
+    for module in (
+        "SumeragiV2NativeApplicationEvidence",
+        "SumeragiV2AutonomousReservationCarrier",
+    ):
+        model = models_by_module.get(module)
+        bindings = model.get("production_symbols") if isinstance(model, dict) else None
+        matches = [
+            binding
+            for binding in bindings or ()
+            if isinstance(binding, dict)
+            and binding.get("path") == helper_relative
+            and binding.get("kind") == helper_kind
+            and binding.get("symbol") == helper_symbol
+        ]
+        if len(matches) != 1 or tuple(matches[0].get("required_tokens", ())) != helper_tokens:
+            errors.append(
+                f"{module}: stable-generation diagnostics helper binding must "
+                "match the exact reviewed bounded retry/fail-closed contract"
+            )
+
+    helper_item = _rust_binding_item(
+        root,
+        helper_relative,
+        helper_kind,
+        helper_symbol,
+        "stable-generation diagnostics helper production binding",
+        errors,
+    )
+    helper_path = root / helper_relative
+    state_path = root / DIAGNOSTIC_STABLE_GENERATION_STATE_RELATIVE
+    state_source = ""
+    if state_path.is_file() and not state_path.is_symlink():
+        state_source = state_path.read_text(encoding="utf-8")
+        bound_count = state_source.count(DIAGNOSTIC_STABLE_GENERATION_ATTEMPT_BOUND)
+        if bound_count != 1:
+            errors.append(
+                f"{state_path}: stable-generation diagnostics attempt bound must "
+                f"equal one exact four-attempt declaration, found {bound_count}"
+            )
+    if helper_item is not None:
+        cursor = -1
+        for token in helper_tokens:
+            count = helper_item.count(token)
+            position = helper_item.find(token, cursor + 1)
+            if count != 1 or position < 0:
+                errors.append(
+                    f"{helper_path}: stable-generation diagnostics helper token "
+                    f"must occur exactly once and in order: {token!r}; found {count}"
+                )
+                break
+            cursor = position
+
+    for (
+        module,
+        relative,
+        kind,
+        symbol,
+        required_tokens,
+        ordered_tokens,
+    ) in DIAGNOSTIC_STABLE_GENERATION_CONSUMER_BINDINGS:
+        model = models_by_module.get(module)
+        bindings = model.get("production_symbols") if isinstance(model, dict) else None
+        matches = [
+            binding
+            for binding in bindings or ()
+            if isinstance(binding, dict)
+            and binding.get("path") == relative
+            and binding.get("kind") == kind
+            and binding.get("symbol") == symbol
+        ]
+        if (
+            len(matches) != 1
+            or tuple(matches[0].get("required_tokens", ())) != required_tokens
+        ):
+            errors.append(
+                f"{module}: diagnostic consumer {symbol} must match the exact "
+                "reviewed stable-generation/fail-closed binding"
+            )
+        item = _rust_binding_item(
+            root,
+            relative,
+            kind,
+            symbol,
+            "stable-generation diagnostics consumer production binding",
+            errors,
+        )
+        if item is None:
+            continue
+        cursor = -1
+        for token in ordered_tokens:
+            count = item.count(token)
+            position = item.find(token, cursor + 1)
+            if count != 1 or position < 0:
+                errors.append(
+                    f"{root / relative}: diagnostic consumer {symbol} token "
+                    f"must occur exactly once and in order: {token!r}; found {count}"
+                )
+                break
+            cursor = position
+
+    for symbol, required_tokens in DIAGNOSTIC_STABLE_GENERATION_TEST_BINDINGS:
+        item = _rust_binding_item(
+            root,
+            DIAGNOSTIC_STABLE_GENERATION_STATE_RELATIVE,
+            "fn",
+            symbol,
+            "stable-generation diagnostics static negative-control test",
+            errors,
+        )
+        if item is None:
+            continue
+        for token in required_tokens:
+            if token not in item:
+                errors.append(
+                    f"{state_path}: stable-generation diagnostics test {symbol} "
+                    f"is missing negative-control token {token!r}"
+                )
+
+
 def _validate_native_prepublication_contract(
     root: Path, models: Any, errors: list[str]
 ) -> None:
@@ -3402,6 +3686,8 @@ def _validate_native_prepublication_contract(
             "self.write_native_amx_participant_application_manifest_artifact_"
             "with_retention_policy_under_publication_guard( "
             "manifest, permit_cleanup, )?; }",
+            "let manifest_readback = self."
+            "read_back_native_amx_plan_manifests_under_publication_guard(plan)?;",
             "for (manifest, receipt) in &plan.artifacts { "
             "self.write_native_amx_participant_application_receipt_artifact_"
             "only_with_retention_policy_under_publication_guard( "
@@ -4477,7 +4763,7 @@ def _validate_inflight_layout_contract(
             "atomic WSV carrier application",
             "four-stage release",
             "twenty-two `_bug.cfg`",
-            "`composed_state_action_relation_no_trace_extraction`",
+            "`composed_state_action_relation_with_source_bound_trace_extraction`",
             "fixed-width composed state/action relation",
             "production trace-extraction theorem",
             "reverse terminal-owner projection",
@@ -4502,9 +4788,9 @@ def _validate_inflight_layout_contract(
             "READY authorization/signature/QC",
             "post-carrier",
             "four-stage",
-            "`composed_state_action_relation_no_trace_extraction`",
+            "`composed_state_action_relation_with_source_bound_trace_extraction`",
             "fixed-width composed transition relation is implemented",
-            "production trace extraction is not implemented",
+            "production trace-extraction certificate",
             "twenty-two exact TLC mutation witnesses",
         ):
             if token not in closure_source:
@@ -4662,6 +4948,10 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         ledger.get(KURA_RETENTION_CONTRACT_KEY),
         errors,
     )
+    validate_autonomous_terminal_recovery_contract(
+        root, models, errors, _rust_binding_item
+    )
+    _validate_stable_generation_diagnostics_contract(root, models, errors)
     _validate_native_participant_application_classifier_contract(
         root, models, errors
     )
@@ -4691,39 +4981,18 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--root",
-        type=Path,
-        default=DEFAULT_ROOT,
-        help="repository root (defaults to the checker-derived root)",
-    )
-    parser.add_argument(
-        "--print-source-manifest-sha256",
-        action="store_true",
-        help="print the current source-bound multilane gate manifest digest",
-    )
-    return parser
+    return build_parser(__doc__, DEFAULT_ROOT)
 
 
 def main() -> int:
     args = _parser().parse_args()
     errors = validate(args.root)
-    if errors:
-        for error in errors:
-            print(f"error: {error}", file=sys.stderr)
-        return 1
-    if args.print_source_manifest_sha256:
-        print(source_manifest_sha256(args.root))
-        return 0
-    print(
-        "Sumeragi v2 multilane models are structurally valid: five refinement "
-        "kernels (including authenticated Kura retention) and the composed "
-        "in-flight state/action relation are source-bound without a production "
-        "trace-extraction claim; no Kura "
-        "retention source check remains pending"
+    source_manifest = (
+        source_manifest_sha256(args.root)
+        if args.print_source_manifest_sha256 and not errors
+        else None
     )
-    return 0
+    return report_validation(errors, source_manifest)
 
 
 if __name__ == "__main__":

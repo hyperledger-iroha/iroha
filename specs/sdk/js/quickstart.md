@@ -735,7 +735,8 @@ workflow. The key steps are:
 
 1. Cache cargo and npm artifacts.
 2. Run `npm run build:native`.
-3. Execute `npm test` (or `node --test` for smoke jobs).
+3. Execute `npm test` (or `node ./scripts/run-tests.mjs` for smoke jobs after
+   the native artifact is built).
 
 ## Next Steps
 

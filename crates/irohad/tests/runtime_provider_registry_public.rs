@@ -9,7 +9,8 @@ use irohad::{
     RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
     RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
     RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
-    load_runtime_provider_broker_catalog_file_v1,
+    RuntimeProviderBrokerReadinessErrorV1, load_runtime_provider_broker_catalog_file_v1,
+    serve_runtime_provider_broker_with_fallible_readiness_v1,
 };
 
 struct DeploymentRegistry;
@@ -139,6 +140,14 @@ fn external_crate_can_name_standard_broker_executable_shell() {
     let assemble_file = RuntimeProviderBrokerExecutableV1::try_from_catalog_file;
     let serve = RuntimeProviderBrokerExecutableV1::serve::<fn()>;
     let serve_signalled = RuntimeProviderBrokerExecutableV1::serve_until_shutdown_signal::<fn()>;
+    let serve_fallible = RuntimeProviderBrokerDeploymentV1::serve_with_fallible_readiness::<
+        fn() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
+    >;
+    let serve_fallible_boundary = serve_runtime_provider_broker_with_fallible_readiness_v1::<
+        fn() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
+    >;
+    let serve_systemd =
+        RuntimeProviderBrokerExecutableV1::serve_until_shutdown_signal_with_systemd_notify;
     let catalog_path = RuntimeProviderBrokerExecutableArgsV1::catalog_path;
 
     let _ = (
@@ -147,6 +156,9 @@ fn external_crate_can_name_standard_broker_executable_shell() {
         assemble_file,
         serve,
         serve_signalled,
+        serve_fallible,
+        serve_fallible_boundary,
+        serve_systemd,
         catalog_path,
     );
 }

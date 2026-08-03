@@ -159,11 +159,13 @@ pub enum IrohaRuntimeProviderSlotV1 {
     StreamTokenGatewayAdmission = 54,
     /// Authenticated immutable moderation panel-notification receipt archive.
     ModerationPanelNotificationArchive = 55,
+    /// Native Bootle/Lantern issuer and opaque-client authentication registry.
+    BootleLanternIssuanceProviderRegistry = 56,
 }
 
 impl IrohaRuntimeProviderSlotV1 {
     /// Every first-release runtime-provider slot in wire-ID order.
-    pub const ALL: [Self; 55] = [
+    pub const ALL: [Self; 56] = [
         Self::ModerationQuarantineKeyWrapper,
         Self::PrivacyCyclePrfProvider,
         Self::PrivacyReleaseAnchor,
@@ -219,6 +221,7 @@ impl IrohaRuntimeProviderSlotV1 {
         Self::EvidenceViewerTransparencyPublisher,
         Self::StreamTokenGatewayAdmission,
         Self::ModerationPanelNotificationArchive,
+        Self::BootleLanternIssuanceProviderRegistry,
     ];
 
     /// Return the stable first-release broker protocol identifier for this role.
@@ -286,6 +289,7 @@ impl IrohaRuntimeProviderSlotV1 {
             53 => Some(Self::EvidenceViewerTransparencyPublisher),
             54 => Some(Self::StreamTokenGatewayAdmission),
             55 => Some(Self::ModerationPanelNotificationArchive),
+            56 => Some(Self::BootleLanternIssuanceProviderRegistry),
             _ => None,
         }
     }
@@ -323,6 +327,8 @@ pub struct IrohaRuntimeProviderBindingV1 {
     handle: String,
     revision: Option<u64>,
     policy_digest: Option<[u8; 32]>,
+    bootle_lantern_issuance_bindings:
+        Option<iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1>,
     stream_token_signer_public_key: Option<[u8; 32]>,
     stream_token_gateway_admission_qualification:
         Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>,
@@ -413,6 +419,7 @@ impl IrohaRuntimeProviderBindingV1 {
             handle,
             revision,
             policy_digest,
+            bootle_lantern_issuance_bindings: None,
             stream_token_signer_public_key: None,
             stream_token_gateway_admission_qualification: None,
             stream_token_gateway_admission_max_pending: None,
@@ -451,6 +458,18 @@ impl IrohaRuntimeProviderBindingV1 {
             governance_request_auth_public_key: None,
             governance_request_auth_max_body_bytes: None,
         })
+    }
+
+    fn try_new_bootle_lantern_issuance(
+        handle: impl Into<String>,
+        revision: u64,
+        policy_digest: [u8; 32],
+        bindings: iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let slot = IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry;
+        let mut projected = Self::try_new(slot, handle, Some(revision), Some(policy_digest))?;
+        projected.bootle_lantern_issuance_bindings = Some(bindings);
+        Ok(projected)
     }
 
     fn try_new_governance_dag_signer(
@@ -1156,6 +1175,14 @@ impl IrohaRuntimeProviderBindingV1 {
         self.policy_digest
     }
 
+    /// Return the complete public Bootle/Lantern issuer resolution inputs.
+    pub(crate) const fn bootle_lantern_issuance_bindings(
+        &self,
+    ) -> Option<iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1>
+    {
+        self.bootle_lantern_issuance_bindings
+    }
+
     /// Return the exact configured stream-token Ed25519 verification key.
     #[must_use]
     pub const fn stream_token_signer_public_key(&self) -> Option<[u8; 32]> {
@@ -1579,6 +1606,36 @@ impl IrohaRuntimeProviderBindingsV1 {
                 checkpoint_store_qualification,
             },
         )
+    }
+
+    /// Construct the exact one-slot catalog for a standalone Bootle/Lantern issuer broker.
+    ///
+    /// This is the only standalone constructor for slot 56. It deliberately
+    /// cannot attach another runtime role, so the broker server's exact-set
+    /// check rejects accidental co-location or a partially provisioned node
+    /// catalog.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-production handle, zero revision or policy digest, or
+    /// invalid issuer, policy, or authorization-lifetime bindings.
+    pub fn try_from_bootle_lantern_issuance_service(
+        chain_id: &iroha_data_model::ChainId,
+        handle: impl Into<String>,
+        revision: u64,
+        policy_digest: [u8; 32],
+        bindings: iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let binding = IrohaRuntimeProviderBindingV1::try_new_bootle_lantern_issuance(
+            handle,
+            revision,
+            policy_digest,
+            bindings,
+        )?;
+        Ok(Self {
+            chain_id: chain_id.to_string(),
+            bindings: vec![binding],
+        })
     }
 
     /// Project the exact public provider catalog requested by the standalone
@@ -2027,6 +2084,7 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     {
         return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
     }
+    qualify_bootle_lantern_issuance_dependency(bindings, &dependencies)?;
     qualify_fenced_privacy_dependencies(bindings, &dependencies)?;
     qualify_governance_dag_signer_dependency(bindings, &dependencies)?;
     qualify_governance_request_auth_dependencies(bindings, &dependencies)?;
@@ -2044,6 +2102,36 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     qualify_moderation_panel_notification_archive_dependency(bindings, &dependencies)?;
     qualify_evidence_viewer_transparency_publisher_dependency(bindings, &dependencies)?;
     Ok(dependencies)
+}
+
+fn qualify_bootle_lantern_issuance_dependency(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    use iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1 as ProviderError;
+
+    let slot = IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry;
+    let Some(expected) = bindings.iter().find(|binding| binding.slot() == slot) else {
+        return Ok(());
+    };
+    let provider = dependencies
+        .bootle_lantern_issuance_provider_registry
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    if provider.handle() != expected.handle() {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    let qualification = provider.qualification().map_err(|error| match error {
+        ProviderError::Unavailable => IrohaRuntimeProviderRegistryErrorV1::Unavailable,
+        ProviderError::StaleOrRevoked => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
+        ProviderError::RejectedBindings => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
+    })?;
+    if Some(qualification.revision) != expected.revision()
+        || Some(qualification.policy_digest) != expected.policy_digest()
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    Ok(())
 }
 
 fn map_soracloud_runtime_signer_qualification_error(
@@ -3238,7 +3326,78 @@ mod tests {
 
     use super::*;
     use iroha_config_base::{toml::TomlSource, util::Bytes};
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+
+    fn standalone_bootle_lantern_bindings()
+    -> iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1 {
+        iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
+            iroha_data_model::privacy::PrivacyIssuerIdV1::new([0x91; 32]),
+            iroha_data_model::privacy::PrivacyPolicyIdV1::new([0x92; 32]),
+            64,
+        )
+        .expect("valid standalone Bootle/Lantern bindings")
+    }
+
+    #[test]
+    fn standalone_bootle_lantern_catalog_is_exactly_one_qualified_slot() {
+        let chain_id = iroha_data_model::ChainId::from("taira");
+        let exact = standalone_bootle_lantern_bindings();
+        let catalog = IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
+            &chain_id,
+            "runtime://privacy/bootle-lantern/taira-primary",
+            7,
+            [0x93; 32],
+            exact,
+        )
+        .expect("construct exact standalone slot-56 catalog");
+
+        assert_eq!(catalog.chain_id(), "taira");
+        assert_eq!(catalog.len(), 1);
+        let binding = catalog.iter().next().expect("one exact slot");
+        assert_eq!(
+            binding.slot(),
+            IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry
+        );
+        assert_eq!(
+            binding.handle(),
+            "runtime://privacy/bootle-lantern/taira-primary"
+        );
+        assert_eq!(binding.revision(), Some(7));
+        assert_eq!(binding.policy_digest(), Some([0x93; 32]));
+        assert_eq!(binding.bootle_lantern_issuance_bindings(), Some(exact));
+    }
+
+    #[test]
+    fn standalone_bootle_lantern_catalog_rejects_unqualified_or_test_bindings() {
+        let chain_id = iroha_data_model::ChainId::from("taira");
+        let exact = standalone_bootle_lantern_bindings();
+        for (handle, revision, digest) in [
+            ("runtime://privacy/bootle-lantern/test", 7, [0x93; 32]),
+            (
+                "runtime://privacy/bootle-lantern/taira-primary",
+                0,
+                [0x93; 32],
+            ),
+            ("runtime://privacy/bootle-lantern/taira-primary", 7, [0; 32]),
+        ] {
+            assert!(
+                IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
+                    &chain_id, handle, revision, digest, exact,
+                )
+                .is_err(),
+                "must reject standalone binding {handle:?}/{revision}/{digest:?}"
+            );
+        }
+        assert!(
+            iroha_torii::privacy_issuance_api::
+                BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
+                    iroha_data_model::privacy::PrivacyIssuerIdV1::new([0; 32]),
+                    iroha_data_model::privacy::PrivacyPolicyIdV1::new([0x92; 32]),
+                    64,
+                )
+                .is_err()
+        );
+    }
 
     struct EmptyRegistry;
 
@@ -5135,10 +5294,24 @@ mod tests {
     fn default_runtime_config() -> Config {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../defaults/kagami/iroha3-dev/config.toml");
-        Config::from_toml_source(
-            TomlSource::from_file(path).expect("read checked-in default daemon config"),
-        )
-        .expect("resolve checked-in default daemon config")
+        let source = std::fs::read_to_string(path).expect("read checked-in default daemon config");
+        let mut table: toml::Table = toml::from_str(&source).expect("parse default daemon config");
+        let expected_hash = table
+            .get_mut("genesis")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|genesis| genesis.get_mut("expected_hash"))
+            .expect("default daemon genesis expected-hash placeholder");
+        assert_eq!(
+            expected_hash.as_str(),
+            Some("REPLACE_WITH_GENESIS_EXPECTED_HASH")
+        );
+        // This test-only value permits inspection of unrelated provider bindings without making
+        // the checked-in signing profile a runnable validator config.
+        *expected_hash = toml::Value::String(
+            Hash::new(b"runtime-provider non-runtime profile inspection").to_string(),
+        );
+        Config::from_toml_source(TomlSource::inline(table))
+            .expect("resolve checked-in default daemon config for inspection")
     }
 
     fn assert_canonical_config_catalog_roundtrip(
@@ -6754,307 +6927,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn provider_ingest_catalog_projects_independent_source_and_resolver_qualifications() {
-        let mut config = default_runtime_config();
-        configure_provider_ingest_runtime(&mut config);
-
-        let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
-            .expect("project provider-ingest provider bindings");
-        let source = bindings
-            .iter()
-            .find(|binding| {
-                binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource
-            })
-            .expect("source-pool binding");
-        assert_eq!(
-            source.handle(),
-            "network://sorafs/provider-ingest/source-primary"
-        );
-        assert_eq!(source.revision(), Some(5));
-        assert_eq!(source.policy_digest(), Some([0xB1; 32]));
-        assert_eq!(
-            source.provider_ingest_source_limits(),
-            Some(ProviderIngestSourceLimitsV1 {
-                operation_timeout_ms: 30_000,
-                max_content_bytes: config.torii.sorafs_storage.max_capacity_bytes.0,
-                max_source_providers: 1_024,
-                max_concurrent_streams: u32::try_from(
-                    config.torii.sorafs_storage.max_parallel_fetches
-                )
-                .expect("configured parallel-fetch bound fits u32"),
-            })
-        );
-
-        let resolver = bindings
-            .iter()
-            .find(|binding| {
-                binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver
-            })
-            .expect("signer-resolver binding");
-        assert_eq!(
-            resolver.handle(),
-            "hsm://sorafs/provider-ingest/resolver-primary"
-        );
-        assert_eq!(resolver.revision(), Some(6));
-        assert_eq!(resolver.policy_digest(), Some([0xB2; 32]));
-        assert_ne!(source.revision(), resolver.revision());
-        assert_ne!(source.policy_digest(), resolver.policy_digest());
-
-        let signer = bindings
-            .iter()
-            .find(|binding| {
-                binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner
-            })
-            .expect("leaf completion-signer binding");
-        assert_eq!(
-            signer.handle(),
-            "pkcs11://sorafs/provider-ingest/signer-primary"
-        );
-        assert_eq!(signer.revision(), Some(3));
-        assert_eq!(signer.policy_digest(), Some([0xA2; 32]));
-        assert_ne!(resolver.revision(), signer.revision());
-        assert_ne!(resolver.policy_digest(), signer.policy_digest());
-        assert_eq!(
-            resolver.provider_ingest_signer_binding(),
-            signer.provider_ingest_signer_binding(),
-            "resolver and leaf roles pin one exact algorithm/key/policy binding"
-        );
-        let detailed = signer
-            .provider_ingest_signer_binding()
-            .expect("exact completion-signer binding");
-        assert_eq!(detailed.qualification.adapter_revision, 3);
-        assert_eq!(
-            detailed.qualification.signer_policy.policy_digest,
-            [0xA2; 32]
-        );
-        assert_eq!(
-            signer.provider_ingest_max_signed_transaction_bytes(),
-            Some(1024 * 1024)
-        );
-        let checkpoint = bindings
-            .iter()
-            .find(|binding| {
-                binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore
-            })
-            .expect("checkpoint-store binding");
-        assert_eq!(
-            checkpoint.provider_ingest_checkpoint_max_bytes(),
-            Some(160 * 1024 * 1024)
-        );
-
-        let mut excessive_streams = config;
-        excessive_streams.torii.sorafs_storage.max_parallel_fetches =
-            usize::try_from(MAX_PROVIDER_INGEST_SOURCE_STREAMS_V1)
-                .expect("stream ceiling fits usize")
-                + 1;
-        assert!(matches!(
-            IrohaRuntimeProviderBindingsV1::try_from_config(&excessive_streams),
-            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource
-            ))
-        ));
-    }
-
-    #[test]
-    fn provider_ingest_catalog_accepts_enabled_default_outbox_capacity() {
-        let mut config = default_runtime_config();
-        configure_provider_ingest_runtime(&mut config);
-        let ingest = config
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_mut()
-            .expect("configured provider ingest");
-        ingest.outbox = iroha_config::parameters::actual::SorafsProviderIngestOutbox {
-            max_active_entries: provider_ingest_outbox_defaults::MAX_ACTIVE_ENTRIES,
-            max_terminal_entries: provider_ingest_outbox_defaults::MAX_TERMINAL_ENTRIES,
-            max_attempts: provider_ingest_outbox_defaults::MAX_ATTEMPTS,
-            checkpoint_max_bytes: provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES,
-            checkpoint_operation_timeout_ms:
-                provider_ingest_outbox_defaults::CHECKPOINT_OPERATION_TIMEOUT_MS,
-            source_lease_ttl_ms: provider_ingest_outbox_defaults::SOURCE_LEASE_TTL_MS,
-            retry_base_delay_ms: provider_ingest_outbox_defaults::RETRY_BASE_DELAY_MS,
-            retry_max_delay_ms: provider_ingest_outbox_defaults::RETRY_MAX_DELAY_MS,
-            terminal_retention_blocks: provider_ingest_outbox_defaults::TERMINAL_RETENTION_BLOCKS,
-            max_signed_transaction_bytes:
-                provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES,
-            max_status_page_size: provider_ingest_outbox_defaults::MAX_STATUS_PAGE_SIZE,
-        };
-
-        let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
-            .expect("enabled default provider-ingest outbox must project");
-        assert_eq!(
-            bindings
-                .iter()
-                .find(|binding| {
-                    binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore
-                })
-                .and_then(IrohaRuntimeProviderBindingV1::provider_ingest_checkpoint_max_bytes),
-            Some(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES.0)
-        );
-        assert_eq!(
-            bindings
-                .iter()
-                .find(|binding| {
-                    binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner
-                })
-                .and_then(
-                    IrohaRuntimeProviderBindingV1::provider_ingest_max_signed_transaction_bytes
-                ),
-            Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES.0)
-        );
-    }
-
-    #[test]
-    fn provider_ingest_catalog_rejects_broker_incompatible_outbox_limits() {
-        let mut exact = default_runtime_config();
-        configure_provider_ingest_runtime(&mut exact);
-        let exact_ingest = exact
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_mut()
-            .expect("configured provider ingest");
-        exact_ingest.max_source_jobs_per_tick = 1;
-        let exact_outbox = &mut exact_ingest.outbox;
-        exact_outbox.max_active_entries = 1;
-        exact_outbox.max_terminal_entries = 1;
-        exact_outbox.checkpoint_max_bytes =
-            Bytes(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT);
-        exact_outbox.max_signed_transaction_bytes =
-            Bytes(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT);
-        let exact_bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&exact)
-            .expect("stock broker ceilings must project");
-        assert_eq!(
-            exact_bindings
-                .iter()
-                .find(|binding| {
-                    binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore
-                })
-                .and_then(IrohaRuntimeProviderBindingV1::provider_ingest_checkpoint_max_bytes),
-            Some(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT)
-        );
-        assert_eq!(
-            exact_bindings
-                .iter()
-                .find(|binding| {
-                    binding.slot() == IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner
-                })
-                .and_then(
-                    IrohaRuntimeProviderBindingV1::provider_ingest_max_signed_transaction_bytes
-                ),
-            Some(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT)
-        );
-
-        let mut oversized_checkpoint = default_runtime_config();
-        configure_provider_ingest_runtime(&mut oversized_checkpoint);
-        oversized_checkpoint
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_mut()
-            .expect("configured provider ingest")
-            .outbox
-            .checkpoint_max_bytes =
-            Bytes(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT + 1);
-        assert_eq!(
-            IrohaRuntimeProviderBindingsV1::try_from_config(&oversized_checkpoint),
-            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore,
-            ))
-        );
-
-        let mut oversized_transaction = default_runtime_config();
-        configure_provider_ingest_runtime(&mut oversized_transaction);
-        oversized_transaction
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_mut()
-            .expect("configured provider ingest")
-            .outbox
-            .max_signed_transaction_bytes =
-            Bytes(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT + 1);
-        assert_eq!(
-            IrohaRuntimeProviderBindingsV1::try_from_config(&oversized_transaction),
-            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
-            ))
-        );
-
-        let mut legacy_128_mib_transaction = default_runtime_config();
-        configure_provider_ingest_runtime(&mut legacy_128_mib_transaction);
-        let legacy_ingest = legacy_128_mib_transaction
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_mut()
-            .expect("configured provider ingest");
-        legacy_ingest.max_source_jobs_per_tick = 1;
-        legacy_ingest.outbox.max_active_entries = 1;
-        legacy_ingest.outbox.max_terminal_entries = 1;
-        legacy_ingest.outbox.checkpoint_max_bytes =
-            Bytes(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT);
-        legacy_ingest.outbox.max_signed_transaction_bytes = Bytes(128 * 1024 * 1024);
-        assert_eq!(
-            IrohaRuntimeProviderBindingsV1::try_from_config(&legacy_128_mib_transaction),
-            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
-            )),
-            "the former 128 MiB transaction limit must not project under a 192 MiB checkpoint"
-        );
-
-        let mut below_envelope_reserve = default_runtime_config();
-        configure_provider_ingest_runtime(&mut below_envelope_reserve);
-        below_envelope_reserve
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_mut()
-            .expect("configured provider ingest")
-            .outbox
-            .max_signed_transaction_bytes =
-            Bytes(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN - 1);
-        assert_eq!(
-            IrohaRuntimeProviderBindingsV1::try_from_config(&below_envelope_reserve),
-            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
-            ))
-        );
-
-        let mut exact_minimum = default_runtime_config();
-        configure_provider_ingest_runtime(&mut exact_minimum);
-        exact_minimum
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_mut()
-            .expect("configured provider ingest")
-            .outbox
-            .max_signed_transaction_bytes =
-            Bytes(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN);
-        IrohaRuntimeProviderBindingsV1::try_from_config(&exact_minimum)
-            .expect("exact signed-transaction minimum must project");
-
-        let mut impossible_aggregate = default_runtime_config();
-        configure_provider_ingest_runtime(&mut impossible_aggregate);
-        impossible_aggregate
-            .torii
-            .sorafs_storage
-            .provider_ingest_runtime
-            .as_mut()
-            .expect("configured provider ingest")
-            .outbox
-            .max_active_entries = 128;
-        assert_eq!(
-            IrohaRuntimeProviderBindingsV1::try_from_config(&impossible_aggregate),
-            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore,
-            )),
-            "an aggregate outbox capacity above its checkpoint bound must fail projection"
-        );
-    }
+    include!("runtime_provider_registry/provider_ingest_binding_tests.rs");
 
     include!("runtime_provider_registry/registry_tail_tests.rs");
 }

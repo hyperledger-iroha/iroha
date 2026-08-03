@@ -81,4 +81,3 @@ fn view_zero_binds_semantic_parent_decision_across_reproposal_rounds() {
         Err(ReducerError::InvalidProposalJustification)
     );
 }
-

@@ -456,7 +456,7 @@ mod tests {
     }
 
     fn asset(name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(domain(), name.parse().expect("asset name"))
+        AssetDefinitionId::derive_from_components(domain(), name.parse().expect("asset name"))
     }
 
     fn name(value: &str) -> Name {

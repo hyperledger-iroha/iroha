@@ -1,5 +1,6 @@
-    // Pipeline recovery metadata and strict indexed-sidecar persistence primitives.
+// Pipeline recovery metadata and strict indexed-sidecar persistence primitives.
 
+impl Kura {
     /// Enqueue pipeline recovery metadata for asynchronous persistence.
     ///
     /// This avoids consensus-path I/O; the Kura writer thread flushes the queue.
@@ -4605,3 +4606,4 @@
             }
         }
     }
+}

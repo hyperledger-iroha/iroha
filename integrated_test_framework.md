@@ -28,7 +28,11 @@ Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests shou
 - Source: `defaults/genesis.json` which now groups instructions into a `transactions` array. Tests may append instructions with `NetworkBuilder::with_genesis_instruction` and start a new transaction via `.next_genesis_transaction()`. The resulting block is serialized to Norito `.nrt`.
 - Topology: Stored in the first transaction (`transactions[0].topology`) and includes all 7 peers (public key + address), so each peer knows the network from the start.
 - Accounts/Permissions: Prefer standardized accounts from `crates/iroha_test_samples` (`ALICE_ID`, `BOB_ID`, `SAMPLE_GENESIS_ACCOUNT_KEYPAIR`) with explicit grants for test scenarios, e.g. `CanManagePeers`, `CanManageRoles`, `CanMintAssetWithDefinition`.
-- Injection strategy: With the harness, genesis is typically provided to one peer (the “genesis submitter”); other peers catch up via block sync. With Compose, point all peers to the same genesis path.
+- Injection strategy: Every peer with empty storage must receive the same signed
+  genesis `.nrt` trust artifact and its exact bound manifest. Genesis is not
+  fetched from another peer. The harness writes the common artifacts into each
+  peer's startup configuration; Compose publishes them once and mounts the
+  resulting artifacts into every validator.
 
 **Networking and Ports:**
 
@@ -42,12 +46,17 @@ Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests shou
 **Harness flow:**
 
 1) Build network: `NetworkBuilder::new().with_peers(7)`; optionally `.with_pipeline_time(...)` and `.with_config_layer(...)` for overrides; choose IVM fuel via `IvmFuelConfig`.
-2) Start peers: `.start()` or `.start_blocking()`; writes config layers, sets `trusted_peers`, injects genesis for one peer, and waits for readiness.
+2) Start peers: `.start()` or `.start_blocking()`; writes config layers, sets
+   `trusted_peers`, provisions the same signed genesis trust artifact for every
+   empty peer, and waits for readiness.
 3) Readiness: `Network::ensure_blocks(height)` or `once_blocks_sync(...)` ensures non‑empty block heights reach expectations across peers. Alternatively, poll `Client::get_status()`.
 
 **Docker Compose flow (optional):**
 
-1) Generate compose: Use `iroha_swarm::Swarm` to emit a compose file with N peers. Map API ports to host and set env vars (CHAIN, keys, TRUSTED_PEERS, GENESIS).
+1) Generate compose: Use `iroha_swarm::Swarm` to emit a compose file with N
+   peers. The one-shot genesis signer atomically publishes the signed block and
+   exact bound manifest into a shared volume; every validator waits for that
+   successful publication and mounts the artifacts read-only.
 2) Start: `docker compose up`.
 3) Readiness: Poll Torii HTTP endpoints until status healthy and block height ≥ 1.
 

@@ -50,17 +50,16 @@ const QUEUE_PLAN_JOURNAL_FRAME_COMMIT: [u8; 8] = *b"IRQPEND4";
 const QUEUE_PLAN_JOURNAL_FRAME_FORMAT_VERSION: u16 = 4;
 const FRAME_HEADER_BYTES: u64 = 8 + 2 + 4 + 4;
 const FRAME_TRAILER_BYTES: u64 = Hash::LENGTH as u64 + 8;
-// Norito's cumulative element counter for canonical V4 frames stays below the
-// wire length. Keep the production allowance at that exact linear bound; the
-// calibration tests below independently measure payload-heavy and
-// allocation-dense frames.
-const FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT: usize = 1;
-// Owned decoding retains the canonical archive while materializing nested
-// transaction and routing values. Calibrate both a payload-heavy frame and an
-// allocation-dense frame, then exercise the latter at the maximum admitted
-// instruction count, so this multiplier is not based on one object-graph
-// shape.
-const FRAME_DECODE_ALLOCATION_AMPLIFICATION_LIMIT: usize = 26;
+// Native deployment frames contain a nested instruction archive whose decoded
+// element walk is just under twice the authenticated wire payload. The generic
+// canonical decoder independently applies its own payload-derived ceiling.
+const FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT: usize = 2;
+// Keep the journal-specific allocation envelope above Norito's canonical
+// envelope so an evolving valid InstructionBox shape is governed by the
+// codec-wide resource policy rather than an older journal calibration. Nested
+// decode-limit scopes take the stricter bound, so the canonical decoder remains
+// the effective allocation-bomb boundary.
+const FRAME_DECODE_ALLOCATION_AMPLIFICATION_LIMIT: usize = 64;
 const FRAME_DECODE_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 64 * 1024;
 
 /// Version of durable queue plan journal records.
@@ -472,6 +471,8 @@ pub(super) enum QueuePlanJournalTestFault {
     CompactionAfterTempCreate,
     /// Fail after replacing the journal path but before syncing its parent.
     CompactionAfterRename,
+    /// Fail while authenticating the exact startup replay receipt, before Queue publication.
+    StartupReplayReceiptObserve,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -584,11 +585,10 @@ fn queue_plan_startup_live_record_root(
     }
     let mut rolling = Hash::new(QUEUE_PLAN_STARTUP_LIVE_ROOT_EMPTY_DOMAIN);
     for claim in ordered.values() {
-        let entrypoint_hash: Hash = *claim.entrypoint_hash.as_ref();
         rolling = Hash::new_from_chunks(&[
             QUEUE_PLAN_STARTUP_LIVE_ROOT_STEP_DOMAIN,
             rolling.as_ref(),
-            entrypoint_hash.as_ref(),
+            claim.entrypoint_hash.as_ref(),
             claim.routing_plan_digest.as_ref(),
             claim.journal_record_digest.as_ref(),
         ]);
@@ -1663,117 +1663,11 @@ impl QueuePlanJournal {
     pub fn prepare_replay(&self) -> io::Result<QueuePlanJournalReplay> {
         self.prepare_replay_with_removed_entrypoints(None)
     }
+}
 
-    /// Observe the exact post-replay V4 image and classify every V6 startup owner.
-    ///
-    /// This receipt is evidence only. It authenticates one direct journal and
-    /// parent identity, byte length, content digest, complete live-record root,
-    /// and exact per-owner V4 phase. A V6 marker may prove an already compacted
-    /// tombstone, but it can never override a currently live V4 record. Without
-    /// that marker, an absent record is accepted only when the exact retained V4
-    /// tombstone still validates against the complete reservation key.
-    pub(super) fn observe_startup_replay_receipt(
-        &self,
-        phases: &[LaneQueueReservationRecoveryPhaseV1],
-    ) -> io::Result<QueuePlanStartupReplayReceiptV1> {
-        self.ensure_healthy()?;
-        if phases.len() > self.limits.max_live_records {
-            return Err(invalid_data(
-                "queue-plan startup phase coverage exceeds the configured owner bound",
-            ));
-        }
+include!("journal_reservation_commit_preflight.rs");
 
-        let mut owner_hashes = BTreeSet::new();
-        let mut entrypoints = BTreeSet::new();
-        for phase in phases {
-            phase.key.validate().map_err(invalid_data)?;
-            if !owner_hashes.insert(phase.key.signed_transaction_hash) {
-                return Err(invalid_data(
-                    "queue-plan startup phase coverage contains a duplicate reservation owner",
-                ));
-            }
-            if !entrypoints.insert(phase.key.entrypoint_hash.clone()) {
-                return Err(invalid_data(
-                    "queue-plan startup phase coverage contains a duplicate entrypoint",
-                ));
-            }
-            match phase.reservation_phase {
-                LaneQueueReservationOwnerPhaseV6::CommitBarrier => {}
-                LaneQueueReservationOwnerPhaseV6::Live
-                | LaneQueueReservationOwnerPhaseV6::ReleasePrepared
-                | LaneQueueReservationOwnerPhaseV6::ReleaseCompleted => {
-                    if phase.queue_plan_phase != QueuePlanReservationPhaseV1::Live
-                        || phase.plan_tombstone_marked
-                    {
-                        return Err(invalid_data(
-                            "non-commit reservation owner must retain one live unmarked QueuePlan claim",
-                        ));
-                    }
-                }
-            }
-            if phase.plan_tombstone_marked
-                && phase.queue_plan_phase != QueuePlanReservationPhaseV1::Tombstoned
-            {
-                return Err(invalid_data(
-                    "V6 PlanTombstoned marker conflicts with a claimed live V4 phase",
-                ));
-            }
-        }
-
-        let mut replay = self.prepare_replay_with_removed_entrypoints(Some(&entrypoints))?;
-        replay.verify_snapshot_content()?;
-        for phase in phases {
-            let actual = if let Some(live) = replay.live_positions.get(&phase.key.entrypoint_hash) {
-                live.validate_global_admission_for_reservation_commit(&phase.key)?;
-                if phase.plan_tombstone_marked {
-                    return Err(invalid_data(
-                        "durable V6 PlanTombstoned marker conflicts with a live V4 claim",
-                    ));
-                }
-                QueuePlanReservationPhaseV1::Live
-            } else if let Some(removed) = replay.removed_positions.get(&phase.key.entrypoint_hash) {
-                removed.validate_global_admission_for_reservation_commit(&phase.key)?;
-                QueuePlanReservationPhaseV1::Tombstoned
-            } else if phase.plan_tombstone_marked {
-                QueuePlanReservationPhaseV1::Tombstoned
-            } else {
-                return Err(invalid_data(
-                    "unmarked reservation owner is neither live nor exactly tombstoned in V4",
-                ));
-            };
-            if actual != phase.queue_plan_phase {
-                return Err(invalid_data(
-                    "queue-plan startup phase disagrees with the exact V4 journal image",
-                ));
-            }
-        }
-
-        let live_claims =
-            replay
-                .live_positions
-                .values()
-                .map(|live| QueuePlanStartupLiveClaimIdentityV1 {
-                    entrypoint_hash: live.record.entrypoint_hash.clone(),
-                    routing_plan_digest: live.plan_digest,
-                    journal_record_digest: live.claim_digest,
-                });
-        let (live_record_count, live_record_root) =
-            queue_plan_startup_live_record_root(live_claims)?;
-        let (reservation_phase_count, reservation_phase_root) =
-            queue_plan_startup_reservation_phase_root(phases)?;
-        replay.verify_snapshot_content()?;
-        Ok(QueuePlanStartupReplayReceiptV1 {
-            file_identity: replay.file_identity,
-            parent_identity: replay.parent_identity,
-            snapshot_len: replay.snapshot_len,
-            snapshot_digest: replay.snapshot_digest,
-            live_record_count,
-            live_record_root,
-            reservation_phase_count,
-            reservation_phase_root,
-        })
-    }
-
+impl QueuePlanJournal {
     /// Reobserve the complete V4 image and compare every receipt component.
     pub(super) fn revalidate_startup_replay_receipt(
         &self,
@@ -2835,13 +2729,10 @@ fn decode_frame(
         ))
     })?;
     let payload_budget = payload.len();
-    // Norito retains an aligned archive copy while constructing the owned
-    // entrypoint and routing plan. Bound that deterministic wire-to-owned
-    // amplification separately from element counts. Small transactions have
-    // a comparatively large fixed object-graph cost, so reserve 64 KiB for
-    // decoder-owned archive and container metadata instead of leaving small
-    // frames unaccounted. Allocation bombs remain capped by a fixed allowance
-    // plus the calibrated multiple of the already bounded frame length.
+    // A Put frame contains an open InstructionBox. Keep its schema-specific
+    // element bound calibrated to valid admitted instructions, but do not let a
+    // stale journal allocation multiplier undercut Norito's canonical envelope.
+    // Both limits remain linear in the already authenticated frame length.
     let aggregate_element_budget =
         payload_budget.saturating_mul(FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT);
     let aggregate_allocation_budget = frame_decode_allocation_budget(payload_budget)
@@ -4263,79 +4154,17 @@ fn verify_open_regular_path(path: &Path, file: &File) -> io::Result<JournalFileI
     Ok(opened_identity)
 }
 
-fn configure_direct_regular_open(options: &mut OpenOptions) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-}
-
-fn open_new_regular(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.create_new(true).read(true).write(true);
-    configure_direct_regular_open(&mut options);
-    let file = options.open(path)?;
-    verify_open_regular_path(path, &file)?;
-    Ok(file)
-}
-
-fn open_regular_append(path: &Path) -> io::Result<File> {
-    validate_regular_path(path)?;
-    let mut options = OpenOptions::new();
-    options.append(true).read(true);
-    configure_direct_regular_open(&mut options);
-    let file = options.open(path)?;
-    verify_open_regular_path(path, &file)?;
-    Ok(file)
-}
-
-fn open_regular_read_write(path: &Path) -> io::Result<File> {
-    validate_regular_path(path)?;
-    let mut options = OpenOptions::new();
-    options.read(true).write(true);
-    configure_direct_regular_open(&mut options);
-    let file = options.open(path)?;
-    verify_open_regular_path(path, &file)?;
-    Ok(file)
-}
-
-fn open_regular_read(path: &Path) -> io::Result<File> {
-    validate_regular_path(path)?;
-    let mut options = OpenOptions::new();
-    options.read(true);
-    configure_direct_regular_open(&mut options);
-    let file = options.open(path)?;
-    verify_open_regular_path(path, &file)?;
-    Ok(file)
-}
-
-fn poisoned_journal_error() -> io::Error {
-    io::Error::other("queue plan journal is poisoned after an ambiguous durability boundary")
-}
-
-fn invalid_data(error: impl ToString) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, error.to_string())
-}
-
-fn invalid_input(error: impl ToString) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, error.to_string())
-}
+include!("journal_direct_file_io.rs");
 
 #[cfg(test)]
 mod tests {
     use std::fs::{self, OpenOptions};
 
     use iroha_data_model::{
-        isi::{InstructionBox, Log},
+        isi::{
+            InstructionBox, Log,
+            smart_contract_code::{SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk},
+        },
         transaction::TransactionBuilder,
     };
     use iroha_logger::Level;
@@ -4636,6 +4465,46 @@ mod tests {
         journal
             .observe_startup_replay_receipt(core::slice::from_ref(&marked_tombstone))
             .expect("durable V6 marker proves the exact tombstone after V4 compaction");
+    }
+
+    #[test]
+    fn finalized_carrier_absence_may_exceed_live_owner_bound_in_one_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("multi-carrier-terminal-absence.norito");
+        let (first_record, first_binding) = globally_bound_record("terminal-absence-first");
+        let (second_record, second_binding) = globally_bound_record("terminal-absence-second");
+        let finalized_keys = [
+            reservation_key_for_record(&first_record, first_binding.canonical_hash()),
+            reservation_key_for_record(&second_record, second_binding.canonical_hash()),
+        ];
+        let mut journal =
+            QueuePlanJournal::open_with_limits(&path, limits(1), true).expect("open journal");
+
+        journal.reset_replay_scan_count();
+        journal
+            .observe_startup_replay_receipt_with_finalized_absence(&[], &finalized_keys)
+            .expect("two finalized carrier keys may exceed the one-live-owner bound");
+        assert_eq!(
+            journal.replay_scan_count(),
+            1,
+            "active and finalized QueuePlan evidence must share one immutable replay snapshot",
+        );
+
+        journal
+            .replace_strict_durable(second_record)
+            .expect("persist one conflicting live QueuePlan owner");
+        journal.reset_replay_scan_count();
+        assert!(
+            journal
+                .observe_startup_replay_receipt_with_finalized_absence(&[], &finalized_keys)
+                .is_err(),
+            "a finalized carrier key must reject its exact live QueuePlan owner",
+        );
+        assert_eq!(
+            journal.replay_scan_count(),
+            1,
+            "the conflicting finalized owner must be classified by the same single replay",
+        );
     }
 
     #[test]

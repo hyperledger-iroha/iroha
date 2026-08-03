@@ -56,9 +56,6 @@ pub(super) enum V2RunnerError {
     /// Production service failed.
     #[error("Sumeragi v2 production service failed: {0}")]
     Service(String),
-    /// Local validator role is absent from the frozen voting roster.
-    #[error("Sumeragi v2 node is configured as validator but absent from the frozen roster")]
-    ValidatorAbsent,
     /// Fresh genesis leader no longer has the signed genesis body.
     #[error("Sumeragi v2 height one is missing its signed genesis body")]
     MissingGenesisBody,

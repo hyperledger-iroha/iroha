@@ -183,26 +183,31 @@ print(formats["i105_warning"])
 ## Ledger reads and faucet bootstrap
 
 `ToriiClient` includes convenience helpers for common ledger reads so
-applications do not need to duplicate Torii pagination, compatibility retries,
-or account-asset matching logic:
+applications do not need to duplicate Torii pagination or account-asset
+matching logic:
+
+Caller-supplied IDs are sent only to their exact URL-encoded REST routes. The
+client never substitutes a network prefix and never retries an alternate ID.
+`find_account` and `account_exists` fall back to the paginated account list
+only when the exact account route returns `503` with
+`x-iroha-reject-code: route_unavailable`, and the fallback requires exact ID
+equality. A `404` reports absence; `400`, including a wrong-network-prefix
+rejection, propagates without fallback.
 
 ```python
 from iroha_python import ToriiClient, authority_fee_payment
 
 client = ToriiClient("https://taira.sora.org")
+account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 
-exists = client.account_exists("adult@is", include_taira_prefix_variant=True)
-balance = client.asset_balance(
-    "adult@is",
-    "ds#wonderland.is",
-    include_taira_prefix_variant=True,
-)
+exists = client.account_exists(account_id)
+balance = client.asset_balance(account_id, "ds#wonderland.is")
 definition = client.get_asset_definition("ds#wonderland.is")
 
 puzzle = client.get_account_faucet_puzzle()
-anchor_height, nonce_hex = ToriiClient.solve_account_faucet_pow("adult@is", puzzle)
+anchor_height, nonce_hex = ToriiClient.solve_account_faucet_pow(account_id, puzzle)
 response = client.submit_account_faucet_claim(
-    "adult@is",
+    account_id,
     pow_anchor_height=anchor_height,
     pow_nonce_hex=nonce_hex,
 )
@@ -346,10 +351,14 @@ client.unshield_prepared_and_wait(
     public_amount="3",
     inputs=["dd" * 32],
     proof=prepared_proof,
-    outputs=[],
     root_hint="ee" * 32,
 )
 ```
+
+The first-release `Unshield` instruction does not accept caller-supplied output
+commitments. Verified proof policy determines every private output. Passing the
+retired `outputs` keyword or decoding an output-bearing pre-release payload
+fails closed; the SDK does not ignore or translate it.
 
 ## Dataspace lifecycle helpers
 
@@ -501,7 +510,13 @@ from iroha_python import ToriiClient, rwa_query_envelope
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
 chain_page = client.list_rwas_typed(limit=20, offset=0)
-detail_page = client.list_explorer_rwas_typed(domain="commodities", page=1, per_page=25)
+detail_page = client.list_explorer_rwas_typed(domain="commodities", limit=25)
+if detail_page.pagination.has_more:
+    next_page = client.list_explorer_rwas_typed(
+        domain="commodities",
+        limit=25,
+        cursor=detail_page.pagination.next_cursor,
+    )
 detail = client.get_explorer_rwa_detail_typed("lot-001$commodities")
 filtered = client.query_rwas_typed(
     filter={"eq": [{"name": "id"}, "lot-001$commodities"]},
@@ -920,9 +935,9 @@ quote = client.create_vpn_quote(
     canonical_auth=auth,
 )
 
-# Submit quote.open_lease_instruction or quote.tx_instructions as a normal signed
-# transaction that moves the XOR lease fee into native VPN escrow, then pass the
-# committed transaction hash back to Torii.
+# Submit quote.open_lease_instruction as a normal signed transaction that moves
+# the XOR lease fee into native VPN escrow, then pass the committed transaction
+# hash back to Torii.
 session = client.create_vpn_session(
     VpnSessionCreateRequest(
         quote_id=quote.quote_id,
@@ -937,7 +952,7 @@ print(session.helper_ticket_hex)
 
 Relay operators submit signed receipts with `submit_vpn_receipt`; the response
 returns earned/refund XOR fields plus a `SettleVpnLease` instruction skeleton in
-`settle_lease_instruction` and `tx_instructions`.
+the optional `settle_lease_instruction` field.
 
 ## Transaction helpers
 
@@ -962,12 +977,16 @@ draft.register_domain("wonderland") \
      .register_account("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", metadata={"role": "admin"}) \
      .register_asset_definition(
         "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        owner="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+        owning_domain="wonderland",
+        balance_scope_policy="Global",
+        name="rose",
         scale=2,
         mintable="Infinitely",
         metadata={"sym": "ROS"},
      ) \
      .mint_asset_quantity("norito:<asset-id-hex>", 10)
+
+# The transaction authority in ``config`` owns the registered definition.
 
 pair = Ed25519KeyPair.from_private_key(bytes([1] * 32))
 envelope, fee_quote = draft.quote_and_sign(client, pair.private_key)
@@ -1453,7 +1472,7 @@ client = create_torii_client(
 client.set_protected_namespaces(["apps", "system"])
 protected = client.get_protected_namespaces()
 governed_contract = client.get_governance_contract_typed(
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
 )
 council = client.get_governance_council_current()
 audit = client.get_governance_council_audit(epoch=42)
@@ -1797,15 +1816,18 @@ docker-compose topology, waits for the API to become available, and runs
 `pytest` with the `integration` marker:
 
 ```bash
-target/debug/kagami keys --out-dir target/python-integration-genesis
-export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/python-integration-genesis/public.key"
-export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/python-integration-genesis/private.key"
+export IROHA_GENESIS_SIGNED_FILE="$PWD/target/python-integration-genesis/genesis.signed.nrt"
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/python-integration-genesis/genesis.public_key"
+export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/python-integration-genesis/genesis.expected_hash"
 python python/iroha_python/scripts/run_integration.py
 ```
 
-Build `kagami` first if it is not already available. The default Compose stack
-contains no genesis signing key and the harness refuses to start it without
-both runtime file paths. Never commit the private file.
+The default stack is an explicitly seeded development fixture. Prepare those
+artifacts for its exact validator roster with Kagami beforehand; do not reuse a
+random localnet body. The stack contains no genesis signing key or runtime
+signer, and the harness refuses to start it without all three read-only
+trust-root inputs. Normal generated deployments use seedless `kagami docker`
+prepared-bundle mode and embed validated artifact paths directly.
 
 Use the shell wrapper for convenience:
 
@@ -1814,16 +1836,18 @@ python/iroha_python/scripts/run_integration.sh
 ```
 
 Harness options are available as CLI flags (see `--help`). Common environment
-variables:
+variables follow. The compatibility-named `docker-compose.single.yml` fixture
+starts a four-validator committee by default.
 
 | Variable | Purpose |
 |----------|---------|
 | `START_TORII` | Set to `0` to reuse an existing node instead of starting docker compose. |
 | `COMPOSE_FILE` | Override the compose file (defaults to `defaults/docker-compose.single.yml`). |
-| `COMPOSE_SERVICE` | Service name to start (defaults to `irohad0`). |
+| `COMPOSE_SERVICE` | Optional service name to start instead of the default full four-validator stack. |
 | `IROHA_TORII_URL` | Torii URL used by the tests (defaults to `http://127.0.0.1:8080`). |
 | `IROHA_GENESIS_PUBLIC_KEY_FILE` | Runtime genesis verifier-key file required by the default Compose stack. |
-| `IROHA_GENESIS_PRIVATE_KEY_FILE` | Owner-held runtime genesis signing-key file required by the default Compose stack. |
+| `IROHA_GENESIS_SIGNED_FILE` | Host-prepared signed genesis body required by the default Compose stack. |
+| `IROHA_GENESIS_EXPECTED_HASH_FILE` | Independently approved exact genesis hash required by the default Compose stack. |
 
 When running against an external environment, set `--no-start`,
 `--torii-url` (or `IROHA_TORII_URL`), and optional auth tokens
@@ -1908,12 +1932,16 @@ bash python/iroha_python/scripts/release_smoke.sh
 
 The workflow now:
 
-1. Builds the wheel with `python -m build` and installs it into a fresh virtualenv for an import smoke test plus the Norito RPC parity suite.
-2. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
+1. Builds exactly one wheel candidate with `python -m build` and seals and structurally preflights it before installation.
+2. Installs the wheel into a fresh virtualenv, authenticates the complete installed package and native-extension provenance against that seal, and rejects path or file aliases.
+3. Requires the installed native extension to expose bridge ABI 21 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
+4. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
 
 The smoke harness accepts no signing, provenance, key, or manifest-output
 options and never produces signatures. It is deliberately limited to
-build/install/import/RPC/package-metadata checks.
+build/seal/install/native-provenance/privacy/RPC/package-metadata checks; the
+protected aggregate release workflow remains the authority for release
+signing and provenance publication.
 
 Set `PYTHON_RELEASE_SMOKE_KEEP_DIST=1` to preserve the built wheel and source
 distribution under `dist/` after the smoke completes.

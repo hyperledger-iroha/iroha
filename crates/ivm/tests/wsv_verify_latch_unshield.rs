@@ -47,7 +47,10 @@ fn sample_account() -> AccountId {
 fn setup(name: &str, vk_id: &VerifyingKeyId) -> (AccountId, AssetDefinitionId, WsvHost) {
     let caller = sample_account();
     let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
-    let asset = AssetDefinitionId::new(domain.clone(), name.parse().expect("asset name"));
+    let asset = AssetDefinitionId::derive_from_components(
+        domain.clone(),
+        name.parse().expect("asset name"),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
@@ -178,19 +181,18 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
 }
 
 #[test]
-fn wsv_unshield_routes_private_change_outputs() {
-    let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_unshield_outputs");
+fn wsv_unshield_does_not_accept_or_append_guest_change_outputs() {
+    let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_unshield_output_free");
     let (caller, asset, mut host) = setup("violet", &vk_id);
     assert_eq!(host.wsv.drain_zk_events().len(), 1);
     let mut vm = IVM::new(u64::MAX);
     arm_unshield_latch(&mut host, &mut vm);
 
-    let payload = unshield_payload(Unshield::new_with_outputs(
+    let payload = unshield_payload(Unshield::new(
         asset.clone(),
         caller.clone(),
         Quantity::from(2_u64),
         vec![[5; 32]],
-        vec![[9; 32], [10; 32]],
         proof(vk_id, 0x01),
         None,
     ));
@@ -199,29 +201,19 @@ fn wsv_unshield_routes_private_change_outputs() {
         Ok(mutation_gas(payload.len()))
     );
 
-    let (_, roots, depth) = host.wsv.get_roots(&asset, 8);
-    assert_eq!(depth, 2);
-    assert_eq!(roots.len(), 2);
+    let (latest_root, roots, depth) = host.wsv.get_roots(&asset, 8);
+    let empty_root = iroha_data_model::zk::CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT;
+    assert_eq!(latest_root, empty_root);
+    assert_eq!(
+        hex::encode(latest_root),
+        "ce4066b230f348190183f90dd35871c13823a358bb37c2ce8b43526ae7197c3c"
+    );
+    assert_eq!(depth, 0);
+    assert_eq!(roots, vec![empty_root]);
     let events = host.wsv.drain_zk_events();
-    assert_eq!(events.len(), 3);
+    assert_eq!(events.len(), 1);
     assert!(matches!(
         &events[0],
-        ivm::mock_wsv::ZkEvent::CommitmentAdded {
-            asset: event_asset,
-            commitment,
-            new_root,
-        } if event_asset == &asset && commitment == &[9; 32] && new_root == &roots[0]
-    ));
-    assert!(matches!(
-        &events[1],
-        ivm::mock_wsv::ZkEvent::CommitmentAdded {
-            asset: event_asset,
-            commitment,
-            new_root,
-        } if event_asset == &asset && commitment == &[10; 32] && new_root == &roots[1]
-    ));
-    assert!(matches!(
-        &events[2],
         ivm::mock_wsv::ZkEvent::Unshielded {
             asset: event_asset,
             to,

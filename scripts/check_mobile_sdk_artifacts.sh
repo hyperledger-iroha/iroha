@@ -865,12 +865,14 @@ check_bridge_source_contract() {
   local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
   local bridge_header="$ROOT_DIR/crates/connect_norito_bridge/include/connect_norito_bridge.h"
   local bridge_cargo="$ROOT_DIR/crates/connect_norito_bridge/Cargo.toml"
+  local canonical_abi_source="$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs"
 
   # Packaged artifacts can be checked outside a source checkout. When source is
   # present, however, refuse to certify a build whose callable Kagemusha ABI is
   # broader or narrower than the exact first-release allow-list.
   if [[ -f "$bridge_source" ]]; then
     if ! run_isolated_checker_python - "$bridge_source" "$bridge_cargo" \
+        "$bridge_header" "$canonical_abi_source" \
         "$CANDIDATE_LAB_FEATURE" "$CANDIDATE_LAB_MARKER" \
         "$CANDIDATE_LAB_HEADER_MARKER" \
         --shipping "${KAGEMUSHA_C_SYMBOLS[@]}" \
@@ -882,14 +884,21 @@ import tomllib
 
 path = sys.argv[1]
 cargo_path = sys.argv[2]
-feature = sys.argv[3]
-marker = sys.argv[4]
-marker_symbol = sys.argv[5]
+header_path = sys.argv[3]
+canonical_abi_path = sys.argv[4]
+feature = sys.argv[5]
+marker = sys.argv[6]
+marker_symbol = sys.argv[7]
 shipping_separator = sys.argv.index("--shipping")
 lab_separator = sys.argv.index("--lab")
 expected = set(sys.argv[shipping_separator + 1:lab_separator])
 expected_lab = set(sys.argv[lab_separator + 1:])
 text = open(path, "r", encoding="utf-8").read()
+try:
+    header_text = open(header_path, "r", encoding="utf-8").read()
+    canonical_abi_text = open(canonical_abi_path, "r", encoding="utf-8").read()
+except OSError:
+    header_text = canonical_abi_text = ""
 
 
 def rust_code_mask(source):
@@ -981,9 +990,38 @@ def code_matches(pattern):
 
 
 errors = []
-abi_matches = code_matches(re.compile(
-    r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*(\d+)\s*;",
+abi_definitions = code_matches(re.compile(
+    r"\bconst[ \t]+CONNECT_NORITO_BRIDGE_ABI_VERSION[ \t]*:[ \t]*u32[ \t]*=",
 ))
+abi_alias = code_matches(re.compile(
+    r"(?m)^[ \t]*const[ \t]+CONNECT_NORITO_BRIDGE_ABI_VERSION[ \t]*:[ \t]*"
+    r"u32[ \t]*=[ \t]*PRIVACY_BRIDGE_ABI_VERSION_V1[ \t]*;[ \t]*$",
+))
+canonical_abi_mask = rust_code_mask(canonical_abi_text)
+canonical_abi_code = "".join(
+    char if canonical_abi_mask[index] else "\0"
+    for index, char in enumerate(canonical_abi_text)
+)
+canonical_abi_definitions = re.findall(
+    r"\bpub[ \t]+const[ \t]+PRIVACY_BRIDGE_ABI_VERSION_V1[ \t]*:[ \t]*u32[ \t]*=",
+    canonical_abi_code,
+)
+canonical_abi = re.findall(
+    r"(?m)^[ \t]*pub[ \t]+const[ \t]+PRIVACY_BRIDGE_ABI_VERSION_V1[ \t]*:[ \t]*"
+    r"u32[ \t]*=[ \t]*([0-9]+)[ \t]*;[ \t]*$",
+    canonical_abi_code,
+)
+header_abi_mask = rust_code_mask(header_text)
+header_abi_code = "".join(
+    char if header_abi_mask[index] else "\0" for index, char in enumerate(header_text)
+)
+header_abi_definitions = re.findall(
+    r"(?m)^[ \t]*#define[ \t]+CONNECT_NORITO_BRIDGE_ABI_VERSION\b", header_abi_code
+)
+header_abi = re.findall(
+    r"(?m)^[ \t]*#define[ \t]+CONNECT_NORITO_BRIDGE_ABI_VERSION[ \t]+([0-9]+)[ \t]*$",
+    header_abi_code,
+)
 export_pattern = re.compile(
     r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+'
     r'(connect_norito_kagemusha_[A-Za-z0-9_]+)\s*\(',
@@ -1139,8 +1177,16 @@ if lab_present:
 # Candidate-evidence exports are excluded from the shipping ABI only after all
 # checks above authenticate the complete lab-only source contract.
 actual = set(all_export_counts) - set(lab_export_counts)
-if len(abi_matches) != 1 or abi_matches[0].group(1) != "21":
-    errors.append("bridge source does not declare exact ABI 21")
+if len(abi_definitions) != 1 or len(abi_alias) != 1:
+    errors.append("bridge source does not bind its ABI to the canonical privacy constant")
+if len(canonical_abi_definitions) != 1 or len(canonical_abi) != 1:
+    errors.append("canonical privacy bridge ABI constant is missing or non-numeric")
+elif canonical_abi[0] != "21":
+    errors.append("canonical privacy bridge ABI constant drifted from 21")
+if len(header_abi_definitions) != 1 or len(header_abi) != 1:
+    errors.append("bridge header ABI macro is missing or non-numeric")
+elif header_abi[0] != "21":
+    errors.append("bridge header ABI macro drifted from 21")
 missing = sorted(expected - actual)
 retired_or_extra = sorted(actual - expected)
 if missing:
@@ -2103,11 +2149,10 @@ PY
 
     local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
     if [[ -f "$bridge_source" && -d "$ROOT_DIR/.git" ]]; then
-      local source_abi manifest_abi manifest_commit source_relationship source_dirty source_fingerprint manifest_fingerprint
-      source_abi="$(sed -nE 's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$bridge_source" | head -n1)"
+      local manifest_abi manifest_commit source_relationship source_dirty source_fingerprint manifest_fingerprint
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
-      if [[ "$source_abi" != "21" || "$manifest_abi" != "21" ]]; then
-        fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 21"
+      if [[ "$manifest_abi" != "21" ]]; then
+        fail "NoritoBridge artifact must use exact first-release ABI 21"
       fi
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
       source_relationship="$(

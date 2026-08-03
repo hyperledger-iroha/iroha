@@ -4,43 +4,106 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/startup_finality_support.rs"),
     Path("crates/iroha_core/src/kura/bound_progress_and_retained_support.rs"),
     Path("crates/iroha_core/src/kura/autonomous_reservation_bounds.rs"),
+    Path("crates/iroha_core/src/kura/certified_bundle_capacity_reservation_types.rs"),
     Path("crates/iroha_core/src/kura/prune_commit_merge_support.rs"),
+    Path("crates/iroha_core/src/kura/merge_ledger_latest_execution_index.rs"),
     Path("crates/iroha_core/src/kura/replica_advert_and_body_status.rs"),
     Path("crates/iroha_core/src/kura/retained_finality_replica_authority.rs"),
+    Path("crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs"),
+    Path("crates/iroha_core/src/kura/prune_intent_publication.rs"),
+    Path("crates/iroha_core/src/kura/block_store_definition_and_test_controls.rs"),
     Path("crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_terminal_capacity.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_publication_temp_recovery.rs"),
+    Path(
+        "crates/iroha_core/src/kura/"
+        "historical_autonomous_recovery_temp_reconciliation.rs"
+    ),
+    Path("crates/iroha_core/src/kura/hot_path_capacity_preflight.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs"),
+    Path("crates/iroha_core/src/kura/certified_bundle_capacity.rs"),
+    Path("crates/iroha_core/src/kura/lane_artifact_budget.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_release_authority.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_application_evidence.rs"),
+    Path("crates/iroha_core/src/kura/indexed_sidecar_io.rs"),
+    Path("crates/iroha_core/src/kura/indexed_sidecar_rewrite.rs"),
+    Path("crates/iroha_core/src/kura/test_fault_injection_state.rs"),
+    Path("crates/iroha_core/src/kura/test_fault_injection_controls.rs"),
+    Path("crates/iroha_core/src/kura/file_error_support.rs"),
 )
 REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path("crates/iroha_config/src/parameters/actual.rs"): (
+        Path("actual/runtime_tail_tests.rs"),
         Path("actual/tests.rs"),
     ),
     Path("crates/iroha_config/src/parameters/user.rs"): (
         Path("user/kura.rs"),
         Path("user/kura_and_snapshot_tests.rs"),
+        Path("user/runtime_tail_tests.rs"),
     ),
     Path("crates/iroha_core/src/kura.rs"): (
         Path("kura/startup_finality_support.rs"),
         Path("kura/bound_progress_and_retained_support.rs"),
         Path("kura/autonomous_reservation_bounds.rs"),
+        Path("kura/certified_bundle_capacity_reservation_types.rs"),
         Path("kura/prune_commit_merge_support.rs"),
+        Path("kura/merge_ledger_latest_execution_index.rs"),
         Path("kura/replica_advert_and_body_status.rs"),
         Path("kura/retained_finality_replica_authority.rs"),
+        Path("kura/durable_block_and_atomic_sidecar_io.rs"),
+        Path("kura/prune_intent_publication.rs"),
+        Path("kura/block_store_definition_and_test_controls.rs"),
         Path("kura/pipeline_and_lane_artifacts.rs"),
+        Path("kura/autonomous_terminal_capacity.rs"),
+        Path("kura/autonomous_publication_temp_recovery.rs"),
+        Path("kura/historical_autonomous_recovery_temp_reconciliation.rs"),
+        Path("kura/hot_path_capacity_preflight.rs"),
+        Path("kura/autonomous_execution_view_capacity.rs"),
+        Path("kura/certified_bundle_capacity.rs"),
+        Path("kura/lane_artifact_budget.rs"),
+        Path("kura/autonomous_lifecycle_terminal_outcomes.rs"),
+        Path("kura/autonomous_release_authority.rs"),
+        Path("kura/autonomous_application_evidence.rs"),
+        Path("kura/indexed_sidecar_io.rs"),
+        Path("kura/indexed_sidecar_rewrite.rs"),
+        Path("kura/test_fault_injection_state.rs"),
+        Path("kura/test_fault_injection_controls.rs"),
+        Path("kura/file_error_support.rs"),
         Path("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs"),
         Path("kura/tests/01a_retained_eviction_and_rewrite_tail.rs"),
         Path("kura/tests/02_replacement_and_preflight.rs"),
+        Path("kura/tests/02a_unauthenticated_preflight.rs"),
         Path("kura/tests/03_preflight_and_merge_entry.rs"),
         Path("kura/tests/03a_preflight_and_merge_entry_tail.rs"),
         Path("kura/tests/04_merge_log_and_associations.rs"),
+        Path("kura/tests/04b_merge_artifact_budget.rs"),
+        Path("kura/tests/04c_canonical_association_capacity.rs"),
+        Path("kura/tests/04d_prune_intent_capacity.rs"),
         Path("kura/tests/05_merge_resolution_and_eviction.rs"),
         Path("kura/tests/05a_replica_advert_and_body_eviction.rs"),
         Path("kura/tests/06_eviction_and_autonomous_lanes.rs"),
         Path("kura/tests/07a_autonomous_reservation_reconciliation_support.rs"),
         Path("kura/tests/07_autonomous_lanes_and_sidecars.rs"),
         Path("kura/tests/07b_autonomous_reservation_reconciliation_tests.rs"),
+        Path("kura/tests/07c_lane_execution_sidecar_tests.rs"),
+        Path("kura/tests/07d_strict_lane_ownership_barrier_tests.rs"),
+        Path("kura/tests/07e_autonomous_lifecycle_and_canonical_artifact_tests.rs"),
+        Path("kura/tests/07e_autonomous_publication_temp_recovery_tests.rs"),
+        Path("kura/tests/07e_terminal_capacity_hardening_tests.rs"),
+        Path("kura/tests/07f_canonical_carrier_terminal_recovery_tests.rs"),
+        Path("kura/tests/07g_claim_capacity_preflight_tests.rs"),
+        Path("kura/tests/07h_autonomous_execution_view_capacity_tests.rs"),
+        Path("kura/tests/07i_historical_autonomous_batch_capacity_tests.rs"),
+        Path("kura/tests/07j_certified_bundle_capacity_tests.rs"),
+        Path("kura/tests/07k_historical_atomic_temp_recovery_tests.rs"),
+        Path("kura/tests/07l_pending_canonical_capacity_tests.rs"),
         Path("kura/tests/08_lane_receipts_and_artifacts.rs"),
+        Path("kura/tests/08a_certified_lane_block_read_tests.rs"),
         Path("kura/tests/09_lane_artifacts_and_fastpq.rs"),
         Path("kura/tests/10_native_amx_and_roster.rs"),
         Path("kura/tests/10b_native_amx_prepublication_transition.rs"),
+        Path("kura/tests/10c_native_amx_latest_index_support_and_bounds.rs"),
         Path("kura/tests/11_roster_and_progress_sidecars.rs"),
         Path("kura/tests/12_sidecar_index_and_pruning.rs"),
         Path("kura/tests/13_manifests_and_fsync.rs"),
@@ -53,6 +116,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("historical_autonomous_recovery.rs"),
     ),
     Path("crates/iroha_core/src/kura/lane_geometry.rs"): (
+        Path("lane_geometry/bootstrap_path_safety.rs"),
+        Path("lane_geometry/bootstrap_relabel.rs"),
+        Path("lane_geometry/catalog_validation.rs"),
+        Path("lane_geometry/retirement_bounds.rs"),
         Path("lane_geometry_tests/00_support.rs"),
         Path("lane_geometry/native_amx_retained_window_tests.rs"),
         Path("lane_geometry_tests/00_retirement.rs"),
@@ -60,10 +127,71 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("lane_geometry_tests/02_geometry_moves_and_journal.rs"),
         Path("lane_geometry_tests/03_gc_and_startup.rs"),
     ),
+    Path("crates/iroha_core/src/queue.rs"): (
+        Path("queue/canonical_terminal_cleanup.rs"),
+        Path("queue/plan_journal_startup_atomicity_tests.rs"),
+        Path("queue/global_guard_claim_conflict_tests.rs"),
+        Path("queue/queue_metadata_and_admission_tests.rs"),
+        Path("queue/instruction_and_state_routing_tests.rs"),
+        Path("queue/routing_batch_admission_tests.rs"),
+        Path("queue/teu_limit_and_backlog_tests.rs"),
+        Path("queue/routing_projection_resilience_tests.rs"),
+        Path("queue/capacity_and_concurrency_tests.rs"),
+        Path("queue/pressure_resync_tests.rs"),
+        Path("queue/expiry_tracking_tests.rs"),
+        Path("queue/inflight_tracking_tests.rs"),
+        Path("queue/lane_reservation_tests.rs"),
+        Path("queue/lane_reservation_terminal_fault_tests.rs"),
+        Path("queue/reservation_recovery_tests.rs"),
+    ),
+    Path("crates/iroha_core/src/queue/journal.rs"): (
+        Path("journal_reservation_commit_preflight.rs"),
+        Path("journal_direct_file_io.rs"),
+        Path("plan_journal_bounds_tests.rs"),
+        Path("plan_journal_replay_tests.rs"),
+    ),
+    Path("crates/iroha_core/src/state.rs"): (
+        Path("state/vpn_lease_validation.rs"),
+        Path("state/diagnostic_state_generation.rs"),
+        Path("state/autonomous_predecessor_application.rs"),
+        Path("state/state_commit_lock_order_tests.rs"),
+        Path("state/transfer_transcript_tests.rs"),
+        Path("state/block_proof_tests.rs"),
+        Path("state/range_bounds.rs"),
+        Path("state/deserialize_core.rs"),
+        Path("state/deserialize_world.rs"),
+        Path("state/default_oracle.rs"),
+    ),
     Path("crates/iroha_core/src/snapshot.rs"): (
         Path("snapshot/support_policy_tests.rs"),
         Path("snapshot/write_roundtrip_tests.rs"),
         Path("snapshot/reconciliation_generation_tests.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/evidence.rs"): (
+        Path("evidence/missing_signer_pop_test.rs"),
+        Path("evidence/signature_missing_test.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/mod.rs"): (
+        Path("tests/mod_authoritative_runtime_gate_01_support.rs"),
+        Path("tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs"),
+        Path("tests/mod_authoritative_runtime_gate_02_physical_prefix.rs"),
+        Path("tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs"),
+        Path("tests/mod_authoritative_runtime_gate_04_routes_and_dequeue.rs"),
+        Path("tests/mod_authoritative_runtime_gate_05_ownership_maintenance.rs"),
+        Path("tests/mod_authoritative_runtime_gate_06_source_isolation.rs"),
+        Path("tests/mod_authoritative_runtime_gate_07_wire_bounds.rs"),
+        Path("tests/mod_authoritative_runtime_gate_08_capacity_and_control.rs"),
+        Path("tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/status.rs"): (
+        Path("status/test_guards.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2.rs"): (
+        Path("tests/v2_adapter_activation_context.rs"),
+        Path("v2/persistence_and_deferred_tests.rs"),
+        Path("tests/v2_adapter_01_replay_and_registry.rs"),
+        Path("tests/v2_adapter_02_view_and_lock_progress.rs"),
+        Path("tests/v2_adapter_03_tc_and_terminal_ingress.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_worker.rs"): (
         Path("v2_worker/exact_output_rollover_claim.rs"),
@@ -71,38 +199,97 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_worker_reply_route_cases.rs"),
         Path("tests/v2_worker_backpressure_cases.rs"),
         Path("v2_worker/applied_height_handoff_tests.rs"),
+        Path("v2_worker/upstream_reply_route_test.rs"),
         Path("tests/v2_worker_serve_unsealed_cases.rs"),
         Path("tests/v2_worker_serve_decision_restart_cases.rs"),
+        Path("tests/v2_worker_certified_serve_budget_cases.rs"),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): tuple(
-        Path(f"tests/v2_runtime_unsealed_{index:02}.rs") for index in range(7)
+    Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): (
+        Path("v2_runtime/dormant_producer_ownership.rs"),
+        Path("v2_runtime/adapter_runtime.rs"),
+        Path("tests/v2_runtime_unsealed_00.rs"),
+        Path("tests/v2_runtime_unsealed_01.rs"),
+        Path("tests/v2_runtime_unsealed_02.rs"),
+        Path("tests/v2_runtime_unsealed_03.rs"),
+        Path("tests/v2_runtime_unsealed_04.rs"),
+        Path("tests/v2_runtime_unsealed_05.rs"),
+        Path("tests/v2_runtime_unsealed_06.rs"),
+        Path("tests/v2_runtime_upstream_exact_ownership.rs"),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_runner.rs"): tuple(
-        Path(f"tests/v2_runner_unsealed_{index:02}.rs") for index in range(3)
+    Path("crates/iroha_core/src/sumeragi/v2_runner.rs"): (
+        Path("v2_runner/height_ingress_bindings.rs"),
+        Path("v2_runner/lifecycle_terminal_recovery.rs"),
+        Path("v2_runner/finalized_output_rollover.rs"),
+        Path("v2_runner/canonical_recovery_ingress.rs"),
+        Path("v2_runner/merge_sidecar_recovery.rs"),
+        Path("v2_runner_error.rs"),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_apply.rs"): tuple(
-        Path(f"tests/v2_apply_unsealed_{index:02}.rs") for index in range(3)
+    Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"): (
+        Path("tests/v2_runner_unsealed_00.rs"),
+        Path("tests/v2_runner_unsealed_01.rs"),
+        Path("tests/v2_runner_unsealed_02.rs"),
+        Path("tests/v2_runner_upstream_recovery.rs"),
+        Path("tests/v2_runner_lifecycle_startup_order.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_apply.rs"): (
+        Path("v2_apply/autonomous_recovery_types.rs"),
+        Path("v2_apply/reconciliation_authority.rs"),
+        Path("v2_apply/committed_carrier_cleanup.rs"),
+        Path("v2_apply/error_recovery.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"): (
+        Path("tests/reducer_timeout_and_projection.rs"),
         Path("tests/v2_core_reducer_primitive_projection.rs"),
         Path("reducer/counterfeit_boundary_capability_test.rs"),
     ),
+    Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"): (
+        Path("refinement_constructor_test_helpers.rs"),
+        Path("refinement/transition_gate_tail.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_core/refinement_cases.rs"): (
+        Path("refinement_cases/effect_candidate.rs"),
+        Path("refinement_cases/terminal_body_pipeline.rs"),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_core/tests.rs"): (
+        Path("tests/committee_fallback_and_retransmit.rs"),
         Path("tests/v2_core_view_zero_parent_binding.rs"),
         Path("tests/empty_replay_resume_test.rs"),
         Path("tests/v2_core_terminal_transactionality.rs"),
     ),
+    Path("crates/iroha_core/src/sumeragi/v2_effects.rs"): (
+        Path("tests/v2_effects_terminal_and_body_pipeline.rs"),
+        Path("tests/v2_effects_serialized_rebind.rs"),
+        Path("tests/v2_effects_01_view_churn_and_runtime_steps.rs"),
+        Path("tests/v2_effects_02_admission_handoffs.rs"),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
+        Path("v2_lane_work/durable_historical_lane_output.rs"),
+        Path("v2_lane_work/certificate_execution_role.rs"),
         Path("v2_lane_work/canonical_executed_block_application_repair.rs"),
+        Path("v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs"),
+        Path("v2_lane_work/recovery_and_rollover_budget_cases.rs"),
         Path("tests/v2_lane_work_native_signing_guard.rs"),
+        Path("v2_lane_work/native_amx_route_and_receipt_tests.rs"),
         Path("tests/v2_lane_work_observer_role.rs"),
         Path("tests/v2_lane_work_native_body_recovery.rs"),
         Path("tests/v2_lane_work_effect_queue.rs"),
+        Path("v2_lane_work/historical_recovery_and_carrier_tests.rs"),
+        Path("v2_lane_work/autonomous_carrier_lifecycle_tests.rs"),
+        Path("v2_lane_work/autonomous_new_view_ingress_tests.rs"),
+        Path("v2_lane_work/merge_signing_persistence_tests.rs"),
     ),
     Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
         Path("sumeragi_v2_runner/restart_timing_test.rs"),
+        Path("sumeragi_v2_runner/status_validation_helpers.rs"),
+    ),
+    Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"): (
+        Path("verus_proofs/production_transition_contracts.rs"),
+        Path("verus_proofs/in_flight_first_release_proofs.rs"),
+        Path("verus_proofs/production_kernel_tail.rs"),
     ),
 }
+
+
 def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
     """Copy only the config-v6 merge/pending projection and its live consumers."""
 
@@ -271,6 +458,43 @@ def test_ledger_is_canonical_json() -> None:
     parsed = json.loads(source)
 
     assert source == json.dumps(parsed, indent=2, ensure_ascii=False) + "\n"
+
+
+def test_revision4_model_contract_is_registered() -> None:
+    module = load_checker()
+
+    assert "SumeragiV2Revision4" in module.REQUIRED_MODEL_MODULES
+    assert "SumeragiV2Revision4.cfg" in module.REQUIRED_TLC_CONFIGS
+    assert "SumeragiV2Revision4Liveness.cfg" in module.REQUIRED_TLC_CONFIGS
+    assert not module._revision4_model_contract_errors(module.FORMAL_DIR)
+
+
+def test_revision4_model_contract_rejects_output_repair_as_progress_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for filename in (
+        "SumeragiV2Revision4.tla",
+        "SumeragiV2Revision4.cfg",
+        "SumeragiV2Revision4Liveness.cfg",
+    ):
+        shutil.copy2(module.FORMAL_DIR / filename, formal_dir / filename)
+    model = formal_dir / "SumeragiV2Revision4.tla"
+    source = model.read_text(encoding="utf-8")
+    source = source.replace(
+        "    /\\ WF_vars(ActivateSuccessor)\n",
+        "    /\\ WF_vars(ActivateSuccessor)\n"
+        "    /\\ WF_vars(RepairFinalizedOutput)\n",
+        1,
+    )
+    model.write_text(source, encoding="utf-8")
+
+    errors = module._revision4_model_contract_errors(formal_dir)
+    assert any(
+        "finalized-output repair may not be" in error for error in errors
+    ), errors
 
 
 def copy_audited_rank_leaf_contract_fixture(tmp_path: Path, module) -> Path:
@@ -1454,6 +1678,34 @@ def test_reviewed_rust_include_manifests_are_static_and_current() -> None:
     assert module._reviewed_rust_include_manifest_errors() == []
 
 
+def test_reviewed_rust_include_manifest_rejects_ignored_untracked_component(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    parent = repo_root / "parent.rs"
+    component = repo_root / "test_ignored_component.rs"
+    parent.write_text('include!("test_ignored_component.rs");\n', encoding="utf-8")
+    component.write_text("// ignored include component\n", encoding="utf-8")
+    (repo_root / ".gitignore").write_text("test_*\n", encoding="utf-8")
+    module.subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True)
+    module.subprocess.run(
+        ["git", "add", ".gitignore", "parent.rs"], cwd=repo_root, check=True
+    )
+    monkeypatch.setattr(
+        module,
+        "_REVIEWED_RUST_INCLUDE_MANIFESTS",
+        {"parent.rs": ("test_ignored_component.rs",)},
+    )
+    errors = module._reviewed_rust_include_manifest_errors(repo_root)
+
+    assert any(
+        str(component) in error and "must be Git-tracked" in error for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize("parent_relative", REVIEWED_RUST_INCLUDE_MANIFESTS)
 def test_each_reviewed_rust_include_manifest_fails_closed(
     tmp_path: Path,
@@ -1472,7 +1724,6 @@ def test_each_reviewed_rust_include_manifest_fails_closed(
             (ROOT_DIR / parent_relative).parent / component_relative,
             destination,
         )
-
     relative = parent_relative.as_posix()
     errors: list[str] = []
     _path, expanded = module._read_reviewed_rust_source(
@@ -2254,12 +2505,19 @@ def _synthetic_production_trace_certificate(module) -> dict[str, object]:
             "verus_document_sha256": "7" * 64,
             "cross_tool_document_sha256": "8" * 64,
             "cross_tool_ledger_sha256": "5" * 64,
-            "cross_tool_component_evidence": {
+            "component_evidence": {
                 "tlaps_sha256": "6" * 64,
                 "verus_sha256": "7" * 64,
             },
             "verus_log_sha256": "9" * 64,
-            "machine_checked_completion": True,
+            "multilane_dependency_completion": True,
+            "multilane_ledger_dependencies": [
+                {"id": obligation_id, "status": status}
+                for obligation_id, status in (
+                    module.PRODUCTION_TRACE_EXTRACTION_LEDGER_DEPENDENCIES
+                )
+            ],
+            "global_machine_checked_completion": False,
         },
     }
 
@@ -2285,6 +2543,10 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         "reservation_cleanup_prefixes",
         "pre_kura_direct_reservation_release",
         "producer_kura_activation",
+        "startup_generation_crash_cas",
+        "startup_generation_recover_cas",
+        "startup_snapshot_recovery_authorization",
+        "startup_local_kura_custody_rehydration_cas",
         "producer_payload_transport_fanout",
         "producer_payload_fanout_queue_fence",
         "producer_payload_retransmission_fanout",
@@ -2320,27 +2582,15 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
     )
 
 
-def test_production_trace_certificate_keeps_unextracted_actions_explicit() -> None:
+def test_production_trace_certificate_extracts_every_required_action() -> None:
     module = load_checker()
-    assert module.PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS == (
-        "Crash",
-        "Recover",
-        "RecoverReservationSnapshot",
-        "RehydrateLocalKuraCustody",
-    )
-    assert all(
-        "RehydrateLocalKuraCustody" not in binding["model_actions"]
+    assert module.PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS == ()
+    bound = {
+        action
         for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
-    )
-
-    with pytest.raises(ValueError, match="model actions remain unextracted"):
-        module.build_production_trace_extraction_evidence(
-            {"machine_checked_completion": True},
-            tlaps_evidence={},
-            verus_evidence={},
-            cross_tool_evidence={},
-            artifacts=None,
-        )
+        for action in binding["model_actions"]
+    }
+    assert bound == set(module.PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS)
 
 
 @pytest.mark.parametrize(
@@ -2440,15 +2690,76 @@ def test_production_trace_certificate_rejects_snapshot_recovery_bridge_drift(
         module._production_trace_extraction_source_snapshot()
 
 
-def test_production_trace_certificate_rejects_erased_open_action_debt(
+def test_production_trace_certificate_rejects_roster_gated_lifecycle_process_generation(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = load_checker()
-    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS", ())
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(
+        candidate
+        for candidate in bindings
+        if candidate["id"] == "startup_snapshot_recovery_authorization"
+    )
+    claim_source = next(
+        source
+        for source in binding["supporting_sources"]
+        if source["symbol"] == "claim_runner_lifecycle_process_generation"
+    )
+    source_path = ROOT_DIR / claim_source["path"]
+    source = source_path.read_text(encoding="utf-8")
+    extraction_errors: list[str] = []
+    item = module._production_trace_unique_function(
+        root_dir=ROOT_DIR,
+        relative=claim_source["path"],
+        symbol=claim_source["symbol"],
+        impl_name=claim_source["impl"],
+        errors=extraction_errors,
+    )
+    assert extraction_errors == []
+    assert item is not None
+    configured_role_dispatch = "match role {"
+    roster_membership_gate = """if local_validator_index(context, local_peer, role)?.is_none() {
+        return Ok(None);
+    }
+    match role {"""
+    assert configured_role_dispatch in item.source
+    mutated_item = item.source.replace(
+        configured_role_dispatch,
+        roster_membership_gate,
+        1,
+    )
+    mutated_path = tmp_path / "roster-gated-lifecycle-process-generation.rs"
+    mutated_path.write_text(
+        source.replace(item.source, mutated_item, 1),
+        encoding="utf-8",
+    )
+    claim_source["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert "configured-role lifecycle process-generation claim" in message
+    assert "contains forbidden exact code tokens" in message
+    assert "local_validator_index" in message
+
+
+def test_production_trace_certificate_rejects_reintroduced_open_action_debt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_checker()
+    monkeypatch.setattr(
+        module, "PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS", ("Crash",)
+    )
 
     with pytest.raises(ValueError, match="do not partition the exact model-action"):
         module.build_production_trace_extraction_evidence(
-            {"machine_checked_completion": True},
+            module.load_ledger(),
             tlaps_evidence={},
             verus_evidence={},
             cross_tool_evidence={},
@@ -3503,7 +3814,7 @@ def test_production_trace_certificate_rejects_missing_proof_linkage(
         lambda *args, **kwargs: expected,
     )
     observed = copy.deepcopy(expected)
-    del observed["proof_linkage"]["cross_tool_component_evidence"]
+    del observed["proof_linkage"]["component_evidence"]
 
     errors = module._production_trace_extraction_evidence_errors(
         {},

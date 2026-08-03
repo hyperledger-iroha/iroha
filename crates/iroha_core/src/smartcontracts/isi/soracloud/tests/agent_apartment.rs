@@ -1,7 +1,6 @@
 //! Authoritative SoraCloud agent-apartment ledger transition tests.
 
 use super::*;
-
 #[test]
 fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
@@ -126,9 +125,12 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
     let wallet_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
         .parse()
         .expect("canonical wallet asset definition");
-    Register::asset_definition(
-        AssetDefinition::numeric(wallet_asset_definition_id.clone()).with_name("xor".to_string()),
-    )
+    Register::asset_definition(AssetDefinition::numeric(
+        wallet_asset_definition_id.clone(),
+        "xor".to_string(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
     .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
 
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {

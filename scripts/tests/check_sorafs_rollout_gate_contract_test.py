@@ -492,7 +492,7 @@ ACTIVE_SORAFS_TODO_DISCOVERY_ROOTS = (
     SCRIPTS_DIR,
     REPO_ROOT / "ci",
 )
-ACTIVE_SORAFS_TODO_CONTENT_DISCOVERY_ROOTS = (SCRIPTS_DIR,)
+ACTIVE_SORAFS_TODO_CONTENT_DISCOVERY_ROOTS = ACTIVE_SORAFS_TODO_DISCOVERY_ROOTS[1:-1]
 ACTIVE_SORAFS_TODO_DISCOVERY_EXCLUDED_PARTS = {
     "build",
     "docs",
@@ -6063,32 +6063,27 @@ def test_rollout_runner_step_artifacts_match_command_outputs() -> None:
     assert failures == {}
 
 
-def test_source_entry_runner_examples_cover_required_source_entry_kinds() -> None:
-    missing: dict[str, list[str]] = {}
-    checked: list[str] = []
-    for runner in RUNNERS:
+def test_transparency_runners_require_precollected_producer_evidence() -> None:
+    requirements = {
+        "run_sorafs_ai_prescreen_rollout_evidence.py": (
+            "--transparency-producer-evidence",
+            "validate_transparency_producer_evidence",
+        ),
+        "run_sorafs_transparency_rollout_evidence.py": (
+            "--source-entry-producer-evidence",
+            "validate_source_entry_producer_evidence",
+        ),
+    }
+
+    for runner_name, (option, validator) in requirements.items():
+        runner = SCRIPTS_DIR / runner_name
         source = read(runner)
-        if "--source-entry" not in source:
-            continue
-        module = load_script_module(runner, f"sorafs_source_entry_runner_{runner.stem}")
-        required_kinds = required_source_entry_kinds(module)
-        if not required_kinds:
-            continue
         example = runner_example(runner)
         assert example is not None
-        example_source = read(example)
-        checked.append(runner.name)
-        missing_kinds = sorted(
-            source_kind
-            for source_kind in required_kinds
-            if f"{source_kind}=" not in example_source
-        )
-        if missing_kinds:
-            missing[runner.name] = missing_kinds
-        assert example_source.count("--source-entry") >= len(required_kinds)
-
-    assert checked
-    assert missing == {}
+        assert 'parser.add_argument("--source-entry",' not in source
+        assert option in source
+        assert validator in source
+        assert option in read(example)
 
 
 def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
@@ -6152,22 +6147,12 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     )
     assert "test_response_file_rejects_duplicate_auth_options_without_values" in reputation_test
     assert "test_auth_option_prefix_abbreviations_fail_without_values" in reputation_test
-    assert "--source-entry must use KIND=PATH form" in ai_runner
-    assert "--source-entry must use KIND=PATH form" in transparency_runner
-    assert "diagnostic_text_is_canonical" in ai_runner
-    assert "diagnostic_text_is_canonical" in transparency_runner
-    assert "not diagnostic_text_is_canonical(source_kind)" in ai_runner
-    assert "not diagnostic_text_is_canonical(source_kind)" in transparency_runner
-    assert "not diagnostic_text_is_canonical(path)" in ai_runner
-    assert "not diagnostic_text_is_canonical(path)" in transparency_runner
-    assert "source_kind.strip()" not in ai_runner
-    assert "source_kind.strip()" not in transparency_runner
-    assert "path.strip()" not in ai_runner
-    assert "path.strip()" not in transparency_runner
-    assert "source-entry supplied for unsupported kind" in ai_runner
-    assert "source-entry supplied for unsupported kind" in transparency_runner
-    assert "duplicate source-entry kind" in ai_runner
-    assert "duplicate source-entry kind" in transparency_runner
+    assert "validate_transparency_producer_evidence" in ai_runner
+    assert "validate_source_entry_producer_evidence" in transparency_runner
+    assert "Generic live source-entry submission is not supported" in ai_runner
+    assert "Generic live source-entry submission is not supported" in transparency_runner
+    assert "TRANSPARENCY_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC" in ai_runner
+    assert "SOURCE_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC" in transparency_runner
     assert "CYCLE_ID_HEX_PATTERN" in transparency_runner
     assert "--cycle-id must be a 16-byte lowercase hex string" in transparency_runner
     assert "got `{spec}`" not in ai_runner
@@ -6181,26 +6166,12 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     assert "got `{existing}`" not in transparency_runner
     assert "test_malformed_provider_proof_does_not_echo_spec" in reputation_test
     assert "test_duplicate_provider_proof_does_not_echo_provider_id" in reputation_test
-    assert "test_malformed_source_entry_does_not_echo_spec" in ai_test
-    assert "test_malformed_source_entry_does_not_echo_spec" in transparency_test
-    assert (
-        "test_source_entry_rejects_padded_or_unicode_components_without_trimming"
-        in ai_test
-    )
-    assert (
-        "test_source_entry_rejects_padded_or_unicode_components_without_trimming"
-        in transparency_test
-    )
-    assert "test_unknown_source_kind_fails_before_plan_without_leaking" in ai_test
-    assert (
-        "test_unknown_source_kind_fails_before_plan_without_leaking"
-        in transparency_test
-    )
-    assert "test_duplicate_source_kind_fails_before_plan_without_leaking" in ai_test
-    assert (
-        "test_duplicate_source_kind_fails_before_plan_without_leaking"
-        in transparency_test
-    )
+    assert "test_transparency_producer_evidence_read_error_is_sanitized" in ai_test
+    assert "test_source_producer_evidence_read_error_is_sanitized" in transparency_test
+    assert "test_transparency_producer_evidence_rejects_generic_public_ingress" in ai_test
+    assert "test_source_producer_evidence_rejects_generic_public_ingress" in transparency_test
+    assert "test_missing_transparency_producer_evidence_fails_before_plan" in ai_test
+    assert "test_missing_source_producer_evidence_fails_before_plan" in transparency_test
     assert (
         "test_generated_artifact_context_conflict_does_not_echo_existing_value"
         in transparency_test
@@ -6234,14 +6205,18 @@ def test_runner_missing_input_diagnostics_are_payload_free() -> None:
         "release evidence supplied for unrequired kind"
         in runner_sources["run_sorafs_reference_sdk_release_evidence.py"]
     )
-    assert (
-        "missing required source-entry coverage"
-        in runner_sources["run_sorafs_ai_prescreen_rollout_evidence.py"]
+    assert "--transparency-producer-evidence" in runner_sources[
+        "run_sorafs_ai_prescreen_rollout_evidence.py"
+    ]
+    assert "pre-collected moderation transparency producer evidence is invalid" in (
+        runner_sources["run_sorafs_ai_prescreen_rollout_evidence.py"]
     )
-    assert (
-        "missing required source-entry coverage"
-        in runner_sources["run_sorafs_transparency_rollout_evidence.py"]
-    )
+    assert "--source-entry-producer-evidence" in runner_sources[
+        "run_sorafs_transparency_rollout_evidence.py"
+    ]
+    assert "pre-collected source-entry producer evidence is invalid" in runner_sources[
+        "run_sorafs_transparency_rollout_evidence.py"
+    ]
     assert (
         "missing --provider-proof for requested provider"
         in runner_sources["run_sorafs_reputation_rollout_evidence.py"]
@@ -6259,11 +6234,11 @@ def test_runner_missing_input_diagnostics_are_payload_free() -> None:
     helper_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_ai_prescreen_rollout_evidence_test.py"
     )
-    assert "dataset_manifest\" not in captured.err" in helper_test
+    assert '"missing-producer-evidence.json" not in captured.err' in helper_test
     helper_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_transparency_rollout_evidence_test.py"
     )
-    assert "feed_source\" not in captured.err" in helper_test
+    assert '"missing-producer-evidence.json" not in captured.err' in helper_test
 
 
 def test_sorafs_hedging_billing_observability_pack_is_checked_in() -> None:
@@ -6994,8 +6969,7 @@ def test_rollout_runners_use_shared_caught_argument_error_reporting() -> None:
     assert collected_raw_errors == []
     for script_name in collected_error_runners:
         source = read(SCRIPTS_DIR / script_name)
-        assert "from sorafs_path_identity import error_diagnostic_label" in source
-        assert "errors.append(error_diagnostic_label(error))" in source
+        assert "emit_runner_exception(error)" in source
     assert local_parser_error_handlers == []
     assert missing_shared_raises == []
 
@@ -8367,7 +8341,11 @@ def test_sorafs_operator_helpers_do_not_reintroduce_plain_file_io() -> None:
         for path in sorted(root.rglob("*sorafs*")):
             if not path.is_file():
                 continue
-            if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+            if (
+                "__pycache__" in path.parts
+                or "target" in path.parts
+                or path.suffix in {".pyc", ".pyo"}
+            ):
                 continue
             if SCRIPTS_DIR / "tests" in path.parents:
                 continue
@@ -8396,7 +8374,11 @@ def test_sorafs_operator_helpers_use_shared_path_identity_for_resolution() -> No
         for path in sorted(root.rglob("*sorafs*")):
             if not path.is_file():
                 continue
-            if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+            if (
+                "__pycache__" in path.parts
+                or "target" in path.parts
+                or path.suffix in {".pyc", ".pyo"}
+            ):
                 continue
             if SCRIPTS_DIR / "tests" in path.parents:
                 continue
@@ -16046,7 +16028,7 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`.",
         "its dry-run JSON includes the checker-backed `evidence_contract` map with the schema and required payload fields for every SFM-4a evidence kind, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live canaries.",
-        "It also rejects duplicate or unsupported `--source-entry` kinds before dry-run output or live canaries.",
+        "It requires a pre-collected `--transparency-producer-evidence` artifact and validates its schema, freshness, deployment context, durable provenance, and absence of generic public ingress before dry-run output or live canaries.",
         "cross-artifact runner/workflow binding failures are reflected on the offending artifacts in the emitted summary.",
         "Committee artifacts also bind `result_count` to the unique canonical `results[].name` inventory, require reviewed `ai-prescreen-committee-result-*` labels without non-production markers, and reject duplicate committee-result entries before promotion can report ready.",
         "Runner and committee artifacts must use reviewed `cid:*` subject references without non-production markers",
@@ -16055,9 +16037,9 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
         "The AI prescreen gate fail-closes when more than one valid runner, workflow, notification manifest, executor summary, or policy anchor appears, and clears the mixed `valid_runner_bindings`, `valid_workflow_digests`, `valid_notification_manifest_digests`, `valid_executor_summary_digests`, or `valid_policy_digests` set before aggregate promotion can report ready.",
         "Operator workflow artifacts also bind `route_count` and `passed_route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready.",
         "Juror notification transport artifacts also bind `probe_count` and `accepted_count` to the unique canonical `probes[].delivery_id` inventory and require reviewed `ai-prescreen-notification-delivery-*` labels without non-production markers, at least one accepted notification delivery, and coverage for both shipped `submit_commit` and `submit_reveal` actions before promotion can report ready.",
-        "Transparency publication artifacts also bind `probe_count`, `passed_probe_count`, and `source_entry_probe_count` to the unique canonical `probes[].source_kind` inventory, require source-entry probe coverage for every required transparency source kind, and reject duplicate or unknown source-entry probes before promotion can report ready.",
-        "Transparency publication artifacts must explicitly set `payload_bytes_included`, `private_payloads_included`, and `response_bodies_included` to `false` before promotion can report ready.",
-        "AI pre-screen payload-safety artifacts must also explicitly set `payload_bytes_included` and `private_payloads_included` to `false` on operator workflow, juror notification transport, commit/reveal executor, transparency publication, Governance DAG, end-to-end workflow, and their nested route, probe, artifact, and execution-summary records; executor artifacts must set `private_payload_files_copied` to `false`, and transparency probes must set `response_body_included` to `false` before promotion can report ready.",
+        "Moderation transparency producer evidence binds `producer_count` to the unique canonical `producers[].source_kind` inventory, requires every reviewed moderation source kind, and rejects duplicate or unknown producers before promotion can report ready.",
+        "Transparency publication artifacts must explicitly set `payload_bytes_included` and `private_payloads_included` to `false` before promotion can report ready.",
+        "AI pre-screen payload-safety artifacts must also explicitly set `payload_bytes_included` and `private_payloads_included` to `false` on operator workflow, juror notification transport, commit/reveal executor, transparency publication, Governance DAG, end-to-end workflow, and their nested route, producer, artifact, and execution-summary records; executor artifacts must set `private_payload_files_copied` to `false` before promotion can report ready.",
         "Commit/reveal executor artifacts also bind `artifact_count` and `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and require the reviewed executor bundle to cover `executor.env` and `run.sh`.",
         "Commit/reveal executor evidence must also use the reviewed `sorafs-moderation-ballots-executor` service identity before promotion can report ready.",
         "Duplicate or unknown artifact entries are rejected before promotion can report ready.",
@@ -16207,19 +16189,18 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     )
     assert "every route response must include a `body_blake3_hex` digest" in normalized_plan
     assert 'require_minimum_int(payload, "accepted_count", 1, errors)' in checker
+    assert 'require_bool_true(payload, "generic_public_ingress_absent", errors)' in checker
     assert (
-        "require_minimum_int(\n"
+        "require_string_inventory_count_match(\n"
         "        payload,\n"
-        "        \"source_entry_probe_count\",\n"
-        "        len(REQUIRED_TRANSPARENCY_SOURCE_KINDS),"
+        "        \"producers\",\n"
+        "        \"producer_count\","
     ) in checker
     assert 'require_false(payload, "payload_bytes_included", errors)' in checker
     assert 'require_false(payload, "private_payloads_included", errors)' in checker
-    assert 'require_false(payload, "response_bodies_included", errors)' in checker
     assert 'require_false(payload, "private_payload_files_copied", errors)' in checker
     assert 'require_false(record, "payload_bytes_included", errors)' in checker
     assert 'require_false(record, "private_payloads_included", errors)' in checker
-    assert 'require_false(record, "response_body_included", errors)' in checker
     assert 'require_false(summary, "payload_bytes_included", errors)' in checker
     assert 'require_false(summary, "private_payloads_included", errors)' in checker
     assert (
@@ -16269,13 +16250,14 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert "test_executor_artifacts_must_not_include_unknown_values" in checker_test
     assert "test_executor_artifacts_must_cover_required_bundle_files" in checker_test
     assert "test_executor_service_name_must_match_reviewed_service" in checker_test
-    assert "test_transparency_probe_count_must_match_unique_source_kinds" in checker_test
-    assert "test_transparency_probes_must_not_duplicate_source_kind" in checker_test
+    assert "test_transparency_producer_count_must_match_inventory" in checker_test
+    assert "test_transparency_producers_must_not_duplicate_source_kind" in checker_test
     assert (
         "test_transparency_source_kinds_must_not_include_unknown_values"
         in checker_test
     )
-    assert "test_transparency_source_entry_probe_count_must_match_probe_count" in checker_test
+    assert "test_transparency_producer_evidence_rejects_generic_public_ingress" in checker_test
+    assert "test_transparency_producer_provenance_is_required" in checker_test
     assert "test_governance_producer_count_must_match_unique_producers" in checker_test
     assert "test_governance_producers_must_not_duplicate" in checker_test
     assert "test_governance_producers_must_not_include_unknown_values" in checker_test
@@ -16314,15 +16296,15 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     roadmap = read(REPO_ROOT / "roadmap.md")
 
     assert "Build payload-free non-runner SoraFS AI pre-screening canary artifacts." in builder
-    assert 'LIVE_PROBE_ONLY_KINDS = ("runner", "committee")' in builder
-    assert "if kind not in LIVE_PROBE_ONLY_KINDS" in builder
-    assert "Runner and committee evidence must come from deployed live-probe commands." in builder
+    assert 'EXTERNAL_EVIDENCE_ONLY_KINDS = ("runner", "committee", "transparency_publication")' in builder
+    assert "kind not in EXTERNAL_EVIDENCE_ONLY_KINDS" in builder
+    assert "transparency producer evidence must come from trusted internal producers" in builder
     assert "validate_evidence_payload(" in builder
     assert "ValidationOptions(" in builder
     assert "now_unix=args.now_unix" in builder
     assert 'parser.add_argument("--now-unix", type=positive_int_arg, required=True)' in builder
     assert "REQUIRED_OPERATOR_ROUTES" in builder
-    assert "REQUIRED_TRANSPARENCY_SOURCE_KINDS" in builder
+    assert "REQUIRED_TRANSPARENCY_SOURCE_KINDS" not in builder
     assert "REQUIRED_GOVERNANCE_PRODUCERS" in builder
     assert "REQUIRED_E2E_STEPS" in builder
     assert "REQUIRED_EXECUTOR_SERVICE_NAME" in builder
@@ -16419,7 +16401,7 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
         "test_path_arguments_reject_encoded_or_platform_values_without_leaking"
         in builder_tests
     )
-    assert "test_builder_rejects_live_probe_only_kinds" in builder_tests
+    assert "test_builder_rejects_external_evidence_only_kinds" in builder_tests
     assert "test_generated_non_live_canaries_pass_their_kind_contract" in builder_tests
     assert "test_operator_workflow_canary_records_passed_route_count" in builder_tests
     assert "test_governance_edge_inventory_must_match_edge_count" in builder_tests
@@ -21117,7 +21099,7 @@ def test_pdp_provider_protocol_exposes_only_the_canonical_v1_api_family() -> Non
 
 def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
     source = read(SORAFS_GOVERNANCE_DAG_PLAN)
-    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
+    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS) + read(SORAFS_GOVERNANCE_DAG_SERVICE_RS.parent / "governance_service/tests/restart_and_live_kubo.rs")
 
     outstanding_start = source.index("Still outstanding:")
     outstanding_end = source.index("\n## Goals & Scope", outstanding_start)
@@ -23295,7 +23277,7 @@ def test_production_evidence_viewer_service_surface_is_exposed_once() -> None:
         assert route not in torii
         assert f'paths.insert(\n        "{route}".to_owned(),' not in openapi
 
-    read_only_appeal_finance_routes = (
+    authenticated_appeal_finance_publication_routes = (
         "/v1/sorafs/appeals/finance/reports",
         "/v1/sorafs/appeals/finance/weekly-rollups",
     )
@@ -23311,8 +23293,12 @@ def test_production_evidence_viewer_service_surface_is_exposed_once() -> None:
         paths = json.loads(read(spec_path))["paths"]
         for route in retired_viewer_routes:
             assert route not in paths
-        for route in read_only_appeal_finance_routes:
-            assert set(paths[route]) == {"get"}
+        for route in authenticated_appeal_finance_publication_routes:
+            operations = paths[route]
+            assert set(operations) == {"get", "post"}
+            assert operations["post"]["security"]
+            assert "202" in operations["post"]["responses"]
+            assert "200" not in operations["post"]["responses"]
 
 
 def test_evidence_viewer_canary_builder_is_checked_in() -> None:
@@ -24941,9 +24927,9 @@ def test_transparency_deployed_services_stay_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "It does not yet ship deployed GAR/moderation/appeal producers that call the source-entry route, captured deployed aggregate producer/scheduler rollout evidence, proof service hardening, deployed public receipt explorer rollout evidence, deployed proof-token issuance producers/explorer-linking rollout evidence, or deployed moderation ledger publication service described by the original plan.",
-        "The local ledger layer now covers bundle materialization and readback; remaining deployed-service work is to wire live producer, anchoring, explorer, proof-token, and hardening evidence for:",
-        "deployed GAR/moderation/appeal/legal-hold/redaction/evidence-viewer/proof-token issuance service producers and captured rollout evidence remain open",
+        "It does not yet ship deployed GAR/moderation/appeal producers wired through trusted internal adapters, captured deployed aggregate producer/scheduler rollout evidence, proof service hardening, deployed public receipt explorer rollout evidence, deployed proof-token issuance producers/explorer-linking rollout evidence, or deployed moderation ledger publication service described by the original plan.",
+        "trusted in-process producer boundary with no generic public source-entry write route",
+        "deployed trusted GAR/moderation/appeal/legal-hold/redaction/evidence-viewer/proof-token producers and captured rollout evidence remain open",
         "deployed anchoring and captured service rollout evidence remain open",
         "deployed service hardening and captured public rollout evidence are not shipped",
         "captured deployed public rollout evidence is not shipped",
@@ -25080,7 +25066,7 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
     for catalog_guard in (
         "constfnstock_runtime_provider_slot_is_supported(slot:IrohaRuntimeProviderSlotV1)->bool",
         "wire_id>=IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()",
-        "wire_id<=IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()",
+        "wire_id<=IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id()",
         "any(|binding|!stock_runtime_provider_slot_is_supported(binding.slot()))",
         "protocol::resolve(bindings)",
     ):
@@ -25202,11 +25188,11 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
         "binds publication and explorer `route_count` to the unique canonical `routes[].name` inventories with duplicate route rejection",
         "binds publication `cycle_detail_probe_count` to the unique canonical `cycle_detail_probes[].name` inventory using reviewed `transparency-cycle-detail-*` probe labels without non-production markers, with duplicate cycle-detail probe rejection",
         "keeps probe-based `probe_count` values equal to the `probes[]` inventory length",
-        "requires source-entry, source-event, publish-due, and proof-token issuance sub-counts to match the corresponding `probes[]` role inventory",
+        "requires source-event, publish-due, and proof-token issuance sub-counts to match the corresponding `probes[]` role inventory",
         "binds privacy aggregate and proof-token issuance `probe_count` values to the unique canonical `probes[].action` inventory with duplicate action rejection",
         "rejects unknown values outside the reviewed source-kind, route, cycle-detail-probe, privacy-action, and proof-token action inventories",
         "`--dry-run` emits the command plan plus the checker-backed `evidence_contract` field map without contacting live services.",
-        "It also rejects duplicate or unsupported `--source-entry` kinds before rendering the plan or contacting live services.",
+        "The collection runner accepts only a pre-collected `--source-entry-producer-evidence` artifact and validates it before contacting live services.",
         "transparency rollout collection runner reject non-lowercase, wrong-length, or otherwise malformed `--cycle-id` values before rendering dry-run command plans or contacting deployed cycle-detail routes.",
         "emits `valid_publication_bindings` so aggregate promotion can prove every ready cycle digest came from a source-bound publication. Aggregate promotion also rechecks source-bound artifact fingerprints against `valid_source_batch_digests` and cycle-bound artifact fingerprints against `valid_cycle_digests` before final promotion can report ready.",
         "The transparency gate fail-closes when more than one valid source batch, publication cycle, or publication binding anchor appears, and clears the mixed `valid_source_batch_digests`, `valid_cycle_digests`, or `valid_publication_bindings` set before aggregate promotion can report ready.",
@@ -25230,11 +25216,8 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     assert 'label="valid_cycle_digests"' in checker
     assert 'label="valid_publication_bindings"' in checker
     assert '        "probe_count",' in checker
-    assert (
-        "source_entry_probe_count\""
-        in checker
-        and "field=\"source_kind\"" in checker
-    )
+    assert '"generic_public_ingress_absent"' in checker
+    assert '"producer_count"' in checker and 'field="source_kind"' in checker
     assert "field=\"action\"" in checker
     assert "REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES" in checker
     assert "CYCLE_DETAIL_PROBE_LABEL_PATTERN" in checker
@@ -25260,11 +25243,13 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
     assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
     assert "test_routes_must_not_include_unknown_values_for_route_artifacts" in checker_test
-    assert "test_source_entry_probes_must_not_duplicate_source_kind" in checker_test
+    assert "test_source_entry_producers_must_not_duplicate_source_kind" in checker_test
     assert (
-        "test_source_entry_probe_kinds_must_not_include_unknown_values"
+        "test_source_entry_producer_kinds_must_not_include_unknown_values"
         in checker_test
     )
+    assert "test_source_entry_producer_evidence_rejects_public_generic_ingress" in checker_test
+    assert "test_source_entry_producer_evidence_requires_durable_provenance" in checker_test
     assert "test_privacy_aggregate_actions_must_not_duplicate" in checker_test
     assert (
         "test_privacy_aggregate_actions_must_not_include_unknown_values"
@@ -25308,7 +25293,7 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     assert "test_specific_probe_counts_must_match_probe_roles" in checker_test
     assert "test_privacy_aggregate_probe_role_counts_must_sum_to_probe_count" in checker_test
     docs = re.sub(r"\s+", " ", read(SORAFS_TRANSPARENCY_PLAN))
-    assert "unique canonical `probes[].source_kind` inventory" in docs
+    assert "unique canonical `producers[].source_kind` inventory" in docs
     assert "duplicate source-kind rejection" in docs
     assert "proof-token issuance `probe_count` values" in docs
     assert "unique canonical `probes[].action` inventory" in docs
@@ -25337,7 +25322,7 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     assert "ValidationOptions(" in builder
     assert "now_unix=args.now_unix" in builder
     assert 'parser.add_argument("--now-unix", type=positive_int_arg, required=True)' in builder
-    assert "DEFAULT_REQUIRED_SOURCE_KINDS" in builder
+    assert 'CANARY_KINDS = tuple(kind for kind in KIND_BY_NAME if kind != "source_entry")' in builder
     assert "REQUIRED_PUBLICATION_ROUTES" in builder
     assert "REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES" in builder
     assert "REQUIRED_EXPLORER_ROUTES" in builder
@@ -25350,8 +25335,7 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     assert "default=len(REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES)" in builder
     assert "test_builds_payload_free_proof_token_issuance_canary" in builder_tests
     assert "test_generated_canaries_pass_full_transparency_gate" in builder_tests
-    assert "test_duplicate_source_kind_coverage_fails_closed" in builder_tests
-    assert "test_unknown_source_kind_coverage_fails_closed" in builder_tests
+    assert "write_source_producer_evidence" in builder_tests
     assert "test_duplicate_publication_route_coverage_fails_closed" in builder_tests
     assert "test_unknown_publication_route_coverage_fails_closed" in builder_tests
     assert "test_missing_cycle_detail_probe_coverage_fails_closed" in builder_tests
@@ -25383,11 +25367,11 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     )
     assert "scripts/build_sorafs_transparency_canary.py" in roadmap
     assert "--cycle-detail-probe\ntransparency-cycle-detail-readback" in publication_example
-    assert (
+    assert not (
         SCRIPTS_DIR
         / "examples"
         / "sorafs_transparency_source_entry_canary.args.example"
-    ).is_file()
+    ).exists()
     assert (
         SCRIPTS_DIR
         / "examples"
@@ -25415,7 +25399,6 @@ def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
         "/v1/sorafs/transparency/cycles",
         "/v1/sorafs/transparency/explorer",
         "/v1/sorafs/transparency/explorer/ui",
-        "/v1/sorafs/transparency/source-entries/{source_kind}",
         "/v1/sorafs/transparency/privacy-aggregates/source-events",
         "/v1/sorafs/transparency/privacy-aggregates/publish-due",
         "/v1/sorafs/transparency/tokens",
@@ -25453,7 +25436,6 @@ def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
         "explorer",
         "explorer-canary",
         "publication-canary",
-        "source-entry",
         "privacy-aggregate",
         "token-issuance",
         "tokens",
@@ -25461,8 +25443,6 @@ def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
         "transparency explorer",
         "transparency explorer-canary",
         "transparency publication-canary",
-        "transparency source-entry",
-        "transparency source-entry canary",
         "transparency privacy-aggregate source-event",
         "transparency privacy-aggregate publish-due",
         "transparency privacy-aggregate canary",
@@ -26017,7 +25997,6 @@ def test_gateway_fixture_d1_is_governed_compliance_refusal() -> None:
 
 def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> None:
     shipped_local_routes = (
-        "/v1/sorafs/transparency/source-entries/{source_kind}",
         "/v1/sorafs/transparency/tokens",
         "/v1/sorafs/transparency/tokens/verify",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff",
@@ -26044,7 +26023,6 @@ def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> N
         "gateway compliance feed-sync-proof",
         "gateway compliance promotion-canary",
         "gar proof-token",
-        "transparency source-entry",
         "transparency publication-canary",
     )
 

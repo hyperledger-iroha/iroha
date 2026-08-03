@@ -1,4 +1,6 @@
-use iroha_crypto::HashOf;
+use std::num::NonZeroU64;
+
+use iroha_crypto::{HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use ivm::{IVM, syscalls};
 
 mod common;
@@ -6,8 +8,6 @@ use common::assemble_syscalls;
 
 #[test]
 fn registers_compact_helper_matches_syscall() {
-    use iroha_crypto::MerkleProof;
-
     let target = 9usize;
     let mut vm = IVM::new(u64::MAX);
     let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT as u8]);
@@ -45,33 +45,56 @@ fn registers_compact_helper_matches_syscall() {
     let val = vm.register(target);
     let leaf = register_leaf_digest(val, false);
     let root_hash = root_h;
+    let commitment = register_commitment(root_hash.clone());
 
-    assert!(proof_h.clone().verify_sha256(&leaf, &root_hash));
-    assert!(proof_s.clone().verify_sha256(&leaf, &root_hash));
-    let full_h: MerkleProof<[u8; 32]> = proof_h.into_full_with_index(target as u32);
-    let full_s: MerkleProof<[u8; 32]> = proof_s.into_full_with_index(target as u32);
-    assert!(full_h.verify_sha256(&leaf, &root_hash, 32));
-    assert!(full_s.verify_sha256(&leaf, &root_hash, 32));
+    assert!(proof_h.verify_sha256(&leaf, &commitment));
+    assert!(proof_s.verify_sha256(&leaf, &commitment));
+    let full_h: MerkleProof<[u8; 32]> = proof_h
+        .try_into_full()
+        .expect("helper emitted a canonical compact proof");
+    let full_s: MerkleProof<[u8; 32]> = proof_s
+        .try_into_full()
+        .expect("syscall emitted a canonical compact proof");
+    assert_eq!(full_h.leaf_index(), target as u32);
+    assert_eq!(full_s.leaf_index(), target as u32);
+    assert!(full_h.verify_sha256(&leaf, &commitment));
+    assert!(full_s.verify_sha256(&leaf, &commitment));
 }
 
 #[test]
-fn registers_compact_depth_cap_adjusts_root() {
+fn registers_compact_depth_cap_returns_partial_root() {
+    let target = 200usize;
     let mut vm = IVM::new(u64::MAX);
     vm.set_register(3, 0xDEADBEEFCAFEBABE);
-    vm.set_register(12, 0xBADC0FFEE0DDFACE);
+    vm.set_register(target, 0xBADC0FFEE0DDFACE);
 
-    let (full_proof, full_root) = vm.registers.merkle_compact(12, None);
-    let leaf = register_leaf_digest(vm.register(12), false);
-    let full_root_hash = full_root;
-    assert!(full_proof.clone().verify_sha256(&leaf, &full_root_hash));
+    let (full_proof, full_root) = vm.registers.merkle_compact(target, None);
+    let leaf = register_leaf_digest(vm.register(target), false);
+    let full_commitment = register_commitment(full_root.clone());
+    assert!(full_proof.verify_sha256(&leaf, &full_commitment));
 
-    let (capped_proof, capped_root) = vm.registers.merkle_compact(12, Some(8));
-    let capped_root_hash = capped_root;
-    assert!(capped_proof.clone().verify_sha256(&leaf, &capped_root_hash));
+    let (capped_proof, capped_root) = vm.registers.merkle_compact(target, Some(4));
+    assert_eq!(capped_proof.depth(), 4);
+    let capped_full = capped_proof
+        .clone()
+        .try_into_full()
+        .expect("helper emitted a canonical capped proof");
+    assert_eq!(capped_full.leaf_index(), target as u32 & 0x0f);
+    let computed_partial = capped_full
+        .compute_partial_root_sha256(&leaf, usize::from(capped_proof.depth()))
+        .expect("proof height equals compact depth");
+    assert_eq!(computed_partial, capped_root);
+    assert_ne!(capped_root, full_root);
 
-    if capped_root != full_root {
-        assert!(!capped_proof.verify_sha256(&leaf, &full_root_hash));
-    }
+    // A capped path cannot be promoted to membership in the full register tree.
+    assert!(!capped_proof.verify_sha256(&leaf, &full_commitment));
+}
+
+fn register_commitment(root: HashOf<MerkleTree<[u8; 32]>>) -> MerkleTreeCommitment<[u8; 32]> {
+    MerkleTreeCommitment::new(
+        root,
+        NonZeroU64::new(256).expect("register count is non-zero"),
+    )
 }
 
 fn register_leaf_digest(value: u64, private: bool) -> HashOf<[u8; 32]> {

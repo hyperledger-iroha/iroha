@@ -7,9 +7,18 @@ import argparse
 import json
 import os
 import re
+import stat
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+try:
+    from scripts import taira_constants
+except ModuleNotFoundError as error:
+    if error.name != "scripts":
+        raise
+    import taira_constants
 
 
 DEFAULT_NETWORK_ADDRESS = "0.0.0.0:1337"
@@ -17,20 +26,36 @@ DEFAULT_TORII_ADDRESS = "0.0.0.0:18080"
 DEFAULT_INSTALL_ROOT = Path("/etc/iroha/taira-validator")
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
-MAX_VALIDATORS = 128
-TAIRA_CHAIN_DISCRIMINANT = 369
+MAX_VALIDATORS = 31
+GENESIS_EXPECTED_HASH_PLACEHOLDER = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
+GENESIS_EXPECTED_HASH_RE = re.compile(r"[0-9a-f]{64}")
+TAIRA_CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 MIB = 1024 * 1024
 # First-release privacy admission permits one 9 MiB action per 10 MiB
-# transaction and two such actions per block. The body retains another 1 MiB
-# for canonical block framing and context attachments.
+# transaction. Revision 4 caps the complete canonical consensus payload at
+# 16 MiB, leaving 6 MiB for canonical block framing and context attachments
+# when one maximum transaction is present.
 TAIRA_PRIVACY_MAX_ACTION_BYTES = 9 * MIB
 TAIRA_TRANSACTION_MAX_BYTES = 10 * MIB
-TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK = 2
-TAIRA_BLOCK_BODY_FRAME_HEADROOM_BYTES = MIB
-TAIRA_BLOCK_MAX_PAYLOAD_BYTES = (
-    TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK * TAIRA_TRANSACTION_MAX_BYTES
-    + TAIRA_BLOCK_BODY_FRAME_HEADROOM_BYTES
-)
+TAIRA_BLOCK_MAX_PAYLOAD_BYTES = 16 * MIB
+TAIRA_PRIVACY_ISSUER_DESIGNATED_VALIDATOR = "taira-validator-1"
+TAIRA_PRIVACY_ISSUER_SECTION = "[torii.privacy_bootle_lantern_issuer]"
+TAIRA_PRIVACY_ISSUER_BASE_FIELDS = {
+    "enabled",
+    "state_dir",
+    "max_inflight",
+    "authorization_lifetime_blocks",
+    "max_records",
+    "max_total_bytes",
+    "terminal_retention_blocks",
+}
+TAIRA_PRIVACY_ISSUER_BINDING_FIELDS = {
+    "issuer_id_hex",
+    "policy_id_hex",
+    "runtime_provider_registry_handle",
+    "runtime_provider_registry_revision",
+    "runtime_provider_registry_policy_digest_hex",
+}
 # Sumeragi isolates an ordinary body envelope, a completion envelope with the
 # recommended 1,024-hash manifest, and one timeout vote for every source.
 SUMERAGI_BODY_ENVELOPE_HEADROOM_BYTES = 64 * 1024
@@ -42,9 +67,7 @@ TAIRA_BODY_SOURCE_MIN_BYTES = (
     + SUMERAGI_TIMEOUT_VOTE_RESERVE_BYTES
 )
 # Preserve the reviewed whole-MiB deployment margin above the exact minimum.
-TAIRA_BODY_SOURCE_BYTES = (
-    (TAIRA_BODY_SOURCE_MIN_BYTES + MIB - 1) // MIB
-) * MIB
+TAIRA_BODY_SOURCE_BYTES = ((TAIRA_BODY_SOURCE_MIN_BYTES + MIB - 1) // MIB) * MIB
 # Exact completion/P2P geometry is checked by the node at height activation.
 # The deployment rounds its maximum block-sync plaintext frame to the next MiB
 # and its maximum 10 MiB transaction frame to the next MiB. The global cap adds
@@ -57,9 +80,53 @@ TAIRA_MAX_FRAME_BYTES = (
 )
 BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 I105_ALPHABET = tuple(BASE58_ALPHABET) + (
-    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
-    "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
-    "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
+    "ｲ",
+    "ﾛ",
+    "ﾊ",
+    "ﾆ",
+    "ﾎ",
+    "ﾍ",
+    "ﾄ",
+    "ﾁ",
+    "ﾘ",
+    "ﾇ",
+    "ﾙ",
+    "ｦ",
+    "ﾜ",
+    "ｶ",
+    "ﾖ",
+    "ﾀ",
+    "ﾚ",
+    "ｿ",
+    "ﾂ",
+    "ﾈ",
+    "ﾅ",
+    "ﾗ",
+    "ﾑ",
+    "ｳ",
+    "ヰ",
+    "ﾉ",
+    "ｵ",
+    "ｸ",
+    "ﾔ",
+    "ﾏ",
+    "ｹ",
+    "ﾌ",
+    "ｺ",
+    "ｴ",
+    "ﾃ",
+    "ｱ",
+    "ｻ",
+    "ｷ",
+    "ﾕ",
+    "ﾒ",
+    "ﾐ",
+    "ｼ",
+    "ヱ",
+    "ﾋ",
+    "ﾓ",
+    "ｾ",
+    "ｽ",
 )
 I105_INDEX = {symbol: index for index, symbol in enumerate(I105_ALPHABET)}
 I105_CHECKSUM_LEN = 6
@@ -141,6 +208,87 @@ def _load_toml(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _is_strong_lower_hex_digest(value: Any) -> bool:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        return False
+    return len(set(bytes.fromhex(value))) >= 8
+
+
+def _validate_privacy_issuer_template(
+    template: dict[str, Any], validators: list[ValidatorEntry]
+) -> None:
+    """Reject partial or fleet-wide first-release issuer configuration."""
+
+    torii = template.get("torii")
+    if not isinstance(torii, dict):
+        return
+    issuer = torii.get("privacy_bootle_lantern_issuer")
+    if issuer is None:
+        return
+    if not isinstance(issuer, dict):
+        raise ValueError(
+            "config template `[torii.privacy_bootle_lantern_issuer]` must be a table"
+        )
+    enabled = issuer.get("enabled")
+    if type(enabled) is not bool:
+        raise ValueError(
+            "config template privacy issuer `enabled` must be exactly boolean"
+        )
+    expected_fields = TAIRA_PRIVACY_ISSUER_BASE_FIELDS | (
+        TAIRA_PRIVACY_ISSUER_BINDING_FIELDS if enabled else set()
+    )
+    if set(issuer) != expected_fields:
+        raise ValueError(
+            "config template privacy issuer contains partial, dormant, or unknown bindings"
+        )
+    expected_state_dir = (
+        "/var/lib/iroha/taira-validator-1/privacy/bootle-lantern/issuer"
+    )
+    expected_bounds = {
+        "state_dir": expected_state_dir,
+        "max_inflight": 2,
+        "authorization_lifetime_blocks": 300,
+        "max_records": 4096,
+        "max_total_bytes": 13_557_760,
+        "terminal_retention_blocks": 4096,
+    }
+    for field, expected in expected_bounds.items():
+        if type(issuer.get(field)) is not type(expected) or issuer[field] != expected:
+            raise ValueError(
+                f"config template privacy issuer `{field}` must be exactly {expected!r}"
+            )
+    if not enabled:
+        return
+    if (
+        sum(
+            validator.slug == TAIRA_PRIVACY_ISSUER_DESIGNATED_VALIDATOR
+            for validator in validators
+        )
+        != 1
+    ):
+        raise ValueError(
+            "enabled privacy issuer requires exactly one taira-validator-1 roster entry"
+        )
+    for field in (
+        "issuer_id_hex",
+        "policy_id_hex",
+        "runtime_provider_registry_policy_digest_hex",
+    ):
+        if not _is_strong_lower_hex_digest(issuer.get(field)):
+            raise ValueError(
+                f"config template privacy issuer `{field}` must be a strong lowercase digest"
+            )
+    if (
+        issuer.get("runtime_provider_registry_handle")
+        != "runtime://privacy/bootle-lantern/taira-primary"
+        or type(issuer.get("runtime_provider_registry_revision")) is not int
+        or issuer["runtime_provider_registry_revision"] != 1
+    ):
+        raise ValueError(
+            "config template privacy issuer provider binding differs from Taira V1"
+        )
+
+
 def _require_string(payload: dict[str, Any], key: str, context: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -148,18 +296,14 @@ def _require_string(payload: dict[str, Any], key: str, context: str) -> str:
     return value.strip()
 
 
-def _require_positive_integer(
-    payload: dict[str, Any], key: str, context: str
-) -> int:
+def _require_positive_integer(payload: dict[str, Any], key: str, context: str) -> int:
     value = payload.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{context} field `{key}` must be a positive integer")
     return value
 
 
-def _scaled_sumeragi_body_bytes(
-    template: dict[str, Any], validator_count: int
-) -> int:
+def _scaled_sumeragi_body_bytes(template: dict[str, Any], validator_count: int) -> int:
     """Return an aggregate ingress budget isolating every configured source."""
 
     sumeragi = template.get("sumeragi")
@@ -172,11 +316,10 @@ def _scaled_sumeragi_body_bytes(
     max_payload_bytes = _require_positive_integer(
         block, "max_payload_bytes", block_context
     )
-    if max_payload_bytes < TAIRA_BLOCK_MAX_PAYLOAD_BYTES:
+    if max_payload_bytes != TAIRA_BLOCK_MAX_PAYLOAD_BYTES:
         raise ValueError(
-            f"{block_context} field `max_payload_bytes` must be at least "
-            f"{TAIRA_BLOCK_MAX_PAYLOAD_BYTES} bytes to carry two maximum "
-            "first-release privacy transactions and canonical block framing"
+            f"{block_context} field `max_payload_bytes` must equal the "
+            f"revision-4 protocol ceiling of {TAIRA_BLOCK_MAX_PAYLOAD_BYTES} bytes"
         )
     queues = sumeragi.get("queues")
     if not isinstance(queues, dict):
@@ -220,18 +363,13 @@ def _scaled_sumeragi_body_bytes(
             f"{network_context} field `max_frame_bytes_block_sync` must be at "
             f"least {TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES} bytes"
         )
-    if (
-        max_frame_bytes
-        < max_frame_bytes_block_sync + TAIRA_AEAD_FRAME_OVERHEAD_BYTES
-    ):
+    if max_frame_bytes < max_frame_bytes_block_sync + TAIRA_AEAD_FRAME_OVERHEAD_BYTES:
         raise ValueError(
             f"{network_context} field `max_frame_bytes` must include "
             f"{TAIRA_AEAD_FRAME_OVERHEAD_BYTES} AEAD bytes beyond "
             "`max_frame_bytes_block_sync`"
         )
-    minimum = (
-        validator_count + authenticated_non_validator_sources + 1
-    ) * source_bytes
+    minimum = (validator_count + authenticated_non_validator_sources + 1) * source_bytes
     return max(configured, minimum)
 
 
@@ -411,8 +549,11 @@ def _canonical_socket_address(value: str, context: str) -> str:
         canonical_host = f"[{host.lower()}]"
     else:
         host, separator, port_text = body.rpartition(":")
-        if not separator or not host or ":" in host or any(
-            character in host for character in "[]/@#"
+        if (
+            not separator
+            or not host
+            or ":" in host
+            or any(character in host for character in "[]/@#")
         ):
             raise ValueError(f"{context} must contain one host and one port")
         canonical_host = host.lower()
@@ -430,14 +571,89 @@ def _canonical_socket_address(value: str, context: str) -> str:
 
     canonical = _format_literal("addr", f"{canonical_host}:{port}")
     if literal_match is not None and canonical != raw:
-        raise ValueError(
-            f"{context} is not canonical; expected `{canonical}`"
-        )
+        raise ValueError(f"{context} is not canonical; expected `{canonical}`")
     return canonical
 
 
-def _blake3_token_hash(token: str) -> str:
+def _blake3_token_hash(token: str, native_tool: Path | None = None) -> str:
     """Return the canonical digest stored in account-onboarding config."""
+
+    try:
+        token_bytes = token.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise ValueError(
+            "onboarding token must contain only printable ASCII bytes"
+        ) from error
+    if not 32 <= len(token_bytes) <= 256:
+        raise ValueError("onboarding token must contain 32 through 256 bytes")
+    if any(byte < 0x21 or byte > 0x7E for byte in token_bytes):
+        raise ValueError(
+            "onboarding token must contain only non-whitespace printable ASCII bytes"
+        )
+    if native_tool is not None:
+        if not native_tool.is_absolute():
+            raise ValueError("native onboarding-token hash tool must be absolute")
+        try:
+            resolved = native_tool.resolve(strict=True)
+            info = native_tool.lstat()
+        except OSError as error:
+            raise ValueError(
+                "cannot inspect native onboarding-token hash tool"
+            ) from error
+        if (
+            resolved != native_tool
+            or stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or not os.access(native_tool, os.X_OK)
+        ):
+            raise ValueError(
+                "native onboarding-token hash tool must be a canonical, "
+                "single-link, non-writable executable"
+            )
+        try:
+            result = subprocess.run(
+                [str(native_tool)],
+                input=token_bytes,
+                capture_output=True,
+                check=False,
+                timeout=30,
+                env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+                umask=0o077,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ValueError(
+                "native onboarding-token hash tool could not run"
+            ) from error
+        if (
+            result.returncode != 0
+            or result.stderr
+            or re.fullmatch(rb"[0-9a-f]{64}\n", result.stdout) is None
+        ):
+            raise ValueError(
+                "native onboarding-token hash tool refused canonical derivation"
+            )
+        after = native_tool.lstat()
+        if (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+            info.st_mode,
+            info.st_nlink,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+            after.st_mode,
+            after.st_nlink,
+        ):
+            raise ValueError("native onboarding-token hash tool changed while running")
+        return f"blake3:{result.stdout[:-1].decode('ascii')}"
 
     try:
         import blake3
@@ -449,24 +665,125 @@ def _blake3_token_hash(token: str) -> str:
 
 
 def _write_private_text(path: Path, value: str) -> None:
-    """Create or replace one runtime-only sidecar without a permissive mode window."""
+    """Atomically replace one private regular file without following planted links."""
 
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    parent_descriptor = _open_private_directory(path.parent, "private output parent")
+    temporary_name = f".{path.name}.{os.urandom(16).hex()}.tmp"
+    descriptor = -1
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            descriptor = -1
-            handle.write(value)
-            if not value.endswith("\n"):
-                handle.write("\n")
+        try:
+            existing = os.stat(
+                path.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            existing = None
+        if existing is not None and (
+            not stat.S_ISREG(existing.st_mode)
+            or existing.st_nlink != 1
+            or existing.st_uid != os.getuid()
+            or existing.st_gid != os.getgid()
+            or stat.S_IMODE(existing.st_mode) & 0o077
+        ):
+            raise ValueError(f"private output path is not a safe regular file: {path}")
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        os.fchmod(descriptor, 0o600)
+        payload = (value if value.endswith("\n") else f"{value}\n").encode("utf-8")
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:  # pragma: no cover - defensive kernel contract
+                raise OSError("short write while publishing private output")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        final = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(final.st_mode)
+            or final.st_nlink != 1
+            or final.st_uid != os.getuid()
+            or final.st_gid != os.getgid()
+            or stat.S_IMODE(final.st_mode) != 0o600
+        ):
+            raise ValueError(f"published private output has an unsafe identity: {path}")
+        os.fsync(parent_descriptor)
     finally:
-        if descriptor >= 0:  # pragma: no cover - defensive cleanup
+        if descriptor >= 0:
             os.close(descriptor)
-    path.chmod(0o600)
+        try:
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            pass
+        os.close(parent_descriptor)
 
 
-def _validate_account_onboarding_secrets(
-    shared: SharedSecrets, context: str
-) -> None:
+def _open_private_directory(path: Path, label: str) -> int:
+    """Open one canonical owner-private directory without following links."""
+
+    if not path.is_absolute():
+        raise ValueError(f"{label} must be an absolute path")
+    try:
+        if path.resolve(strict=True) != path:
+            raise ValueError(
+                f"{label} must be canonical and contain no symlink components"
+            )
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as error:
+        raise ValueError(f"cannot open {label}: {path}") from error
+    info = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_gid != os.getgid()
+        or stat.S_IMODE(info.st_mode) & 0o077
+    ):
+        os.close(descriptor)
+        raise ValueError(f"{label} must be owner-controlled and mode 0700: {path}")
+    return descriptor
+
+
+def _ensure_private_directory(path: Path, label: str) -> None:
+    """Create one direct child of a private directory, or validate it in place."""
+
+    if not path.is_absolute() or path.name in {"", ".", ".."}:
+        raise ValueError(f"{label} must be a canonical absolute child path")
+    parent_descriptor = _open_private_directory(path.parent, f"{label} parent")
+    try:
+        try:
+            os.mkdir(path.name, 0o700, dir_fd=parent_descriptor)
+            os.fsync(parent_descriptor)
+        except FileExistsError:
+            pass
+    finally:
+        os.close(parent_descriptor)
+    descriptor = _open_private_directory(path, label)
+    os.close(descriptor)
+
+
+def _validate_account_onboarding_secrets(shared: SharedSecrets, context: str) -> None:
     fields = {
         "account_onboarding_authority": shared.account_onboarding_authority,
         "account_onboarding_private_key": shared.account_onboarding_private_key,
@@ -625,9 +942,7 @@ def _validate_mandatory_soracloud_runtime_signer(
         )
 
 
-def _validate_kagemusha_command_submitter(
-    shared: SharedSecrets, context: str
-) -> None:
+def _validate_kagemusha_command_submitter(shared: SharedSecrets, context: str) -> None:
     """Validate Taira's optional online command-submitter credential.
 
     This application-service signer is used by hosted top-up/redemption
@@ -644,7 +959,9 @@ def _validate_kagemusha_command_submitter(
         )
 
 
-def _load_validator_tables(payload: dict[str, Any], context: str) -> list[dict[str, Any]]:
+def _load_validator_tables(
+    payload: dict[str, Any], context: str
+) -> list[dict[str, Any]]:
     validators_raw = payload.get("validators")
     if not isinstance(validators_raw, list):
         raise ValueError(f"{context} must define a `validators` array of tables")
@@ -755,7 +1072,9 @@ def load_secret_material(path: Path) -> SecretMaterial:
         slug = _require_string(raw, "slug", f"secrets file `{path}`")
         private_key = _require_string(raw, "private_key", f"secrets file `{slug}`")
         if slug in secrets:
-            raise ValueError(f"secrets file `{path}` duplicates validator slug `{slug}`")
+            raise ValueError(
+                f"secrets file `{path}` duplicates validator slug `{slug}`"
+            )
         secrets[slug] = private_key
     shared_raw = payload.get("shared", {})
     if not isinstance(shared_raw, dict):
@@ -897,9 +1216,7 @@ def load_secret_material(path: Path) -> SecretMaterial:
             f"secrets file `{path}` must configure both torii_faucet_authority "
             "and torii_faucet_private_key"
         )
-    _validate_mandatory_soracloud_runtime_signer(
-        shared, f"secrets file `{path}`"
-    )
+    _validate_mandatory_soracloud_runtime_signer(shared, f"secrets file `{path}`")
     _validate_kagemusha_command_submitter(shared, f"secrets file `{path}`")
     return SecretMaterial(
         validators=secrets,
@@ -999,12 +1316,12 @@ def render_genesis_template(
     if (
         isinstance(max_payload_size_bytes, bool)
         or not isinstance(max_payload_size_bytes, int)
-        or max_payload_size_bytes < TAIRA_BLOCK_MAX_PAYLOAD_BYTES
+        or max_payload_size_bytes != TAIRA_BLOCK_MAX_PAYLOAD_BYTES
     ):
         raise ValueError(
             f"base genesis {base_genesis_path} sumeragi_v2.da_layout."
-            f"max_payload_size_bytes must be at least "
-            f"{TAIRA_BLOCK_MAX_PAYLOAD_BYTES}"
+            f"max_payload_size_bytes must equal the revision-4 protocol "
+            f"ceiling of {TAIRA_BLOCK_MAX_PAYLOAD_BYTES}"
         )
     transaction_parameter_tables = [
         transaction["parameters"]["transaction"]
@@ -1092,27 +1409,26 @@ def render_genesis_template(
     )
 
     target = output_dir / "genesis.json"
-    target.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _write_private_text(target, json.dumps(payload, ensure_ascii=False, indent=2))
     signing_command = output_dir / "genesis-signing-command.txt"
-    signing_command.write_text(
+    _write_private_text(
+        signing_command,
         " ".join(
             [
-                "kagami genesis sign",
+                '"$TAIRA_GENESIS_EXTERNAL_SIGNER"',
+                "--unsigned-genesis",
                 str(target),
-                "--config",
+                "--peer-config",
                 str(output_dir / validators[0].slug / "config.toml"),
-                "--private-key \"$TAIRA_GENESIS_PRIVATE_KEY\"",
                 "--bound-manifest-out",
                 str(target),
-                "--out-file",
+                "--signed-genesis-out",
                 str(output_dir / "genesis.signed.nrt"),
+                "--expected-hash-out",
+                str(output_dir / "genesis.expected_hash"),
             ]
         )
         + "\n",
-        encoding="utf-8",
     )
     return target
 
@@ -1136,6 +1452,11 @@ def load_roster(
             f"roster must define at most {MAX_VALIDATORS} validators for the "
             "Sumeragi v2 protocol"
         )
+    if (len(validators_raw) - 1) % 3 != 0:
+        raise ValueError(
+            "roster must define an exact 3f + 1 validator committee "
+            "(4, 7, 10, ..., 31)"
+        )
     if secrets is None and secrets_path is not None:
         secrets = load_secret_material(secrets_path)
     secrets_by_slug = secrets.validators if secrets is not None else {}
@@ -1150,6 +1471,11 @@ def load_roster(
         if not isinstance(raw, dict):
             raise ValueError(f"validator entry #{index} must be a TOML table")
         slug = _require_string(raw, "slug", f"validator `{index}`")
+        expected_slug = f"taira-validator-{index}"
+        if slug != expected_slug:
+            raise ValueError(
+                f"validator entry #{index} slug must be exactly `{expected_slug}`"
+            )
         public_key = _require_string(raw, "public_key", f"validator `{slug}`")
         private_key_value = raw.get("private_key", secrets_by_slug.get(slug))
         if not isinstance(private_key_value, str) or not private_key_value.strip():
@@ -1171,7 +1497,10 @@ def load_roster(
             raise ValueError(f"validator `{slug}` field `network_address` is invalid")
         if not isinstance(torii_address, str) or not torii_address.strip():
             raise ValueError(f"validator `{slug}` field `torii_address` is invalid")
-        if not isinstance(torii_public_address, str) or not torii_public_address.strip():
+        if (
+            not isinstance(torii_public_address, str)
+            or not torii_public_address.strip()
+        ):
             raise ValueError(
                 f"validator `{slug}` must set `torii_public_address` explicitly; "
                 "public Taira deploys use direct per-node Torii hostnames"
@@ -1184,7 +1513,9 @@ def load_roster(
         if public_key in seen_public_keys:
             raise ValueError(f"validator public_key `{public_key}` is duplicated")
         if public_address in seen_public_addresses:
-            raise ValueError(f"validator public_address `{public_address}` is duplicated")
+            raise ValueError(
+                f"validator public_address `{public_address}` is duplicated"
+            )
         if torii_public_address.strip() in seen_torii_public_addresses:
             raise ValueError(
                 f"validator torii_public_address `{torii_public_address.strip()}` is duplicated; "
@@ -1236,12 +1567,18 @@ def render_validator_config(
     manifest_directory: Path = DEFAULT_INSTALL_ROOT / "manifests",
     sorafs_admission_directory: Path = DEFAULT_INSTALL_ROOT / "sorafs_admission",
     sumeragi_body_bytes: int | None = None,
+    genesis_expected_hash: str | None = None,
+    genesis_file: Path | None = None,
+    privacy_issuer_state_dir: Path | None = None,
 ) -> str:
     """Rewrite the checked-in peer-1 baseline for one validator."""
 
     current_section: str | None = None
     skipping_array: str | None = None
     body_bytes_rewritten = False
+    staged_genesis_hash_placeholder = False
+    genesis_expected_hash_rewritten = False
+    genesis_file_rewritten = False
     rendered: list[str] = []
     trusted_peers_lines = _render_trusted_peers(validators)
     trusted_peers_pop_lines = _render_trusted_peers_pop(validators)
@@ -1258,6 +1595,9 @@ def render_validator_config(
         if stripped.startswith("[[") or stripped.startswith("["):
             current_section = stripped
             rendered.append(raw_line)
+            if current_section == "[genesis]" and genesis_file is not None:
+                rendered.append(f"file = {_quote_toml(str(genesis_file))}")
+                genesis_file_rewritten = True
             continue
 
         if current_section is None and stripped.startswith("public_key = "):
@@ -1275,11 +1615,47 @@ def render_validator_config(
             skipping_array = "trusted_peers_pop"
             continue
 
+        if current_section == TAIRA_PRIVACY_ISSUER_SECTION:
+            field = stripped.partition("=")[0].strip()
+            if field == "enabled" and (
+                validator.slug != TAIRA_PRIVACY_ISSUER_DESIGNATED_VALIDATOR
+            ):
+                rendered.append("enabled = false")
+                continue
+            if field == "state_dir":
+                state_dir = privacy_issuer_state_dir or Path(
+                    f"/var/lib/iroha/{validator.slug}/privacy/bootle-lantern/issuer"
+                )
+                rendered.append("state_dir = " + _quote_toml(str(state_dir)))
+                continue
+            if (
+                validator.slug != TAIRA_PRIVACY_ISSUER_DESIGNATED_VALIDATOR
+                and field in TAIRA_PRIVACY_ISSUER_BINDING_FIELDS
+            ):
+                continue
+
+        if (
+            current_section == "[genesis]"
+            and stripped.startswith("file = ")
+            and genesis_file is not None
+        ):
+            continue
+        if current_section == "[genesis]" and stripped.startswith("expected_hash = "):
+            genesis_expected_hash_rewritten = True
+            if genesis_expected_hash is None:
+                rendered.append(
+                    f'expected_hash = "{GENESIS_EXPECTED_HASH_PLACEHOLDER}"'
+                )
+                staged_genesis_hash_placeholder = True
+            else:
+                rendered.append(f'expected_hash = "{genesis_expected_hash}"')
+            continue
+
         if current_section == "[network]" and stripped.startswith("address = "):
-            rendered.append(f'address = {_quote_toml(validator.network_address)}')
+            rendered.append(f"address = {_quote_toml(validator.network_address)}")
             continue
         if current_section == "[network]" and stripped.startswith("public_address = "):
-            rendered.append(f'public_address = {_quote_toml(validator.public_address)}')
+            rendered.append(f"public_address = {_quote_toml(validator.public_address)}")
             continue
         if (
             current_section == "[sumeragi.queues]"
@@ -1290,11 +1666,11 @@ def render_validator_config(
             body_bytes_rewritten = True
             continue
         if current_section == "[torii]" and stripped.startswith("address = "):
-            rendered.append(f'address = {_quote_toml(validator.torii_address)}')
+            rendered.append(f"address = {_quote_toml(validator.torii_address)}")
             continue
         if current_section == "[torii]" and stripped.startswith("public_address = "):
             rendered.append(
-                f'public_address = {_quote_toml(validator.torii_public_address)}'
+                f"public_address = {_quote_toml(validator.torii_public_address)}"
             )
             continue
         if (
@@ -1303,7 +1679,7 @@ def render_validator_config(
             and shared.account_onboarding_authority is not None
         ):
             rendered.append(
-                f'authority = {_quote_toml(shared.account_onboarding_authority)}'
+                f"authority = {_quote_toml(shared.account_onboarding_authority)}"
             )
             continue
         if (
@@ -1312,7 +1688,7 @@ def render_validator_config(
             and onboarding_private_key_file is not None
         ):
             rendered.append(
-                f'private_key_file = {_quote_toml(str(onboarding_private_key_file))}'
+                f"private_key_file = {_quote_toml(str(onboarding_private_key_file))}"
             )
             continue
         if (
@@ -1321,7 +1697,7 @@ def render_validator_config(
             and shared.account_onboarding_credential_id is not None
         ):
             rendered.append(
-                f'id = {_quote_toml(shared.account_onboarding_credential_id)}'
+                f"id = {_quote_toml(shared.account_onboarding_credential_id)}"
             )
             continue
         if (
@@ -1348,14 +1724,14 @@ def render_validator_config(
             and stripped.startswith("token_hash = ")
             and onboarding_token_hash is not None
         ):
-            rendered.append(f'token_hash = {_quote_toml(onboarding_token_hash)}')
+            rendered.append(f"token_hash = {_quote_toml(onboarding_token_hash)}")
             continue
         if (
             current_section == "[torii.faucet]"
             and stripped.startswith("authority = ")
             and shared.torii_faucet_authority is not None
         ):
-            rendered.append(f'authority = {_quote_toml(shared.torii_faucet_authority)}')
+            rendered.append(f"authority = {_quote_toml(shared.torii_faucet_authority)}")
             continue
         if (
             current_section == "[torii.kagemusha_commands]"
@@ -1363,7 +1739,7 @@ def render_validator_config(
             and shared.kagemusha_commands_private_key is not None
         ):
             rendered.append(
-                f'private_key = {_quote_toml(shared.kagemusha_commands_private_key)}'
+                f"private_key = {_quote_toml(shared.kagemusha_commands_private_key)}"
             )
             continue
         if current_section == "[soracloud_runtime.submission.signer]":
@@ -1383,9 +1759,7 @@ def render_validator_config(
                 )
                 continue
             if field in signer_values:
-                rendered.append(
-                    f"{field} = {_quote_toml(signer_values[field] or '')}"
-                )
+                rendered.append(f"{field} = {_quote_toml(signer_values[field] or '')}")
                 continue
         if (
             current_section == "[torii.faucet]"
@@ -1393,7 +1767,7 @@ def render_validator_config(
             and faucet_private_key_file is not None
         ):
             rendered.append(
-                f'private_key_file = {_quote_toml(str(faucet_private_key_file))}'
+                f"private_key_file = {_quote_toml(str(faucet_private_key_file))}"
             )
             continue
         if (
@@ -1402,12 +1776,11 @@ def render_validator_config(
             and shared.streaming_identity_public_key is not None
         ):
             rendered.append(
-                f'identity_public_key = {_quote_toml(shared.streaming_identity_public_key)}'
+                f"identity_public_key = {_quote_toml(shared.streaming_identity_public_key)}"
             )
             continue
-        if (
-            current_section == "[sorafs.discovery.admission]"
-            and stripped.startswith("envelopes_dir = ")
+        if current_section == "[sorafs.discovery.admission]" and stripped.startswith(
+            "envelopes_dir = "
         ):
             rendered.append(
                 f"envelopes_dir = {_quote_toml(str(sorafs_admission_directory))}"
@@ -1429,8 +1802,7 @@ def render_validator_config(
             and shared.sorafs_council_signature_threshold is not None
         ):
             rendered.append(
-                "signature_threshold = "
-                f"{shared.sorafs_council_signature_threshold}"
+                f"signature_threshold = {shared.sorafs_council_signature_threshold}"
             )
             continue
         if (
@@ -1439,7 +1811,7 @@ def render_validator_config(
             and shared.streaming_identity_private_key is not None
         ):
             rendered.append(
-                f'identity_private_key = {_quote_toml(shared.streaming_identity_private_key)}'
+                f"identity_private_key = {_quote_toml(shared.streaming_identity_private_key)}"
             )
             continue
         if current_section == "[nexus.registry]" and stripped.startswith(
@@ -1452,9 +1824,7 @@ def render_validator_config(
         if current_section == "[nexus.registry]" and stripped.startswith(
             "cache_directory = "
         ):
-            rendered.append(
-                f"cache_directory = {_quote_toml(str(manifest_directory))}"
-            )
+            rendered.append(f"cache_directory = {_quote_toml(str(manifest_directory))}")
             continue
 
         rendered.append(raw_line)
@@ -1467,7 +1837,22 @@ def render_validator_config(
             f"rendered config for `{validator.slug}` could not rewrite the "
             "`[sumeragi.queues] body_bytes` assignment"
         )
-    if "REPLACE_WITH_" in rendered_text:
+    if not genesis_expected_hash_rewritten:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` lacks the mandatory "
+            "`[genesis] expected_hash` assignment"
+        )
+    if genesis_file is not None and not genesis_file_rewritten:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` lacks the mandatory "
+            "`[genesis]` table needed for its bundle-local file"
+        )
+    unresolved_text = rendered_text
+    if staged_genesis_hash_placeholder:
+        unresolved_text = unresolved_text.replace(
+            f'expected_hash = "{GENESIS_EXPECTED_HASH_PLACEHOLDER}"', "", 1
+        )
+    if "REPLACE_WITH_" in unresolved_text:
         raise ValueError(
             f"rendered config for `{validator.slug}` still contains template placeholder "
             "values; provide the matching validator/shared secrets in the roster or "
@@ -1484,53 +1869,98 @@ def render_bundle(
     only: str | None = None,
     base_genesis_path: Path | None = None,
     install_root: Path = DEFAULT_INSTALL_ROOT,
+    genesis_expected_hash: str | None = None,
+    bundle_root: Path | None = None,
+    onboarding_token_hash_tool: Path | None = None,
 ) -> list[Path]:
     """Render one config.toml per validator into output_dir."""
 
+    if genesis_expected_hash is not None and (
+        GENESIS_EXPECTED_HASH_RE.fullmatch(genesis_expected_hash) is None
+        or int(genesis_expected_hash[-2:], 16) & 1 == 0
+    ):
+        raise ValueError(
+            "genesis_expected_hash must be a lowercase 32-byte Iroha hash with its marker bit set"
+        )
     secret_material = (
         load_secret_material(secrets_path) if secrets_path is not None else None
     )
     validators = load_roster(roster_path, secrets=secret_material)
+    if only is not None and only not in {validator.slug for validator in validators}:
+        raise ValueError(
+            "only must identify one validator in the canonical Taira roster"
+        )
+    resolved_onboarding_token_hash: str | None = None
+    if (
+        secret_material is not None
+        and secret_material.shared.account_onboarding_api_token is not None
+    ):
+        resolved_onboarding_token_hash = _blake3_token_hash(
+            secret_material.shared.account_onboarding_api_token,
+            onboarding_token_hash_tool,
+        )
     template = _load_toml(base_config_path)
+    _validate_privacy_issuer_template(template, validators)
     sumeragi_body_bytes = _scaled_sumeragi_body_bytes(template, len(validators))
     template_text = base_config_path.read_text(encoding="utf-8")
-    install_root_text = str(install_root)
+    path_root = bundle_root if bundle_root is not None else install_root
+    install_root_text = str(path_root)
     if (
-        not install_root.is_absolute()
-        or install_root == Path("/")
+        not path_root.is_absolute()
+        or path_root == Path("/")
         or install_root_text.startswith("//")
         or os.path.normpath(install_root_text) != install_root_text
         or any(ord(character) < 0x20 for character in install_root_text)
     ):
-        raise ValueError(
-            "install_root must be a canonical, non-root absolute path"
-        )
-    output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    output_dir.chmod(0o700)
-    _write_private_text(output_dir / ".gitignore", "*\n!.gitignore")
+        root_label = "bundle_root" if bundle_root is not None else "install_root"
+        raise ValueError(f"{root_label} must be a canonical, non-root absolute path")
+    if bundle_root is not None:
+        if output_dir != bundle_root / "rendered":
+            raise ValueError(
+                "bundle-local rendering requires output_dir to equal bundle_root/rendered"
+            )
+        if not bundle_root.exists() or bundle_root.resolve(strict=True) != bundle_root:
+            raise ValueError("bundle_root must be an existing canonical directory")
+    if not output_dir.is_absolute():
+        raise ValueError("output_dir must be an absolute path")
+    _ensure_private_directory(output_dir, "render output directory")
+    if bundle_root is None:
+        _write_private_text(output_dir / ".gitignore", "*\n!.gitignore")
 
     written: list[Path] = []
     for validator in validators:
         if only is not None and validator.slug != only:
             continue
         target_dir = output_dir / validator.slug
-        target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        target_dir.chmod(0o700)
+        _ensure_private_directory(target_dir, f"{validator.slug} output directory")
         runtime_dir = target_dir / "runtime"
-        runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        runtime_dir.chmod(0o700)
+        _ensure_private_directory(runtime_dir, f"{validator.slug} runtime directory")
         manifest_dir = target_dir / "manifests"
-        manifest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        manifest_dir.chmod(0o700)
-        sorafs_admission_dir = target_dir / "sorafs_admission"
-        sorafs_admission_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        sorafs_admission_dir.chmod(0o700)
+        _ensure_private_directory(manifest_dir, f"{validator.slug} manifest directory")
+        if bundle_root is None:
+            sorafs_admission_dir = target_dir / "sorafs_admission"
+            _ensure_private_directory(
+                sorafs_admission_dir,
+                f"{validator.slug} SoraFS admission directory",
+            )
         onboarding_private_key_file: Path | None = None
-        onboarding_token_hash: str | None = None
         faucet_private_key_file: Path | None = None
-        installed_runtime_dir = install_root / "runtime"
-        installed_manifest_dir = install_root / "manifests"
-        installed_sorafs_admission_dir = install_root / "sorafs_admission"
+        if bundle_root is None:
+            installed_runtime_dir = install_root / "runtime"
+            installed_manifest_dir = install_root / "manifests"
+            installed_sorafs_admission_dir = install_root / "sorafs_admission"
+            genesis_file = None
+            privacy_issuer_state_dir = None
+        else:
+            installed_runtime_dir = target_dir / "runtime"
+            installed_manifest_dir = target_dir / "manifests"
+            installed_sorafs_admission_dir = (
+                target_dir / "configs/soranexus/taira/sorafs_admission"
+            )
+            genesis_file = bundle_root / "genesis.signed.nrt"
+            privacy_issuer_state_dir = (
+                target_dir / "runtime/privacy/bootle-lantern/issuer"
+            )
         if secret_material is not None:
             shared = secret_material.shared
             if shared.account_onboarding_private_key is not None:
@@ -1545,9 +1975,6 @@ def render_bundle(
                 _write_private_text(
                     runtime_dir / "onboarding-token",
                     shared.account_onboarding_api_token,
-                )
-                onboarding_token_hash = _blake3_token_hash(
-                    shared.account_onboarding_api_token
                 )
             if shared.torii_faucet_private_key is not None:
                 faucet_private_key_file = installed_runtime_dir / "faucet-signer.key"
@@ -1565,16 +1992,19 @@ def render_bundle(
                 validators,
                 shared_secrets=secret_material.shared if secret_material else None,
                 onboarding_private_key_file=onboarding_private_key_file,
-                onboarding_token_hash=onboarding_token_hash,
+                onboarding_token_hash=resolved_onboarding_token_hash,
                 faucet_private_key_file=faucet_private_key_file,
                 manifest_directory=installed_manifest_dir,
                 sorafs_admission_directory=installed_sorafs_admission_dir,
                 sumeragi_body_bytes=sumeragi_body_bytes,
+                genesis_expected_hash=genesis_expected_hash,
+                genesis_file=genesis_file,
+                privacy_issuer_state_dir=privacy_issuer_state_dir,
             ),
         )
-        (manifest_dir / "governance.manifest.json").write_text(
+        _write_private_text(
+            manifest_dir / "governance.manifest.json",
             _render_governance_manifest(validators),
-            encoding="utf-8",
         )
         written.append(target_path)
 
@@ -1627,6 +2057,28 @@ def main(argv: list[str] | None = None) -> int:
         "--only",
         help="render only one validator slug instead of the full bundle",
     )
+    parser.add_argument(
+        "--genesis-expected-hash",
+        help=(
+            "exact lowercase consensus-header hash printed by `kagami genesis sign`; "
+            "omit only for the non-runnable pre-signing bundle"
+        ),
+    )
+    parser.add_argument(
+        "--bundle-root",
+        help=(
+            "existing canonical private reset root; when set, --output-dir must "
+            "be its rendered/ child and every runtime/genesis/privacy path is "
+            "bound inside that reset"
+        ),
+    )
+    parser.add_argument(
+        "--onboarding-token-hash-tool",
+        help=(
+            "optional exact-source native helper that derives the onboarding "
+            "token BLAKE3 digest from stdin"
+        ),
+    )
     args = parser.parse_args(argv)
 
     written = render_bundle(
@@ -1637,6 +2089,13 @@ def main(argv: list[str] | None = None) -> int:
         only=args.only,
         base_genesis_path=Path(args.base_genesis),
         install_root=Path(args.install_root),
+        genesis_expected_hash=args.genesis_expected_hash,
+        bundle_root=Path(args.bundle_root) if args.bundle_root else None,
+        onboarding_token_hash_tool=(
+            Path(args.onboarding_token_hash_tool)
+            if args.onboarding_token_hash_tool
+            else None
+        ),
     )
     for path in written:
         print(f"config: {path}")

@@ -1,13 +1,11 @@
 //! Native clean-room Jindo polynomial-commitment engine.
 //!
-//! The published Jindo construction is a univariate lattice PCS over a
-//! Jindo-friendly coefficient field.  This module deliberately implements one
-//! closed transparent profile; it does not expose the unpublished
-//! "multilinear/flexible regime" surface that used to be represented by shape
-//! checks alone.
+//! This is the closed univariate, coefficient-encoding specialization of the
+//! revised Jindo lattice PCS.  It deliberately does not expose the paper's
+//! slot-encoding or general multilinear parameter surfaces.
 //!
-//! The implementation completes the public algorithms in Figures 1--5 of
-//! ePrint 2026/044 as one exact, versioned, native-Rust experimental testnet
+//! The implementation completes the public algorithms in Figures 2--7 of the
+//! current ePrint 2026/044 revision as one exact, versioned, native-Rust experimental testnet
 //! profile: fixed ring parameters, proof wire, prover, verifier, integer-only
 //! sampling, and adversarial vectors.
 
@@ -56,7 +54,7 @@ mod sampling;
 mod transcript;
 
 pub use codec::{JindoProofCodecErrorV1, JindoProofSectionV1};
-pub use parameters::JINDO_PARAMETER_MANIFEST_V1;
+pub use parameters::{JINDO_PARAMETER_MANIFEST_V1, JINDO_SOURCE_PROVENANCE_V1};
 pub use protocol::{
     JINDO_NATIVE_PROOF_BYTES_V1, JINDO_SOURCE_PROFILE_V1, JINDO_SUITE_V1, JindoBindingFieldV1,
     JindoErrorV1, JindoOpeningV1, commit_polynomial_v1, evaluate_polynomial_v1,
@@ -69,27 +67,27 @@ pub use transcript::JindoTranscriptErrorV1;
 pub const JINDO_FIELD_ELEMENT_BYTES_V1: usize = IROHA_JINDO_FIELD_ELEMENT_BYTES_V1;
 
 /// CELPC/Jindo coefficient-encoding base `b`.
-pub const JINDO_ENCODING_BASE_V1: u64 = 60_272;
+pub const JINDO_ENCODING_BASE_V1: u64 = 3_611_623_616;
 
-/// CELPC/Jindo coefficient-encoding exponent `gamma`.
-pub const JINDO_ENCODING_EXPONENT_V1: usize = 16;
+/// CELPC/Jindo coefficient digit count `d/gamma` (`exp` in the oracle).
+pub const JINDO_ENCODING_EXPONENT_V1: usize = 8;
 
 /// Cyclotomic application-ring degree `d`.
 pub const JINDO_RING_DEGREE_V1: usize = IROHA_JINDO_RING_DEGREE_V1;
 
-/// Number of coefficient-field slots encoded in one application-ring element.
+/// Coefficient-encoding `gamma`, i.e. the number of field slots.
 pub const JINDO_ENCODING_SLOTS_V1: usize = JINDO_RING_DEGREE_V1 / JINDO_ENCODING_EXPONENT_V1;
 
 /// Maximum polynomial coefficient count in the fixed testnet profile.
-pub const JINDO_MAX_COEFFICIENTS_V1: usize = JINDO_RING_DEGREE_V1;
+pub const JINDO_MAX_COEFFICIENTS_V1: usize = 256;
 
-/// Maximum polynomial count in one first-release batched opening.
+/// Exact polynomial count in one first-release batched opening.
 pub const JINDO_MAX_BATCH_SIZE_V1: usize = IROHA_JINDO_MAX_POLYNOMIALS_V1 as usize;
 
 const _: () = {
     assert!(JINDO_FIELD_ELEMENT_BYTES_V1 == 32);
-    assert!(JINDO_RING_DEGREE_V1 == 256);
-    assert!(JINDO_MAX_COEFFICIENTS_V1 == JINDO_RING_DEGREE_V1);
+    assert!(JINDO_RING_DEGREE_V1 == 1024);
+    assert!(JINDO_MAX_COEFFICIENTS_V1 == 256);
     assert!(JINDO_MAX_BATCH_SIZE_V1 == 4);
 };
 
@@ -185,10 +183,10 @@ impl JindoPrivacyActionWitnessV1 {
     }
 
     fn validate(&self) -> Result<(), JindoPrivacyActionWitnessErrorV1> {
-        if self.polynomials.is_empty() || self.polynomials.len() > JINDO_MAX_BATCH_SIZE_V1 {
+        if self.polynomials.len() != JINDO_MAX_BATCH_SIZE_V1 {
             return Err(JindoPrivacyActionWitnessErrorV1::InvalidPolynomialCount {
                 count: self.polynomials.len(),
-                max: JINDO_MAX_BATCH_SIZE_V1,
+                expected: JINDO_MAX_BATCH_SIZE_V1,
             });
         }
         for (polynomial_index, polynomial) in self.polynomials.iter().enumerate() {
@@ -226,13 +224,13 @@ impl Drop for JindoPrivacyActionWitnessV1 {
 /// Canonical witness validation failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum JindoPrivacyActionWitnessErrorV1 {
-    /// The batch is empty or exceeds the fixed first-release maximum.
-    #[error("Jindo witness polynomial count {count} is outside 1..={max}")]
+    /// The batch is not the exact frozen first-release size.
+    #[error("Jindo witness requires exactly {expected} polynomials, got {count}")]
     InvalidPolynomialCount {
         /// Observed count.
         count: usize,
-        /// Compiled maximum.
-        max: usize,
+        /// Compiled exact batch size.
+        expected: usize,
     },
     /// One polynomial has no coefficient.
     #[error("Jindo witness polynomial {polynomial_index} is empty")]
@@ -830,8 +828,13 @@ where
         engine_manifest_digest: *profile.engine_manifest_digest.as_bytes(),
         generator_digest: jindo_crs_digest_v1(),
     };
-    let proof =
-        prove_batched_evaluation_v1(&final_statement, &witness.polynomials, &openings, &binding)?;
+    let proof = protocol::prove_batched_evaluation_with_checked_rng_v1(
+        &final_statement,
+        &witness.polynomials,
+        &openings,
+        &binding,
+        &mut checked_rng,
+    )?;
     let proof_bytes = u32::try_from(proof.len())
         .map_err(|_| JindoPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
     let final_envelope = PrivacyProofEnvelopeV1 {
@@ -1133,7 +1136,12 @@ mod tests {
 
     fn action_witness() -> JindoPrivacyActionWitnessV1 {
         JindoPrivacyActionWitnessV1::try_new(
-            vec![vec![field(3), field(5), field(7), field(11)]],
+            vec![
+                vec![field(3), field(5), field(7), field(11)],
+                vec![field(13), field(17)],
+                vec![field(19), field(23)],
+                vec![field(29), field(31)],
+            ],
             field(13),
         )
         .expect("canonical fixed witness")
@@ -1149,9 +1157,29 @@ mod tests {
         }
     }
 
+    fn exact_batch_with_first(
+        first: Vec<PrivacyJindoFieldElementV1>,
+    ) -> Vec<Vec<PrivacyJindoFieldElementV1>> {
+        vec![first, vec![field(101)], vec![field(102)], vec![field(103)]]
+    }
+
+    fn perturb_rns_polynomial(
+        polynomial: &mut ring::JindoRnsPolynomialV1,
+        delta: i128,
+        moduli: [ring::JindoPrimeModulusV1; 2],
+    ) {
+        let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
+        coefficients[0] = delta;
+        polynomial.add_assign(
+            &ring::JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, moduli),
+            moduli,
+        );
+    }
+
     #[test]
     fn fixed_profile_dimensions_are_self_consistent() {
-        assert_eq!(JINDO_ENCODING_SLOTS_V1, 16);
+        assert_eq!(JINDO_ENCODING_EXPONENT_V1, 8);
+        assert_eq!(JINDO_ENCODING_SLOTS_V1, 128);
         assert_eq!(JINDO_RING_DEGREE_V1 % JINDO_ENCODING_EXPONENT_V1, 0);
         assert_eq!(JINDO_FIELD_ELEMENT_BYTES_V1, 32);
         assert!(JINDO_MAX_COEFFICIENTS_V1.is_power_of_two());
@@ -1168,35 +1196,47 @@ mod tests {
             witness_error(vec![vec![field(1)]; JINDO_MAX_BATCH_SIZE_V1 + 1], field(1)),
             JindoPrivacyActionWitnessErrorV1::InvalidPolynomialCount { .. }
         ));
+        for count in [1, 3] {
+            assert!(matches!(
+                witness_error(
+                    (0..count).map(|i| vec![field(i as u64 + 1)]).collect(),
+                    field(1)
+                ),
+                JindoPrivacyActionWitnessErrorV1::InvalidPolynomialCount { .. }
+            ));
+        }
         assert_eq!(
-            witness_error(vec![Vec::new()], field(1)),
+            witness_error(exact_batch_with_first(Vec::new()), field(1)),
             JindoPrivacyActionWitnessErrorV1::EmptyPolynomial {
                 polynomial_index: 0
             }
         );
         assert!(matches!(
             witness_error(
-                vec![vec![field(1); JINDO_MAX_COEFFICIENTS_V1 + 1]],
+                exact_batch_with_first(vec![field(1); JINDO_MAX_COEFFICIENTS_V1 + 1]),
                 field(1)
             ),
             JindoPrivacyActionWitnessErrorV1::PolynomialTooLarge { .. }
         ));
         assert_eq!(
-            witness_error(vec![vec![field_modulus()]], field(1)),
+            witness_error(exact_batch_with_first(vec![field_modulus()]), field(1)),
             JindoPrivacyActionWitnessErrorV1::NonCanonicalCoefficient {
                 polynomial_index: 0,
                 coefficient_index: 0,
             }
         );
         assert_eq!(
-            witness_error(vec![vec![field_modulus_plus_one()]], field(1)),
+            witness_error(
+                exact_batch_with_first(vec![field_modulus_plus_one()]),
+                field(1)
+            ),
             JindoPrivacyActionWitnessErrorV1::NonCanonicalCoefficient {
                 polynomial_index: 0,
                 coefficient_index: 0,
             }
         );
         assert_eq!(
-            witness_error(vec![vec![field(1), field(0)]], field(1)),
+            witness_error(exact_batch_with_first(vec![field(1), field(0)]), field(1)),
             JindoPrivacyActionWitnessErrorV1::TrailingZeroCoefficient {
                 polynomial_index: 0,
             }
@@ -1204,28 +1244,37 @@ mod tests {
         let mut trailing_zero_at_cap = vec![field(1); JINDO_MAX_COEFFICIENTS_V1];
         trailing_zero_at_cap[JINDO_MAX_COEFFICIENTS_V1 - 1] = field(0);
         assert_eq!(
-            witness_error(vec![trailing_zero_at_cap], field(1)),
+            witness_error(exact_batch_with_first(trailing_zero_at_cap), field(1)),
             JindoPrivacyActionWitnessErrorV1::TrailingZeroCoefficient {
                 polynomial_index: 0,
             }
         );
         assert_eq!(
-            witness_error(vec![vec![field(1)], vec![field(1)]], field(1)),
+            witness_error(
+                vec![
+                    vec![field(1)],
+                    vec![field(1)],
+                    vec![field(2)],
+                    vec![field(3)],
+                ],
+                field(1)
+            ),
             JindoPrivacyActionWitnessErrorV1::DuplicatePolynomial {
                 polynomial_index: 1,
             }
         );
         assert_eq!(
-            witness_error(vec![vec![field(1)]], field_modulus()),
+            witness_error(exact_batch_with_first(vec![field(1)]), field_modulus()),
             JindoPrivacyActionWitnessErrorV1::NonCanonicalEvaluationPoint
         );
         assert!(
-            JindoPrivacyActionWitnessV1::try_new(vec![vec![field(0)]], field(0)).is_ok(),
+            JindoPrivacyActionWitnessV1::try_new(exact_batch_with_first(vec![field(0)]), field(0))
+                .is_ok(),
             "the uniquely encoded zero polynomial and zero point remain valid"
         );
         assert!(
             JindoPrivacyActionWitnessV1::try_new(
-                vec![vec![field(1); JINDO_MAX_COEFFICIENTS_V1]],
+                exact_batch_with_first(vec![field(1); JINDO_MAX_COEFFICIENTS_V1]),
                 field(0),
             )
             .is_ok(),
@@ -1282,8 +1331,8 @@ mod tests {
         )
         .expect("deterministic Jindo action proving");
 
-        assert_eq!(prepared.polynomial_count(), 1);
-        assert_eq!(prepared.coefficient_counts(), &[4]);
+        assert_eq!(prepared.polynomial_count(), 4);
+        assert_eq!(prepared.coefficient_counts(), &[4, 2, 2, 2]);
         assert_eq!(prepared.proof_bytes(), JINDO_NATIVE_PROOF_BYTES_V1 as u32);
         assert_ne!(prepared.transaction_intent_digest(), [0; 32]);
         assert_ne!(prepared.statement_digest(), [0; 32]);
@@ -1396,6 +1445,92 @@ mod tests {
                 PrivacyConsensusLimitsV1::taira_default().max_proof_bytes_per_action,
             )
             .expect("final envelope is bound to the compiled profile and exact CRS");
+
+            let decoded = codec::JindoEvaluationProofV1::decode_exact(
+                proof.as_bytes(),
+                JINDO_MAX_BATCH_SIZE_V1,
+                PrivacyConsensusLimitsV1::taira_default().max_proof_bytes_per_action,
+            )
+            .expect("the canonical proof wire decodes");
+            let mut mutations = Vec::new();
+
+            let mut mutated = decoded.clone();
+            perturb_rns_polynomial(
+                &mut mutated.mask_commitments[0],
+                1_i128 << 68,
+                ring::JINDO_OUTER_MODULI_V1,
+            );
+            mutations.push(("aggregation-mask-commitment", mutated));
+
+            let mut mutated = decoded.clone();
+            mutated.mask_split_evaluation[0] =
+                mutated.mask_split_evaluation[0] + field::JindoFieldElementV1::ONE;
+            mutations.push(("aggregation-mask-evaluation", mutated));
+
+            let mut mutated = decoded.clone();
+            perturb_rns_polynomial(
+                &mut mutated.partials[0],
+                1_i128 << 80,
+                ring::JINDO_INNER_MODULI_V1,
+            );
+            mutations.push(("quadratic-partial", mutated));
+
+            let mut mutated = decoded.clone();
+            perturb_rns_polynomial(
+                &mut mutated.encode_responses[0],
+                1_i128 << 80,
+                ring::JINDO_INNER_MODULI_V1,
+            );
+            mutations.push(("encoded-response", mutated));
+
+            let mut mutated = decoded.clone();
+            perturb_rns_polynomial(
+                &mut mutated.mlwe_responses[0],
+                1_i128 << 80,
+                ring::JINDO_INNER_MODULI_V1,
+            );
+            mutations.push(("mlwe-response", mutated));
+
+            let mut mutated = decoded.clone();
+            perturb_rns_polynomial(
+                &mut mutated.inner_commitments[0],
+                1_i128 << 68,
+                ring::JINDO_OUTER_MODULI_V1,
+            );
+            mutations.push(("inner-commitment", mutated));
+
+            let mut mutated = decoded.clone();
+            mutated.blind_evaluations[0] =
+                mutated.blind_evaluations[0] + field::JindoFieldElementV1::ONE;
+            mutations.push(("split-blind-evaluation", mutated));
+
+            let mut mutated = decoded;
+            mutated.split_evaluations[0] =
+                mutated.split_evaluations[0] + field::JindoFieldElementV1::ONE;
+            mutations.push(("split-evaluation", mutated));
+
+            for (section, mutation) in mutations {
+                let mutation = mutation.encode();
+                codec::JindoEvaluationProofV1::decode_exact(
+                    &mutation,
+                    JINDO_MAX_BATCH_SIZE_V1,
+                    PrivacyConsensusLimitsV1::taira_default().max_proof_bytes_per_action,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{section} mutation must remain canonically encoded: {error}")
+                });
+                let error = verify_batched_evaluation_v1(
+                    statement,
+                    &mutation,
+                    &binding,
+                    PrivacyConsensusLimitsV1::taira_default().max_proof_bytes_per_action,
+                )
+                .unwrap_err();
+                assert!(
+                    !matches!(error, JindoErrorV1::ProofCodec(_)),
+                    "{section} must fail a semantic relation, not canonical decoding"
+                );
+            }
         }
 
         let mut tampered_payload = prepared.payload.clone();

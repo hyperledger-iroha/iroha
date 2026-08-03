@@ -12,6 +12,7 @@ use std::{
 use criterion::Criterion;
 use dashmap::{DashMap, DashSet};
 use iroha_crypto::KeyPair;
+use iroha_data_model::state_path::StatePath;
 use iroha_primitives::numeric::Quantity;
 use ivm::{
     DurableStateSnapshot, MockWorldStateView, WsvHost,
@@ -64,8 +65,13 @@ impl ConcurrentWSV {
         self.accounts.insert(id)
     }
 
-    fn register_asset_definition(&self, id: AssetDefinitionId, mintable: Mintable) -> bool {
-        if !self.domains.contains(id.domain()) {
+    fn register_asset_definition(
+        &self,
+        id: AssetDefinitionId,
+        owning_domain: &DomainId,
+        mintable: Mintable,
+    ) -> bool {
+        if !self.domains.contains(owning_domain) {
             return false;
         }
         self.asset_definitions
@@ -181,8 +187,13 @@ fn bench_massive_wsv(c: &mut Criterion) {
                     let idx = u64::from_le_bytes(tx.code[..8].try_into().unwrap());
                     let asset_name =
                         Name::try_from(format!("asset{idx}")).expect("valid asset name");
-                    let asset_id = AssetDefinitionId::new(domain_ref.clone(), asset_name);
-                    wsv_ref.register_asset_definition(asset_id.clone(), Mintable::Infinitely);
+                    let asset_id =
+                        AssetDefinitionId::derive_from_components(domain_ref.clone(), asset_name);
+                    wsv_ref.register_asset_definition(
+                        asset_id.clone(),
+                        domain_ref,
+                        Mintable::Infinitely,
+                    );
                     assert!(wsv_ref.mint(
                         accounts_ref[0].clone(),
                         asset_id.clone(),
@@ -238,7 +249,10 @@ fn mock_wsv_host_with_persisted_state(entries: usize, value_bytes: usize) -> (Ws
         .expect("create persisted mock WSV state store");
     let mut state = BTreeMap::new();
     for idx in 0..entries {
-        state.insert(format!("bench/{idx:06}"), vec![idx as u8; value_bytes]);
+        let path: StatePath = format!("bench/{idx:06}")
+            .parse()
+            .expect("benchmark state path should be valid");
+        state.insert(path, vec![idx as u8; value_bytes]);
     }
     wsv.sc_restore(&DurableStateSnapshot::new(state))
         .expect("seed persisted mock WSV state");

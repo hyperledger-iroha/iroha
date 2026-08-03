@@ -29,6 +29,9 @@ use tokio::time::sleep;
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
+const NATIVE_AMX_FAULT_COMMAND_FILE: &str = "native-amx-fault-command.norito.json";
+const NATIVE_AMX_FAULT_ACK_FILE: &str = "native-amx-fault-ack.norito.json";
+const NATIVE_AMX_FAULT_FORMAT_VERSION: u64 = 1;
 const FORMAT_VERSION: u64 = 4;
 const MAX_CONTROL_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
@@ -122,6 +125,47 @@ pub enum ConsensusMessageControlAction {
     Drop,
     /// Retain the authenticated message in the receiver's bounded queue.
     Hold,
+}
+
+/// Exact feature-isolated Native AMX process-cut phase.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeAmxFaultPhase {
+    /// Abort after authenticating and aggregating the participant PrepareQC.
+    AfterPrepareQc,
+    /// Abort after authenticating and aggregating the participant CommitQC.
+    AfterCommitQc,
+    /// Abort after constructing the exact State overlay and immediately before WSV publication.
+    BeforeWorldCommit,
+}
+
+impl NativeAmxFaultPhase {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::AfterPrepareQc => "after_prepare_qc",
+            Self::AfterCommitQc => "after_commit_qc",
+            Self::BeforeWorldCommit => "before_world_commit",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "after_prepare_qc" => Ok(Self::AfterPrepareQc),
+            "after_commit_qc" => Ok(Self::AfterCommitQc),
+            "before_world_commit" => Ok(Self::BeforeWorldCommit),
+            _ => Err(eyre!("unknown Native AMX fault phase `{value}`")),
+        }
+    }
+}
+
+/// Durable proof that the controlled daemon reached an exact Native AMX cut.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeAmxFaultAck {
+    /// Monotonic controller-local command revision.
+    pub revision: u64,
+    /// Exact phase reached before process abort.
+    pub phase: NativeAmxFaultPhase,
+    /// Exact Native AMX source transaction identity.
+    pub source_id: [u8; 32],
 }
 
 impl ConsensusMessageControlAction {
@@ -289,6 +333,7 @@ pub struct ConsensusMessageControl {
     root_identity: RootIdentity,
     initial_command: InitialCommand,
     next_revision: Mutex<u64>,
+    next_native_amx_fault_revision: Mutex<u64>,
     operation: tokio::sync::Mutex<()>,
 }
 
@@ -339,6 +384,7 @@ impl ConsensusMessageControl {
                 staged: false,
             },
             next_revision: Mutex::new(1),
+            next_native_amx_fault_revision: Mutex::new(0),
             operation: tokio::sync::Mutex::new(()),
         };
         let command_digest = control.write_command(1, &[], &[], DEFAULT_QUEUE_CAPACITY, false)?;
@@ -500,6 +546,93 @@ impl ConsensusMessageControl {
         )?;
         validate_root_identity(&self.root, self.root_identity)?;
         parse_ack(&bytes)
+    }
+
+    /// Arm one exact, one-shot Native AMX process cut for this peer.
+    ///
+    /// `source_id` is the 32-byte digest of the exact signed source transaction,
+    /// not its external-entrypoint projection.
+    ///
+    /// The feature-isolated daemon fsyncs an acknowledgement at the named
+    /// phase and then aborts. Restart sees the acknowledgement and will not
+    /// repeat the same revision.
+    pub fn arm_native_amx_fault(
+        &self,
+        phase: NativeAmxFaultPhase,
+        source_id: [u8; 32],
+    ) -> Result<u64> {
+        validate_root_identity(&self.root, self.root_identity)?;
+        let mut next = self
+            .next_native_amx_fault_revision
+            .lock()
+            .expect("Native AMX fault revision lock poisoned");
+        *next = next
+            .checked_add(1)
+            .ok_or_else(|| eyre!("Native AMX fault revision overflow"))?;
+        let revision = *next;
+        let command = native_amx_fault_value(revision, phase, source_id);
+        let bytes = canonical_json(&command)?;
+        write_atomic_private_file(
+            &self.root,
+            NATIVE_AMX_FAULT_COMMAND_FILE,
+            &bytes,
+            self.root_identity.owner,
+        )?;
+        validate_root_identity(&self.root, self.root_identity)?;
+        drop(next);
+        Ok(revision)
+    }
+
+    /// Read and authenticate the latest durable Native AMX phase acknowledgement.
+    pub fn read_native_amx_fault_ack(&self) -> Result<NativeAmxFaultAck> {
+        validate_root_identity(&self.root, self.root_identity)?;
+        let bytes = read_bounded_private_file(
+            &self.root.join(NATIVE_AMX_FAULT_ACK_FILE),
+            MAX_CONTROL_BYTES,
+            self.root_identity.owner,
+        )?;
+        validate_root_identity(&self.root, self.root_identity)?;
+        parse_native_amx_fault(&bytes)
+    }
+
+    /// Wait until the daemon durably proves that it reached the armed phase.
+    pub async fn wait_for_native_amx_fault(
+        &self,
+        revision: u64,
+        phase: NativeAmxFaultPhase,
+        source_id: [u8; 32],
+        timeout: Duration,
+    ) -> Result<NativeAmxFaultAck> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.read_native_amx_fault_ack() {
+                Ok(ack)
+                    if ack.revision == revision
+                        && ack.phase == phase
+                        && ack.source_id == source_id =>
+                {
+                    return Ok(ack);
+                }
+                Ok(ack) if ack.revision >= revision => {
+                    return Err(eyre!(
+                        "Native AMX fault acknowledgement differs from revision {revision}: {ack:?}"
+                    ));
+                }
+                Ok(_) | Err(_) if Instant::now() < deadline => {}
+                Err(error) => return Err(error),
+                Ok(ack) => {
+                    return Err(eyre!(
+                        "timed out waiting for Native AMX fault revision {revision}; latest={ack:?}"
+                    ));
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(eyre!(
+                    "timed out waiting for Native AMX fault revision {revision}"
+                ));
+            }
+            sleep(ACK_POLL).await;
+        }
     }
 
     async fn wait_for_revision(
@@ -691,6 +824,89 @@ fn rule_value(rule: &ConsensusMessageControlRule) -> Value {
         ("sender", Value::from(rule.sender.to_string())),
         ("view", Value::from(rule.view)),
     ])
+}
+
+fn native_amx_fault_value(revision: u64, phase: NativeAmxFaultPhase, source_id: [u8; 32]) -> Value {
+    object_value([
+        ("phase", Value::from(phase.as_str())),
+        ("revision", Value::from(revision)),
+        ("source_id", Value::from(lowercase_hex(&source_id))),
+        ("version", Value::from(NATIVE_AMX_FAULT_FORMAT_VERSION)),
+    ])
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn decode_canonical_lower_hex_32(value: &str) -> Result<[u8; 32]> {
+    if value.len() != 64
+        || value
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+    {
+        return Err(eyre!(
+            "Native AMX fault acknowledgement source is not canonical"
+        ));
+    }
+
+    let mut decoded = [0_u8; 32];
+    for (output, pair) in decoded.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        let nibble = |byte: u8| match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            _ => unreachable!("canonical lowercase hexadecimal was validated"),
+        };
+        *output = (nibble(pair[0]) << 4) | nibble(pair[1]);
+    }
+    Ok(decoded)
+}
+
+fn parse_native_amx_fault(bytes: &[u8]) -> Result<NativeAmxFaultAck> {
+    if bytes.is_empty() || bytes.len() > MAX_CONTROL_BYTES {
+        return Err(eyre!("Native AMX fault acknowledgement has invalid size"));
+    }
+    let value: Value = norito::json::from_slice(bytes)?;
+    if canonical_json(&value)?.as_slice() != bytes {
+        return Err(eyre!("Native AMX fault acknowledgement is not canonical"));
+    }
+    let object = exact_object(
+        &value,
+        &["phase", "revision", "source_id", "version"],
+        "Native AMX fault acknowledgement",
+    )?;
+    if required_u64(object, "version")? != NATIVE_AMX_FAULT_FORMAT_VERSION {
+        return Err(eyre!(
+            "unsupported Native AMX fault acknowledgement version"
+        ));
+    }
+    let revision = required_u64(object, "revision")?;
+    if revision == 0 {
+        return Err(eyre!(
+            "Native AMX fault acknowledgement revision must be positive"
+        ));
+    }
+    let phase = object
+        .get("phase")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("Native AMX fault acknowledgement lacks `phase`"))?;
+    let phase = NativeAmxFaultPhase::parse(phase)?;
+    let source = object
+        .get("source_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("Native AMX fault acknowledgement lacks `source_id`"))?;
+    let source_id = decode_canonical_lower_hex_32(source)?;
+    Ok(NativeAmxFaultAck {
+        revision,
+        phase,
+        source_id,
+    })
 }
 
 fn parse_ack(bytes: &[u8]) -> Result<ConsensusMessageControlAck> {
@@ -1705,6 +1921,55 @@ mod tests {
                 .write_command(2, &[], &[], MAX_HOLDS + 1, false)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn native_amx_fault_command_and_ack_bind_exact_phase_source_and_revision() {
+        let parent = tempdir().expect("temporary parent");
+        let control =
+            ConsensusMessageControl::create(parent.path().join("control")).expect("controller");
+        let source_id = [0xA7; 32];
+        let revision = control
+            .arm_native_amx_fault(NativeAmxFaultPhase::AfterCommitQc, source_id)
+            .expect("arm exact fault");
+        assert_eq!(revision, 1);
+        let command =
+            fs::read(control.root.join(NATIVE_AMX_FAULT_COMMAND_FILE)).expect("read fault command");
+        let parsed = parse_native_amx_fault(&command).expect("command is valid ack shape");
+        assert_eq!(
+            parsed,
+            NativeAmxFaultAck {
+                revision,
+                phase: NativeAmxFaultPhase::AfterCommitQc,
+                source_id,
+            }
+        );
+
+        write_atomic_private_file(
+            &control.root,
+            NATIVE_AMX_FAULT_ACK_FILE,
+            &command,
+            control.root_identity.owner,
+        )
+        .expect("write simulated daemon acknowledgement");
+        assert_eq!(
+            control
+                .read_native_amx_fault_ack()
+                .expect("read exact acknowledgement"),
+            parsed
+        );
+
+        let mut noncanonical: Value =
+            norito::json::from_slice(&command).expect("parse command for mutation");
+        noncanonical
+            .as_object_mut()
+            .expect("fault command object")
+            .insert(
+                "source_id".to_owned(),
+                Value::from(lowercase_hex(&source_id).to_ascii_uppercase()),
+            );
+        let uppercase = canonical_json(&noncanonical).expect("encode uppercase source");
+        assert!(parse_native_amx_fault(&uppercase).is_err());
     }
 
     #[test]

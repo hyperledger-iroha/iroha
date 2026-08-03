@@ -1080,9 +1080,9 @@ fn verify_decoded(
     let mut validator_keys = Vec::with_capacity(artifact.height_context.roster.len());
     let mut validator_powers = Vec::with_capacity(artifact.height_context.roster.len());
     for entry in &artifact.height_context.roster {
-        if entry.power == 0 {
+        if entry.power != 1 {
             return Err(format!(
-                "validator {} has zero voting power",
+                "validator {} does not have the required unit consensus vote",
                 entry.validator
             ));
         }
@@ -1338,7 +1338,7 @@ mod tests {
         keys.sort_by(|left, right| {
             PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
         });
-        let powers = [40, 30, 20, 10];
+        let powers = [1, 1, 1, 1];
         let roster = keys
             .iter()
             .zip(powers)
@@ -1386,12 +1386,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"pk2 finality verifier test nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x42; 32],
         };
@@ -1922,12 +1922,12 @@ mod tests {
                 .expect("semantic commit decision id")
         );
         assert_eq!(receipt.validator_keys.len(), 4);
-        assert_eq!(receipt.validator_powers, vec![40, 30, 20, 10]);
+        assert_eq!(receipt.validator_powers, vec![1, 1, 1, 1]);
         assert_eq!(receipt.signer_indices, vec![0, 1, 2]);
         assert_eq!(receipt.signer_count, 3);
         assert_eq!(receipt.min_signers, 3);
-        assert_eq!(receipt.total_power, 100);
-        assert_eq!(receipt.signed_power, 90);
+        assert_eq!(receipt.total_power, 4);
+        assert_eq!(receipt.signed_power, 3);
         assert_eq!(receipt.status_sha256.len(), 64);
         assert_eq!(receipt.proof_sha256.len(), 64);
     }
@@ -2044,7 +2044,7 @@ mod tests {
             .last_commit_qc
             .as_mut()
             .expect("commit summary")
-            .signed_power = 91;
+            .signed_power = 4;
         assert!(
             verify_fixture(&wrong_power)
                 .expect_err("reject mismatched status power")

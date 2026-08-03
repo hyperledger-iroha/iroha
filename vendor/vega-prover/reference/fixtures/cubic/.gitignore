@@ -1,0 +1,5 @@
+# Iroha release-oracle exceptions. Upstream ignores regenerated binary
+# fixtures; these independently generated artifacts are part of Iroha's
+# closed vendor manifest and must remain in source archives.
+!python_vk.bin
+!python_standalone_proof.bin

@@ -30,12 +30,40 @@ pub mod fingerprint;
 
 /// Sumeragi v2 wire protocol version.
 pub const PROTOCOL_VERSION: u16 = 4;
+/// Consensus-wide lower bound for one voting roster.
+///
+/// Every production committee has the exact `3f + 1` shape and tolerates at
+/// least one Byzantine validator.
+pub const MIN_VALIDATORS_PER_HEIGHT: usize = 4;
+/// Maximum Byzantine validators tolerated by one frozen height context.
+pub const MAX_FAULTS_PER_HEIGHT: usize = 10;
 /// Consensus-wide upper bound for one voting roster.
 ///
 /// This is a protocol admission limit, not a local resource-tuning knob.  It
 /// must stay aligned with the production reducer and the formal Sumeragi v2
 /// model so every admitted wire value has a representable verified state.
-pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;
+pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;
+/// Returns whether `validator_count` has the production `3f + 1` geometry.
+#[must_use]
+pub const fn is_valid_committee_size(validator_count: usize) -> bool {
+    validator_count >= MIN_VALIDATORS_PER_HEIGHT
+        && validator_count <= MAX_VALIDATORS_PER_HEIGHT
+        && (validator_count - 1) % 3 == 0
+}
+/// Protocol-wide upper bound for one authenticated RS16 chunk.
+pub const MAX_DA_CHUNK_SIZE_BYTES: u32 = 256 * 1024;
+/// Protocol-wide upper bound for data shards in one RS16 stripe.
+pub const MAX_DA_DATA_SHARDS: u16 = 16;
+/// Protocol-wide upper bound for parity shards in one RS16 stripe.
+pub const MAX_DA_PARITY_SHARDS: u16 = 16;
+/// Protocol-wide upper bound for total shards in one RS16 stripe.
+pub const MAX_DA_STRIPE_WIDTH: u16 = MAX_DA_DATA_SHARDS + MAX_DA_PARITY_SHARDS;
+/// Protocol-wide upper bound for one canonical consensus payload.
+pub const MAX_DA_PAYLOAD_SIZE_BYTES: u64 = 16 * 1024 * 1024;
+/// Protocol-wide upper bound for all encoded shards of one maximum payload.
+pub const MAX_DA_ENCODED_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
+/// Protocol-wide upper bound for encoded chunks committed by one manifest.
+pub const MAX_DA_CHUNK_COUNT: u32 = 1024;
 /// Maximum exact Commit vote groups exposed by one active-height liveness snapshot.
 ///
 /// A reducer may retain one historical exact-lock group while the current
@@ -106,7 +134,7 @@ pub type View = u64;
 /// Index into the ordered voting roster frozen in a [`HeightContext`].
 pub type ValidatorIndex = u32;
 
-/// Consensus mode used to construct the frozen voting-power snapshot.
+/// Consensus mode used to select the frozen equal-vote committee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -121,7 +149,7 @@ pub type ValidatorIndex = u32;
 pub enum ConsensusMode {
     /// Every validator has voting power one.
     Permissioned,
-    /// Voting powers come from the finalized epoch stake snapshot.
+    /// Stake selects the finalized epoch committee; every member has one vote.
     Npos,
 }
 
@@ -169,7 +197,7 @@ impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
     }
 }
 
-/// A validator and its voting power at one height.
+/// A validator and its consensus vote at one height.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -179,15 +207,15 @@ impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
 pub struct ValidatorPower {
     /// Validator identity and consensus public key.
     pub validator: PeerId,
-    /// Positive voting power frozen for this height.
+    /// Consensus vote count. Protocol v4 requires this to be exactly one.
     pub power: u64,
 }
 
-/// Count-and-power quorum parameters frozen in a height context.
+/// Equal-vote quorum parameters frozen in a height context.
 ///
-/// A certificate must satisfy both thresholds.  The count threshold is the
-/// smallest integer strictly greater than two thirds of the voting roster;
-/// signed power must be strictly greater than two thirds of total power.
+/// The roster has exact `n = 3f + 1` geometry and a certificate requires
+/// `2f + 1` distinct signers. `total_power` is a redundant integrity
+/// projection equal to the validator count because every member has one vote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -197,7 +225,7 @@ pub struct ValidatorPower {
 pub struct DualQuorum {
     /// Required number of distinct validator signatures.
     pub min_signers: u32,
-    /// Total voting power represented by the ordered roster.
+    /// Redundant total vote count represented by the ordered roster.
     pub total_power: u64,
 }
 
@@ -210,7 +238,7 @@ impl DualQuorum {
             .and_then(|threshold| u32::try_from(threshold).ok())
     }
 
-    /// Construct the canonical dual quorum for an ordered voting roster.
+    /// Construct the canonical quorum projection for an ordered voting roster.
     ///
     /// # Errors
     ///
@@ -253,19 +281,12 @@ impl DualQuorum {
             return Err(ValidationError::InsufficientSignerCount);
         }
 
-        let mut signed_power = 0_u64;
         for signer in signers {
             let index = usize::try_from(*signer).map_err(|_| ValidationError::SignerOutOfRange)?;
             let entry = roster.get(index).ok_or(ValidationError::SignerOutOfRange)?;
-            signed_power = signed_power
-                .checked_add(entry.power)
-                .ok_or(ValidationError::VotingPowerOverflow)?;
-        }
-
-        let signed_scaled = u128::from(signed_power) * 3;
-        let total_scaled = u128::from(self.total_power) * 2;
-        if signed_scaled <= total_scaled {
-            return Err(ValidationError::InsufficientVotingPower);
+            if entry.power != 1 {
+                return Err(ValidationError::VotingPowerNotOne);
+            }
         }
         Ok(())
     }
@@ -347,11 +368,11 @@ impl SumeragiV2GenesisContextParameters {
         Self {
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 256 * 1024,
+                chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES,
                 data_shards: 4,
                 parity_shards: 2,
-                max_payload_size_bytes: 16 * 1024 * 1024,
-                max_chunk_count: 1024,
+                max_payload_size_bytes: MAX_DA_PAYLOAD_SIZE_BYTES,
+                max_chunk_count: MAX_DA_CHUNK_COUNT,
             },
             nexus_amx_context_hash: RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             execution_policy_hash: RECOMMENDED_EXECUTION_POLICY_HASH,
@@ -372,24 +393,7 @@ impl SumeragiV2GenesisContextParameters {
         if self.execution_policy_hash == [0; 32] {
             return Err(ValidationError::InvalidExecutionPolicyHash);
         }
-        let layout = self.da_layout;
-        if layout.chunk_size_bytes == 0
-            || layout.max_payload_size_bytes == 0
-            || layout.max_chunk_count == 0
-        {
-            return Err(ValidationError::InvalidDataAvailabilityLayout);
-        }
-        match layout.encoding {
-            PayloadEncoding::Plain if layout.data_shards != 0 || layout.parity_shards != 0 => {
-                Err(ValidationError::InvalidDataAvailabilityLayout)
-            }
-            PayloadEncoding::ReedSolomon16
-                if layout.data_shards == 0 || layout.parity_shards == 0 =>
-            {
-                Err(ValidationError::InvalidDataAvailabilityLayout)
-            }
-            PayloadEncoding::Plain | PayloadEncoding::ReedSolomon16 => Ok(()),
-        }
+        validate_data_availability_layout(self.da_layout)
     }
 }
 
@@ -494,7 +498,7 @@ pub struct HeightContext {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
-    /// Consensus mode that produced the voting-power snapshot.
+    /// Consensus mode that selected the equal-vote committee.
     pub mode: ConsensusMode,
     /// Commit certificate for the parent block, absent only at genesis or an audited snapshot
     /// bootstrap boundary.
@@ -508,7 +512,7 @@ pub struct HeightContext {
     pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
     /// Deterministically ordered voting roster; observers are excluded.
     pub roster: Vec<ValidatorPower>,
-    /// Canonical dual quorum derived from `roster`.
+    /// Canonical equal-vote quorum derived from `roster`.
     pub quorum: DualQuorum,
     /// Hash of all frozen Nexus/AMX inputs that proposal assembly and
     /// deterministic validation must bind.
@@ -595,10 +599,8 @@ impl HeightContext {
             (false, None) => {}
         }
         self.quorum.validate_roster(&self.roster)?;
-        if self.mode == ConsensusMode::Permissioned
-            && self.roster.iter().any(|validator| validator.power != 1)
-        {
-            return Err(ValidationError::PermissionedPowerNotOne);
+        if self.roster.iter().any(|validator| validator.power != 1) {
+            return Err(ValidationError::VotingPowerNotOne);
         }
         match (
             self.height,
@@ -633,29 +635,10 @@ impl HeightContext {
             }
             require_aggregate_signature(&parent.aggregate_signature)?;
         }
-        if self.da_layout.chunk_size_bytes == 0
-            || self.da_layout.max_payload_size_bytes == 0
-            || self.da_layout.max_chunk_count == 0
-        {
-            return Err(ValidationError::InvalidDataAvailabilityLayout);
-        }
-        match self.da_layout.encoding {
-            PayloadEncoding::Plain
-                if self.da_layout.data_shards != 0 || self.da_layout.parity_shards != 0 =>
-            {
-                return Err(ValidationError::InvalidDataAvailabilityLayout);
-            }
-            PayloadEncoding::ReedSolomon16
-                if self.da_layout.data_shards == 0 || self.da_layout.parity_shards == 0 =>
-            {
-                return Err(ValidationError::InvalidDataAvailabilityLayout);
-            }
-            PayloadEncoding::Plain | PayloadEncoding::ReedSolomon16 => {}
-        }
-        Ok(())
+        validate_data_availability_layout(self.da_layout)
     }
 
-    /// Validate that a canonical signer list satisfies both quorum thresholds.
+    /// Validate that a canonical signer list satisfies the equal-vote quorum.
     ///
     /// # Errors
     ///
@@ -1400,7 +1383,7 @@ impl QuorumCertificate {
         }
     }
 
-    /// Validate the certificate's context binding and dual quorum.
+    /// Validate the certificate's context binding and equal-vote quorum.
     ///
     /// Cryptographic aggregate-signature verification remains the caller's
     /// responsibility.
@@ -1589,7 +1572,7 @@ impl TimeoutCertificate {
             })
     }
 
-    /// Validate grouping, disjoint signers, context binding, and dual quorum.
+    /// Validate grouping, disjoint signers, context binding, and equal-vote quorum.
     ///
     /// Cryptographic aggregate-signature verification remains the caller's
     /// responsibility.
@@ -2679,7 +2662,7 @@ pub enum SumeragiV2BodyState {
     Applied,
 }
 
-/// Frozen election and dual-quorum inputs governing the active status height.
+/// Frozen election and equal-vote quorum inputs governing the active status height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2691,17 +2674,17 @@ pub struct SumeragiV2HeightContextStatus {
     pub epoch: u64,
     /// Last height governed by this epoch's frozen election snapshot.
     pub epoch_end_height: Height,
-    /// Consensus mode which produced the voting-power snapshot.
+    /// Consensus mode which selected the equal-vote committee.
     pub mode: ConsensusMode,
     /// Finalized seed used to select the view-zero leader.
     pub epoch_seed: [u8; 32],
     /// Number of voting validators in the frozen roster.
     pub validator_count: u32,
-    /// Canonical count-and-power quorum derived from the frozen roster.
+    /// Canonical `2f + 1` quorum derived from the frozen `3f + 1` roster.
     pub quorum: DualQuorum,
 }
 
-/// Power-aware summary of the latest authenticated durable `CommitQC`.
+/// Equal-vote summary of the latest authenticated durable `CommitQC`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2717,9 +2700,9 @@ pub struct SumeragiV2CommitQcStatus {
     pub signer_count: u32,
     /// Canonical strict-supermajority signer threshold.
     pub min_signers: u32,
-    /// Voting power represented by the certificate signers.
+    /// Redundant vote total; equal to `signer_count` in protocol v4.
     pub signed_power: u64,
-    /// Total voting power in the certificate's frozen roster.
+    /// Redundant roster vote total; equal to `validator_count` in protocol v4.
     pub total_power: u64,
 }
 
@@ -2729,7 +2712,7 @@ pub struct SumeragiV2CommitQcStatus {
 /// installation, replaces vote pools or asynchronous completion ownership.
 pub type SumeragiV2Generation = u64;
 
-/// Partial dual-quorum state for one exact voting round and proposal.
+/// Partial equal-vote quorum state for one exact voting round and proposal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2747,11 +2730,11 @@ pub struct SumeragiV2VoteQuorumStatus {
     pub execution_commitment: ExecutionCommitment,
     /// Number of distinct authenticated voting validators in the pool.
     pub signer_count: u32,
-    /// Voting power represented by those validators.
+    /// Redundant unit-vote projection equal to `signer_count`.
     pub signed_power: u64,
     /// Required number of distinct voting validators.
     pub min_signers: u32,
-    /// Total voting power in the frozen height roster.
+    /// Redundant unit-vote projection equal to the frozen roster length.
     pub total_power: u64,
 }
 
@@ -2767,11 +2750,11 @@ pub struct SumeragiV2TimeoutQuorumStatus {
     pub round: ConsensusRound,
     /// Number of distinct authenticated voting validators in the pool.
     pub signer_count: u32,
-    /// Voting power represented by those validators.
+    /// Redundant unit-vote projection equal to `signer_count`.
     pub signed_power: u64,
     /// Required number of distinct voting validators.
     pub min_signers: u32,
-    /// Total voting power in the frozen height roster.
+    /// Redundant unit-vote projection equal to the frozen roster length.
     pub total_power: u64,
     /// Whether the partial pool has produced a verified timeout certificate.
     pub certificate_formed: bool,
@@ -2998,11 +2981,11 @@ pub enum SumeragiV2ProgressTransition {
     CommitVoteAdmitted,
     /// An authenticated timeout vote increased an exact partial pool.
     TimeoutVoteAdmitted,
-    /// A Prepare dual quorum formed or arrived.
+    /// A Prepare equal-vote quorum formed or arrived.
     PrepareQuorum,
     /// A `PrepareQC` lock became durable.
     LockInstalled,
-    /// A Commit dual quorum formed or arrived.
+    /// A Commit equal-vote quorum formed or arrived.
     CommitQuorum,
     /// A timeout certificate installed a successor view.
     TimeoutCertificateInstalled,
@@ -3052,9 +3035,9 @@ pub enum SumeragiV2LivenessBlocker {
     MissingProposal,
     /// A certified or locked proposal body is unavailable locally.
     BodyUnavailable,
-    /// The exact Prepare pool lacks count or voting-power quorum.
+    /// The exact Prepare pool lacks the required `2f + 1` distinct votes.
     PrepareQuorumMissing,
-    /// The exact Commit pool lacks count or voting-power quorum.
+    /// The exact Commit pool lacks the required `2f + 1` distinct votes.
     CommitQuorumMissing,
     /// Timeout votes have not produced the required timeout certificate.
     TimeoutCertificateMissing,
@@ -3062,6 +3045,8 @@ pub enum SumeragiV2LivenessBlocker {
     SchedulerStarvation,
     /// A durable decision is waiting for terminating local application work.
     ApplicationPending,
+    /// Durable application completed but successor activation has not advanced.
+    SuccessorActivationPending,
     /// The reducer is waiting for safety-WAL persistence or consensus signing.
     LocalControlPending,
 }
@@ -3258,9 +3243,7 @@ impl SumeragiV2Status {
         if self.height_context.epoch_end_height < self.height {
             return Err(Error::EpochEndsBeforeHeight);
         }
-        if self.height_context.validator_count == 0
-            || u64::from(self.height_context.validator_count)
-                > u64::try_from(MAX_VALIDATORS_PER_HEIGHT).unwrap_or(u64::MAX)
+        if !usize::try_from(self.height_context.validator_count).is_ok_and(is_valid_committee_size)
         {
             return Err(Error::InvalidValidatorCount);
         }
@@ -3273,10 +3256,7 @@ impl SumeragiV2Status {
             return Err(Error::InvalidHeightContextQuorum);
         }
         let validator_count = u64::from(self.height_context.validator_count);
-        if self.height_context.quorum.total_power < validator_count
-            || (self.height_context.mode == ConsensusMode::Permissioned
-                && self.height_context.quorum.total_power != validator_count)
-        {
+        if self.height_context.quorum.total_power != validator_count {
             return Err(Error::InvalidHeightContextQuorum);
         }
 
@@ -3350,16 +3330,12 @@ impl SumeragiV2Status {
                 return Err(Error::CommitSummaryCertificateMismatch);
             }
             let canonical_min_signers = DualQuorum::count_threshold(summary.validator_count);
-            if summary.validator_count == 0
-                || u64::from(summary.validator_count)
-                    > u64::try_from(MAX_VALIDATORS_PER_HEIGHT).unwrap_or(u64::MAX)
+            if !usize::try_from(summary.validator_count).is_ok_and(is_valid_committee_size)
                 || canonical_min_signers != Some(summary.min_signers)
                 || summary.signer_count < summary.min_signers
                 || summary.signer_count > summary.validator_count
-                || summary.total_power < u64::from(summary.validator_count)
-                || summary.signed_power < u64::from(summary.signer_count)
-                || summary.signed_power > summary.total_power
-                || u128::from(summary.signed_power) * 3 <= u128::from(summary.total_power) * 2
+                || summary.total_power != u64::from(summary.validator_count)
+                || summary.signed_power != u64::from(summary.signer_count)
             {
                 return Err(Error::InvalidCommitSummaryQuorum);
             }
@@ -3457,10 +3433,7 @@ impl SumeragiV2Status {
                 if min_signers != self.height_context.quorum.min_signers
                     || total_power != self.height_context.quorum.total_power
                     || signer_count > self.height_context.validator_count
-                    || signed_power < u64::from(signer_count)
-                    || signed_power > total_power
-                    || (self.height_context.mode == ConsensusMode::Permissioned
-                        && signed_power != u64::from(signer_count))
+                    || signed_power != u64::from(signer_count)
                 {
                     return Err(Error::InvalidLivenessQuorum);
                 }
@@ -3497,10 +3470,7 @@ impl SumeragiV2Status {
                 quorum.min_signers,
                 quorum.total_power,
             )?;
-            if quorum.certificate_formed
-                && (quorum.signer_count < quorum.min_signers
-                    || u128::from(quorum.signed_power) * 3 <= u128::from(quorum.total_power) * 2)
-            {
+            if quorum.certificate_formed && quorum.signer_count < quorum.min_signers {
                 return Err(Error::InvalidLivenessQuorum);
             }
         }
@@ -3609,11 +3579,11 @@ pub enum SumeragiV2StatusValidationError {
     ZeroPersistenceId,
     /// The compact height context's epoch does not cover the active height.
     EpochEndsBeforeHeight,
-    /// The compact height context declared an empty or oversized validator roster.
+    /// The compact height context declared a non-`3f + 1` validator roster.
     InvalidValidatorCount,
     /// The expected leader does not index the frozen validator roster.
     LeaderOutOfRange,
-    /// The compact height context's dual quorum is not structurally canonical.
+    /// The compact height context's equal-vote quorum is not structurally canonical.
     InvalidHeightContextQuorum,
     /// The reducer phase cannot emit the reported body state.
     PhaseBodyMismatch,
@@ -3631,7 +3601,7 @@ pub enum SumeragiV2StatusValidationError {
     CommitFrontierAuthenticationMismatch,
     /// The `CommitQC` summary did not certify the reported committed subject and height.
     CommitSummaryCertificateMismatch,
-    /// The `CommitQC` summary did not satisfy its frozen dual quorum.
+    /// The `CommitQC` summary did not satisfy its frozen equal-vote quorum.
     InvalidCommitSummaryQuorum,
     /// A `CommitQC` for the active context reported different frozen quorum inputs.
     CommitSummaryContextMismatch,
@@ -3694,9 +3664,9 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             Error::EpochEndsBeforeHeight => {
                 f.write_str("Sumeragi status epoch end must cover the active height")
             }
-            Error::InvalidValidatorCount => f.write_str(
-                "Sumeragi status validator count is empty or exceeds the protocol bound",
-            ),
+            Error::InvalidValidatorCount => {
+                f.write_str("Sumeragi status validator count does not have bounded 3f + 1 geometry")
+            }
             Error::LeaderOutOfRange => {
                 f.write_str("Sumeragi status leader does not index the frozen validator roster")
             }
@@ -3849,8 +3819,8 @@ pub enum ValidationError {
     TotalPowerMismatch,
     /// Encoded count threshold is not the canonical strict supermajority.
     CountThresholdMismatch,
-    /// Permissioned contexts must assign unit power to every validator.
-    PermissionedPowerNotOne,
+    /// Every committee member must have exactly one consensus vote.
+    VotingPowerNotOne,
     /// The frozen epoch end precedes the height governed by this context.
     EpochEndsBeforeHeight,
     /// An epoch-ending context omitted its old-roster-authenticated transition.
@@ -3871,8 +3841,12 @@ pub enum ValidationError {
     MissingNextEpochProofOfPossession,
     /// A next-epoch proof of possession exceeds the protocol bound.
     NextEpochProofOfPossessionTooLarge,
-    /// A permissioned next-epoch snapshot assigned non-unit voting power.
-    NextEpochPermissionedPowerNotOne,
+    /// A next-epoch snapshot assigned non-unit consensus voting power.
+    NextEpochVotingPowerNotOne,
+    /// The voting roster cannot tolerate at least one Byzantine validator.
+    RosterTooSmall,
+    /// The voting roster does not have the exact `3f + 1` shape.
+    InvalidCommitteeGeometry,
     /// The parent certificate is not a `CommitQC` for the previous height.
     InvalidParentCommit,
     /// The audited snapshot bootstrap record or its height/anchor relationship is malformed.
@@ -3921,7 +3895,7 @@ pub enum ValidationError {
     SignatureTooLarge,
     /// Too few distinct validators signed.
     InsufficientSignerCount,
-    /// Signed voting power is not strictly greater than two thirds.
+    /// The redundant signed-vote projection is not a strict supermajority.
     InsufficientVotingPower,
     /// A timeout certificate contains no groups.
     EmptyTimeoutCertificate,
@@ -4003,8 +3977,8 @@ impl fmt::Display for ValidationError {
             Self::CountThresholdMismatch => {
                 f.write_str("count threshold is not the canonical strict supermajority")
             }
-            Self::PermissionedPowerNotOne => {
-                f.write_str("permissioned validators must each have voting power one")
+            Self::VotingPowerNotOne => {
+                f.write_str("every consensus validator must have voting power one")
             }
             Self::EpochEndsBeforeHeight => {
                 f.write_str("height context epoch ends before its governed height")
@@ -4036,8 +4010,14 @@ impl fmt::Display for ValidationError {
             Self::NextEpochProofOfPossessionTooLarge => {
                 f.write_str("next-epoch snapshot contains an oversized PoP")
             }
-            Self::NextEpochPermissionedPowerNotOne => {
-                f.write_str("permissioned next-epoch validators must each have voting power one")
+            Self::NextEpochVotingPowerNotOne => {
+                f.write_str("every next-epoch consensus validator must have voting power one")
+            }
+            Self::RosterTooSmall => {
+                f.write_str("voting roster must contain at least four validators")
+            }
+            Self::InvalidCommitteeGeometry => {
+                f.write_str("voting roster must contain exactly 3f + 1 validators")
             }
             Self::InvalidParentCommit => {
                 f.write_str("height context parent is not the previous height CommitQC")
@@ -4102,7 +4082,9 @@ impl fmt::Display for ValidationError {
             Self::InsufficientSignerCount => {
                 f.write_str("insufficient distinct validator signatures")
             }
-            Self::InsufficientVotingPower => f.write_str("insufficient signed voting power"),
+            Self::InsufficientVotingPower => {
+                f.write_str("inconsistent redundant signed-vote projection")
+            }
             Self::EmptyTimeoutCertificate => f.write_str("timeout certificate has no groups"),
             Self::EmptyTimeoutGroup => f.write_str("timeout vote group has no signers"),
             Self::TimeoutGroupsNotStrictlySorted => {
@@ -4188,7 +4170,7 @@ fn expected_encoded_chunk_count(
     let payload = u128::from(payload_size_bytes);
     let chunk_size = u128::from(layout.chunk_size_bytes);
     let count = match layout.encoding {
-        PayloadEncoding::Plain => payload.div_ceil(chunk_size),
+        PayloadEncoding::Plain => return Err(ValidationError::InvalidDataAvailabilityLayout),
         PayloadEncoding::ReedSolomon16 => {
             let data_shards = u128::from(layout.data_shards);
             let stripe_payload = chunk_size
@@ -4203,9 +4185,42 @@ fn expected_encoded_chunk_count(
     u32::try_from(count).map_err(|_| ValidationError::ChunkCountTooLarge)
 }
 
+fn validate_data_availability_layout(
+    layout: DataAvailabilityLayout,
+) -> Result<(), ValidationError> {
+    if layout.encoding != PayloadEncoding::ReedSolomon16
+        || layout.chunk_size_bytes == 0
+        || layout.chunk_size_bytes > MAX_DA_CHUNK_SIZE_BYTES
+        || !layout.chunk_size_bytes.is_multiple_of(2)
+        || layout.data_shards == 0
+        || layout.data_shards > MAX_DA_DATA_SHARDS
+        || layout.parity_shards == 0
+        || layout.parity_shards > MAX_DA_PARITY_SHARDS
+        || layout.data_shards.saturating_add(layout.parity_shards) > MAX_DA_STRIPE_WIDTH
+        || layout.max_payload_size_bytes == 0
+        || layout.max_payload_size_bytes > MAX_DA_PAYLOAD_SIZE_BYTES
+        || layout.max_chunk_count == 0
+        || layout.max_chunk_count > MAX_DA_CHUNK_COUNT
+    {
+        return Err(ValidationError::InvalidDataAvailabilityLayout);
+    }
+    let required_chunk_capacity =
+        expected_encoded_chunk_count(layout.max_payload_size_bytes, layout)
+            .map_err(|_| ValidationError::InvalidDataAvailabilityLayout)?;
+    let required_encoded_bytes = u64::from(required_chunk_capacity)
+        .checked_mul(u64::from(layout.chunk_size_bytes))
+        .ok_or(ValidationError::InvalidDataAvailabilityLayout)?;
+    if required_chunk_capacity > layout.max_chunk_count
+        || required_encoded_bytes > MAX_DA_ENCODED_PAYLOAD_BYTES
+    {
+        return Err(ValidationError::InvalidDataAvailabilityLayout);
+    }
+    Ok(())
+}
+
 fn validate_encoded_chunk_len(
     manifest: &PayloadManifest,
-    index: usize,
+    _index: usize,
     actual: usize,
 ) -> Result<(), ValidationError> {
     let chunk_size = usize::try_from(manifest.layout.chunk_size_bytes)
@@ -4213,18 +4228,14 @@ fn validate_encoded_chunk_len(
     if actual == 0 || actual > chunk_size {
         return Err(ValidationError::InvalidChunkLength);
     }
-    if manifest.layout.encoding == PayloadEncoding::Plain {
-        let offset = index
-            .checked_mul(chunk_size)
-            .ok_or(ValidationError::InvalidChunkLength)?;
-        let payload_size = usize::try_from(manifest.payload_size_bytes)
-            .map_err(|_| ValidationError::InvalidChunkLength)?;
-        let expected = payload_size.saturating_sub(offset).min(chunk_size);
-        if actual != expected {
+    match manifest.layout.encoding {
+        PayloadEncoding::Plain => {
+            return Err(ValidationError::InvalidDataAvailabilityLayout);
+        }
+        PayloadEncoding::ReedSolomon16 if actual != chunk_size => {
             return Err(ValidationError::InvalidChunkLength);
         }
-    } else if actual != chunk_size {
-        return Err(ValidationError::InvalidChunkLength);
+        PayloadEncoding::ReedSolomon16 => {}
     }
     Ok(())
 }
@@ -4233,8 +4244,14 @@ fn validated_total_power(roster: &[ValidatorPower]) -> Result<u64, ValidationErr
     if roster.is_empty() {
         return Err(ValidationError::EmptyRoster);
     }
+    if roster.len() < MIN_VALIDATORS_PER_HEIGHT {
+        return Err(ValidationError::RosterTooSmall);
+    }
     if roster.len() > MAX_VALIDATORS_PER_HEIGHT {
         return Err(ValidationError::RosterTooLarge);
+    }
+    if !is_valid_committee_size(roster.len()) {
+        return Err(ValidationError::InvalidCommitteeGeometry);
     }
     let mut seen = BTreeSet::new();
     let mut total = 0_u64;

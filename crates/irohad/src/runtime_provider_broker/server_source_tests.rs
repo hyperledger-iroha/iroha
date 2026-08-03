@@ -560,6 +560,51 @@ fn broker_server_readiness_follows_qualification_and_secure_bind() {
 }
 
 #[test]
+fn broker_server_readiness_failure_stops_before_accept_and_cleans_endpoint() {
+    let directory = tempfile::tempdir().expect("create failed-readiness server directory");
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+        .expect("harden failed-readiness server directory");
+    let path = directory.path().join("runtime-provider-broker-v1.sock");
+    let policy = EndpointPolicy::for_test(path.clone());
+    let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+    let callback_lifecycle = Arc::clone(&lifecycle);
+    let callback_invoked = AtomicBool::new(false);
+
+    assert_eq!(
+        serve_with_policy_and_fallible_readiness(
+            &IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain"),
+            RuntimeProviderBrokerBackendsV1::new(),
+            &policy,
+            Arc::clone(&lifecycle),
+            || {
+                callback_invoked.store(true, Ordering::Release);
+                endpoint_identity(&policy).expect("callback observes the secured endpoint");
+                assert!(
+                    callback_lifecycle.try_begin_operation().is_none(),
+                    "the lifecycle must remain starting while readiness publication runs"
+                );
+                Err(RuntimeProviderBrokerReadinessErrorV1)
+            },
+        ),
+        Err(RuntimeProviderBrokerServerErrorV1::ReadinessUnavailable)
+    );
+    assert!(callback_invoked.load(Ordering::Acquire));
+    assert!(
+        lifecycle.shutdown_requested(),
+        "failed readiness publication must move the lifecycle to stopping"
+    );
+    assert_eq!(lifecycle.active_provider_call_count(), 0);
+    assert!(
+        !path.exists(),
+        "failed readiness publication must remove the bound endpoint"
+    );
+    assert!(
+        UnixStream::connect(&path).is_err(),
+        "no client can enter an accept loop after readiness publication fails"
+    );
+}
+
+#[test]
 fn broker_server_graceful_cleanup_allows_exact_endpoint_rebind() {
     let directory = tempfile::tempdir().expect("create broker server directory");
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
@@ -1180,6 +1225,20 @@ fn lifecycle_linearizes_readiness_shutdown_and_operation_admission() {
         stopped_callback.store(true, Ordering::Release);
     }));
     assert!(!stopped_callback.load(Ordering::Acquire));
+
+    let failed_readiness = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+    assert_eq!(
+        failed_readiness.publish_ready_fallible(|| Err(RuntimeProviderBrokerReadinessErrorV1)),
+        Err(RuntimeProviderBrokerReadinessErrorV1)
+    );
+    assert!(
+        failed_readiness.try_begin_operation().is_none(),
+        "a failed callback must not publish the ready state"
+    );
+    assert!(
+        failed_readiness.shutdown_requested(),
+        "a failed callback must atomically move the lifecycle to stopping"
+    );
 
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     assert!(

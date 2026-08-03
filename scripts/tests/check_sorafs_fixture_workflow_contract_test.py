@@ -535,8 +535,14 @@ def test_manifest_generator_enables_required_vrf_and_drand_crypto() -> None:
 def test_por_fixture_generator_has_a_strict_isolated_output_root() -> None:
     """The aggregate generator cannot ambiguously redirect fixture writes."""
 
-    generator = read(
-        "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs"
+    generator = "\n".join(
+        (
+            read("crates/sorafs_manifest/src/bin/generate_por_fixtures.rs"),
+            read(
+                "crates/sorafs_manifest/src/bin/generate_por_fixtures/"
+                "output_transaction_tests.rs"
+            ),
+        )
     )
     assert "fn parse_args(" in generator
     assert 'Some("--output-dir")' in generator
@@ -717,6 +723,7 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
     )
     assert "tests/cancel_asset_lock_v1_test.py" in runner
     assert "tests/cancel_asset_lock_client_helpers_test.py" in runner
+    assert "tests/client_hard_cut_contract_test.py" in runner
     assert "tests/client_ledger_helpers_test.py" in runner
     assert "tests/sorafs_reference_validation_test.py" in runner
     assert "tests/sorafs_replication_instruction_test.py" in runner

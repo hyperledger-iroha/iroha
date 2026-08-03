@@ -3051,7 +3051,7 @@ mod tests {
         let mut delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
-            asset_definition: AssetDefinitionId::new(
+            asset_definition: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),

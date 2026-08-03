@@ -16,6 +16,11 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
 };
+use iroha_data_model::{
+    isi::musubi::SetMusubiReleaseYankV1,
+    musubi::{MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1},
+    nexus::DataSpaceId,
+};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use norito::json::Value;
 use tower::ServiceExt as _;
@@ -1968,7 +1973,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             10320,
             "iroha.gov.contract.get",
             norito::json!({
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             }),
         ),
         (
@@ -2824,38 +2829,39 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.domains.query"),
         "expected agent-friendly domains query MCP tool"
     );
-    assert!(
-        names.iter().any(|name| name == "iroha.musubi.search"),
-        "expected agent-friendly Musubi search MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.musubi.release.get"),
-        "expected agent-friendly Musubi release detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.musubi.package.releases"),
-        "expected agent-friendly Musubi package releases MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.musubi.package.versions"),
-        "expected agent-friendly Musubi package versions MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.musubi.alias.resolve"),
-        "expected agent-friendly Musubi alias resolve MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.musubi.instructions.yank_release"),
-        "expected agent-friendly Musubi yank instruction MCP tool"
-    );
+    for expected in [
+        "iroha.musubi.queries.exact_package",
+        "iroha.musubi.queries.exact_release",
+        "iroha.musubi.queries.resolver_index",
+        "iroha.musubi.queries.versions",
+        "iroha.musubi.queries.maintainers",
+        "iroha.musubi.queries.archive_locations",
+        "iroha.musubi.queries.alias",
+        "iroha.musubi.queries.alias_history",
+        "iroha.musubi.queries.ordered_prefix",
+        "iroha.musubi.instructions.namespace_binding_register",
+        "iroha.musubi.instructions.archive_register",
+        "iroha.musubi.instructions.archive_location_add",
+        "iroha.musubi.instructions.archive_location_retire",
+        "iroha.musubi.instructions.release_publish",
+        "iroha.musubi.instructions.release_yank_set",
+        "iroha.musubi.instructions.package_metadata_set",
+        "iroha.musubi.instructions.package_member_invite",
+        "iroha.musubi.instructions.package_member_accept",
+        "iroha.musubi.instructions.package_member_set_role",
+        "iroha.musubi.instructions.package_member_remove",
+        "iroha.musubi.instructions.alias_register",
+        "iroha.musubi.instructions.package_recover",
+        "iroha.musubi.instructions.alias_retarget",
+        "iroha.musubi.instructions.artifact_takedown",
+        "iroha.musubi.instructions.registry_policy_set",
+        "iroha.musubi.instructions.release_digest_assert",
+    ] {
+        assert!(
+            names.iter().any(|name| name == expected),
+            "expected first-release Musubi MCP tool `{expected}`"
+        );
+    }
     assert!(
         names
             .iter()
@@ -4588,7 +4594,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_query_accepts_flat_envelope_
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_musubi_search_accepts_flat_query_fields() {
+async fn mcp_jsonrpc_tools_call_musubi_v1_query_requires_typed_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -4601,12 +4607,8 @@ async fn mcp_jsonrpc_tools_call_agent_alias_musubi_search_accepts_flat_query_fie
             "id": 10622301,
             "method": "tools/call",
             "params": {
-                "name": "iroha.musubi.search",
-                "arguments": {
-                    "query": "swap",
-                    "namespace": "dex.universal",
-                    "limit": 10
-                }
+                "name": "iroha.musubi.queries.exact_package",
+                "arguments": {}
             }
         }),
     )
@@ -4614,22 +4616,20 @@ async fn mcp_jsonrpc_tools_call_agent_alias_musubi_search_accepts_flat_query_fie
 
     assert_eq!(status, StatusCode::OK);
     assert!(
-        !tool_is_error(&call),
-        "Musubi search alias with flat query fields should dispatch successfully"
+        tool_is_error(&call),
+        "Musubi V1 queries must reject the retired flat-field envelope"
     );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
     assert!(
-        structured
-            .get("body")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty),
-        "empty registry should return an empty package list"
+        structured_content(&call)
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("body")),
+        "missing typed request body should produce a focused error"
     );
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_musubi_yank_instruction_builds_unsigned_payload() {
+async fn mcp_jsonrpc_tools_call_musubi_v1_rejects_signing_fields() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -4639,13 +4639,70 @@ async fn mcp_jsonrpc_tools_call_agent_alias_musubi_yank_instruction_builds_unsig
         &app,
         norito::json!({
             "jsonrpc": "2.0",
+            "id": 106223011,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.musubi.instructions.release_yank_set",
+                "arguments": {
+                    "body": {},
+                    "private_key": "must-not-be-accepted"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(tool_is_error(&call));
+    assert!(
+        structured_content(&call)
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("private_key")),
+        "Musubi V1 MCP tools must reject signing material before dispatch"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_musubi_v1_yank_instruction_builds_unsigned_payload() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let instruction = SetMusubiReleaseYankV1::new(
+        MusubiReleaseIdV1::new(
+            MusubiPackageIdV1::new(
+                DataSpaceId::new(7),
+                MusubiPackageScopeV1::DataspaceRoot,
+                "swap-core".parse().expect("package name"),
+            ),
+            "1.2.3".parse().expect("version"),
+        ),
+        true,
+        "bad archive".parse().expect("reason"),
+        1,
+    );
+    let release = norito::json::to_value(&instruction.release).expect("release JSON");
+    let yanked = instruction.yanked;
+    let reason = norito::json::to_value(&instruction.reason).expect("reason JSON");
+    let expected_yank_revision = instruction.expected_yank_revision;
+    let body = norito::json!({
+        "release": release,
+        "yanked": yanked,
+        "reason": reason,
+        "expected_yank_revision": expected_yank_revision,
+    });
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
             "id": 10622302,
             "method": "tools/call",
             "params": {
-                "name": "iroha.musubi.instructions.yank_release",
+                "name": "iroha.musubi.instructions.release_yank_set",
                 "arguments": {
-                    "package": "dex.universal/swap-core@1.2.3",
-                    "reason": "bad archive"
+                    "body": body
                 }
             }
         }),
@@ -4659,13 +4716,10 @@ async fn mcp_jsonrpc_tools_call_agent_alias_musubi_yank_instruction_builds_unsig
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-    let body = structured
-        .get("body")
-        .and_then(Value::as_object)
-        .expect("instruction response body");
+    let body = structured.get("body").expect("instruction response body");
     assert_eq!(
         body.get("wire_id").and_then(Value::as_str),
-        Some("iroha.musubi.release.yank")
+        Some(SetMusubiReleaseYankV1::WIRE_ID)
     );
     assert!(
         body.get("instruction_base64")
@@ -4673,8 +4727,19 @@ async fn mcp_jsonrpc_tools_call_agent_alias_musubi_yank_instruction_builds_unsig
             .is_some_and(|value| !value.is_empty()),
         "instruction base64 should be present"
     );
+    assert_eq!(
+        body.pointer("/instruction_json/payload/yanked")
+            .and_then(Value::as_bool),
+        Some(true),
+        "instruction preview should expose the exact typed payload"
+    );
+    assert_eq!(
+        body.pointer("/instruction_json/payload/expected_yank_revision")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
     assert!(
-        !body.contains_key("private_key"),
+        body.get("private_key").is_none(),
         "instruction builders must not accept or return private keys"
     );
 }
@@ -4688,10 +4753,23 @@ async fn mcp_musubi_instruction_schemas_do_not_publish_private_key_fields() {
 
     let app = build_router(cfg);
     for tool_name in [
-        "iroha.musubi.instructions.publish_release",
-        "iroha.musubi.instructions.yank_release",
-        "iroha.musubi.instructions.set_alias",
-        "iroha.musubi.instructions.assert_release_exists",
+        "iroha.musubi.instructions.namespace_binding_register",
+        "iroha.musubi.instructions.archive_register",
+        "iroha.musubi.instructions.archive_location_add",
+        "iroha.musubi.instructions.archive_location_retire",
+        "iroha.musubi.instructions.release_publish",
+        "iroha.musubi.instructions.release_yank_set",
+        "iroha.musubi.instructions.package_metadata_set",
+        "iroha.musubi.instructions.package_member_invite",
+        "iroha.musubi.instructions.package_member_accept",
+        "iroha.musubi.instructions.package_member_set_role",
+        "iroha.musubi.instructions.package_member_remove",
+        "iroha.musubi.instructions.alias_register",
+        "iroha.musubi.instructions.package_recover",
+        "iroha.musubi.instructions.alias_retarget",
+        "iroha.musubi.instructions.artifact_takedown",
+        "iroha.musubi.instructions.registry_policy_set",
+        "iroha.musubi.instructions.release_digest_assert",
     ] {
         let tool = find_tool(&app, tool_name).await;
         let schema = tool.get("inputSchema").expect("input schema");
@@ -5775,419 +5853,6 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_surfaces_create_error() {
     }
 }
 
-#[tokio::test]
-async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    enable_writer_mcp(&mut cfg);
-    cfg.torii.connect.enabled = true;
+include!("mcp_endpoints/connect_session_lifecycle_test.rs");
 
-    let app = build_router(cfg);
-    let sid = B64.encode([0x55u8; 32]);
-
-    let (status, create_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 108,
-            "method": "tools/call",
-            "params": {
-                "name": "connect.session.create",
-                "arguments": {
-                    "session_id": sid
-                }
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&create_call),
-        "session creation should not be an MCP tool error"
-    );
-    let create_structured = structured_content(&create_call);
-    assert_eq!(
-        create_structured.get("status").and_then(Value::as_u64),
-        Some(200)
-    );
-    let create_body = create_structured
-        .get("body")
-        .and_then(Value::as_object)
-        .expect("session create body");
-    assert_eq!(
-        create_body.get("sid").and_then(Value::as_str),
-        Some(sid.as_str())
-    );
-    assert!(
-        create_body
-            .get("token_app")
-            .and_then(Value::as_str)
-            .is_some_and(|token| !token.is_empty()),
-        "session create response should contain token_app"
-    );
-    assert!(
-        create_body
-            .get("token_wallet")
-            .and_then(Value::as_str)
-            .is_some_and(|token| !token.is_empty()),
-        "session create response should contain token_wallet"
-    );
-    assert!(
-        create_body
-            .get("token_management")
-            .and_then(Value::as_str)
-            .is_some_and(|token| !token.is_empty()),
-        "session create response should contain token_management"
-    );
-    let token_app = create_body
-        .get("token_app")
-        .and_then(Value::as_str)
-        .expect("token_app present")
-        .to_owned();
-    let token_wallet = create_body
-        .get("token_wallet")
-        .and_then(Value::as_str)
-        .expect("token_wallet present")
-        .to_owned();
-    let token_management = create_body
-        .get("token_management")
-        .and_then(Value::as_str)
-        .expect("token_management present")
-        .to_owned();
-
-    let (status, ws_ticket_app_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 109,
-            "method": "tools/call",
-            "params": {
-                "name": "connect.ws.ticket",
-                "arguments": {
-                    "session_id": sid,
-                    "role": "app",
-                    "token_app": token_app,
-                    "node_url": "https://node.example"
-                }
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&ws_ticket_app_call),
-        "ticket generation should not be an MCP tool error"
-    );
-    let ws_ticket_app = structured_content(&ws_ticket_app_call);
-    assert_eq!(
-        ws_ticket_app.get("ws_url").and_then(Value::as_str),
-        Some(
-            "wss://node.example/v1/connect/ws?sid=VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU&role=app"
-        )
-    );
-    assert_eq!(
-        ws_ticket_app
-            .get("authorization_header")
-            .and_then(Value::as_str),
-        Some(format!("Bearer {token_app}").as_str())
-    );
-    assert_eq!(
-        ws_ticket_app
-            .get("sec_websocket_protocol")
-            .and_then(Value::as_str),
-        Some(
-            format!(
-                "iroha-connect.token.v1.{}",
-                B64.encode(token_app.as_bytes())
-            )
-            .as_str()
-        )
-    );
-
-    let (status, ws_ticket_wallet_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 110,
-            "method": "tools/call",
-            "params": {
-                "name": "connect.ws.ticket",
-                "arguments": {
-                    "sid": sid,
-                    "role": "wallet",
-                    "token_wallet": token_wallet,
-                    "node_url": "https://node.example"
-                }
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&ws_ticket_wallet_call),
-        "wallet ticket generation should not be an MCP tool error"
-    );
-    let ws_ticket_wallet = structured_content(&ws_ticket_wallet_call);
-    assert_eq!(
-        ws_ticket_wallet
-            .get("authorization_header")
-            .and_then(Value::as_str),
-        Some(format!("Bearer {token_wallet}").as_str())
-    );
-
-    let (status, status_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 111,
-            "method": "tools/call",
-            "params": {
-                "name": "connect.status"
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&status_call),
-        "connect status should not be an MCP tool error"
-    );
-    let status_structured = structured_content(&status_call);
-    assert_eq!(
-        status_structured.get("status").and_then(Value::as_u64),
-        Some(200)
-    );
-
-    let (status, delete_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 112,
-            "method": "tools/call",
-            "params": {
-                "name": "connect.session.delete",
-                "arguments": {
-                    "path": {
-                        "session_id": sid
-                    },
-                    "token_management": token_management
-                }
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&delete_call),
-        "successful delete should not be an MCP tool error"
-    );
-    let delete_structured = structured_content(&delete_call);
-    assert_eq!(
-        delete_structured.get("status").and_then(Value::as_u64),
-        Some(204)
-    );
-
-    let (status, delete_again_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 113,
-            "method": "tools/call",
-            "params": {
-                "name": "connect.session.delete",
-                "arguments": {
-                    "sid": sid,
-                    "token_management": token_management
-                }
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&delete_again_call),
-        "404 delete should be marked as MCP tool error"
-    );
-    let delete_again_structured = structured_content(&delete_again_call);
-    assert_eq!(
-        delete_again_structured
-            .get("status")
-            .and_then(Value::as_u64),
-        Some(404)
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    enable_writer_mcp(&mut cfg);
-    cfg.torii.connect.enabled = true;
-
-    let app = build_router(cfg);
-    let sid = B64.encode([0x66u8; 32]);
-
-    let (status, create_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 114,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.connect.session.create",
-                "arguments": {
-                    "session_id": sid
-                }
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&create_call),
-        "connect alias create should not be an MCP tool error"
-    );
-    let create_structured = structured_content(&create_call);
-    assert_eq!(
-        create_structured.get("status").and_then(Value::as_u64),
-        Some(200)
-    );
-    let create_body = create_structured
-        .get("body")
-        .and_then(Value::as_object)
-        .expect("session create body");
-    let token_app = create_body
-        .get("token_app")
-        .and_then(Value::as_str)
-        .expect("token_app present")
-        .to_owned();
-    let token_management = create_body
-        .get("token_management")
-        .and_then(Value::as_str)
-        .expect("token_management present")
-        .to_owned();
-
-    let (status, ticket_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 115,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.connect.ws.ticket",
-                "arguments": {
-                    "session_id": sid,
-                    "role": "app",
-                    "token_app": token_app,
-                    "node_url": "https://node.example"
-                }
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&ticket_call),
-        "connect alias ticket should not be an MCP tool error"
-    );
-    let ticket_structured = structured_content(&ticket_call);
-    assert_eq!(
-        ticket_structured.get("ws_url").and_then(Value::as_str),
-        Some(
-            "wss://node.example/v1/connect/ws?sid=ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY&role=app"
-        )
-    );
-
-    let (status, status_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 116,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.connect.status"
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&status_call),
-        "connect alias status should not be an MCP tool error"
-    );
-    let status_structured = structured_content(&status_call);
-    assert_eq!(
-        status_structured.get("status").and_then(Value::as_u64),
-        Some(200)
-    );
-
-    let (status, delete_call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 117,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.connect.session.delete",
-                "arguments": {
-                    "path": {
-                        "session_id": sid
-                    },
-                    "token_management": token_management
-                }
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&delete_call),
-        "connect alias delete should not be an MCP tool error"
-    );
-    let delete_structured = structured_content(&delete_call);
-    assert_eq!(
-        delete_structured.get("status").and_then(Value::as_u64),
-        Some(204)
-    );
-}
-
-#[tokio::test]
-async fn mcp_routes_remain_registered_and_report_disabled_state() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = false;
-
-    let app = build_router(cfg);
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/mcp")
-                .body(Body::empty())
-                .expect("valid request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let capabilities = read_json_body(response).await;
-    assert_eq!(
-        capabilities.get("enabled").and_then(Value::as_bool),
-        Some(false)
-    );
-
-    let (status, error) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": "disabled",
-            "method": "ping"
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        error.get("code").and_then(Value::as_str),
-        Some("mcp_disabled")
-    );
-}
+include!("mcp_endpoints/connect_and_registration_tests.rs");

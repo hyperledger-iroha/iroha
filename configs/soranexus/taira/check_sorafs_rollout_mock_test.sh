@@ -271,7 +271,7 @@ SH
 set -euo pipefail
 
 if [[ "$*" == *"tools address convert"* ]]; then
-  echo '{"i105":{"value":"testuFAKEACCOUNT@universal"}}'
+  echo '{"i105":{"value":"testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV@universal"}}'
   exit 0
 fi
 

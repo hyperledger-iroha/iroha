@@ -6,6 +6,8 @@ package org.hyperledger.iroha.android.privacy;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -24,6 +26,8 @@ public final class PrivacyExact12FixtureCodecV1 {
   public static final String SCHEMA_NAME =
       "iroha.privacy.exact12-typed-fixture-bundle.v1";
   public static final String SUBMIT_PROOF_WIRE_ID = "iroha.privacy.submit_proof.v1";
+  public static final String CANONICAL_ARCHIVE_SHA256_HEX =
+      "d1bed4c1a07f7fb487ceb4b343d621fab1660ed2f35217543160a8fed921b90f";
   public static final int VERSION = 1;
   public static final int ROW_COUNT = 12;
   public static final int HASH_BYTES = 32;
@@ -118,6 +122,10 @@ public final class PrivacyExact12FixtureCodecV1 {
       throw new IllegalArgumentException(
           "exact-12 fixture archive exceeds " + MAX_ARCHIVE_BYTES + " bytes");
     }
+    if (!CANONICAL_ARCHIVE_SHA256_HEX.equals(canonicalArchiveDigestHex(encoded))) {
+      throw new IllegalArgumentException(
+          "exact-12 fixture differs from the pinned Rust-derived first-release KAT");
+    }
     return encoded;
   }
 
@@ -183,6 +191,19 @@ public final class PrivacyExact12FixtureCodecV1 {
     }
   }
 
+  private static String canonicalArchiveDigestHex(final byte[] bytes) {
+    try {
+      final byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+      final StringBuilder encoded = new StringBuilder(digest.length * 2);
+      for (final byte value : digest) {
+        encoded.append(String.format("%02x", value & 0xff));
+      }
+      return encoded.toString();
+    } catch (final NoSuchAlgorithmException error) {
+      throw new IllegalStateException("SHA-256 is unavailable", error);
+    }
+  }
+
   private static final class BundleAdapter
       implements TypeAdapter<PrivacyExact12FixtureBundleV1> {
     @Override
@@ -235,8 +256,8 @@ public final class PrivacyExact12FixtureCodecV1 {
         throw new IllegalArgumentException(
             "exact-12 fixture must declare exactly " + ROW_COUNT + " rows");
       }
-      final PrivacyNativeBridge.ProtocolIdV1[] expected =
-          PrivacyNativeBridge.ProtocolIdV1.values();
+      final PrivacyProtocolIdV1[] expected =
+          PrivacyProtocolIdV1.values();
       final RowAdapter adapter = new RowAdapter(Objects.requireNonNull(budget, "budget"));
       final List<PrivacyExact12TypedFixtureRowV1> rows = new ArrayList<>(ROW_COUNT);
       for (int index = 0; index < ROW_COUNT; index++) {
@@ -286,8 +307,8 @@ public final class PrivacyExact12FixtureCodecV1 {
       final DecodeBudget decodeBudget = Objects.requireNonNull(budget, "budget");
       final long protocolTag =
           decodeExactSizedField(decoder, UINT32_ADAPTER, 4L, "protocol id");
-      final PrivacyNativeBridge.ProtocolIdV1[] protocols =
-          PrivacyNativeBridge.ProtocolIdV1.values();
+      final PrivacyProtocolIdV1[] protocols =
+          PrivacyProtocolIdV1.values();
       if (protocolTag < 0L || protocolTag >= protocols.length) {
         throw new IllegalArgumentException(
             "unknown exact-12 protocol discriminant: " + protocolTag);

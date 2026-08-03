@@ -736,7 +736,7 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
     if source[0] != "sora-taira":
         raise ValueError(f"{label}.source_network must be SORA Taira")
     protocol_version = _integer(
-        record["protocol_version"], f"{label}.protocol_version", 4, 4
+        record["protocol_version"], f"{label}.protocol_version", 3, 4
     )
     chain_hash = bytes.fromhex(_upper_hex(record["chain_id_hash"], f"{label}.chain_id_hash", 32))
     if chain_hash != _SORA_TAIRA_CHAIN_ID_HASH:

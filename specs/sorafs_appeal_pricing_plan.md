@@ -131,7 +131,9 @@ implemented helpers and the remaining service gates.
 - `NodeHandle::publish_appeal_finance_report` validates and publishes those
   reports through the configured signed Governance DAG outbox as canonical
   `.to` payloads, JSON mirrors, BLAKE3
-  sidecars, `publish-index.json` entries, local CAR queue segments, and optional
+  sidecars, entries in the authoritative
+  `governance-publication-state-v1.json` `publish_index`, local CAR queue
+  segments, and optional
   signed runtime DAG blocks.
 - `SoraFsAppealFinanceWeeklyRollupV1::from_reports` validates source reports,
   rejects duplicate report ids, and emits deterministic weekly totals by
@@ -139,15 +141,16 @@ implemented helpers and the remaining service gates.
   refund, treasury, held escrow, rewards paid, and forfeited rewards.
 - `NodeHandle::publish_appeal_finance_weekly_rollup` publishes weekly rollups
   through the configured signed Governance DAG outbox as canonical `.to`
-  payloads, JSON mirrors, BLAKE3 sidecars, `publish-index.json` entries, local
-  CAR queue segments, and signed runtime DAG blocks.
+  payloads, JSON mirrors, BLAKE3 sidecars, authoritative publication-envelope
+  entries, local CAR queue segments, and signed runtime DAG blocks.
 - `SoraFsAppealFinanceSettlementReceiptV1` records finalized server-submitted
   settlement steps with the exact committed transaction hash, required authority,
   reconciliation digest, observed ledger state, and settlement amounts.
 - `NodeHandle::publish_appeal_finance_settlement_receipt` publishes settlement
   receipts through the configured signed Governance DAG outbox as canonical
-  `.to` payloads, JSON mirrors, BLAKE3 sidecars, `publish-index.json` entries,
-  local CAR queue segments, and signed runtime DAG blocks under
+  `.to` payloads, JSON mirrors, BLAKE3 sidecars, authoritative
+  publication-envelope entries, local CAR queue segments, and signed runtime
+  DAG blocks under
   `appeal_finance_settlement_receipt`.
 - `GET /v1/sorafs/appeals/finance/settlement-receipts` summarizes locally
   published settlement receipts from the Governance DAG publish-index for
@@ -331,9 +334,10 @@ The app API publishes the deterministic baseline through JSON endpoints:
   published only after committed-state reconciliation and is derived from the
   exact signed transaction.
 - `GET /v1/sorafs/appeals/finance/settlement-receipts` returns the local
-  settlement receipt publication summary from `publish-index.json`, with totals
-  by submitted settlement step and reconciliation status plus source entries for
-  dashboard drill-downs. The response includes published/returned counts,
+  settlement receipt publication summary from the `publish_index` section of
+  `governance-publication-state-v1.json`, with totals by submitted settlement
+  step and reconciliation status plus source entries for dashboard drill-downs.
+  The response includes published/returned counts,
   applied `limit`, and a truncation flag for the bounded `entries` array.
 - `POST /v1/sorafs/appeals/finance/deposits/reconcile` accepts the same
   `deposit_confirmation`, `outcome`, and optional `panel_size`, then compares

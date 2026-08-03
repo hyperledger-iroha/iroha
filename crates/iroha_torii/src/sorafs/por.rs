@@ -1,16 +1,17 @@
-//! In-memory Proof-of-Retrievability coordinator used by Torii.
+//! Rebuildable Proof-of-Retrievability projection used by Torii.
 //!
-//! This module collects governance-issued PoR challenges, provider proofs, and
-//! audit verdicts so that operators can query historical outcomes and generate
-//! weekly reports. When constructed with [`PorCoordinator::with_persistence`],
-//! state is snapshotted to disk using Norito so operators can recover history
-//! across restarts.
+//! The storage node checkpoint is the sole authority for PoR challenge lifecycle
+//! state. Torii installs that projection at startup, then advances its maps and
+//! indexes in place with exact node-authoritative generation updates. Coordinator
+//! persistence retains only exact report publication state once the projection
+//! has been installed.
 
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
+    ops::Bound,
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -39,57 +40,43 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
     to_bytes,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{MappedRwLockReadGuard, Mutex, RwLock, RwLockReadGuard};
 use sorafs_manifest::por::{
-    AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1,
-    PorChallengeOutcome, PorChallengePublicationV1, PorChallengePublicationValidationError,
-    PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError, PorProviderSummaryV1,
+    AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1,
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_CHALLENGE_STATUS_VERSION_V1,
+    POR_STATUS_CURSOR_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome,
+    PorChallengePublicationV1, PorChallengePublicationValidationError, PorChallengeStatusV1,
+    PorChallengeV1, PorChallengeValidationError, PorProviderSummaryV1,
     PorProviderSummaryValidationError, PorReportIsoWeek, PorReportIsoWeekValidationError,
-    PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
+    PorStatusCursorV1, PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
     ProviderVrfSubmissionValidationError, provider_vrf_input,
 };
-use sorafs_node::por_repair_source_identity_v1;
 #[cfg(feature = "app_api")]
 use sorafs_node::{
     ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError, PorRandomness,
+};
+use sorafs_node::{
+    PorMutationFailureV1, PorStatusAuthoritySnapshotV1, PorStatusAuthorityUpdateV1,
+    por_repair_source_identity_v1,
 };
 use thiserror::Error;
 use time::{Date, Duration, OffsetDateTime, Weekday};
 #[cfg(feature = "app_api")]
 use tokio::time::{MissedTickBehavior, interval};
 
-const POR_STATUS_EXPORT_VERSION_V1: u8 = 1;
+const POR_STATUS_PAGE_VERSION_V1: u8 = 1;
+const POR_STATUS_EXPORT_PAGE_VERSION_V1: u8 = 1;
+/// Maximum sum of canonical status-record bytes returned by one PoR page.
+pub(crate) const POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1: usize =
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1;
+/// Maximum status records materialized and filter-evaluated by one status query.
+pub(crate) const POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1: usize = 512;
 const POR_COORDINATOR_SNAPSHOT_VERSION_V1: u8 = 1;
-const MAX_POR_COORDINATOR_RECORDS: usize = 65_536;
+const MAX_POR_COORDINATOR_RECORDS: usize =
+    iroha_config::parameters::defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX;
 const MAX_POR_COORDINATOR_FORCED_PROVIDERS: usize = 4_096;
 const MAX_POR_COORDINATOR_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_POR_COORDINATOR_DECODE_ALLOCATED_BYTES: usize = 512 * 1024 * 1024;
-
-#[derive(Debug)]
-struct RankedPorStatus(PorChallengeStatusV1);
-
-impl PartialEq for RankedPorStatus {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.issued_at == other.0.issued_at && self.0.challenge_id == other.0.challenge_id
-    }
-}
-
-impl Eq for RankedPorStatus {}
-
-impl PartialOrd for RankedPorStatus {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for RankedPorStatus {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0
-            .issued_at
-            .cmp(&other.0.issued_at)
-            .then_with(|| self.0.challenge_id.cmp(&other.0.challenge_id))
-    }
-}
 
 const fn por_coordinator_decode_limits() -> norito::DecodeLimits {
     norito::DecodeLimits::new(
@@ -101,6 +88,7 @@ const fn por_coordinator_decode_limits() -> norito::DecodeLimits {
     )
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PorCoordinatorVerdictOutcome {
     Inserted,
@@ -117,6 +105,7 @@ struct RecordedVerdict {
 }
 
 impl RecordedVerdict {
+    #[cfg(test)]
     fn from_verdict(verdict: &AuditVerdictV1) -> Result<Self, PorCoordinatorError> {
         let canonical = to_bytes(verdict)
             .map_err(|error| PorCoordinatorError::CanonicalVerdictEncoding(error.to_string()))?;
@@ -177,71 +166,129 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordedVerdictSnapshot {
     }
 }
 
-/// Binary export produced for PoR status snapshots.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-pub struct PorStatusExportV1 {
-    /// Schema version.
-    pub version: u8,
-    /// Unix timestamp when the export was generated.
-    pub generated_at: u64,
-    /// Optional epoch filter lower bound (inclusive).
-    #[norito(default)]
-    pub start_epoch: Option<u64>,
-    /// Optional epoch filter upper bound (inclusive).
-    #[norito(default)]
-    pub end_epoch: Option<u64>,
-    /// Challenge status records included in the export.
-    pub statuses: Vec<PorChallengeStatusV1>,
+/// Validated record and canonical-byte ceilings for one PoR status page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PorStatusPageLimits {
+    records: usize,
+    canonical_bytes: usize,
 }
 
-impl PorStatusExportV1 {
-    /// Validate export metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorStatusExportValidationError`] if the export version,
-    /// epoch bounds, or contained challenge statuses are invalid.
-    pub fn validate(&self) -> Result<(), PorStatusExportValidationError> {
-        if self.version != POR_STATUS_EXPORT_VERSION_V1 {
-            return Err(PorStatusExportValidationError::UnsupportedVersion {
-                found: self.version,
+impl PorStatusPageLimits {
+    /// Validate first-release page limits at the coordinator boundary.
+    pub(crate) fn new(records: usize, canonical_bytes: usize) -> Result<Self, PorCoordinatorError> {
+        if records == 0 {
+            return Err(PorCoordinatorError::InvalidPageLimit {
+                field: "limit",
+                value: records,
+                maximum: POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
             });
         }
-        if let (Some(start), Some(end)) = (self.start_epoch, self.end_epoch) {
-            if start > end {
-                return Err(PorStatusExportValidationError::InvalidEpochRange { start, end });
-            }
+        if records > POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 {
+            return Err(PorCoordinatorError::InvalidPageLimit {
+                field: "limit",
+                value: records,
+                maximum: POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
+            });
         }
-        for status in &self.statuses {
-            status
-                .validate()
-                .map_err(PorStatusExportValidationError::InvalidStatus)?;
+        if canonical_bytes == 0 || canonical_bytes > POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1 {
+            return Err(PorCoordinatorError::InvalidPageLimit {
+                field: "max_bytes",
+                value: canonical_bytes,
+                maximum: POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1,
+            });
         }
-        Ok(())
+        Ok(Self {
+            records,
+            canonical_bytes,
+        })
     }
 }
 
-/// Validation errors for [`PorStatusExportV1`].
-#[allow(clippy::large_enum_variant, variant_size_differences)]
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum PorStatusExportValidationError {
-    /// The supplied export version is not supported.
-    #[error("unsupported export version {found}")]
-    UnsupportedVersion {
-        /// Version byte read from the export payload.
-        found: u8,
+/// Opaque, versioned cursor for a PoR status or export page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PorStatusPageCursor {
+    /// Start a new snapshot traversal.
+    First,
+    /// Continue strictly after one consumed index candidate from an exact
+    /// generation and selection.
+    After {
+        /// Coordinator generation issued with the cursor.
+        snapshot_generation: u64,
+        /// Domain-separated digest of the normalized filter or export range.
+        selection_digest: [u8; 32],
+        /// Epoch anchor, and the leading order-key component for ranged exports.
+        last_epoch_id: u64,
+        /// Issued-at component of the last consumed candidate's exact order key.
+        last_issued_at: u64,
+        /// Challenge component of the last consumed candidate's exact order key.
+        challenge_id: [u8; 32],
     },
-    /// Provided epoch range has the start greater than the end.
-    #[error("start_epoch {start} must not exceed end_epoch {end}")]
-    InvalidEpochRange {
-        /// Inclusive start of the epoch interval.
-        start: u64,
-        /// Inclusive end of the epoch interval.
-        end: u64,
-    },
-    /// One of the embedded status records failed validation.
-    #[error("status record invalid: {0}")]
-    InvalidStatus(#[source] sorafs_manifest::por::PorChallengeStatusValidationError),
+}
+
+impl PorStatusPageCursor {
+    /// Decode one canonical URL-safe cursor, or begin at the first page.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PorCoordinatorError`] when the cursor is oversized,
+    /// non-canonical, malformed, or uses an unsupported version.
+    pub(crate) fn from_opaque(cursor: Option<&str>) -> Result<Self, PorCoordinatorError> {
+        let Some(cursor) = cursor else {
+            return Ok(Self::First);
+        };
+        let payload = PorStatusCursorV1::decode_opaque(cursor)
+            .map_err(|error| PorCoordinatorError::InvalidPageCursor(error.to_string()))?;
+        Ok(Self::After {
+            snapshot_generation: payload.snapshot_generation,
+            selection_digest: payload.selection_digest,
+            last_epoch_id: payload.last_epoch_id,
+            last_issued_at: payload.last_issued_at,
+            challenge_id: payload.last_challenge_id,
+        })
+    }
+}
+
+/// Bounded, generation-bound PoR status page.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct PorStatusPageV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Immutable coordinator generation against which this page was evaluated.
+    pub snapshot_generation: u64,
+    /// Maximum records requested by the caller.
+    pub record_limit: u32,
+    /// Maximum sum of canonical status-record bytes requested by the caller.
+    pub canonical_byte_limit: u64,
+    /// Exact sum of canonical bytes for all returned status records.
+    pub canonical_bytes: u64,
+    /// Exact number of indexed status candidates evaluated for this page.
+    pub inspected_candidates: u32,
+    /// Whether traversal can continue after the last consumed candidate.
+    ///
+    /// Sparse filter intersections may therefore return no statuses together
+    /// with `has_more = true` and a non-empty continuation cursor.
+    pub has_more: bool,
+    /// Opaque continuation bound to this generation, selection, and last
+    /// consumed candidate.
+    #[norito(default)]
+    pub next_cursor: Option<String>,
+    /// Challenge status records in canonical index order.
+    pub statuses: Vec<PorChallengeStatusV1>,
+}
+
+/// Bounded replacement for the retired full-history PoR export response.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct PorStatusExportPageV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Optional inclusive epoch-range lower bound.
+    #[norito(default)]
+    pub start_epoch: Option<u64>,
+    /// Optional inclusive epoch-range upper bound.
+    #[norito(default)]
+    pub end_epoch: Option<u64>,
+    /// Bounded page evaluated against one exact coordinator generation.
+    pub page: PorStatusPageV1,
 }
 
 /// Durable exact report material and its publication acknowledgement.
@@ -251,2449 +298,495 @@ struct PreparedWeeklyReportV1 {
     published: bool,
 }
 
-/// Aggregate coordinator for PoR challenge lifecycle.
+type PorStatusOrderKey = (u64, [u8; 32]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PorStatusCursorAnchor {
+    epoch_id: u64,
+    issued_at: u64,
+    challenge_id: [u8; 32],
+}
+
+impl PorStatusCursorAnchor {
+    fn status_order_key(self) -> PorStatusOrderKey {
+        (self.issued_at, self.challenge_id)
+    }
+
+    fn epoch_order_key(self) -> (u64, u64, [u8; 32]) {
+        (self.epoch_id, self.issued_at, self.challenge_id)
+    }
+}
+
+fn por_status_selection_digest(filter: &PorStatusFilter) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"iroha.sorafs.por.status-cursor.selection.v1");
+    for value in [filter.manifest, filter.provider] {
+        match value {
+            Some(value) => {
+                hasher.update(&[1]);
+                hasher.update(&value);
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+    }
+    match filter.epoch {
+        Some(value) => {
+            hasher.update(&[1]);
+            hasher.update(&value.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    match filter.status {
+        Some(value) => {
+            hasher.update(&[1, value as u8]);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn por_export_selection_digest(range: Option<(u64, u64)>) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"iroha.sorafs.por.export-cursor.selection.v1");
+    match range {
+        Some((start, end)) => {
+            hasher.update(&[1]);
+            hasher.update(&start.to_le_bytes());
+            hasher.update(&end.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    *hasher.finalize().as_bytes()
+}
+
+#[derive(Debug, Clone)]
+struct PorStatusIndexes {
+    generation: u64,
+    canonical: BTreeSet<PorStatusOrderKey>,
+    by_manifest: BTreeMap<[u8; 32], BTreeSet<PorStatusOrderKey>>,
+    by_provider: BTreeMap<[u8; 32], BTreeSet<PorStatusOrderKey>>,
+    by_epoch: BTreeMap<u64, BTreeSet<PorStatusOrderKey>>,
+    by_outcome: BTreeMap<u8, BTreeSet<PorStatusOrderKey>>,
+    epoch_order: BTreeSet<(u64, u64, [u8; 32])>,
+}
+
+impl Default for PorStatusIndexes {
+    fn default() -> Self {
+        Self {
+            generation: 1,
+            canonical: BTreeSet::new(),
+            by_manifest: BTreeMap::new(),
+            by_provider: BTreeMap::new(),
+            by_epoch: BTreeMap::new(),
+            by_outcome: BTreeMap::new(),
+            epoch_order: BTreeSet::new(),
+        }
+    }
+}
+
+impl PorStatusIndexes {
+    fn from_records(records: &DashMap<[u8; 32], ChallengeRecord>, generation: u64) -> Self {
+        debug_assert_ne!(generation, 0, "PoR status generation is always non-zero");
+        let mut indexes = Self {
+            generation,
+            ..Self::default()
+        };
+        for entry in records.iter() {
+            indexes.insert_status(&entry.value().to_status());
+        }
+        indexes
+    }
+
+    fn from_statuses(statuses: &BTreeMap<[u8; 32], PorChallengeStatusV1>, generation: u64) -> Self {
+        debug_assert_ne!(generation, 0, "PoR status generation is always non-zero");
+        let mut indexes = Self {
+            generation,
+            ..Self::default()
+        };
+        for status in statuses.values() {
+            indexes.insert_status(status);
+        }
+        indexes
+    }
+
+    fn order_key(status: &PorChallengeStatusV1) -> PorStatusOrderKey {
+        (status.issued_at, status.challenge_id)
+    }
+
+    fn insert_status(&mut self, status: &PorChallengeStatusV1) {
+        let key = Self::order_key(status);
+        self.canonical.insert(key);
+        self.by_manifest
+            .entry(status.manifest_digest)
+            .or_default()
+            .insert(key);
+        self.by_provider
+            .entry(status.provider_id)
+            .or_default()
+            .insert(key);
+        self.by_epoch
+            .entry(status.epoch_id)
+            .or_default()
+            .insert(key);
+        self.by_outcome
+            .entry(status.status as u8)
+            .or_default()
+            .insert(key);
+        self.epoch_order
+            .insert((status.epoch_id, status.issued_at, status.challenge_id));
+    }
+
+    fn remove_status(&mut self, status: &PorChallengeStatusV1) {
+        let key = Self::order_key(status);
+        self.canonical.remove(&key);
+        Self::remove_secondary(&mut self.by_manifest, &status.manifest_digest, &key);
+        Self::remove_secondary(&mut self.by_provider, &status.provider_id, &key);
+        Self::remove_secondary(&mut self.by_epoch, &status.epoch_id, &key);
+        Self::remove_secondary(&mut self.by_outcome, &(status.status as u8), &key);
+        self.epoch_order
+            .remove(&(status.epoch_id, status.issued_at, status.challenge_id));
+    }
+
+    fn remove_secondary<K: Ord + Copy>(
+        index: &mut BTreeMap<K, BTreeSet<PorStatusOrderKey>>,
+        key: &K,
+        order_key: &PorStatusOrderKey,
+    ) {
+        let remove_bucket = index.get_mut(key).is_some_and(|bucket| {
+            bucket.remove(order_key);
+            bucket.is_empty()
+        });
+        if remove_bucket {
+            index.remove(key);
+        }
+    }
+
+    fn commit_insert(&mut self, status: &PorChallengeStatusV1, next_generation: u64) {
+        self.insert_status(status);
+        self.publish_generation(next_generation);
+    }
+
+    #[cfg(test)]
+    fn commit_remove(&mut self, status: &PorChallengeStatusV1, next_generation: u64) {
+        self.remove_status(status);
+        self.publish_generation(next_generation);
+    }
+
+    fn commit_replace(
+        &mut self,
+        previous: &PorChallengeStatusV1,
+        current: &PorChallengeStatusV1,
+        next_generation: u64,
+    ) {
+        self.remove_status(previous);
+        self.insert_status(current);
+        self.publish_generation(next_generation);
+    }
+
+    fn publish_generation(&mut self, next_generation: u64) {
+        debug_assert_eq!(self.generation.checked_add(1), Some(next_generation));
+        self.generation = next_generation;
+    }
+
+    fn validate_against_records(
+        &self,
+        records: &DashMap<[u8; 32], ChallengeRecord>,
+    ) -> Result<(), String> {
+        let rebuilt = Self::from_records(records, self.generation);
+        if self.canonical != rebuilt.canonical
+            || self.by_manifest != rebuilt.by_manifest
+            || self.by_provider != rebuilt.by_provider
+            || self.by_epoch != rebuilt.by_epoch
+            || self.by_outcome != rebuilt.by_outcome
+            || self.epoch_order != rebuilt.epoch_order
+        {
+            return Err("PoR status indexes do not match persisted challenge records".to_owned());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct AuthoritativePorProjectionV1 {
+    statuses: BTreeMap<[u8; 32], PorChallengeStatusV1>,
+    indexes: PorStatusIndexes,
+    forced_providers: HashMap<[u8; 32], BTreeMap<u64, usize>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthoritativeUpdateAction {
+    Insert,
+    Replace,
+}
+
+fn por_status_identity_is_unchanged(
+    previous: &PorChallengeStatusV1,
+    current: &PorChallengeStatusV1,
+) -> bool {
+    previous.version == current.version
+        && previous.challenge_id == current.challenge_id
+        && previous.manifest_digest == current.manifest_digest
+        && previous.provider_id == current.provider_id
+        && previous.epoch_id == current.epoch_id
+        && previous.drand_round == current.drand_round
+        && previous.sample_count == current.sample_count
+        && previous.forced == current.forced
+        && previous.issued_at == current.issued_at
+}
+
+fn por_status_lifecycle_advances(
+    previous: &PorChallengeStatusV1,
+    current: &PorChallengeStatusV1,
+) -> bool {
+    if previous == current
+        || previous
+            .responded_at
+            .is_some_and(|value| current.responded_at != Some(value))
+        || previous
+            .proof_digest
+            .is_some_and(|value| current.proof_digest != Some(value))
+    {
+        return false;
+    }
+
+    match previous.status {
+        PorChallengeOutcome::AwaitingProof => match current.status {
+            PorChallengeOutcome::ProofSubmitted => true,
+            PorChallengeOutcome::Failed => {
+                // A proof submission is its own durable generation. A direct
+                // deadline-failure transition therefore cannot introduce the
+                // response material that was absent from `AwaitingProof`.
+                current.responded_at.is_none() && current.proof_digest.is_none()
+            }
+            PorChallengeOutcome::AwaitingProof
+            | PorChallengeOutcome::Verified
+            | PorChallengeOutcome::Repaired => false,
+        },
+        PorChallengeOutcome::ProofSubmitted => matches!(
+            current.status,
+            PorChallengeOutcome::Verified
+                | PorChallengeOutcome::Failed
+                | PorChallengeOutcome::Repaired
+        ),
+        PorChallengeOutcome::Verified
+        | PorChallengeOutcome::Failed
+        | PorChallengeOutcome::Repaired => false,
+    }
+}
+
+fn remove_forced_status(
+    forced_providers: &mut HashMap<[u8; 32], BTreeMap<u64, usize>>,
+    status: &PorChallengeStatusV1,
+) {
+    if !status.forced {
+        return;
+    }
+    let remove_provider = forced_providers
+        .get_mut(&status.provider_id)
+        .is_some_and(|epochs| {
+            let remove_epoch = epochs.get_mut(&status.epoch_id).is_some_and(|count| {
+                if *count > 1 {
+                    *count -= 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            debug_assert!(
+                epochs.contains_key(&status.epoch_id),
+                "retained forced-provider provenance must contain the removed status"
+            );
+            if remove_epoch {
+                epochs.remove(&status.epoch_id);
+            }
+            epochs.is_empty()
+        });
+    if remove_provider {
+        forced_providers.remove(&status.provider_id);
+    }
+}
+
+fn insert_forced_status(
+    forced_providers: &mut HashMap<[u8; 32], BTreeMap<u64, usize>>,
+    status: &PorChallengeStatusV1,
+) {
+    if status.forced {
+        let count = forced_providers
+            .entry(status.provider_id)
+            .or_default()
+            .entry(status.epoch_id)
+            .or_default();
+        *count = count
+            .checked_add(1)
+            .expect("bounded PoR status retention leaves forced-provenance count headroom");
+    }
+}
+
+/// Rebuildable PoR read projection and durable weekly-report publisher state.
 #[derive(Debug, Clone)]
 pub struct PorCoordinator {
+    record_limit: usize,
+    #[cfg(test)]
     records: Arc<DashMap<[u8; 32], ChallengeRecord>>,
+    /// One atomic, rebuildable read projection sourced from the node checkpoint.
+    authoritative_projection: Arc<RwLock<Option<AuthoritativePorProjectionV1>>>,
+    #[cfg(test)]
+    status_indexes: Arc<RwLock<PorStatusIndexes>>,
     /// Tracks recent forced challenges so we can flag providers missing VRFs.
+    #[cfg(test)]
     forced_providers: Arc<RwLock<HashMap<[u8; 32], BTreeSet<u64>>>>,
     /// Exact report material prepared before durable Governance DAG publication.
     prepared_weekly_report: Arc<RwLock<Option<PreparedWeeklyReportV1>>>,
     persistence: Option<Arc<PorPersistence>>,
+    /// Latches a post-publication persistence fault until disk state is reloaded.
+    persistence_fault: Arc<RwLock<Option<String>>>,
     mutation_lock: Arc<Mutex<()>>,
     pipeline_lock: Arc<tokio::sync::Mutex<()>>,
+    #[cfg(test)]
+    weekly_report_projection_lookups: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(test)]
+    status_page_projection_lookups: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl PorCoordinator {
-    /// Construct an empty coordinator.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            records: Arc::new(DashMap::new()),
-            forced_providers: Arc::new(RwLock::new(HashMap::new())),
-            prepared_weekly_report: Arc::new(RwLock::new(None)),
-            persistence: None,
-            mutation_lock: Arc::new(Mutex::new(())),
-            pipeline_lock: Arc::new(tokio::sync::Mutex::new(())),
-        }
-    }
-
-    /// Construct a coordinator backed by on-disk persistence.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorPersistenceError`] if the existing persistence records cannot
-    /// be loaded from disk.
-    pub fn with_persistence<P: Into<PathBuf>>(path: P) -> Result<Self, PorPersistenceError> {
-        let persistence = Arc::new(PorPersistence::new(path.into()));
-        let (records, forced, prepared_weekly_report) = persistence.load()?;
-        Ok(Self {
-            records,
-            forced_providers: forced,
-            prepared_weekly_report,
-            persistence: Some(persistence),
-            mutation_lock: Arc::new(Mutex::new(())),
-            pipeline_lock: Arc::new(tokio::sync::Mutex::new(())),
-        })
-    }
-
-    /// Serialize the Torii/node dual-state PoR submission pipeline.
-    pub(crate) async fn lock_pipeline(&self) -> tokio::sync::OwnedMutexGuard<()> {
-        Arc::clone(&self.pipeline_lock).lock_owned().await
-    }
-
-    /// Record a governance-issued challenge.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorCoordinatorError::InvalidChallenge`] when validation fails,
-    /// [`PorCoordinatorError::DuplicateChallenge`] for an exact replay,
-    /// [`PorCoordinatorError::ChallengeConflict`] if a different challenge is
-    /// already recorded under the same identifier, or
-    /// [`PorCoordinatorError::Persistence`] when persistence updates fail.
-    pub(crate) fn record_challenge(
-        &self,
-        challenge: &PorChallengeV1,
-    ) -> Result<(), PorCoordinatorError> {
-        challenge
-            .validate()
-            .map_err(PorCoordinatorError::InvalidChallenge)?;
-        let _mutation = self.mutation_lock.lock();
-        if let Some(existing) = self.records.get(&challenge.challenge_id) {
-            if existing.challenge != *challenge {
-                return Err(PorCoordinatorError::ChallengeConflict {
-                    challenge_id: challenge.challenge_id,
-                    challenge_id_hex: hex::encode(challenge.challenge_id),
-                });
-            }
-            return Err(PorCoordinatorError::DuplicateChallenge {
-                challenge_id: challenge.challenge_id,
-                challenge_id_hex: hex::encode(challenge.challenge_id),
-            });
-        }
-        if self.records.len() >= MAX_POR_COORDINATOR_RECORDS {
-            return Err(PorCoordinatorError::RetentionExhausted {
-                limit: MAX_POR_COORDINATOR_RECORDS,
-            });
-        }
-        let record = ChallengeRecord::from_challenge(challenge.clone());
-        if record.challenge.forced {
-            self.track_forced(&record.challenge.provider_id, record.challenge.epoch_id);
-        }
-        self.records.insert(challenge.challenge_id, record);
-        if let Err(error) = self.persist() {
-            self.records.remove(&challenge.challenge_id);
-            if challenge.forced {
-                self.untrack_forced(&challenge.provider_id, challenge.epoch_id);
-            }
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    /// Record a provider proof submission.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorCoordinatorError::InvalidProof`] if validation fails,
-    /// [`PorCoordinatorError::DuplicateProof`] for any replay,
-    /// [`PorCoordinatorError::UnknownChallenge`] when the challenge cannot be
-    /// found, or [`PorCoordinatorError::Persistence`] if persisting updates
-    /// fails.
-    pub(crate) fn record_proof(
-        &self,
-        proof: &sorafs_manifest::por::PorProofV1,
-        admitted_provider_key: &[u8],
-    ) -> Result<(), PorCoordinatorError> {
-        proof
-            .validate()
-            .map_err(PorCoordinatorError::InvalidProof)?;
-        proof
-            .verify_signature_for_provider(admitted_provider_key)
-            .map_err(PorCoordinatorError::InvalidProofSignature)?;
-        let _mutation = self.mutation_lock.lock();
-        let digest = proof.proof_digest();
-        let previous = {
-            let mut entry = self.records.get_mut(&proof.challenge_id).ok_or_else(|| {
-                PorCoordinatorError::UnknownChallenge {
-                    challenge_id: proof.challenge_id,
-                    challenge_id_hex: hex::encode(proof.challenge_id),
-                }
-            })?;
-            entry.ensure_consistency(proof.manifest_digest, proof.provider_id)?;
-            if !proof
-                .samples
-                .iter()
-                .map(|sample| sample.sample_index)
-                .eq(entry.challenge.sample_indices.iter().copied())
-            {
-                return Err(PorCoordinatorError::SampleIndicesMismatch {
-                    challenge_id: proof.challenge_id,
-                    challenge_id_hex: hex::encode(proof.challenge_id),
-                });
-            }
-            if proof.submitted_at < entry.challenge.issued_at
-                || proof.submitted_at > entry.challenge.deadline_at
-            {
-                return Err(PorCoordinatorError::ProofOutsideChallengeWindow {
-                    submitted_at: proof.submitted_at,
-                    issued_at: entry.challenge.issued_at,
-                    deadline_at: entry.challenge.deadline_at,
-                });
-            }
-            if entry.proof_digest.is_some() {
-                return Err(PorCoordinatorError::DuplicateProof {
-                    challenge_id: proof.challenge_id,
-                    challenge_id_hex: hex::encode(proof.challenge_id),
-                });
-            }
-            let previous = entry.clone();
-            entry.proof_digest = Some(digest);
-            entry.proof_submitted_at = Some(proof.submitted_at);
-            entry.responded_at = Some(proof.submitted_at);
-            previous
-        };
-        if let Err(error) = self.persist() {
-            self.records.insert(proof.challenge_id, previous);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    /// Roll back a just-recorded challenge after the node-side commit failed.
-    pub(crate) fn rollback_challenge(
-        &self,
-        challenge: &PorChallengeV1,
-    ) -> Result<(), PorCoordinatorError> {
-        let _mutation = self.mutation_lock.lock();
-        let Some((_, record)) = self.records.remove(&challenge.challenge_id) else {
-            return Ok(());
-        };
-        if record.challenge != *challenge
-            || record.proof_digest.is_some()
-            || record.verdict.is_some()
-        {
-            self.records.insert(challenge.challenge_id, record);
-            return Err(PorCoordinatorError::RollbackConflict {
-                challenge_id: challenge.challenge_id,
-                challenge_id_hex: hex::encode(challenge.challenge_id),
-            });
-        }
-        if challenge.forced {
-            self.untrack_forced(&challenge.provider_id, challenge.epoch_id);
-        }
-        if let Err(error) = self.persist() {
-            if challenge.forced {
-                self.track_forced(&challenge.provider_id, challenge.epoch_id);
-            }
-            self.records.insert(challenge.challenge_id, record);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    /// Roll back a just-recorded proof after the node-side commit failed.
-    pub(crate) fn rollback_proof(
-        &self,
-        proof: &sorafs_manifest::por::PorProofV1,
-    ) -> Result<(), PorCoordinatorError> {
-        let _mutation = self.mutation_lock.lock();
-        let digest = proof.proof_digest();
-        let previous = {
-            let mut entry = self.records.get_mut(&proof.challenge_id).ok_or_else(|| {
-                PorCoordinatorError::UnknownChallenge {
-                    challenge_id: proof.challenge_id,
-                    challenge_id_hex: hex::encode(proof.challenge_id),
-                }
-            })?;
-            if entry.proof_digest != Some(digest) || entry.verdict.is_some() {
-                return Err(PorCoordinatorError::RollbackConflict {
-                    challenge_id: proof.challenge_id,
-                    challenge_id_hex: hex::encode(proof.challenge_id),
-                });
-            }
-            let previous = entry.clone();
-            entry.proof_digest = None;
-            entry.proof_submitted_at = None;
-            entry.responded_at = None;
-            previous
-        };
-        if let Err(error) = self.persist() {
-            self.records.insert(proof.challenge_id, previous);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    /// Roll back a just-recorded verdict after the node-side commit failed.
-    pub(crate) fn rollback_verdict(
-        &self,
-        verdict: &AuditVerdictV1,
-    ) -> Result<(), PorCoordinatorError> {
-        let canonical_digest = RecordedVerdict::from_verdict(verdict)?.canonical_digest;
-        let _mutation = self.mutation_lock.lock();
-        let previous = {
-            let mut entry = self.records.get_mut(&verdict.challenge_id).ok_or_else(|| {
-                PorCoordinatorError::UnknownChallenge {
-                    challenge_id: verdict.challenge_id,
-                    challenge_id_hex: hex::encode(verdict.challenge_id),
-                }
-            })?;
-            if entry
-                .verdict
-                .as_ref()
-                .is_none_or(|recorded| recorded.canonical_digest != canonical_digest)
-            {
-                return Err(PorCoordinatorError::RollbackConflict {
-                    challenge_id: verdict.challenge_id,
-                    challenge_id_hex: hex::encode(verdict.challenge_id),
-                });
-            }
-            let previous = entry.clone();
-            entry.verdict = None;
-            entry.repair_task_id = None;
-            entry.responded_at = entry.proof_submitted_at;
-            previous
-        };
-        if let Err(error) = self.persist() {
-            self.records.insert(verdict.challenge_id, previous);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    /// Validate a governance verdict against the current coordinator record.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorCoordinatorError`] if the verdict is invalid, references an
-    /// unknown challenge, or conflicts with a terminal record.
-    pub(crate) fn validate_verdict_candidate(
-        &self,
-        verdict: &AuditVerdictV1,
-        trusted_auditor_keys: &[Vec<u8>],
-        auditor_threshold: usize,
-    ) -> Result<PorCoordinatorVerdictOutcome, PorCoordinatorError> {
-        verdict
-            .validate()
-            .map_err(PorCoordinatorError::InvalidVerdict)?;
-        verdict
-            .verify_signatures_with_policy(trusted_auditor_keys, auditor_threshold)
-            .map_err(PorCoordinatorError::InvalidVerdictSignature)?;
-        let recorded_verdict = RecordedVerdict::from_verdict(verdict)?;
-        let repair_task_id = (verdict.outcome == AuditOutcomeV1::Failed)
-            .then(|| sorafs_repair_task_id_v1(por_repair_source_identity_v1(verdict.challenge_id)));
-        let entry = self.records.get(&verdict.challenge_id).ok_or_else(|| {
-            PorCoordinatorError::UnknownChallenge {
-                challenge_id: verdict.challenge_id,
-                challenge_id_hex: hex::encode(verdict.challenge_id),
-            }
-        })?;
-        entry.ensure_consistency(verdict.manifest_digest, verdict.provider_id)?;
-        if let Some(existing) = &entry.verdict {
-            return if existing.canonical_digest == recorded_verdict.canonical_digest
-                && entry.repair_task_id == repair_task_id
-            {
-                Ok(PorCoordinatorVerdictOutcome::Existing)
-            } else {
-                Err(PorCoordinatorError::VerdictConflict {
-                    challenge_id: verdict.challenge_id,
-                    challenge_id_hex: hex::encode(verdict.challenge_id),
-                })
-            };
-        }
-        entry.validate_verdict_transition(verdict)?;
-        Ok(PorCoordinatorVerdictOutcome::Inserted)
-    }
-
-    /// Commit a previously validated audit verdict.
-    ///
-    /// Exact replays return [`PorCoordinatorVerdictOutcome::Existing`].
-    pub(crate) fn record_verdict(
-        &self,
-        verdict: &AuditVerdictV1,
-        trusted_auditor_keys: &[Vec<u8>],
-        auditor_threshold: usize,
-    ) -> Result<PorCoordinatorVerdictOutcome, PorCoordinatorError> {
-        verdict
-            .validate()
-            .map_err(PorCoordinatorError::InvalidVerdict)?;
-        verdict
-            .verify_signatures_with_policy(trusted_auditor_keys, auditor_threshold)
-            .map_err(PorCoordinatorError::InvalidVerdictSignature)?;
-        let recorded_verdict = RecordedVerdict::from_verdict(verdict)?;
-        let repair_task_id = (verdict.outcome == AuditOutcomeV1::Failed)
-            .then(|| sorafs_repair_task_id_v1(por_repair_source_identity_v1(verdict.challenge_id)));
-        let _mutation = self.mutation_lock.lock();
-        let previous = {
-            let mut entry = self.records.get_mut(&verdict.challenge_id).ok_or_else(|| {
-                PorCoordinatorError::UnknownChallenge {
-                    challenge_id: verdict.challenge_id,
-                    challenge_id_hex: hex::encode(verdict.challenge_id),
-                }
-            })?;
-            entry.ensure_consistency(verdict.manifest_digest, verdict.provider_id)?;
-            if let Some(existing) = &entry.verdict {
-                if existing.canonical_digest == recorded_verdict.canonical_digest
-                    && entry.repair_task_id == repair_task_id
-                {
-                    return Ok(PorCoordinatorVerdictOutcome::Existing);
-                }
-                return Err(PorCoordinatorError::VerdictConflict {
-                    challenge_id: verdict.challenge_id,
-                    challenge_id_hex: hex::encode(verdict.challenge_id),
-                });
-            }
-            entry.validate_verdict_transition(verdict)?;
-            let previous = entry.clone();
-            entry.verdict = Some(recorded_verdict);
-            entry.repair_task_id = repair_task_id;
-            previous
-        };
-        if let Err(error) = self.persist() {
-            self.records.insert(verdict.challenge_id, previous);
-            return Err(error);
-        }
-        Ok(PorCoordinatorVerdictOutcome::Inserted)
-    }
-
-    /// Snapshot challenge statuses using optional filters.
-    #[must_use]
-    pub fn query_statuses(
-        &self,
-        filter: &PorStatusFilter,
-        limit: Option<usize>,
-        page_token: Option<[u8; 32]>,
-    ) -> Vec<PorChallengeStatusV1> {
-        let after = page_token.and_then(|token| {
-            self.records.get(&token).map(|entry| {
-                let status = entry.to_status();
-                (status.issued_at, status.challenge_id)
-            })
-        });
-        let limit = limit.unwrap_or(usize::MAX);
-        if limit == 0 {
-            return Vec::new();
-        }
-
-        // Retain only the earliest requested records while scanning. The HTTP surface always
-        // supplies a bounded limit, so a small page no longer materializes and sorts the entire
-        // coordinator history.
-        let mut selected = BinaryHeap::with_capacity(limit.min(self.records.len()));
-        for entry in self.records.iter() {
-            let status = entry.value().to_status();
-            let key = (status.issued_at, status.challenge_id);
-            if after.is_some_and(|after| key <= after) || !filter.matches(&status) {
-                continue;
-            }
-            let ranked = RankedPorStatus(status);
-            if selected.len() < limit {
-                selected.push(ranked);
-            } else if selected
-                .peek()
-                .is_some_and(|latest| ranked.cmp(latest) == Ordering::Less)
-            {
-                selected.pop();
-                selected.push(ranked);
-            }
-        }
-        selected
-            .into_sorted_vec()
-            .into_iter()
-            .map(|ranked| ranked.0)
-            .collect()
-    }
-
-    /// Export challenge statuses within an optional epoch range.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorCoordinatorError`] if the generated export fails validation.
-    pub fn export_statuses(
-        &self,
-        range: Option<(u64, u64)>,
-    ) -> Result<PorStatusExportV1, PorCoordinatorError> {
-        let filter = PorStatusFilter {
-            manifest: None,
-            provider: None,
-            epoch: None,
-            status: None,
-        };
-        let statuses: Vec<_> = self
-            .records
-            .iter()
-            .map(|entry| entry.value().to_status())
-            .filter(|status| match range {
-                Some((start, end)) => (status.epoch_id >= start) && (status.epoch_id <= end),
-                None => true,
-            })
-            .filter(|status| filter.matches(status))
-            .collect();
-
-        let export = PorStatusExportV1 {
-            version: POR_STATUS_EXPORT_VERSION_V1,
-            generated_at: unix_now(),
-            start_epoch: range.map(|r| r.0),
-            end_epoch: range.map(|r| r.1),
-            statuses,
-        };
-        export
-            .validate()
-            .map_err(PorCoordinatorError::InvalidExport)?;
-        Ok(export)
-    }
-
-    /// Generate a weekly report for the supplied ISO week.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorCoordinatorError`] if the week is invalid, data cannot be
-    /// aggregated, or the report fails validation.
-    pub fn weekly_report(
-        &self,
-        cycle: PorReportIsoWeek,
-    ) -> Result<PorWeeklyReportV1, PorCoordinatorError> {
-        if let Some(prepared) = self.prepared_weekly_report.read().as_ref()
-            && prepared.report.cycle == cycle
-        {
-            return Ok(prepared.report.clone());
-        }
-        let generated_at = canonical_weekly_report_generated_at(cycle)?;
-        self.weekly_report_at(cycle, generated_at)
-    }
-
-    /// Prepare and durably retain the exact report bytes before publication.
-    ///
-    /// Exact retries for the same cycle return the retained report even if
-    /// coordinator history changes after the first preparation. A pending
-    /// report must be marked published before the next cycle can be prepared.
-    /// Catch-up advances one ISO week per call so outages cannot skip cycles.
-    fn prepare_weekly_report(
-        &self,
-        cycle: PorReportIsoWeek,
-    ) -> Result<PreparedWeeklyReportV1, PorCoordinatorError> {
-        cycle
-            .validate()
-            .map_err(PorCoordinatorError::InvalidIsoWeek)?;
-        let _mutation = self.mutation_lock.lock();
-        let requested_marker = iso_week_marker(cycle);
-        if let Some(existing) = self.prepared_weekly_report.read().as_ref() {
-            let existing_marker = iso_week_marker(existing.report.cycle);
-            if existing_marker == requested_marker {
-                return Ok(existing.clone());
-            }
-            if existing_marker > requested_marker {
-                return Err(PorCoordinatorError::WeeklyReportCycleRollback {
-                    prepared: existing.report.cycle,
-                    requested: cycle,
-                });
-            }
-            if !existing.published {
-                return Err(PorCoordinatorError::WeeklyReportPublicationPending {
-                    prepared: existing.report.cycle,
-                    requested: cycle,
-                });
-            }
-        }
-
-        let cycle = self
-            .prepared_weekly_report
-            .read()
-            .as_ref()
-            .map_or(Ok(cycle), |existing| {
-                next_iso_week(existing.report.cycle).and_then(|next| {
-                    if iso_week_marker(next) <= requested_marker {
-                        Ok(next)
-                    } else {
-                        Err(PorCoordinatorError::WeeklyReportCycleRollback {
-                            prepared: existing.report.cycle,
-                            requested: cycle,
-                        })
-                    }
-                })
-            })?;
-        let generated_at = canonical_weekly_report_generated_at(cycle)?;
-        let prepared_report = PreparedWeeklyReportV1 {
-            report: self.weekly_report_at(cycle, generated_at)?,
-            published: false,
-        };
-        let previous = {
-            let mut prepared = self.prepared_weekly_report.write();
-            prepared.replace(prepared_report.clone())
-        };
-        if let Err(error) = self.persist() {
-            *self.prepared_weekly_report.write() = previous;
-            return Err(error);
-        }
-        Ok(prepared_report)
-    }
-
-    /// Persist the publication acknowledgement for an exact prepared report.
-    fn mark_weekly_report_published(
-        &self,
-        report: &PorWeeklyReportV1,
-    ) -> Result<(), PorCoordinatorError> {
-        let _mutation = self.mutation_lock.lock();
-        let previous = {
-            let mut prepared = self.prepared_weekly_report.write();
-            let Some(current) = prepared.as_mut() else {
-                return Err(PorCoordinatorError::WeeklyReportPreparationConflict {
-                    cycle: report.cycle,
-                });
-            };
-            if current.report != *report {
-                return Err(PorCoordinatorError::WeeklyReportPreparationConflict {
-                    cycle: report.cycle,
-                });
-            }
-            if current.published {
-                return Ok(());
-            }
-            let previous = current.clone();
-            current.published = true;
-            previous
-        };
-        if let Err(error) = self.persist() {
-            *self.prepared_weekly_report.write() = Some(previous);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    fn weekly_report_at(
-        &self,
-        cycle: PorReportIsoWeek,
-        generated_at: u64,
-    ) -> Result<PorWeeklyReportV1, PorCoordinatorError> {
-        cycle
-            .validate()
-            .map_err(PorCoordinatorError::InvalidIsoWeek)?;
-        let (start, end) = iso_week_bounds(cycle)?;
-
-        let mut statuses: Vec<_> = self
-            .records
-            .iter()
-            .map(|entry| entry.value().to_status())
-            .filter(|status| {
-                let Ok(issued_at) = i64::try_from(status.issued_at) else {
-                    return false;
-                };
-                let Ok(issued) = OffsetDateTime::from_unix_timestamp(issued_at) else {
-                    return false;
-                };
-                issued >= start && issued < end
-            })
-            .collect();
-        statuses.sort_by(|left, right| match left.issued_at.cmp(&right.issued_at) {
-            Ordering::Equal => left.challenge_id.cmp(&right.challenge_id),
-            other => other,
-        });
-
-        let challenges_total = statuses.len() as u32;
-        let challenges_verified = statuses
-            .iter()
-            .filter(|s| matches!(s.status, PorChallengeOutcome::Verified))
-            .count() as u32;
-        let challenges_failed = statuses
-            .iter()
-            .filter(|s| {
-                matches!(
-                    s.status,
-                    PorChallengeOutcome::Failed | PorChallengeOutcome::Repaired
-                )
-            })
-            .count() as u32;
-        let forced_challenges = statuses.iter().filter(|s| s.forced).count() as u32;
-
-        let mut provider_map: BTreeMap<[u8; 32], ProviderStats> = BTreeMap::new();
-        for status in &statuses {
-            let entry = provider_map.entry(status.provider_id).or_default();
-            entry.manifests.insert(status.manifest_digest);
-            entry.challenges += 1;
-            entry.forced += u32::from(status.forced);
-            match status.status {
-                PorChallengeOutcome::Verified => entry.successes += 1,
-                PorChallengeOutcome::Failed | PorChallengeOutcome::Repaired => {
-                    entry.failures += 1;
-                    if entry.first_failure_at.is_none() {
-                        entry.first_failure_at =
-                            Some(status.responded_at.unwrap_or(status.issued_at));
-                    }
-                }
-                PorChallengeOutcome::Forced => {}
-                PorChallengeOutcome::Pending => {}
-            }
-        }
-
-        let providers_missing_vrf = provider_map
-            .iter()
-            .filter(|(_, stats)| stats.forced > 0)
-            .map(|(provider, _)| *provider)
-            .collect::<Vec<_>>();
-
-        let mut top_offenders: Vec<PorProviderSummaryV1> = provider_map
-            .iter()
-            .filter_map(|(provider_id, stats)| {
-                if stats.failures == 0 && stats.forced == 0 {
-                    return None;
-                }
-                let challenges = stats.challenges;
-                let successes = stats.successes;
-                let failures = stats.failures;
-                let forced = stats.forced;
-                let success_rate_bps = if challenges == 0 {
-                    10_000
-                } else {
-                    u16::try_from((u64::from(successes) * 10_000_u64) / u64::from(challenges))
-                        .unwrap_or(10_000)
-                };
-                Some(PorProviderSummaryV1 {
-                    provider_id: *provider_id,
-                    manifest_count: stats.manifests.len() as u32,
-                    challenges,
-                    successes,
-                    failures,
-                    forced,
-                    success_rate_bps,
-                    first_failure_at: stats.first_failure_at,
-                    last_success_latency_ms_p95: None,
-                    repair_dispatched: failures > 0,
-                    pending_repairs: 0,
-                    ticket_id: None,
-                })
-            })
-            .collect();
-
-        top_offenders.sort_by(|left, right| match right.failures.cmp(&left.failures) {
-            Ordering::Equal => match right.forced.cmp(&left.forced) {
-                Ordering::Equal => left.provider_id.cmp(&right.provider_id),
-                other => other,
-            },
-            other => other,
-        });
-        if top_offenders.len() > 10 {
-            top_offenders.truncate(10);
-        }
-
-        let report = PorWeeklyReportV1 {
-            version: POR_WEEKLY_REPORT_VERSION_V1,
-            cycle,
-            generated_at,
-            challenges_total,
-            challenges_verified,
-            challenges_failed,
-            forced_challenges,
-            repairs_enqueued: 0,
-            repairs_completed: 0,
-            mean_latency_ms: None,
-            p95_latency_ms: None,
-            slashing_events: Vec::new(),
-            providers_missing_vrf,
-            top_offenders,
-            notes: None,
-        };
-        report
-            .validate()
-            .map_err(PorCoordinatorError::InvalidWeeklyReport)?;
-        Ok(report)
-    }
-
-    /// Persist coordinator state to the configured backing store, if present.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorCoordinatorError::Persistence`] when the persistence layer
-    /// encounters a failure.
-    fn persist(&self) -> Result<(), PorCoordinatorError> {
-        if let Some(persistence) = &self.persistence {
-            let mut records: Vec<_> = self
-                .records
-                .iter()
-                .map(|entry| entry.value().clone())
-                .collect();
-            records.sort_by(|left, right| {
-                left.challenge
-                    .challenge_id
-                    .cmp(&right.challenge.challenge_id)
-            });
-
-            let forced_guard = self.forced_providers.read();
-            let mut forced: Vec<_> = forced_guard
-                .iter()
-                .map(|(provider, epochs)| (*provider, epochs.iter().copied().collect::<Vec<_>>()))
-                .collect();
-            forced.sort_by(|left, right| left.0.cmp(&right.0));
-            drop(forced_guard);
-
-            let prepared_weekly_report = self.prepared_weekly_report.read().clone();
-            persistence.store(&records, &forced, prepared_weekly_report.as_ref())?;
-        }
-        Ok(())
-    }
-
-    fn track_forced(&self, provider_id: &[u8; 32], epoch: u64) {
-        let mut guard = self.forced_providers.write();
-        guard.entry(*provider_id).or_default().insert(epoch);
-    }
-
-    fn untrack_forced(&self, provider_id: &[u8; 32], epoch: u64) {
-        let mut guard = self.forced_providers.write();
-        if let Some(epochs) = guard.get_mut(provider_id) {
-            epochs.remove(&epoch);
-            if epochs.is_empty() {
-                guard.remove(provider_id);
-            }
-        }
-    }
-}
-
+include!("por/coordinator_impl.rs");
 impl Default for PorCoordinator {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[derive(Debug, Clone)]
-struct ChallengeRecord {
-    challenge: PorChallengeV1,
-    proof_digest: Option<[u8; 32]>,
-    proof_submitted_at: Option<u64>,
-    responded_at: Option<u64>,
-    verdict: Option<RecordedVerdict>,
-    repair_task_id: Option<[u8; 32]>,
+struct PorStatusPageAccumulator {
+    snapshot_generation: u64,
+    selection_digest: [u8; 32],
+    limits: PorStatusPageLimits,
+    canonical_bytes: usize,
+    inspected_candidates: usize,
+    last_consumed_candidate: Option<(u64, u64, [u8; 32])>,
+    statuses: Vec<PorChallengeStatusV1>,
+    has_more: bool,
 }
 
-impl ChallengeRecord {
-    fn from_challenge(challenge: PorChallengeV1) -> Self {
+impl PorStatusPageAccumulator {
+    fn new(
+        snapshot_generation: u64,
+        selection_digest: [u8; 32],
+        limits: PorStatusPageLimits,
+    ) -> Self {
         Self {
-            challenge,
-            proof_digest: None,
-            proof_submitted_at: None,
-            responded_at: None,
-            verdict: None,
-            repair_task_id: None,
+            snapshot_generation,
+            selection_digest,
+            limits,
+            canonical_bytes: 0,
+            inspected_candidates: 0,
+            last_consumed_candidate: None,
+            statuses: Vec::with_capacity(limits.records),
+            has_more: false,
         }
     }
 
-    fn ensure_consistency(
-        &self,
-        manifest_digest: [u8; 32],
-        provider_id: [u8; 32],
-    ) -> Result<(), PorCoordinatorError> {
-        if self.challenge.manifest_digest != manifest_digest {
-            return Err(PorCoordinatorError::ManifestMismatch {
-                expected: self.challenge.manifest_digest,
-                actual: manifest_digest,
-                expected_hex: hex::encode(self.challenge.manifest_digest),
-                actual_hex: hex::encode(manifest_digest),
-            });
-        }
-        if self.challenge.provider_id != provider_id {
-            return Err(PorCoordinatorError::ProviderMismatch {
-                expected: self.challenge.provider_id,
-                actual: provider_id,
-                expected_hex: hex::encode(self.challenge.provider_id),
-                actual_hex: hex::encode(provider_id),
-            });
-        }
+    fn record_limit_reached(&self) -> bool {
+        self.statuses.len() == self.limits.records
+    }
+
+    fn note_inspected_candidate(&mut self) -> Result<(), PorCoordinatorError> {
+        self.inspected_candidates = self
+            .inspected_candidates
+            .checked_add(1)
+            .ok_or(PorCoordinatorError::StatusPageByteOverflow)?;
         Ok(())
     }
 
-    fn validate_verdict_transition(
-        &self,
-        verdict: &AuditVerdictV1,
-    ) -> Result<(), PorCoordinatorError> {
-        if verdict.decided_at < self.challenge.issued_at {
-            return Err(PorCoordinatorError::VerdictBeforeChallenge {
-                decided_at: verdict.decided_at,
-                issued_at: self.challenge.issued_at,
-            });
+    fn consume_candidate(&mut self, status: &PorChallengeStatusV1) {
+        self.last_consumed_candidate =
+            Some((status.epoch_id, status.issued_at, status.challenge_id));
+    }
+
+    fn mark_has_more(&mut self) {
+        self.has_more = true;
+    }
+
+    fn accept(&mut self, status: PorChallengeStatusV1) -> Result<bool, PorCoordinatorError> {
+        if self.statuses.len() == self.limits.records {
+            self.has_more = true;
+            return Ok(false);
         }
-        match (self.proof_digest, verdict.proof_digest) {
-            (Some(expected), Some(actual)) if expected != actual => {
-                return Err(PorCoordinatorError::ProofDigestMismatch {
-                    expected,
-                    actual,
-                    expected_hex: hex::encode(expected),
-                    actual_hex: hex::encode(actual),
+        let canonical = to_bytes(&status).map_err(PorCoordinatorError::StatusPageEncoding)?;
+        let next_bytes = self
+            .canonical_bytes
+            .checked_add(canonical.len())
+            .ok_or(PorCoordinatorError::StatusPageByteOverflow)?;
+        if next_bytes > self.limits.canonical_bytes {
+            if self.statuses.is_empty() {
+                return Err(PorCoordinatorError::StatusRecordExceedsPageByteLimit {
+                    challenge_id: status.challenge_id,
+                    record_bytes: canonical.len(),
+                    byte_limit: self.limits.canonical_bytes,
                 });
             }
-            (Some(_), None) => return Err(PorCoordinatorError::MissingVerdictProofDigest),
-            (None, Some(_)) => return Err(PorCoordinatorError::UnexpectedVerdictProofDigest),
-            (None, None)
-                if matches!(
-                    verdict.outcome,
-                    AuditOutcomeV1::Success | AuditOutcomeV1::Repaired
-                ) =>
-            {
-                return Err(PorCoordinatorError::MissingProofForSuccessfulVerdict);
-            }
-            _ => {}
+            self.has_more = true;
+            return Ok(false);
         }
-        if let Some(submitted_at) = self.proof_submitted_at
-            && verdict.decided_at < submitted_at
-        {
-            return Err(PorCoordinatorError::VerdictBeforeProof {
-                decided_at: verdict.decided_at,
-                submitted_at,
-            });
-        }
-        Ok(())
+        self.canonical_bytes = next_bytes;
+        self.statuses.push(status);
+        Ok(true)
     }
 
-    fn to_status(&self) -> PorChallengeStatusV1 {
-        let mut status = PorChallengeStatusV1 {
-            version: POR_CHALLENGE_STATUS_VERSION_V1,
-            challenge_id: self.challenge.challenge_id,
-            manifest_digest: self.challenge.manifest_digest,
-            provider_id: self.challenge.provider_id,
-            epoch_id: self.challenge.epoch_id,
-            drand_round: self.challenge.drand_round,
-            status: PorChallengeOutcome::Pending,
-            sample_count: self.challenge.sample_count,
-            forced: self.challenge.forced,
-            issued_at: self.challenge.issued_at,
-            responded_at: self.responded_at,
-            proof_digest: self.proof_digest,
-            repair_task_id: self.repair_task_id,
-            failure_reason: None,
-            verifier_latency_ms: None,
-        };
-
-        if let Some(verdict) = &self.verdict {
-            status.status = match verdict.outcome {
-                AuditOutcomeV1::Success => PorChallengeOutcome::Verified,
-                AuditOutcomeV1::Failed => PorChallengeOutcome::Failed,
-                AuditOutcomeV1::Repaired => PorChallengeOutcome::Repaired,
-            };
-            if verdict.outcome != AuditOutcomeV1::Success {
-                status.failure_reason.clone_from(&verdict.failure_reason);
-            }
-        } else if self.challenge.forced {
-            status.status = PorChallengeOutcome::Forced;
-        }
-
-        status
-    }
-
-    fn validate_persisted(&self) -> Result<(), String> {
-        self.challenge
-            .validate()
-            .map_err(|error| error.to_string())?;
-        if self.proof_digest.is_some() != self.proof_submitted_at.is_some() {
-            return Err(
-                "proof digest and submission timestamp must both be present or absent".to_owned(),
-            );
-        }
-        if let Some(submitted_at) = self.proof_submitted_at
-            && (submitted_at < self.challenge.issued_at
-                || submitted_at > self.challenge.deadline_at)
-        {
-            return Err("proof submission timestamp is outside the challenge window".to_owned());
-        }
-
-        let expected_responded_at = match &self.verdict {
-            None => {
-                if self.repair_task_id.is_some() {
-                    return Err("repair task cannot exist without a verdict".to_owned());
-                }
-                self.proof_submitted_at
-            }
-            Some(verdict) => {
-                if verdict.decided_at < self.challenge.issued_at
-                    || self
-                        .proof_submitted_at
-                        .is_some_and(|submitted_at| verdict.decided_at < submitted_at)
-                {
-                    return Err("verdict timestamp predates its challenge or proof".to_owned());
-                }
-                if verdict.proof_digest != self.proof_digest {
-                    return Err(
-                        "verdict proof digest does not match recorded proof state".to_owned()
-                    );
-                }
-                match verdict.outcome {
-                    AuditOutcomeV1::Success => {
-                        if verdict.failure_reason.is_some()
-                            || self.proof_digest.is_none()
-                            || self.repair_task_id.is_some()
-                        {
-                            return Err(
-                                "successful verdict has inconsistent proof, reason, or repair state"
-                                    .to_owned(),
-                            );
-                        }
-                    }
-                    AuditOutcomeV1::Failed => {
-                        if verdict
-                            .failure_reason
-                            .as_deref()
-                            .is_none_or(|reason| reason.trim().is_empty())
-                            || self.repair_task_id
-                                != Some(sorafs_repair_task_id_v1(por_repair_source_identity_v1(
-                                    self.challenge.challenge_id,
-                                )))
-                        {
-                            return Err(
-                                "failed verdict is missing its reason or native repair task"
-                                    .to_owned(),
-                            );
-                        }
-                    }
-                    AuditOutcomeV1::Repaired => {
-                        if verdict
-                            .failure_reason
-                            .as_deref()
-                            .is_none_or(|reason| reason.trim().is_empty())
-                            || self.proof_digest.is_none()
-                            || self.repair_task_id.is_some()
-                        {
-                            return Err(
-                                "repaired verdict is missing a proof or failure reason".to_owned()
-                            );
-                        }
-                    }
-                }
-                if verdict.canonical_digest == [0; 32] {
-                    return Err("verdict canonical digest cannot be zero".to_owned());
-                }
-                self.proof_submitted_at
-            }
-        };
-        if self.responded_at != expected_responded_at {
-            return Err("responded_at does not match the persisted lifecycle".to_owned());
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct ChallengeRecordSnapshot {
-    challenge: PorChallengeV1,
-    proof_digest: Option<[u8; 32]>,
-    proof_submitted_at: Option<u64>,
-    responded_at: Option<u64>,
-    verdict: Option<RecordedVerdictSnapshot>,
-    repair_task_id: Option<[u8; 32]>,
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for ChallengeRecordSnapshot {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        norito::core::decode_field_canonical::<ChallengeRecordSnapshot>(bytes)
-    }
-}
-
-impl From<&ChallengeRecord> for ChallengeRecordSnapshot {
-    fn from(record: &ChallengeRecord) -> Self {
-        Self {
-            challenge: record.challenge.clone(),
-            proof_digest: record.proof_digest,
-            proof_submitted_at: record.proof_submitted_at,
-            responded_at: record.responded_at,
-            verdict: record.verdict.as_ref().map(RecordedVerdictSnapshot::from),
-            repair_task_id: record.repair_task_id,
-        }
-    }
-}
-
-impl ChallengeRecordSnapshot {
-    fn into_record(self) -> Result<ChallengeRecord, PorPersistenceError> {
-        let verdict = match self.verdict {
-            Some(snapshot) => Some(snapshot.into_recorded_verdict()?),
-            None => None,
-        };
-        Ok(ChallengeRecord {
-            challenge: self.challenge,
-            proof_digest: self.proof_digest,
-            proof_submitted_at: self.proof_submitted_at,
-            responded_at: self.responded_at,
-            verdict,
-            repair_task_id: self.repair_task_id,
-        })
-    }
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct ForcedProviderSnapshot {
-    provider_id: [u8; 32],
-    epochs: Vec<u64>,
-}
-
-impl ForcedProviderSnapshot {
-    fn into_set(self) -> BTreeSet<u64> {
-        self.epochs.into_iter().collect()
-    }
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for ForcedProviderSnapshot {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        norito::core::decode_field_canonical::<ForcedProviderSnapshot>(bytes)
-    }
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct PorCoordinatorSnapshot {
-    version: u8,
-    records: Vec<ChallengeRecordSnapshot>,
-    forced: Vec<ForcedProviderSnapshot>,
-    prepared_weekly_report: Option<PreparedWeeklyReportV1>,
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for PorCoordinatorSnapshot {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        norito::core::decode_field_canonical::<PorCoordinatorSnapshot>(bytes)
-    }
-}
-
-const SECURE_TEMP_RETRIES: usize = 8;
-
-#[derive(Debug, Error)]
-enum SecureFileError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("unsafe persistence path: {0}")]
-    UnsafePath(String),
-    #[error("persistence payload exceeds {limit} bytes")]
-    Oversize { limit: usize },
-    #[error("existing immutable artefact conflicts with canonical bytes")]
-    Conflict,
-}
-
-fn absolute_secure_path(path: &Path) -> Result<PathBuf, SecureFileError> {
-    if path
-        .components()
-        .any(|component| component == Component::ParentDir)
-    {
-        return Err(SecureFileError::UnsafePath(
-            "parent-directory components are forbidden".to_owned(),
-        ));
-    }
-    let candidate = if path.is_absolute() {
-        path.to_owned()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let mut absolute = PathBuf::new();
-    for component in candidate.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                return Err(SecureFileError::UnsafePath(
-                    "parent-directory components are forbidden".to_owned(),
-                ));
-            }
-            _ => absolute.push(component.as_os_str()),
-        }
-    }
-    if absolute.file_name().is_none() {
-        return Err(SecureFileError::UnsafePath(
-            "persistence path must name a file".to_owned(),
-        ));
-    }
-    Ok(absolute)
-}
-
-fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata), SecureFileError> {
-    let absolute = absolute_secure_path(path)?;
-    let parent = absolute
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| SecureFileError::UnsafePath("persistence path has no parent".to_owned()))?;
-    let mut cursor = PathBuf::new();
-    for component in parent.components() {
-        cursor.push(component.as_os_str());
-        match fs::symlink_metadata(&cursor) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                    return Err(SecureFileError::UnsafePath(format!(
-                        "ancestor {} is not a regular directory",
-                        cursor.display()
-                    )));
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let mut builder = fs::DirBuilder::new();
-                #[cfg(unix)]
-                builder.mode(0o700);
-                builder.create(&cursor)?;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-    let metadata = fs::symlink_metadata(&parent)?;
-    #[cfg(unix)]
-    let effective_uid = rustix::process::geteuid().as_raw();
-    #[cfg(unix)]
-    if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 {
-        return Err(SecureFileError::UnsafePath(format!(
-            "persistence directory {} must be owned by this process user and mode 0700",
-            parent.display()
-        )));
-    }
-    Ok((absolute, parent, metadata))
-}
-
-fn validate_secure_file_metadata(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<(), SecureFileError> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(SecureFileError::UnsafePath(format!(
-            "{} is not a regular non-symlink file",
-            path.display()
-        )));
-    }
-    #[cfg(unix)]
-    let effective_uid = rustix::process::geteuid().as_raw();
-    #[cfg(unix)]
-    if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 || metadata.nlink() != 1 {
-        return Err(SecureFileError::UnsafePath(format!(
-            "{} must be owned by this process user, private, and singly linked",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-fn secure_read_bytes(path: &Path, max_bytes: usize) -> Result<Option<Vec<u8>>, SecureFileError> {
-    let (absolute, _, _) = ensure_secure_parent(path)?;
-    let metadata = match fs::symlink_metadata(&absolute) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    validate_secure_file_metadata(&absolute, &metadata)?;
-    if metadata.len() > max_bytes as u64 {
-        return Err(SecureFileError::Oversize { limit: max_bytes });
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW);
-    let file = options.open(&absolute)?;
-    let opened = file.metadata()?;
-    validate_secure_file_metadata(&absolute, &opened)?;
-    #[cfg(unix)]
-    if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
-        return Err(SecureFileError::UnsafePath(format!(
-            "{} changed while opening",
-            absolute.display()
-        )));
-    }
-    let mut bytes = Vec::with_capacity(opened.len() as usize);
-    file.take(max_bytes as u64 + 1).read_to_end(&mut bytes)?;
-    if bytes.len() > max_bytes {
-        return Err(SecureFileError::Oversize { limit: max_bytes });
-    }
-    Ok(Some(bytes))
-}
-
-fn sync_secure_directory(parent: &Path) -> Result<(), SecureFileError> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
-    options.open(parent)?.sync_all()?;
-    Ok(())
-}
-
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
-fn link_secure_file_noreplace(
-    parent: &File,
-    source_name: &std::ffi::OsStr,
-    destination_name: &std::ffi::OsStr,
-) -> std::io::Result<()> {
-    rustix::fs::linkat(
-        parent,
-        source_name,
-        parent,
-        destination_name,
-        rustix::fs::AtFlags::empty(),
-    )
-    .map_err(std::io::Error::from)?;
-    if let Err(unlink_error) =
-        rustix::fs::unlinkat(parent, source_name, rustix::fs::AtFlags::empty())
-    {
-        let rollback = rustix::fs::unlinkat(parent, destination_name, rustix::fs::AtFlags::empty());
-        return match rollback {
-            Ok(()) => Err(std::io::Error::from(unlink_error)),
-            Err(rollback_error) => Err(std::io::Error::other(format!(
-                "failed to unlink temporary publication ({unlink_error}) and to roll back its destination ({rollback_error})"
-            ))),
-        };
-    }
-    Ok(())
-}
-
-#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
-fn publish_secure_file_noreplace(
-    parent: &File,
-    source_name: &std::ffi::OsStr,
-    destination_name: &std::ffi::OsStr,
-) -> std::io::Result<()> {
-    let result = rustix::fs::renameat_with(
-        parent,
-        source_name,
-        parent,
-        destination_name,
-        rustix::fs::RenameFlags::NOREPLACE,
-    );
-    match result {
-        Ok(()) => Ok(()),
-        Err(error) if rename_noreplace_is_unavailable(error) => {
-            link_secure_file_noreplace(parent, source_name, destination_name)
-        }
-        Err(error) => Err(std::io::Error::from(error)),
-    }
-}
-
-#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
-fn rename_noreplace_is_unavailable(error: rustix::io::Errno) -> bool {
-    let code = error.raw_os_error();
-    code == libc::ENOSYS || code == libc::EINVAL || code == libc::EOPNOTSUPP
-}
-
-#[cfg(target_os = "redox")]
-fn publish_secure_file_noreplace(
-    parent: &File,
-    source_name: &std::ffi::OsStr,
-    destination_name: &std::ffi::OsStr,
-) -> std::io::Result<()> {
-    rustix::fs::renameat_with(
-        parent,
-        source_name,
-        parent,
-        destination_name,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(std::io::Error::from)
-}
-
-#[cfg(all(
-    unix,
-    not(any(
-        target_vendor = "apple",
-        target_os = "linux",
-        target_os = "android",
-        target_os = "espidf",
-        target_os = "redox"
-    ))
-))]
-fn publish_secure_file_noreplace(
-    parent: &File,
-    source_name: &std::ffi::OsStr,
-    destination_name: &std::ffi::OsStr,
-) -> std::io::Result<()> {
-    link_secure_file_noreplace(parent, source_name, destination_name)
-}
-
-#[cfg(any(not(unix), target_os = "espidf"))]
-fn publish_secure_file_noreplace(
-    _parent: &File,
-    _source_name: &std::ffi::OsStr,
-    _destination_name: &std::ffi::OsStr,
-) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "atomic descriptor-relative no-replace publication is unsupported on this platform",
-    ))
-}
-
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
-fn unlink_secure_temporary_file(
-    parent: &File,
-    source_name: &std::ffi::OsStr,
-    _source_path: &Path,
-) -> std::io::Result<()> {
-    rustix::fs::unlinkat(parent, source_name, rustix::fs::AtFlags::empty())
-        .map_err(std::io::Error::from)
-}
-
-#[cfg(any(not(unix), target_os = "espidf", target_os = "redox"))]
-fn unlink_secure_temporary_file(
-    _parent: &File,
-    _source_name: &std::ffi::OsStr,
-    source_path: &Path,
-) -> std::io::Result<()> {
-    fs::remove_file(source_path)
-}
-
-#[cfg(any(
-    target_vendor = "apple",
-    target_os = "linux",
-    target_os = "android",
-    target_os = "redox"
-))]
-const HAS_RENAME_NOREPLACE: bool = true;
-
-#[cfg(not(any(
-    target_vendor = "apple",
-    target_os = "linux",
-    target_os = "android",
-    target_os = "redox"
-)))]
-const HAS_RENAME_NOREPLACE: bool = false;
-
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
-const HAS_LINK_NOREPLACE: bool = true;
-
-#[cfg(not(all(unix, not(any(target_os = "espidf", target_os = "redox")))))]
-const HAS_LINK_NOREPLACE: bool = false;
-
-fn secure_noreplace_publication_is_supported() -> bool {
-    HAS_RENAME_NOREPLACE || HAS_LINK_NOREPLACE
-}
-
-fn secure_atomic_write(
-    path: &Path,
-    bytes: &[u8],
-    max_bytes: usize,
-    replace_existing: bool,
-) -> Result<(), SecureFileError> {
-    if bytes.len() > max_bytes {
-        return Err(SecureFileError::Oversize { limit: max_bytes });
-    }
-    let (absolute, parent, parent_before) = ensure_secure_parent(path)?;
-    if let Some(existing) = secure_read_bytes(&absolute, max_bytes)? {
-        if existing == bytes {
-            sync_secure_directory(&parent)?;
-            return Ok(());
-        }
-        if !replace_existing {
-            return Err(SecureFileError::Conflict);
-        }
-    }
-    if !replace_existing && !secure_noreplace_publication_is_supported() {
-        return Err(SecureFileError::Io(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "atomic descriptor-relative no-replace publication is unsupported on this platform",
-        )));
-    }
-    let filename = absolute
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            SecureFileError::UnsafePath("persistence filename is not UTF-8".to_owned())
-        })?;
-    let mut temp_file = None;
-    let mut temp_path = PathBuf::new();
-    for _ in 0..SECURE_TEMP_RETRIES {
-        let nonce: [u8; 16] = rand::random();
-        temp_path = parent.join(format!(".{filename}.{}.tmp", hex::encode(nonce)));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        match options.open(&temp_path) {
-            Ok(file) => {
-                temp_file = Some(file);
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    let mut file = temp_file.ok_or_else(|| {
-        SecureFileError::UnsafePath("failed to allocate a unique temporary file".to_owned())
-    })?;
-    let result = (|| {
-        validate_secure_file_metadata(&temp_path, &file.metadata()?)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        let parent_now = fs::symlink_metadata(&parent)?;
-        #[cfg(unix)]
-        if parent_now.dev() != parent_before.dev() || parent_now.ino() != parent_before.ino() {
-            return Err(SecureFileError::UnsafePath(
-                "persistence parent changed before rename".to_owned(),
-            ));
-        }
-        if let Ok(destination) = fs::symlink_metadata(&absolute) {
-            validate_secure_file_metadata(&absolute, &destination)?;
-        }
-        if replace_existing {
-            fs::rename(&temp_path, &absolute)?;
-        } else {
-            let source_name = temp_path.file_name().ok_or_else(|| {
-                SecureFileError::UnsafePath(
-                    "temporary persistence path must name a file".to_owned(),
-                )
-            })?;
-            let mut parent_options = OpenOptions::new();
-            parent_options.read(true);
-            #[cfg(unix)]
-            parent_options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
-            let parent_file = parent_options.open(&parent)?;
-            #[cfg(unix)]
-            let opened_parent = parent_file.metadata()?;
-            #[cfg(unix)]
-            if opened_parent.dev() != parent_before.dev()
-                || opened_parent.ino() != parent_before.ino()
-            {
-                return Err(SecureFileError::UnsafePath(
-                    "persistence parent changed while opening for publication".to_owned(),
-                ));
-            }
-            match publish_secure_file_noreplace(
-                &parent_file,
-                source_name,
-                std::ffi::OsStr::new(filename),
-            ) {
-                Ok(()) => parent_file.sync_all()?,
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    unlink_secure_temporary_file(&parent_file, source_name, &temp_path)?;
-                    return match secure_read_bytes(&absolute, max_bytes)? {
-                        Some(existing) if existing == bytes => {
-                            sync_secure_directory(&parent)?;
-                            Ok(())
-                        }
-                        Some(_) => Err(SecureFileError::Conflict),
-                        None => Err(SecureFileError::Io(error)),
-                    };
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        sync_secure_directory(&parent)?;
-        let final_metadata = fs::symlink_metadata(&absolute)?;
-        validate_secure_file_metadata(&absolute, &final_metadata)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    result
-}
-
-/// Errors that may occur when reading or writing PoR persistence snapshots.
-#[derive(Debug, Error)]
-pub enum PorPersistenceError {
-    /// Underlying filesystem I/O error.
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    /// Failed to serialize the snapshot payload.
-    #[error("encode error: {0}")]
-    Encode(#[source] norito::core::Error),
-    /// Failed to deserialize persisted state.
-    #[error("decode error: {0}")]
-    Decode(String),
-    /// Persistence path, size, ownership, or atomicity policy failed.
-    #[error("secure persistence error: {0}")]
-    Secure(String),
-    /// Snapshot version on disk does not match the supported one.
-    #[error("unsupported snapshot version {found}")]
-    UnsupportedVersion {
-        /// Version byte found in the snapshot file.
-        found: u8,
-    },
-    /// Encountered an unexpected flag while parsing snapshot contents.
-    #[error("invalid flag value {value}")]
-    InvalidFlag {
-        /// Flag value carrying invalid data.
-        value: u8,
-    },
-}
-
-#[derive(Debug)]
-struct PorPersistence {
-    path: PathBuf,
-}
-
-impl PorPersistence {
-    fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    /// Load persisted coordinator state from disk if present.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorPersistenceError`] when the snapshot cannot be read or decoded.
-    fn load(
-        &self,
-    ) -> Result<
-        (
-            Arc<DashMap<[u8; 32], ChallengeRecord>>,
-            Arc<RwLock<HashMap<[u8; 32], BTreeSet<u64>>>>,
-            Arc<RwLock<Option<PreparedWeeklyReportV1>>>,
-        ),
-        PorPersistenceError,
-    > {
-        let records = Arc::new(DashMap::new());
-        let forced = Arc::new(RwLock::new(HashMap::new()));
-        let prepared_weekly_report = Arc::new(RwLock::new(None));
-
-        let Some(bytes) = secure_read_bytes(&self.path, MAX_POR_COORDINATOR_SNAPSHOT_BYTES)
-            .map_err(|error| PorPersistenceError::Secure(error.to_string()))?
-        else {
-            return Ok((records, forced, prepared_weekly_report));
-        };
-
-        let snapshot = decode_from_bytes_with_limits::<PorCoordinatorSnapshot>(
-            &bytes,
-            por_coordinator_decode_limits(),
-        )
-        .map_err(|err| PorPersistenceError::Decode(err.to_string()))?;
-        let canonical = to_bytes(&snapshot).map_err(PorPersistenceError::Encode)?;
-        if canonical != bytes {
-            return Err(PorPersistenceError::Decode(
-                "snapshot is not canonically encoded".to_owned(),
-            ));
-        }
-        if snapshot.version != POR_COORDINATOR_SNAPSHOT_VERSION_V1 {
-            return Err(PorPersistenceError::UnsupportedVersion {
-                found: snapshot.version,
-            });
-        }
-
-        if snapshot.records.len() > MAX_POR_COORDINATOR_RECORDS
-            || snapshot.forced.len() > MAX_POR_COORDINATOR_FORCED_PROVIDERS
-        {
-            return Err(PorPersistenceError::Decode(
-                "snapshot entry count exceeds production bounds".to_owned(),
-            ));
-        }
-        let mut expected_forced = HashMap::<[u8; 32], BTreeSet<u64>>::new();
-        let mut previous_challenge_id = None;
-        for record in snapshot.records {
-            let record = record.into_record()?;
-            record
-                .validate_persisted()
-                .map_err(PorPersistenceError::Decode)?;
-            if previous_challenge_id
-                .is_some_and(|previous| previous >= record.challenge.challenge_id)
-            {
-                return Err(PorPersistenceError::Decode(
-                    "snapshot challenge records are not strictly ordered".to_owned(),
-                ));
-            }
-            previous_challenge_id = Some(record.challenge.challenge_id);
-            if record.challenge.forced {
-                expected_forced
-                    .entry(record.challenge.provider_id)
-                    .or_default()
-                    .insert(record.challenge.epoch_id);
-            }
-            if records
-                .insert(record.challenge.challenge_id, record)
-                .is_some()
-            {
-                return Err(PorPersistenceError::Decode(
-                    "snapshot contains a duplicate challenge id".to_owned(),
-                ));
-            }
-        }
-
-        let mut forced_guard = forced.write();
-        let mut previous_provider_id = None;
-        for provider in snapshot.forced {
-            if provider.provider_id.iter().all(|byte| *byte == 0)
-                || provider.epochs.len() > 65_536
-                || previous_provider_id.is_some_and(|previous| previous >= provider.provider_id)
-            {
-                return Err(PorPersistenceError::Decode(
-                    "snapshot contains invalid or unordered forced-provider state".to_owned(),
-                ));
-            }
-            previous_provider_id = Some(provider.provider_id);
-            if provider.epochs.is_empty()
-                || provider.epochs.windows(2).any(|pair| pair[0] >= pair[1])
-            {
-                return Err(PorPersistenceError::Decode(
-                    "forced-provider epochs must be non-empty and strictly ordered".to_owned(),
-                ));
-            }
-            forced_guard.insert(provider.provider_id, provider.into_set());
-        }
-        if *forced_guard != expected_forced {
-            return Err(PorPersistenceError::Decode(
-                "forced-provider index does not match forced challenge records".to_owned(),
-            ));
-        }
-        drop(forced_guard);
-
-        if let Some(prepared) = snapshot.prepared_weekly_report {
-            prepared.report.validate().map_err(|error| {
-                PorPersistenceError::Decode(format!("prepared weekly report is invalid: {error}"))
-            })?;
-            let expected_generated_at = canonical_weekly_report_generated_at(prepared.report.cycle)
-                .map_err(|error| {
-                    PorPersistenceError::Decode(format!(
-                        "prepared weekly report cycle is invalid: {error}"
-                    ))
-                })?;
-            if prepared.report.generated_at != expected_generated_at {
-                return Err(PorPersistenceError::Decode(
-                    "prepared weekly report does not use its canonical cycle boundary".to_owned(),
-                ));
-            }
-            *prepared_weekly_report.write() = Some(prepared);
-        }
-
-        Ok((records, forced, prepared_weekly_report))
-    }
-
-    /// Store the supplied coordinator snapshot to disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorPersistenceError`] when the snapshot cannot be encoded or written.
-    fn store(
-        &self,
-        records: &[ChallengeRecord],
-        forced: &[([u8; 32], Vec<u64>)],
-        prepared_weekly_report: Option<&PreparedWeeklyReportV1>,
-    ) -> Result<(), PorPersistenceError> {
-        let snapshot = PorCoordinatorSnapshot {
-            version: POR_COORDINATOR_SNAPSHOT_VERSION_V1,
-            records: records.iter().map(ChallengeRecordSnapshot::from).collect(),
-            forced: forced
-                .iter()
-                .map(|(provider_id, epochs)| ForcedProviderSnapshot {
-                    provider_id: *provider_id,
-                    epochs: epochs.clone(),
-                })
-                .collect(),
-            prepared_weekly_report: prepared_weekly_report.cloned(),
-        };
-
-        let bytes = to_bytes(&snapshot).map_err(PorPersistenceError::Encode)?;
-        secure_atomic_write(&self.path, &bytes, MAX_POR_COORDINATOR_SNAPSHOT_BYTES, true)
-            .map_err(|error| PorPersistenceError::Secure(error.to_string()))
-    }
-}
-
-#[cfg(feature = "app_api")]
-/// Errors produced by the verified drand randomness provider.
-#[derive(Debug, Error)]
-pub enum RandomnessError {
-    /// Pinned trust, transport, or persistence configuration is unsafe.
-    #[error("invalid drand configuration: {0}")]
-    Configuration(String),
-    /// A network endpoint failed before producing a verified beacon.
-    #[error("drand endpoint failure: {0}")]
-    Endpoint(String),
-    /// Fewer agreeing endpoints than the configured strict majority responded.
-    #[error("drand quorum unavailable: {agreeing} agreeing responses; {required} required")]
-    QuorumUnavailable {
-        /// Largest agreeing response group.
-        agreeing: usize,
-        /// Required agreement threshold.
-        required: usize,
-    },
-    /// Verified beacon timing does not satisfy pinned freshness constraints.
-    #[error("drand beacon timing invalid: {0}")]
-    Timing(String),
-    /// A verified round regressed below durable high-water state.
-    #[error("drand round rollback: received {received}, durable high-water is {high_water}")]
-    Rollback {
-        /// Received round.
-        received: u64,
-        /// Durable high-water round.
-        high_water: u64,
-    },
-    /// The same round produced different verified bytes.
-    #[error("drand equivocation detected at round {round}")]
-    Equivocation {
-        /// Conflicting round.
-        round: u64,
-    },
-    /// Durable high-water state failed closed.
-    #[error("drand state persistence failure: {0}")]
-    Persistence(String),
-}
-
-#[cfg(feature = "app_api")]
-/// Trait supplying randomness used to schedule PoR challenges.
-#[async_trait]
-pub trait RandomnessProvider: Send + Sync {
-    /// Produce randomness for the specified epoch, returning the commitment used to plan challenges.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RandomnessError`] when transport, verification, quorum,
-    /// freshness, replay, or durable-state checks fail.
-    async fn randomness_for_epoch(
-        &self,
-        epoch_id: u64,
-        now_secs: u64,
-        response_window_secs: u64,
-    ) -> Result<PorRandomness, RandomnessError>;
-}
-
-#[cfg(feature = "app_api")]
-const DRAND_STATE_VERSION_V1: u8 = 1;
-#[cfg(feature = "app_api")]
-const MAX_DRAND_DNS_ADDRESSES: usize = 16;
-#[cfg(feature = "app_api")]
-const MIN_DRAND_RESPONSE_BYTES: usize = 128;
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct DrandHighWaterStateV1 {
-    version: u8,
-    round: u64,
-    randomness: [u8; 32],
-    signature: [u8; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct VerifiedDrandBeacon {
-    round: u64,
-    randomness: [u8; 32],
-    signature: [u8; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug)]
-struct DrandEndpoint {
-    root: url::Url,
-    host: String,
-    port: u16,
-    pinned_addrs: Vec<SocketAddr>,
-    client: reqwest::Client,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug)]
-struct SecureStateOwnerLock {
-    path: PathBuf,
-    file: File,
-}
-
-#[cfg(feature = "app_api")]
-impl SecureStateOwnerLock {
-    fn acquire(state_path: &Path, label: &str) -> Result<Self, RandomnessError> {
-        let (absolute, parent, _) = ensure_secure_parent(state_path)
-            .map_err(|error| RandomnessError::Persistence(format!("{label} state: {error}")))?;
-        let filename = absolute
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                RandomnessError::Persistence(format!(
-                    "{label} state ownership path is not canonical UTF-8"
-                ))
-            })?;
-        let path = parent.join(format!(".{filename}.owner.lock"));
-        let before_open = match fs::symlink_metadata(&path) {
-            Ok(metadata) => {
-                validate_secure_file_metadata(&path, &metadata).map_err(|error| {
-                    RandomnessError::Persistence(format!("{label} state lock: {error}"))
-                })?;
-                if metadata.len() != 0 {
-                    return Err(RandomnessError::Persistence(format!(
-                        "{label} state ownership lock is not empty"
-                    )));
-                }
-                Some(metadata)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(RandomnessError::Persistence(format!(
-                    "{label} state lock: {error}"
-                )));
-            }
-        };
-
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        let file = options.open(&path).map_err(|error| {
-            RandomnessError::Persistence(format!("{label} state lock: {error}"))
-        })?;
-        let opened = file.metadata().map_err(|error| {
-            RandomnessError::Persistence(format!("{label} state lock: {error}"))
-        })?;
-        validate_secure_file_metadata(&path, &opened).map_err(|error| {
-            RandomnessError::Persistence(format!("{label} state lock: {error}"))
-        })?;
-        if opened.len() != 0 {
-            return Err(RandomnessError::Persistence(format!(
-                "{label} state ownership lock is not empty"
-            )));
-        }
-        #[cfg(unix)]
-        if before_open
-            .as_ref()
-            .is_some_and(|before| before.dev() != opened.dev() || before.ino() != opened.ino())
-        {
-            return Err(RandomnessError::Persistence(format!(
-                "{label} state ownership lock changed while opening"
-            )));
-        }
-        #[cfg(not(unix))]
-        let _ = &before_open;
-        let linked = fs::symlink_metadata(&path).map_err(|error| {
-            RandomnessError::Persistence(format!("{label} state lock: {error}"))
-        })?;
-        #[cfg(unix)]
-        if linked.dev() != opened.dev() || linked.ino() != opened.ino() {
-            return Err(RandomnessError::Persistence(format!(
-                "{label} state ownership lock path changed while opening"
-            )));
-        }
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(fs::TryLockError::WouldBlock) => {
-                return Err(RandomnessError::Persistence(format!(
-                    "{label} state ownership lock is already held"
-                )));
-            }
-            Err(fs::TryLockError::Error(error)) => {
-                return Err(RandomnessError::Persistence(format!(
-                    "{label} state lock: {error}"
-                )));
-            }
-        }
-        let owner = Self { path, file };
-        owner.verify(label)?;
-        Ok(owner)
-    }
-
-    fn verify(&self, label: &str) -> Result<(), RandomnessError> {
-        let opened = self.file.metadata().map_err(|error| {
-            RandomnessError::Persistence(format!("{label} state lock: {error}"))
-        })?;
-        let linked = fs::symlink_metadata(&self.path).map_err(|error| {
-            RandomnessError::Persistence(format!("{label} state lock: {error}"))
-        })?;
-        validate_secure_file_metadata(&self.path, &opened).map_err(|error| {
-            RandomnessError::Persistence(format!("{label} state lock: {error}"))
-        })?;
-        validate_secure_file_metadata(&self.path, &linked).map_err(|error| {
-            RandomnessError::Persistence(format!("{label} state lock: {error}"))
-        })?;
-        if opened.len() != 0 || linked.len() != 0 {
-            return Err(RandomnessError::Persistence(format!(
-                "{label} state ownership lock is not empty"
-            )));
-        }
-        #[cfg(unix)]
-        if linked.dev() != opened.dev() || linked.ino() != opened.ino() {
-            return Err(RandomnessError::Persistence(format!(
-                "{label} state ownership lock path was replaced"
-            )));
-        }
-        Ok(())
-    }
-}
-
-#[cfg(feature = "app_api")]
-/// HTTPS drand provider with pinned chain metadata, DNS, quorum, and durable replay state.
-#[derive(Debug)]
-pub struct DrandHttpRandomnessProvider {
-    public_key: [u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES],
-    genesis_time: u64,
-    period_secs: u64,
-    epoch_interval_secs: u64,
-    quorum: usize,
-    max_body_bytes: usize,
-    max_beacon_age_secs: u64,
-    max_future_skew_secs: u64,
-    endpoints: Vec<DrandEndpoint>,
-    state_path: PathBuf,
-    state_owner_lock: SecureStateOwnerLock,
-    state: Mutex<Option<DrandHighWaterStateV1>>,
-    commit_lock: tokio::sync::Mutex<()>,
-}
-
-#[cfg(feature = "app_api")]
-impl DrandHttpRandomnessProvider {
-    /// Construct a provider after validating trust roots, endpoints, DNS, and persisted state.
-    pub fn from_config(
-        config: &iroha_config::parameters::actual::SorafsPorDrand,
-        epoch_interval_secs: u64,
-    ) -> Result<Self, RandomnessError> {
-        use iroha_crypto::drand::{
-            UNCHAINED_G1_RFC9380_SCHEME, is_valid_unchained_g1_rfc9380_public_key,
-        };
-
-        if config.scheme != UNCHAINED_G1_RFC9380_SCHEME {
-            return Err(RandomnessError::Configuration(format!(
-                "scheme must be `{UNCHAINED_G1_RFC9380_SCHEME}`"
-            )));
-        }
-        if config.chain_hash.iter().all(|byte| *byte == 0) {
-            return Err(RandomnessError::Configuration(
-                "chain hash must be pinned".to_owned(),
-            ));
-        }
-        if !is_valid_unchained_g1_rfc9380_public_key(&config.public_key) {
-            return Err(RandomnessError::Configuration(
-                "public key is not a canonical non-identity G2 point".to_owned(),
-            ));
-        }
-        if config.genesis_time == 0 || config.period_secs == 0 || epoch_interval_secs == 0 {
-            return Err(RandomnessError::Configuration(
-                "genesis_time and period_secs must be non-zero".to_owned(),
-            ));
-        }
-        if config.max_endpoints < 3
-            || config.endpoints.len() < 3
-            || config.endpoints.len() > config.max_endpoints
-            || config.max_endpoints
-                > iroha_config::parameters::defaults::sorafs::por::DRAND_MAX_ENDPOINTS
-        {
-            return Err(RandomnessError::Configuration(format!(
-                "between 3 and {} drand endpoints are required",
-                iroha_config::parameters::defaults::sorafs::por::DRAND_MAX_ENDPOINTS
-            )));
-        }
-        let quorum = usize::from(config.quorum);
-        if quorum <= config.endpoints.len() / 2 || quorum >= config.endpoints.len() {
-            return Err(RandomnessError::Configuration(
-                "drand quorum must be a strict majority and tolerate one endpoint outage"
-                    .to_owned(),
-            ));
-        }
-        if config.connect_timeout.is_zero() || config.request_timeout.is_zero() {
-            return Err(RandomnessError::Configuration(
-                "drand timeouts must be non-zero".to_owned(),
-            ));
-        }
-        if config.max_body_bytes < MIN_DRAND_RESPONSE_BYTES || config.max_body_bytes > 64 * 1024 {
-            return Err(RandomnessError::Configuration(format!(
-                "max_body_bytes must be between {MIN_DRAND_RESPONSE_BYTES} and 65536"
-            )));
-        }
-        if config.max_beacon_age_secs < config.period_secs
-            || config.max_future_skew_secs > config.max_beacon_age_secs
-        {
-            return Err(RandomnessError::Configuration(
-                "drand freshness/skew bounds are inconsistent".to_owned(),
-            ));
-        }
-
-        let chain_hex = hex::encode(config.chain_hash);
-        let expected_path = format!("/v2/chains/{chain_hex}");
-        let mut seen_hosts = BTreeSet::new();
-        let mut endpoints = Vec::with_capacity(config.endpoints.len());
-        for raw_root in &config.endpoints {
-            let root = url::Url::parse(raw_root).map_err(|error| {
-                RandomnessError::Configuration(format!("invalid drand endpoint: {error}"))
-            })?;
-            let host = validate_drand_endpoint(raw_root, &root, &expected_path)?;
-            if !seen_hosts.insert(host.clone()) {
-                return Err(RandomnessError::Configuration(format!(
-                    "duplicate drand endpoint host `{host}`"
-                )));
-            }
-            let port = root.port_or_known_default().ok_or_else(|| {
-                RandomnessError::Configuration("drand endpoint has no HTTPS port".to_owned())
-            })?;
-            let pinned_addrs = resolve_public_endpoint(&host, port)?;
-            let client = reqwest::Client::builder()
-                .https_only(true)
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(config.connect_timeout)
-                .timeout(config.request_timeout)
-                .resolve_to_addrs(&host, &pinned_addrs)
-                .build()
-                .map_err(|error| RandomnessError::Configuration(error.to_string()))?;
-            endpoints.push(DrandEndpoint {
-                root,
-                host,
-                port,
-                pinned_addrs,
-                client,
-            });
-        }
-
-        let state_owner_lock = SecureStateOwnerLock::acquire(&config.state_path, "drand")?;
-        let loaded = load_drand_state(&config.state_path, &config.public_key)?;
-        Ok(Self {
-            public_key: config.public_key,
-            genesis_time: config.genesis_time,
-            period_secs: config.period_secs,
-            epoch_interval_secs,
-            quorum,
-            max_body_bytes: config.max_body_bytes,
-            max_beacon_age_secs: config.max_beacon_age_secs,
-            max_future_skew_secs: config.max_future_skew_secs,
-            endpoints,
-            state_path: config.state_path.clone(),
-            state_owner_lock,
-            state: Mutex::new(loaded),
-            commit_lock: tokio::sync::Mutex::new(()),
-        })
-    }
-
-    fn expected_round(&self, epoch_id: u64, now_secs: u64) -> Result<u64, RandomnessError> {
-        let target = epoch_id
-            .checked_mul(self.epoch_interval_secs)
-            .ok_or_else(|| RandomnessError::Timing("epoch target overflow".to_owned()))?;
-        if target > now_secs.saturating_add(self.max_future_skew_secs) {
-            return Err(RandomnessError::Timing(
-                "PoR epoch target is in the future".to_owned(),
-            ));
-        }
-        if target < self.genesis_time {
-            return Err(RandomnessError::Timing(
-                "PoR epoch target predates pinned drand genesis".to_owned(),
-            ));
-        }
-        let round = target
-            .saturating_sub(self.genesis_time)
-            .checked_div(self.period_secs)
-            .and_then(|offset| offset.checked_add(1))
-            .ok_or_else(|| RandomnessError::Timing("round arithmetic overflow".to_owned()))?;
-        let timestamp = self
-            .genesis_time
-            .checked_add(
-                round
-                    .saturating_sub(1)
-                    .checked_mul(self.period_secs)
+    fn finish(self) -> Result<PorStatusPageV1, PorCoordinatorError> {
+        let record_limit = u32::try_from(self.limits.records)
+            .map_err(|_| PorCoordinatorError::StatusPageByteOverflow)?;
+        let canonical_byte_limit = u64::try_from(self.limits.canonical_bytes)
+            .map_err(|_| PorCoordinatorError::StatusPageByteOverflow)?;
+        let canonical_bytes = u64::try_from(self.canonical_bytes)
+            .map_err(|_| PorCoordinatorError::StatusPageByteOverflow)?;
+        let inspected_candidates = u32::try_from(self.inspected_candidates)
+            .map_err(|_| PorCoordinatorError::StatusPageByteOverflow)?;
+        let next_cursor = if self.has_more {
+            Some(
+                self.last_consumed_candidate
                     .ok_or_else(|| {
-                        RandomnessError::Timing("round timestamp overflow".to_owned())
+                        PorCoordinatorError::InvalidAuthoritativeProjection(
+                            "bounded status page has no safe continuation anchor".to_owned(),
+                        )
+                    })
+                    .and_then(|(last_epoch_id, last_issued_at, last_challenge_id)| {
+                        PorStatusCursorV1 {
+                            version: POR_STATUS_CURSOR_VERSION_V1,
+                            snapshot_generation: self.snapshot_generation,
+                            selection_digest: self.selection_digest,
+                            last_epoch_id,
+                            last_issued_at,
+                            last_challenge_id,
+                        }
+                        .encode_opaque()
+                        .map_err(|error| PorCoordinatorError::InvalidPageCursor(error.to_string()))
                     })?,
             )
-            .ok_or_else(|| RandomnessError::Timing("round timestamp overflow".to_owned()))?;
-        if timestamp > target {
-            return Err(RandomnessError::Timing(
-                "computed round is in the future".to_owned(),
-            ));
-        }
-        if target.saturating_sub(timestamp) > self.max_beacon_age_secs {
-            return Err(RandomnessError::Timing(format!(
-                "round {round} exceeds configured freshness"
-            )));
-        }
-        Ok(round)
-    }
-
-    async fn fetch_endpoint(
-        &self,
-        endpoint: &DrandEndpoint,
-        round: u64,
-    ) -> Result<VerifiedDrandBeacon, RandomnessError> {
-        revalidate_pinned_dns(endpoint).await?;
-        let url = format!("{}/rounds/{round}", endpoint.root.as_str());
-        let mut response = endpoint
-            .client
-            .get(url)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
-            .await
-            .map_err(|error| RandomnessError::Endpoint(error.to_string()))?;
-        if response.status() != reqwest::StatusCode::OK {
-            return Err(RandomnessError::Endpoint(format!(
-                "{} returned status {}",
-                endpoint.host,
-                response.status()
-            )));
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length > self.max_body_bytes as u64)
-        {
-            return Err(RandomnessError::Endpoint(format!(
-                "{} response exceeds byte limit",
-                endpoint.host
-            )));
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|error| RandomnessError::Endpoint(error.to_string()))?
-        {
-            if body.len().saturating_add(chunk.len()) > self.max_body_bytes {
-                return Err(RandomnessError::Endpoint(format!(
-                    "{} response exceeds byte limit",
-                    endpoint.host
-                )));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        parse_and_verify_drand_response(&body, round, &self.public_key)
-    }
-
-    async fn commit_high_water(&self, beacon: &VerifiedDrandBeacon) -> Result<(), RandomnessError> {
-        let _commit = self.commit_lock.lock().await;
-        self.state_owner_lock.verify("drand")?;
-        let next = {
-            let state = self.state.lock();
-            if let Some(previous) = state.as_ref() {
-                if beacon.round < previous.round {
-                    return Err(RandomnessError::Rollback {
-                        received: beacon.round,
-                        high_water: previous.round,
-                    });
-                }
-                if beacon.round == previous.round {
-                    if beacon.randomness != previous.randomness
-                        || beacon.signature != previous.signature
-                    {
-                        return Err(RandomnessError::Equivocation {
-                            round: beacon.round,
-                        });
-                    }
-                    return Ok(());
-                }
-            }
-            DrandHighWaterStateV1 {
-                version: DRAND_STATE_VERSION_V1,
-                round: beacon.round,
-                randomness: beacon.randomness,
-                signature: beacon.signature,
-            }
+        } else {
+            None
         };
-        let state_path = self.state_path.clone();
-        let persisted = next.clone();
-        tokio::task::spawn_blocking(move || store_secure_state(&state_path, &persisted, "drand"))
-            .await
-            .map_err(|error| RandomnessError::Persistence(error.to_string()))??;
-        let mut state = self.state.lock();
-        *state = Some(next);
-        Ok(())
-    }
-}
-
-#[cfg(feature = "app_api")]
-#[async_trait]
-impl RandomnessProvider for DrandHttpRandomnessProvider {
-    async fn randomness_for_epoch(
-        &self,
-        epoch_id: u64,
-        now_secs: u64,
-        response_window_secs: u64,
-    ) -> Result<PorRandomness, RandomnessError> {
-        let round = self.expected_round(epoch_id, now_secs)?;
-        let results = futures::future::join_all(
-            self.endpoints
-                .iter()
-                .map(|endpoint| self.fetch_endpoint(endpoint, round)),
-        )
-        .await;
-        let beacon = select_drand_quorum(results.into_iter().flatten(), self.quorum)?;
-        self.commit_high_water(&beacon).await?;
-        Ok(PorRandomness {
-            epoch_id,
-            issued_at_unix: now_secs,
-            response_window_secs,
-            drand_round: beacon.round,
-            drand_randomness: beacon.randomness,
-            drand_signature: beacon.signature,
+        Ok(PorStatusPageV1 {
+            version: POR_STATUS_PAGE_VERSION_V1,
+            snapshot_generation: self.snapshot_generation,
+            record_limit,
+            canonical_byte_limit,
+            canonical_bytes,
+            inspected_candidates,
+            has_more: self.has_more,
+            next_cursor,
+            statuses: self.statuses,
         })
     }
 }
 
-#[cfg(feature = "app_api")]
-fn select_drand_quorum(
-    beacons: impl IntoIterator<Item = VerifiedDrandBeacon>,
-    quorum: usize,
-) -> Result<VerifiedDrandBeacon, RandomnessError> {
-    let mut groups = BTreeMap::<VerifiedDrandBeacon, usize>::new();
-    for beacon in beacons {
-        *groups.entry(beacon).or_default() += 1;
-    }
-    let agreeing = groups.values().copied().max().unwrap_or(0);
-    groups
-        .into_iter()
-        .find_map(|(beacon, count)| (count >= quorum).then_some(beacon))
-        .ok_or(RandomnessError::QuorumUnavailable {
-            agreeing,
-            required: quorum,
-        })
-}
-
-#[cfg(feature = "app_api")]
-fn validate_drand_endpoint(
-    raw_endpoint: &str,
-    endpoint: &url::Url,
-    expected_path: &str,
-) -> Result<String, RandomnessError> {
-    if endpoint.as_str().len() > 2_048
-        || endpoint.scheme() != "https"
-        || !endpoint.username().is_empty()
-        || endpoint.password().is_some()
-        || endpoint.query().is_some()
-        || endpoint.fragment().is_some()
-        || endpoint.path() != expected_path
-        || endpoint.port().is_some_and(|port| port != 443)
-    {
-        return Err(RandomnessError::Configuration(format!(
-            "drand endpoint must be canonical `https://<host>{expected_path}`"
-        )));
-    }
-    let host = endpoint.host_str().ok_or_else(|| {
-        RandomnessError::Configuration("drand endpoint host is missing".to_owned())
-    })?;
-    if host.parse::<IpAddr>().is_ok()
-        || host != host.to_ascii_lowercase()
-        || host.ends_with('.')
-        || host == "localhost"
-    {
-        return Err(RandomnessError::Configuration(
-            "drand endpoint must use a canonical lowercase public DNS name".to_owned(),
-        ));
-    }
-    let canonical = format!("https://{host}{expected_path}");
-    if raw_endpoint != canonical || endpoint.as_str() != canonical {
-        return Err(RandomnessError::Configuration(format!(
-            "drand endpoint must use exact canonical spelling `{canonical}`"
-        )));
-    }
-    Ok(host.to_owned())
-}
-
-#[cfg(feature = "app_api")]
-fn resolve_public_endpoint(host: &str, port: u16) -> Result<Vec<SocketAddr>, RandomnessError> {
-    let mut addresses = (host, port)
-        .to_socket_addrs()
-        .map_err(|error| RandomnessError::Configuration(format!("DNS for `{host}`: {error}")))?
-        .collect::<Vec<_>>();
-    addresses.sort_unstable();
-    addresses.dedup();
-    if addresses.is_empty() || addresses.len() > MAX_DRAND_DNS_ADDRESSES {
-        return Err(RandomnessError::Configuration(format!(
-            "DNS for `{host}` must yield 1..={MAX_DRAND_DNS_ADDRESSES} addresses"
-        )));
-    }
-    if addresses.iter().any(|address| !is_public_ip(address.ip())) {
-        return Err(RandomnessError::Configuration(format!(
-            "DNS for `{host}` resolved to a non-public address"
-        )));
-    }
-    Ok(addresses)
-}
-
-#[cfg(feature = "app_api")]
-async fn revalidate_pinned_dns(endpoint: &DrandEndpoint) -> Result<(), RandomnessError> {
-    let mut current = tokio::net::lookup_host((endpoint.host.as_str(), endpoint.port))
-        .await
-        .map_err(|error| RandomnessError::Endpoint(format!("DNS revalidation: {error}")))?
-        .collect::<Vec<_>>();
-    current.sort_unstable();
-    current.dedup();
-    if current.is_empty()
-        || current.len() > MAX_DRAND_DNS_ADDRESSES
-        || current.iter().any(|address| !is_public_ip(address.ip()))
-        || current != endpoint.pinned_addrs
-    {
-        return Err(RandomnessError::Endpoint(format!(
-            "DNS rebinding or address-set change detected for `{}`",
-            endpoint.host
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "app_api")]
-fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_public_ipv4(ip),
-        IpAddr::V6(ip) => is_public_ipv6(ip),
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn is_public_ipv4(ip: Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    !(ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_multicast()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || ip.is_unspecified()
-        || octets[0] == 0
-        || octets[0] >= 240
-        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
-        || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
-        || (octets[0] == 198 && (18..=19).contains(&octets[1])))
-}
-
-#[cfg(feature = "app_api")]
-fn is_public_ipv6(ip: Ipv6Addr) -> bool {
-    let segments = ip.segments();
-    let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
-    let documentation_v2 = segments[0] == 0x3fff && (segments[1] & 0xf000) == 0;
-    let orchid = segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0010;
-    let transition = (segments[0] == 0x2001 && segments[1] == 0)
-        || segments[0] == 0x2002
-        || ip.to_ipv4_mapped().is_some();
-    !((segments[0] & 0xe000) != 0x2000
-        || ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_multicast()
-        || (segments[0] & 0xfe00) == 0xfc00
-        || (segments[0] & 0xffc0) == 0xfe80
-        || documentation
-        || documentation_v2
-        || orchid
-        || transition)
-}
-
-#[cfg(feature = "app_api")]
-fn parse_and_verify_drand_response(
-    body: &[u8],
-    expected_round: u64,
-    public_key: &[u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES],
-) -> Result<VerifiedDrandBeacon, RandomnessError> {
-    let value: JsonValue = json::from_slice(body)
-        .map_err(|error| RandomnessError::Endpoint(format!("invalid drand JSON: {error}")))?;
-    let object = value.as_object().ok_or_else(|| {
-        RandomnessError::Endpoint("drand response must be a JSON object".to_owned())
-    })?;
-    if object.len() != 2 || !object.contains_key("round") || !object.contains_key("signature") {
-        return Err(RandomnessError::Endpoint(
-            "drand v2 response must contain exactly round and signature".to_owned(),
-        ));
-    }
-    let round = object
-        .get("round")
-        .and_then(JsonValue::as_u64)
-        .ok_or_else(|| RandomnessError::Endpoint("drand round must be a u64".to_owned()))?;
-    if round != expected_round {
-        return Err(RandomnessError::Endpoint(format!(
-            "drand returned round {round}; expected {expected_round}"
-        )));
-    }
-    fn decode_canonical_hex<const N: usize>(
-        value: Option<&JsonValue>,
-        field: &str,
-    ) -> Result<[u8; N], RandomnessError> {
-        let text = value.and_then(JsonValue::as_str).ok_or_else(|| {
-            RandomnessError::Endpoint(format!("drand {field} must be a hex string"))
-        })?;
-        if text.len() != N * 2
-            || !text
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(RandomnessError::Endpoint(format!(
-                "drand {field} must be canonical lowercase {N}-byte hex"
-            )));
-        }
-        let bytes = hex::decode(text)
-            .map_err(|error| RandomnessError::Endpoint(format!("invalid {field}: {error}")))?;
-        bytes
-            .try_into()
-            .map_err(|_| RandomnessError::Endpoint(format!("drand {field} has invalid length")))
-    }
-    let signature = decode_canonical_hex(object.get("signature"), "signature")?;
-    let randomness =
-        iroha_crypto::drand::verify_unchained_g1_rfc9380(public_key, round, &signature, None)
-            .map_err(|error| RandomnessError::Endpoint(error.to_string()))?;
-    Ok(VerifiedDrandBeacon {
-        round,
-        randomness,
-        signature,
-    })
-}
-
-#[cfg(feature = "app_api")]
-fn load_drand_state(
-    path: &Path,
-    public_key: &[u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES],
-) -> Result<Option<DrandHighWaterStateV1>, RandomnessError> {
-    let Some(bytes) = read_secure_state(path, 4 * 1024, "drand")? else {
-        return Ok(None);
-    };
-    let state: DrandHighWaterStateV1 = decode_from_bytes(&bytes)
-        .map_err(|error| RandomnessError::Persistence(error.to_string()))?;
-    let canonical =
-        to_bytes(&state).map_err(|error| RandomnessError::Persistence(error.to_string()))?;
-    if canonical != bytes || state.version != DRAND_STATE_VERSION_V1 || state.round == 0 {
-        return Err(RandomnessError::Persistence(
-            "drand state is non-canonical or has an unsupported version".to_owned(),
-        ));
-    }
-    iroha_crypto::drand::verify_unchained_g1_rfc9380(
-        public_key,
-        state.round,
-        &state.signature,
-        Some(&state.randomness),
-    )
-    .map_err(|error| RandomnessError::Persistence(error.to_string()))?;
-    Ok(Some(state))
-}
-
-#[cfg(feature = "app_api")]
-fn read_secure_state(
-    path: &Path,
-    max_bytes: usize,
-    label: &str,
-) -> Result<Option<Vec<u8>>, RandomnessError> {
-    secure_read_bytes(path, max_bytes)
-        .map_err(|error| RandomnessError::Persistence(format!("{label} state: {error}")))
-}
-
-#[cfg(feature = "app_api")]
-fn store_secure_state<T: norito::core::NoritoSerialize>(
-    path: &Path,
-    value: &T,
-    label: &str,
-) -> Result<(), RandomnessError> {
-    let bytes = to_bytes(value).map_err(|error| RandomnessError::Persistence(error.to_string()))?;
-    secure_atomic_write(path, &bytes, 64 * 1024 * 1024, true)
-        .map_err(|error| RandomnessError::Persistence(format!("{label} state: {error}")))
-}
-
+include!("por/persistence_randomness.rs");
 #[cfg(feature = "app_api")]
 /// Errors collecting VRF materials required for PoR challenge planning.
 #[derive(Debug, Error)]
@@ -3233,7 +1326,7 @@ pub enum PorAutomationError {
     Planner(#[from] PorChallengePlannerError),
     /// Storage backend encountered an error.
     #[error("storage error: {0}")]
-    Storage(#[from] sorafs_node::PorTrackerError),
+    Storage(#[from] PorMutationFailureV1),
     /// Coordinator rejected the requested state change.
     #[error("coordinator error: {0}")]
     Coordinator(#[from] PorCoordinatorError),
@@ -3246,6 +1339,9 @@ pub enum PorAutomationError {
     /// Timestamp arithmetic overflowed the supported range.
     #[error("timestamp overflow")]
     TimestampOverflow,
+    /// A physically retained blocking mutation worker failed to join.
+    #[error("PoR lifecycle persistence worker failed: {0}")]
+    BlockingWorker(String),
 }
 
 #[cfg(feature = "app_api")]
@@ -3253,7 +1349,7 @@ pub enum PorAutomationError {
 pub struct PorCoordinatorRuntime {
     /// Storage backend responsible for persisting PoR-related records.
     storage: Arc<dyn PorStorage>,
-    /// In-memory coordinator that validates challenges, proofs, and verdicts.
+    /// Atomic read projection rebuilt from node-authoritative lifecycle state.
     coordinator: Arc<PorCoordinator>,
     /// Randomness provider used to derive deterministic challenge seeds.
     randomness: Arc<dyn RandomnessProvider>,
@@ -3480,11 +1576,32 @@ impl PorCoordinatorRuntime {
         {
             let publication =
                 PorChallengePublicationV1::try_new(challenge.clone(), duplicate_samples)?;
-            self.storage.record_challenge(&challenge)?;
-            match self.coordinator.record_challenge(&challenge) {
-                Ok(()) | Err(PorCoordinatorError::DuplicateChallenge { .. }) => {}
-                Err(error) => return Err(PorAutomationError::Coordinator(error)),
-            }
+            let pipeline = self.coordinator.lock_pipeline().await;
+            let storage = Arc::clone(&self.storage);
+            let coordinator = Arc::clone(&self.coordinator);
+            let challenge_for_worker = challenge.clone();
+            tokio::task::spawn_blocking(move || {
+                // Cancellation detaches a blocking task. Retain the pipeline
+                // guard in the physical worker so no later delta can overtake
+                // the durable node mutation or its projection update.
+                let _pipeline = pipeline;
+                match storage.record_challenge(&challenge_for_worker) {
+                    Ok(update) => coordinator
+                        .apply_authoritative_update(update)
+                        .map_err(PorAutomationError::Coordinator),
+                    Err(error) => {
+                        if error.disposition().invalidates_projection() {
+                            coordinator.invalidate_authoritative_projection();
+                        }
+                        Err(PorAutomationError::Storage(error))
+                    }
+                }
+            })
+            .await
+            .map_err(|error| {
+                self.coordinator.invalidate_authoritative_projection();
+                PorAutomationError::BlockingWorker(error.to_string())
+            })??;
             if let Err(err) = self.publisher.publish_challenge(publication) {
                 iroha_logger::error!(
                     ?err,
@@ -3575,11 +1692,12 @@ pub trait PorStorage: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`sorafs_node::PorTrackerError`] when the challenge cannot be persisted.
+    /// Returns a typed mutation failure describing whether authoritative state
+    /// changed when the challenge cannot be persisted.
     fn record_challenge(
         &self,
         challenge: &PorChallengeV1,
-    ) -> Result<(), sorafs_node::PorTrackerError>;
+    ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1>;
 
     /// Return whether a provider currently owns the active local manifest target.
     fn vrf_target_is_active(
@@ -3604,8 +1722,8 @@ impl PorStorage for sorafs_node::NodeHandle {
     fn record_challenge(
         &self,
         challenge: &PorChallengeV1,
-    ) -> Result<(), sorafs_node::PorTrackerError> {
-        self.record_por_challenge(challenge)
+    ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1> {
+        self.record_por_challenge_with_authority_update(challenge)
     }
 
     fn vrf_target_is_active(
@@ -3684,6 +1802,12 @@ impl PorStatusFilter {
 /// Errors returned by the PoR coordinator while processing challenges, proofs, or reports.
 #[derive(Debug, Error)]
 pub enum PorCoordinatorError {
+    /// The node-authoritative lifecycle projection has not been installed.
+    #[error("authoritative PoR status projection is unavailable")]
+    AuthoritativeProjectionUnavailable,
+    /// The storage node supplied a malformed authoritative status projection.
+    #[error("invalid authoritative PoR status projection: {0}")]
+    InvalidAuthoritativeProjection(String),
     /// Challenge payload failed validation.
     #[error("challenge payload invalid: {0}")]
     InvalidChallenge(#[source] PorChallengeValidationError),
@@ -3708,9 +1832,82 @@ pub enum PorCoordinatorError {
     /// Weekly report failed validation.
     #[error("weekly report failed validation: {0}")]
     InvalidWeeklyReport(#[source] PorWeeklyReportValidationError),
-    /// Export payload failed validation.
-    #[error("export payload failed validation: {0}")]
-    InvalidExport(#[source] PorStatusExportValidationError),
+    /// A required page ceiling is zero or exceeds the protocol maximum.
+    #[error("invalid PoR page `{field}` {value}; expected 1..={maximum}")]
+    InvalidPageLimit {
+        /// Query field containing the invalid ceiling.
+        field: &'static str,
+        /// Supplied value.
+        value: usize,
+        /// First-release protocol maximum.
+        maximum: usize,
+    },
+    /// An inclusive export epoch range is reversed.
+    #[error("start_epoch {start} must not exceed end_epoch {end}")]
+    InvalidEpochRange {
+        /// Inclusive lower bound.
+        start: u64,
+        /// Inclusive upper bound.
+        end: u64,
+    },
+    /// The durable status generation cannot advance without wrapping.
+    #[error("PoR status generation is exhausted")]
+    StatusGenerationExhausted,
+    /// A continuation references a coordinator generation that is no longer current.
+    #[error(
+        "PoR page generation changed: continuation expected {expected}, current generation is {current}"
+    )]
+    StalePageGeneration {
+        /// Generation carried by the continuation request.
+        expected: u64,
+        /// Current coordinator generation.
+        current: u64,
+    },
+    /// The cursor does not identify a retained challenge.
+    #[error("unknown PoR page cursor anchor {challenge_id:?}")]
+    UnknownPageCursorAnchor {
+        /// Challenge identifier carried by the cursor.
+        challenge_id: [u8; 32],
+    },
+    /// The opaque page cursor is malformed, non-canonical, oversized, or unsupported.
+    #[error("invalid PoR page cursor: {0}")]
+    InvalidPageCursor(String),
+    /// A continuation was issued for another normalized filter or export range.
+    #[error("PoR page cursor does not belong to the requested selection")]
+    PageCursorSelectionMismatch,
+    /// A cursor's embedded order key does not match its retained challenge.
+    #[error("PoR page cursor anchor does not match challenge {challenge_id:?}")]
+    PageCursorAnchorMismatch {
+        /// Challenge identifier carried by the cursor.
+        challenge_id: [u8; 32],
+    },
+    /// The cursor anchor is not a member of its bound filter or epoch range.
+    #[error("PoR page cursor anchor does not belong to its bound selection")]
+    PageCursorAnchorSelectionMismatch,
+    /// A status index points at a record that is not present.
+    #[error("PoR status index references missing challenge {challenge_id:?}")]
+    StatusIndexCorrupt {
+        /// Missing challenge identifier.
+        challenge_id: [u8; 32],
+    },
+    /// Canonical status encoding failed while enforcing the byte ceiling.
+    #[error("failed to encode canonical PoR status: {0}")]
+    StatusPageEncoding(#[source] norito::core::Error),
+    /// Page byte arithmetic or a deterministic integer conversion overflowed.
+    #[error("PoR status page byte accounting overflowed")]
+    StatusPageByteOverflow,
+    /// The first matching status cannot fit the explicit byte ceiling.
+    #[error(
+        "PoR status {challenge_id:?} requires {record_bytes} canonical bytes, exceeding page limit {byte_limit}"
+    )]
+    StatusRecordExceedsPageByteLimit {
+        /// Challenge identifier of the oversized record.
+        challenge_id: [u8; 32],
+        /// Canonical status-record byte length.
+        record_bytes: usize,
+        /// Caller-supplied byte ceiling.
+        byte_limit: usize,
+    },
     /// Challenge already exists with different payload.
     #[error("challenge with id {challenge_id_hex} already recorded with different payload")]
     ChallengeConflict {
@@ -3872,6 +2069,14 @@ pub enum PorCoordinatorError {
     WeeklyReportPreparationConflict {
         /// Cycle named by the conflicting acknowledgement.
         cycle: PorReportIsoWeek,
+    },
+    /// A prior snapshot may have committed despite a post-publication failure.
+    #[error(
+        "PoR persistence is fail-stopped after an uncertain commit; restart and reconcile before continuing: {reason}"
+    )]
+    PersistenceFaultLatched {
+        /// Post-publication failure that caused the coordinator to fail-stop.
+        reason: String,
     },
     /// Underlying persistence failed.
     #[error("persistence failure: {0}")]
@@ -4081,6 +2286,104 @@ mod tests {
         assert_eq!(
             fs::read(&source).expect("rejected source remains for caller cleanup"),
             b"replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descriptor_relative_replace_stays_bound_to_opened_parent() {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
+        let named_parent = root.join("state");
+        fs::create_dir(&named_parent).expect("create original parent");
+        fs::set_permissions(&named_parent, fs::Permissions::from_mode(0o700))
+            .expect("private original parent");
+        let source_name = std::ffi::OsStr::new(".state.tmp");
+        let destination_name = std::ffi::OsStr::new("state.to");
+        fs::write(named_parent.join(source_name), b"canonical").expect("write staged state");
+
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+        let pinned_parent = options.open(&named_parent).expect("pin original parent");
+        let displaced_parent = root.join("displaced-state");
+        fs::rename(&named_parent, &displaced_parent).expect("displace original parent");
+        fs::create_dir(&named_parent).expect("create path impostor");
+        fs::set_permissions(&named_parent, fs::Permissions::from_mode(0o700))
+            .expect("private path impostor");
+        fs::write(named_parent.join(source_name), b"attacker sentinel")
+            .expect("write same-name impostor entry");
+
+        publish_secure_file_replace(
+            &pinned_parent,
+            source_name,
+            destination_name,
+            &named_parent.join(source_name),
+            &named_parent.join(destination_name),
+        )
+        .expect("publish through pinned parent");
+
+        assert_eq!(
+            fs::read(displaced_parent.join(destination_name)).expect("pinned publication"),
+            b"canonical"
+        );
+        assert!(
+            !named_parent.join(destination_name).exists(),
+            "path impostor must not receive the replacement"
+        );
+        assert_eq!(
+            fs::read(named_parent.join(source_name)).expect("impostor sentinel survives"),
+            b"attacker sentinel",
+            "descriptor-relative publication and cleanup must not unlink through a swapped path"
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn descriptor_relative_read_stays_bound_to_opened_parent() {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
+        let named_parent = root.join("state");
+        fs::create_dir(&named_parent).expect("create original parent");
+        fs::set_permissions(&named_parent, fs::Permissions::from_mode(0o700))
+            .expect("private original parent");
+        let filename = std::ffi::OsStr::new("state.to");
+        let original = named_parent.join(filename);
+        fs::write(&original, b"canonical").expect("write original state");
+        fs::set_permissions(&original, fs::Permissions::from_mode(0o600))
+            .expect("private original state");
+
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+        let pinned_parent = options.open(&named_parent).expect("pin original parent");
+        let displaced_parent = root.join("displaced-state");
+        fs::rename(&named_parent, &displaced_parent).expect("displace original parent");
+        fs::create_dir(&named_parent).expect("create path impostor");
+        fs::set_permissions(&named_parent, fs::Permissions::from_mode(0o700))
+            .expect("private path impostor");
+        let impostor = named_parent.join(filename);
+        fs::write(&impostor, b"malicious").expect("write same-size impostor state");
+        fs::set_permissions(&impostor, fs::Permissions::from_mode(0o600))
+            .expect("private impostor state");
+
+        assert_eq!(
+            secure_read_bytes_in_parent(&pinned_parent, filename, &impostor, 1_024)
+                .expect("descriptor-relative read")
+                .expect("state exists"),
+            b"canonical"
+        );
+        assert_eq!(
+            fs::read(&impostor).expect("impostor survives"),
+            b"malicious"
         );
     }
 
@@ -4640,6 +2943,460 @@ mod tests {
         }
     }
 
+    fn authoritative_status_snapshot(marker: u8, generation: u64) -> PorStatusAuthoritySnapshotV1 {
+        let mut challenge = sample_challenge(marker % 2 == 0);
+        challenge.provider_id = [marker; 32];
+        challenge.epoch_id = challenge.epoch_id.saturating_add(u64::from(marker));
+        challenge.issued_at = challenge.issued_at.saturating_add(u64::from(marker));
+        challenge.deadline_at = challenge.deadline_at.saturating_add(u64::from(marker));
+        challenge.seed = derive_challenge_seed(
+            &challenge.drand_randomness,
+            challenge.vrf_output.as_ref(),
+            &challenge.manifest_digest,
+            challenge.epoch_id,
+        );
+        challenge.challenge_id = derive_challenge_id(
+            &challenge.seed,
+            &challenge.manifest_digest,
+            &challenge.provider_id,
+            challenge.epoch_id,
+            challenge.drand_round,
+        );
+        challenge.validate().expect("projection challenge");
+        PorStatusAuthoritySnapshotV1 {
+            generation,
+            statuses: vec![ChallengeRecord::from_challenge(challenge).to_status()],
+        }
+    }
+
+    #[test]
+    fn absent_node_authority_is_explicitly_unavailable() {
+        let coordinator = PorCoordinator::new();
+        assert!(matches!(
+            coordinator.require_authoritative_projection(),
+            Err(PorCoordinatorError::AuthoritativeProjectionUnavailable)
+        ));
+
+        coordinator
+            .install_authoritative_projection(authoritative_status_snapshot(0x40, 100))
+            .expect("install node-authoritative projection");
+        assert!(coordinator.require_authoritative_projection().is_ok());
+    }
+
+    #[test]
+    fn authoritative_projection_swap_is_generation_record_atomic() {
+        let coordinator = StdArc::new(PorCoordinator::new());
+        let first = authoritative_status_snapshot(0x41, 100);
+        let second = authoritative_status_snapshot(0x42, 200);
+        let first_id = first.statuses[0].challenge_id;
+        let second_id = second.statuses[0].challenge_id;
+        coordinator
+            .install_authoritative_projection(first.clone())
+            .expect("install initial projection");
+
+        let barrier = StdArc::new(Barrier::new(5));
+        let writer = {
+            let coordinator = StdArc::clone(&coordinator);
+            let barrier = StdArc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..500 {
+                    coordinator
+                        .install_authoritative_projection(second.clone())
+                        .expect("install or exactly replay newer authoritative projection");
+                }
+            })
+        };
+        let readers = (0..4)
+            .map(|_| {
+                let coordinator = StdArc::clone(&coordinator);
+                let barrier = StdArc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..500 {
+                        let page = coordinator
+                            .query_status_page(
+                                &PorStatusFilter::default(),
+                                PorStatusPageLimits::new(4, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                                    .expect("page limits"),
+                                PorStatusPageCursor::First,
+                            )
+                            .expect("read one atomic projection");
+                        assert_eq!(page.statuses.len(), 1);
+                        match page.snapshot_generation {
+                            100 => assert_eq!(page.statuses[0].challenge_id, first_id),
+                            200 => assert_eq!(page.statuses[0].challenge_id, second_id),
+                            other => panic!("unexpected projection generation {other}"),
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        writer.join().expect("projection writer joins");
+        for reader in readers {
+            reader.join().expect("projection reader joins");
+        }
+        assert!(matches!(
+            coordinator.install_authoritative_projection(first),
+            Err(PorCoordinatorError::InvalidAuthoritativeProjection(_))
+        ));
+        assert_eq!(
+            coordinator
+                .require_authoritative_projection()
+                .expect("newer projection remains installed")
+                .indexes
+                .generation,
+            200
+        );
+    }
+
+    #[test]
+    fn authoritative_projection_updates_in_place_and_fail_closed_on_generation_gaps() {
+        let coordinator = PorCoordinator::new();
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 1,
+                statuses: Vec::new(),
+            })
+            .expect("install empty authoritative projection");
+        let projection_address = {
+            let projection = coordinator.authoritative_projection.read();
+            std::ptr::from_ref(projection.as_ref().expect("installed projection")).addr()
+        };
+
+        let challenge = sample_challenge(false);
+        let pending_status = ChallengeRecord::from_challenge(challenge.clone()).to_status();
+        let pending_update = PorStatusAuthorityUpdateV1 {
+            generation: 2,
+            status: pending_status.clone(),
+            removed_challenge_ids: Vec::new(),
+        };
+        coordinator
+            .apply_authoritative_update(pending_update.clone())
+            .expect("insert one authoritative status in place");
+        coordinator
+            .apply_authoritative_update(pending_update)
+            .expect("same-generation exact update is idempotent");
+
+        let proof = sample_proof(&challenge);
+        let mut proof_record = ChallengeRecord::from_challenge(challenge);
+        proof_record.proof_digest = Some(proof.proof_digest());
+        proof_record.proof_submitted_at = Some(proof.submitted_at);
+        proof_record.responded_at = Some(proof.submitted_at);
+        let proof_status = proof_record.to_status();
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 3,
+                status: proof_status.clone(),
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect("replace one status and its indexes in place");
+        let projection = coordinator.authoritative_projection.read();
+        assert_eq!(
+            std::ptr::from_ref(projection.as_ref().expect("projection remains installed")).addr(),
+            projection_address,
+            "incremental updates must mutate the installed projection rather than clone history"
+        );
+        assert_eq!(
+            projection
+                .as_ref()
+                .expect("projection remains installed")
+                .statuses
+                .get(&proof_status.challenge_id),
+            Some(&proof_status)
+        );
+        drop(projection);
+
+        let gap = coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 5,
+                status: proof_status.clone(),
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect_err("a skipped authoritative generation must fail closed");
+        assert!(matches!(
+            gap,
+            PorCoordinatorError::InvalidAuthoritativeProjection(_)
+        ));
+        assert!(matches!(
+            coordinator.query_status_page(
+                &PorStatusFilter::default(),
+                PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                    .expect("page limits"),
+                PorStatusPageCursor::First,
+            ),
+            Err(PorCoordinatorError::AuthoritativeProjectionUnavailable)
+        ));
+
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 3,
+                statuses: vec![proof_status.clone()],
+            })
+            .expect("reinstall authoritative projection after gap");
+        let conflicting_status =
+            ChallengeRecord::from_challenge(sample_challenge(true)).to_status();
+        let conflict = coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 3,
+                status: conflicting_status,
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect_err("only an identical same-generation replay is valid");
+        assert!(matches!(
+            conflict,
+            PorCoordinatorError::InvalidAuthoritativeProjection(_)
+        ));
+        assert!(coordinator.authoritative_projection.read().is_none());
+
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 3,
+                statuses: vec![proof_status.clone()],
+            })
+            .expect("reinstall authoritative projection after conflict");
+        let rollback = coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 2,
+                status: proof_status,
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect_err("an authoritative generation rollback must fail closed");
+        assert!(matches!(
+            rollback,
+            PorCoordinatorError::InvalidAuthoritativeProjection(_)
+        ));
+        assert!(coordinator.authoritative_projection.read().is_none());
+    }
+
+    #[test]
+    fn authoritative_projection_rejects_skipped_proof_submission_generation() {
+        let coordinator = PorCoordinator::new();
+        let awaiting = authoritative_status_snapshot(0x45, 2).statuses.remove(0);
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 2,
+                statuses: vec![awaiting.clone()],
+            })
+            .expect("install awaiting-proof authority");
+
+        let mut skipped = awaiting.clone();
+        skipped.status = PorChallengeOutcome::Failed;
+        skipped.responded_at = Some(skipped.issued_at.saturating_add(1));
+        skipped.proof_digest = Some([0xA5; 32]);
+        skipped.repair_task_id = Some([0xB5; 32]);
+        skipped.failure_reason = Some("invalid proof".to_owned());
+        skipped.validate().expect("locally valid terminal status");
+        assert!(matches!(
+            coordinator.apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 3,
+                status: skipped,
+                removed_challenge_ids: Vec::new(),
+            }),
+            Err(PorCoordinatorError::InvalidAuthoritativeProjection(_))
+        ));
+        assert!(coordinator.authoritative_projection.read().is_none());
+
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 2,
+                statuses: vec![awaiting.clone()],
+            })
+            .expect("restore awaiting-proof authority");
+        let mut deadline_failure = awaiting;
+        deadline_failure.status = PorChallengeOutcome::Failed;
+        deadline_failure.repair_task_id = Some([0xC5; 32]);
+        deadline_failure.failure_reason = Some("deadline expired".to_owned());
+        deadline_failure
+            .validate()
+            .expect("deadline failure without proof material is valid");
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 3,
+                status: deadline_failure,
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect("direct deadline failure is the admitted no-proof transition");
+    }
+
+    #[test]
+    fn forced_provenance_counts_survive_same_provider_epoch_retention() {
+        let coordinator = PorCoordinator::with_record_limit(2);
+        let provider_id = [0xD5; 32];
+        let epoch_id = 55;
+        let mut first = authoritative_status_snapshot(0x52, 10).statuses.remove(0);
+        let mut second = authoritative_status_snapshot(0x54, 10).statuses.remove(0);
+        for status in [&mut first, &mut second] {
+            status.provider_id = provider_id;
+            status.epoch_id = epoch_id;
+            status.forced = true;
+            status.status = PorChallengeOutcome::Verified;
+            status.responded_at = Some(status.issued_at.saturating_add(1));
+            status.proof_digest = Some([0xA5; 32]);
+            status
+                .validate()
+                .expect("forced terminal authority fixture");
+        }
+        let mut statuses = vec![first.clone(), second.clone()];
+        statuses.sort_by_key(|status| status.challenge_id);
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 10,
+                statuses,
+            })
+            .expect("install two forced challenges for one provider epoch");
+        {
+            let projection = coordinator.authoritative_projection.read();
+            assert_eq!(
+                projection
+                    .as_ref()
+                    .expect("projection")
+                    .forced_providers
+                    .get(&provider_id)
+                    .and_then(|epochs| epochs.get(&epoch_id)),
+                Some(&2)
+            );
+        }
+
+        let replacement = authoritative_status_snapshot(0x56, 11).statuses.remove(0);
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 11,
+                status: replacement,
+                removed_challenge_ids: vec![first.challenge_id],
+            })
+            .expect("retire only one same-epoch forced challenge");
+        {
+            let projection = coordinator.authoritative_projection.read();
+            assert_eq!(
+                projection
+                    .as_ref()
+                    .expect("projection")
+                    .forced_providers
+                    .get(&provider_id)
+                    .and_then(|epochs| epochs.get(&epoch_id)),
+                Some(&1),
+                "retiring one challenge must preserve the surviving provenance"
+            );
+        }
+
+        let replacement = authoritative_status_snapshot(0x58, 12).statuses.remove(0);
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 12,
+                status: replacement,
+                removed_challenge_ids: vec![second.challenge_id],
+            })
+            .expect("retire the final same-epoch forced challenge");
+        assert!(
+            !coordinator
+                .authoritative_projection
+                .read()
+                .as_ref()
+                .expect("projection")
+                .forced_providers
+                .contains_key(&provider_id)
+        );
+    }
+
+    #[test]
+    fn authoritative_projection_rolls_terminal_retention_and_accepts_archived_replay_noop() {
+        let coordinator = PorCoordinator::with_record_limit(1);
+        let mut terminal = authoritative_status_snapshot(0x61, 4).statuses.remove(0);
+        let proof_digest = [0xA5; 32];
+        terminal.status = PorChallengeOutcome::Verified;
+        terminal.responded_at = Some(terminal.issued_at.saturating_add(1));
+        terminal.proof_digest = Some(proof_digest);
+        terminal.validate().expect("terminal authority fixture");
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 4,
+                statuses: vec![terminal.clone()],
+            })
+            .expect("install full bounded projection");
+
+        let replacement = authoritative_status_snapshot(0x62, 5).statuses.remove(0);
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 5,
+                status: replacement.clone(),
+                removed_challenge_ids: vec![terminal.challenge_id],
+            })
+            .expect("remove archived terminal and insert replacement atomically");
+
+        coordinator
+            .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
+                generation: 5,
+                status: terminal,
+                removed_challenge_ids: Vec::new(),
+            })
+            .expect("authenticated archived exact replay is a projection no-op");
+        let projection = coordinator.authoritative_projection.read();
+        let projection = projection.as_ref().expect("projection remains installed");
+        assert_eq!(projection.statuses.len(), 1);
+        assert_eq!(
+            projection.statuses.get(&replacement.challenge_id),
+            Some(&replacement)
+        );
+    }
+
+    #[test]
+    fn restart_rebuilds_projection_and_persistence_retires_lifecycle_records() {
+        let dir = tempdir().expect("temp dir");
+        let path = canonical_temp_root(&dir).join("por-report-state.to");
+        let stale_challenge = sample_challenge(false);
+        let coordinator = PorCoordinator::with_persistence(path.clone()).expect("coordinator");
+        coordinator
+            .record_challenge(&stale_challenge)
+            .expect("persist legacy lifecycle fixture");
+        drop(coordinator);
+
+        let restored = PorCoordinator::with_persistence(path.clone()).expect("restore fixture");
+        let authoritative = authoritative_status_snapshot(0x77, 300);
+        let authoritative_id = authoritative.statuses[0].challenge_id;
+        restored
+            .install_authoritative_projection(authoritative.clone())
+            .expect("replace stale lifecycle projection");
+        restored
+            .retire_lifecycle_persistence()
+            .expect("persist report-only coordinator state");
+        let page = restored
+            .query_status_page(
+                &PorStatusFilter::default(),
+                PorStatusPageLimits::new(4, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                    .expect("page limits"),
+                PorStatusPageCursor::First,
+            )
+            .expect("query rebuilt projection");
+        assert_eq!(page.snapshot_generation, 300);
+        assert_eq!(page.statuses[0].challenge_id, authoritative_id);
+        drop(restored);
+
+        let report_only =
+            PorCoordinator::with_persistence(path).expect("restore report-only state");
+        let empty = report_only
+            .query_status_page(
+                &PorStatusFilter::default(),
+                PorStatusPageLimits::new(4, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                    .expect("page limits"),
+                PorStatusPageCursor::First,
+            )
+            .expect("lifecycle records were retired");
+        assert!(empty.statuses.is_empty());
+        report_only
+            .install_authoritative_projection(authoritative)
+            .expect("rebuild projection after restart");
+        let rebuilt = report_only
+            .query_status_page(
+                &PorStatusFilter::default(),
+                PorStatusPageLimits::new(4, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                    .expect("page limits"),
+                PorStatusPageCursor::First,
+            )
+            .expect("query restarted projection");
+        assert_eq!(rebuilt.statuses[0].challenge_id, authoritative_id);
+    }
+
     fn sample_proof(challenge: &PorChallengeV1) -> sorafs_manifest::por::PorProofV1 {
         let mut proof = sorafs_manifest::por::PorProofV1 {
             version: POR_PROOF_VERSION_V1,
@@ -4745,9 +3502,443 @@ mod tests {
             provider: Some(matching.provider_id),
             ..PorStatusFilter::default()
         };
-        let statuses = coordinator.query_statuses(&filter, Some(1), Some(page_anchor.challenge_id));
+        let statuses = coordinator.query_statuses(&filter, Some(1), None);
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].challenge_id, matching.challenge_id);
+    }
+
+    #[test]
+    fn indexed_status_pages_enforce_continuity_and_exact_byte_budget() {
+        fn challenge_for(provider: u8, issued_at: u64) -> PorChallengeV1 {
+            let mut challenge = sample_challenge(false);
+            challenge.provider_id = [provider; 32];
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
+            challenge.issued_at = issued_at;
+            challenge.deadline_at = issued_at + 900;
+            challenge
+        }
+
+        let coordinator = PorCoordinator::new();
+        let challenges = [
+            challenge_for(0x41, 1_700_000_100),
+            challenge_for(0x42, 1_700_000_200),
+            challenge_for(0x43, 1_700_000_300),
+        ];
+        for challenge in &challenges {
+            coordinator
+                .record_challenge(challenge)
+                .expect("record indexed challenge");
+        }
+
+        let one_record = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("one-record limits");
+        let first = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                one_record,
+                PorStatusPageCursor::First,
+            )
+            .expect("first indexed page");
+        assert_eq!(first.statuses.len(), 1);
+        assert!(first.has_more);
+        assert!(first.next_cursor.is_some());
+
+        let second = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                one_record,
+                PorStatusPageCursor::from_opaque(first.next_cursor.as_deref())
+                    .expect("canonical continuation cursor"),
+            )
+            .expect("second indexed page");
+        assert_eq!(second.statuses[0].challenge_id, challenges[1].challenge_id);
+        assert_ne!(
+            second.statuses[0].challenge_id,
+            first.statuses[0].challenge_id
+        );
+
+        let first_record_bytes = to_bytes(&first.statuses[0])
+            .expect("encode first status")
+            .len();
+        let byte_limited = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                PorStatusPageLimits::new(3, first_record_bytes).expect("exact byte limit"),
+                PorStatusPageCursor::First,
+            )
+            .expect("byte-limited page");
+        assert_eq!(byte_limited.statuses.len(), 1);
+        assert_eq!(
+            byte_limited.canonical_bytes,
+            u64::try_from(first_record_bytes).expect("status length fits u64")
+        );
+        assert_eq!(byte_limited.inspected_candidates, 2);
+        assert!(byte_limited.has_more);
+        let resumed = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                PorStatusPageLimits::new(3, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                    .expect("resumed page limits"),
+                PorStatusPageCursor::from_opaque(byte_limited.next_cursor.as_deref())
+                    .expect("byte-limited continuation cursor"),
+            )
+            .expect("resume after the last consumed candidate");
+        assert_eq!(
+            resumed.statuses[0].challenge_id, challenges[1].challenge_id,
+            "the matching record inspected only to discover a byte boundary must be retried"
+        );
+    }
+
+    #[test]
+    fn sparse_status_intersection_is_lookup_bounded_and_cursor_complete() {
+        const STATUS_COUNT: usize = 1_027;
+        const INTERSECTION_INDEX: usize = 513;
+        let selected_manifest = [0xA1; 32];
+        let selected_provider = [0xB1; 32];
+        let mut statuses = Vec::with_capacity(STATUS_COUNT);
+        let mut expected_match = [0_u8; 32];
+        let mut first_cursor_anchor = [0_u8; 32];
+
+        for index in 0..STATUS_COUNT {
+            let mut challenge = sample_challenge(false);
+            challenge.manifest_digest = if index <= INTERSECTION_INDEX {
+                selected_manifest
+            } else {
+                [0xA2; 32]
+            };
+            challenge.provider_id = if index >= INTERSECTION_INDEX {
+                selected_provider
+            } else {
+                [0xB2; 32]
+            };
+            challenge.epoch_id = 10_000 + u64::try_from(index).expect("fixture index fits u64");
+            challenge.issued_at =
+                1_700_000_000 + u64::try_from(index).expect("fixture index fits u64");
+            challenge.deadline_at = challenge.issued_at + 900;
+            challenge.seed = derive_challenge_seed(
+                &challenge.drand_randomness,
+                challenge.vrf_output.as_ref(),
+                &challenge.manifest_digest,
+                challenge.epoch_id,
+            );
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
+            challenge.validate().expect("sparse projection challenge");
+            if index == INTERSECTION_INDEX {
+                expected_match = challenge.challenge_id;
+            }
+            if index + 1 == POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1 {
+                first_cursor_anchor = challenge.challenge_id;
+            }
+            statuses.push(ChallengeRecord::from_challenge(challenge).to_status());
+        }
+        statuses.sort_by_key(|status| status.challenge_id);
+
+        let coordinator = PorCoordinator::new();
+        coordinator
+            .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
+                generation: 2_000,
+                statuses,
+            })
+            .expect("install sparse authoritative projection");
+        let filter = PorStatusFilter {
+            manifest: Some(selected_manifest),
+            provider: Some(selected_provider),
+            ..PorStatusFilter::default()
+        };
+        let limits = PorStatusPageLimits::new(10, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("sparse page limits");
+        coordinator
+            .status_page_projection_lookups
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let first = coordinator
+            .query_status_page(&filter, limits, PorStatusPageCursor::First)
+            .expect("first sparse page");
+        assert!(first.statuses.is_empty());
+        assert_eq!(
+            first.inspected_candidates,
+            u32::try_from(POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1)
+                .expect("inspection limit fits u32")
+        );
+        assert_eq!(
+            coordinator
+                .status_page_projection_lookups
+                .load(std::sync::atomic::Ordering::Relaxed),
+            POR_STATUS_PAGE_MAX_INSPECTED_CANDIDATES_V1
+        );
+        assert!(first.has_more);
+        let first_cursor = PorStatusPageCursor::from_opaque(first.next_cursor.as_deref())
+            .expect("empty sparse page returns an advancing cursor");
+        assert!(matches!(
+            first_cursor,
+            PorStatusPageCursor::After { challenge_id, .. }
+                if challenge_id == first_cursor_anchor
+        ));
+
+        coordinator
+            .status_page_projection_lookups
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let second = coordinator
+            .query_status_page(&filter, limits, first_cursor)
+            .expect("continue sparse index traversal");
+        assert_eq!(second.inspected_candidates, 2);
+        assert_eq!(
+            coordinator
+                .status_page_projection_lookups
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+        assert_eq!(second.statuses.len(), 1);
+        assert_eq!(second.statuses[0].challenge_id, expected_match);
+        assert!(!second.has_more);
+        assert!(second.next_cursor.is_none());
+    }
+
+    #[test]
+    fn status_page_continuation_rejects_mutation_and_filter_substitution() {
+        let coordinator = PorCoordinator::new();
+        let first_challenge = sample_challenge(false);
+        coordinator
+            .record_challenge(&first_challenge)
+            .expect("record first challenge");
+        let mut second_challenge = sample_challenge(false);
+        second_challenge.provider_id = [0x44; 32];
+        second_challenge.challenge_id = derive_challenge_id(
+            &second_challenge.seed,
+            &second_challenge.manifest_digest,
+            &second_challenge.provider_id,
+            second_challenge.epoch_id,
+            second_challenge.drand_round,
+        );
+        second_challenge.issued_at += 1;
+        second_challenge.deadline_at += 1;
+        coordinator
+            .record_challenge(&second_challenge)
+            .expect("record second challenge");
+        let limits = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("page limits");
+        let page = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                limits,
+                PorStatusPageCursor::First,
+            )
+            .expect("first page");
+        let cursor = PorStatusPageCursor::from_opaque(page.next_cursor.as_deref())
+            .expect("first page must return a canonical continuation");
+
+        let forged_epoch_cursor = match cursor {
+            PorStatusPageCursor::After {
+                snapshot_generation,
+                selection_digest,
+                last_epoch_id,
+                last_issued_at,
+                challenge_id,
+            } => PorStatusPageCursor::After {
+                snapshot_generation,
+                selection_digest,
+                last_epoch_id: last_epoch_id.saturating_add(1),
+                last_issued_at,
+                challenge_id,
+            },
+            PorStatusPageCursor::First => panic!("continuation cannot be first page"),
+        };
+        assert!(matches!(
+            coordinator
+                .query_status_page(&PorStatusFilter::default(), limits, forged_epoch_cursor,),
+            Err(PorCoordinatorError::PageCursorAnchorMismatch { .. })
+        ));
+
+        let overlapping_filter = PorStatusFilter {
+            status: Some(PorChallengeOutcome::AwaitingProof),
+            ..PorStatusFilter::default()
+        };
+        assert!(matches!(
+            coordinator.query_status_page(&overlapping_filter, limits, cursor,),
+            Err(PorCoordinatorError::PageCursorSelectionMismatch)
+        ));
+
+        let mut third_challenge = sample_challenge(false);
+        third_challenge.provider_id = [0x55; 32];
+        third_challenge.challenge_id = derive_challenge_id(
+            &third_challenge.seed,
+            &third_challenge.manifest_digest,
+            &third_challenge.provider_id,
+            third_challenge.epoch_id,
+            third_challenge.drand_round,
+        );
+        third_challenge.issued_at += 2;
+        third_challenge.deadline_at += 2;
+        coordinator
+            .record_challenge(&third_challenge)
+            .expect("mutate coordinator generation");
+        assert!(matches!(
+            coordinator.query_status_page(&PorStatusFilter::default(), limits, cursor,),
+            Err(PorCoordinatorError::StalePageGeneration { .. })
+        ));
+    }
+
+    #[test]
+    fn export_continuation_rejects_overlapping_range_substitution() {
+        let coordinator = PorCoordinator::new();
+        let mut first = sample_challenge(false);
+        first.epoch_id = 41;
+        first.challenge_id = derive_challenge_id(
+            &first.seed,
+            &first.manifest_digest,
+            &first.provider_id,
+            first.epoch_id,
+            first.drand_round,
+        );
+        coordinator
+            .record_challenge(&first)
+            .expect("record first export challenge");
+
+        let mut second = sample_challenge(false);
+        second.provider_id = [0x45; 32];
+        second.epoch_id = 42;
+        second.issued_at += 1;
+        second.deadline_at += 1;
+        second.challenge_id = derive_challenge_id(
+            &second.seed,
+            &second.manifest_digest,
+            &second.provider_id,
+            second.epoch_id,
+            second.drand_round,
+        );
+        coordinator
+            .record_challenge(&second)
+            .expect("record second export challenge");
+
+        let limits = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("export page limits");
+        let page = coordinator
+            .export_status_page(Some((41, 42)), limits, PorStatusPageCursor::First)
+            .expect("first export page");
+        let cursor = PorStatusPageCursor::from_opaque(page.page.next_cursor.as_deref())
+            .expect("export page must return a canonical continuation");
+
+        let forged_epoch_cursor = match cursor {
+            PorStatusPageCursor::After {
+                snapshot_generation,
+                selection_digest,
+                last_epoch_id,
+                last_issued_at,
+                challenge_id,
+            } => PorStatusPageCursor::After {
+                snapshot_generation,
+                selection_digest,
+                last_epoch_id: last_epoch_id.saturating_add(1),
+                last_issued_at,
+                challenge_id,
+            },
+            PorStatusPageCursor::First => panic!("continuation cannot be first page"),
+        };
+        assert!(matches!(
+            coordinator.export_status_page(Some((41, 42)), limits, forged_epoch_cursor),
+            Err(PorCoordinatorError::PageCursorAnchorMismatch { .. })
+        ));
+
+        assert!(matches!(
+            coordinator.export_status_page(Some((41, 43)), limits, cursor),
+            Err(PorCoordinatorError::PageCursorSelectionMismatch)
+        ));
+    }
+
+    #[test]
+    fn outcome_index_tracks_verdict_transition_and_bounded_export() {
+        let coordinator = PorCoordinator::new();
+        let challenge = sample_challenge(false);
+        coordinator
+            .record_challenge(&challenge)
+            .expect("record challenge");
+        let limits = PorStatusPageLimits::new(4, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("page limits");
+        let pending_filter = PorStatusFilter {
+            status: Some(PorChallengeOutcome::AwaitingProof),
+            ..PorStatusFilter::default()
+        };
+        assert_eq!(
+            coordinator
+                .query_status_page(&pending_filter, limits, PorStatusPageCursor::First)
+                .expect("pending page")
+                .statuses
+                .len(),
+            1
+        );
+
+        let proof = sample_proof(&challenge);
+        let proof_digest = proof.proof_digest();
+        coordinator
+            .record_proof(&proof, &provider_key())
+            .expect("record proof");
+        let verdict = sample_verdict(&challenge, AuditOutcomeV1::Success, Some(proof_digest));
+        coordinator
+            .record_verdict(&verdict, &auditor_keys(), 1)
+            .expect("record verdict");
+
+        assert!(
+            coordinator
+                .query_status_page(&pending_filter, limits, PorStatusPageCursor::First)
+                .expect("updated pending page")
+                .statuses
+                .is_empty()
+        );
+        let verified_filter = PorStatusFilter {
+            status: Some(PorChallengeOutcome::Verified),
+            ..PorStatusFilter::default()
+        };
+        assert_eq!(
+            coordinator
+                .query_status_page(&verified_filter, limits, PorStatusPageCursor::First)
+                .expect("verified page")
+                .statuses[0]
+                .challenge_id,
+            challenge.challenge_id
+        );
+
+        let export = coordinator
+            .export_status_page(
+                Some((challenge.epoch_id, challenge.epoch_id)),
+                PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+                    .expect("export limits"),
+                PorStatusPageCursor::First,
+            )
+            .expect("bounded export page");
+        assert_eq!(export.page.statuses.len(), 1);
+        assert!(export.page.canonical_bytes <= export.page.canonical_byte_limit);
+        assert_eq!(export.start_epoch, Some(challenge.epoch_id));
+        assert_eq!(export.end_epoch, Some(challenge.epoch_id));
+    }
+
+    #[test]
+    fn page_limit_type_rejects_zero_and_protocol_overflow() {
+        assert!(matches!(
+            PorStatusPageLimits::new(0, 1),
+            Err(PorCoordinatorError::InvalidPageLimit { field: "limit", .. })
+        ));
+        assert!(matches!(
+            PorStatusPageLimits::new(POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1 + 1, 1),
+            Err(PorCoordinatorError::InvalidPageLimit { field: "limit", .. })
+        ));
+        assert!(matches!(
+            PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1 + 1),
+            Err(PorCoordinatorError::InvalidPageLimit {
+                field: "max_bytes",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -4794,7 +3985,7 @@ mod tests {
                     .is_err()
             );
             let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
-            assert_eq!(status[0].status, PorChallengeOutcome::Pending);
+            assert_eq!(status[0].status, PorChallengeOutcome::ProofSubmitted);
             assert_eq!(status[0].proof_digest, Some(digest));
         }
 
@@ -4897,7 +4088,7 @@ mod tests {
         );
         coordinator.rollback_verdict(&verdict).unwrap();
         let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
-        assert_eq!(status[0].status, PorChallengeOutcome::Pending);
+        assert_eq!(status[0].status, PorChallengeOutcome::ProofSubmitted);
         assert_eq!(status[0].proof_digest, Some(proof.proof_digest()));
     }
 
@@ -4989,7 +4180,8 @@ mod tests {
             Err(PorCoordinatorError::Persistence(_))
         ));
         let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
-        assert_eq!(status[0].status, PorChallengeOutcome::Forced);
+        assert_eq!(status[0].status, PorChallengeOutcome::ProofSubmitted);
+        assert!(status[0].forced);
         assert_eq!(status[0].proof_digest, Some(digest));
 
         fs::set_permissions(&blocked_parent, fs::Permissions::from_mode(0o700)).unwrap();
@@ -5173,6 +4365,58 @@ mod tests {
     }
 
     #[test]
+    fn weekly_report_projects_only_the_requested_week_from_large_history() {
+        let coordinator = PorCoordinator::new();
+        let record_at = |epoch_id: u64, issued_at: u64| {
+            let mut challenge = sample_challenge(true);
+            challenge.epoch_id = epoch_id;
+            challenge.issued_at = issued_at;
+            challenge.deadline_at = issued_at + 600;
+            challenge.seed = derive_challenge_seed(
+                &challenge.drand_randomness,
+                None,
+                &challenge.manifest_digest,
+                challenge.epoch_id,
+            );
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
+            coordinator.record_challenge(&challenge).expect("challenge");
+        };
+
+        for index in 0..2_048 {
+            record_at(index, 1_600_000_000 + index);
+            record_at(10_000 + index, 1_800_000_000 + index);
+        }
+        for index in 0..3 {
+            record_at(20_000 + index, 1_700_000_000 + index);
+        }
+
+        coordinator
+            .weekly_report_projection_lookups
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let report = coordinator
+            .weekly_report(PorReportIsoWeek {
+                year: 2023,
+                week: 46,
+            })
+            .expect("weekly report");
+        assert_eq!(report.challenges_total, 3);
+        assert_eq!(coordinator.records.len(), 4_099);
+        assert_eq!(
+            coordinator
+                .weekly_report_projection_lookups
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3,
+            "report work must be bounded by the canonical week slice, not total retention"
+        );
+    }
+
+    #[test]
     fn persistence_round_trip_restores_state() {
         let dir = tempdir().expect("temp dir");
         let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
@@ -5204,6 +4448,354 @@ mod tests {
         assert_eq!(status.proof_digest, Some(expected_digest));
         assert!(status.responded_at.is_some());
         assert_eq!(status.repair_task_id, None);
+    }
+
+    #[test]
+    fn persisted_generation_rejects_pre_mutation_cursor_after_restart() {
+        fn challenge_for(provider: u8, issued_at_offset: u64) -> PorChallengeV1 {
+            let mut challenge = sample_challenge(false);
+            challenge.provider_id = [provider; 32];
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
+            challenge.issued_at += issued_at_offset;
+            challenge.deadline_at += issued_at_offset;
+            challenge
+        }
+
+        let dir = tempdir().expect("temp dir");
+        let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
+        let limits = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("page limits");
+        let (cursor, issued_generation) = {
+            let coordinator =
+                PorCoordinator::with_persistence(&snapshot_path).expect("coordinator");
+            for challenge in [challenge_for(0x61, 0), challenge_for(0x62, 1)] {
+                coordinator
+                    .record_challenge(&challenge)
+                    .expect("record initial challenge");
+            }
+            let page = coordinator
+                .query_status_page(
+                    &PorStatusFilter::default(),
+                    limits,
+                    PorStatusPageCursor::First,
+                )
+                .expect("first page");
+            let cursor = page
+                .next_cursor
+                .expect("two records produce a continuation cursor");
+            coordinator
+                .record_challenge(&challenge_for(0x63, 2))
+                .expect("persist generation-advancing mutation");
+            (cursor, page.snapshot_generation)
+        };
+
+        let coordinator =
+            PorCoordinator::with_persistence(&snapshot_path).expect("reload coordinator");
+        let error = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                limits,
+                PorStatusPageCursor::from_opaque(Some(&cursor)).expect("decode old cursor"),
+            )
+            .expect_err("pre-mutation cursor must remain stale after restart");
+        assert!(matches!(
+            error,
+            PorCoordinatorError::StalePageGeneration { expected, current }
+                if expected == issued_generation && current > expected
+        ));
+    }
+
+    #[test]
+    fn persisted_generation_survives_same_cardinality_mutation_and_rollback() {
+        fn challenge_for(provider: u8, issued_at_offset: u64) -> PorChallengeV1 {
+            let mut challenge = sample_challenge(false);
+            challenge.provider_id = [provider; 32];
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
+            challenge.issued_at += issued_at_offset;
+            challenge.deadline_at += issued_at_offset;
+            challenge
+        }
+
+        let dir = tempdir().expect("temp dir");
+        let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
+        let limits = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("page limits");
+        let (cursor, issued_generation) = {
+            let coordinator =
+                PorCoordinator::with_persistence(&snapshot_path).expect("coordinator");
+            let first = challenge_for(0x71, 0);
+            let second = challenge_for(0x72, 1);
+            for challenge in [&first, &second] {
+                coordinator
+                    .record_challenge(challenge)
+                    .expect("record initial challenge");
+            }
+            let page = coordinator
+                .query_status_page(
+                    &PorStatusFilter::default(),
+                    limits,
+                    PorStatusPageCursor::First,
+                )
+                .expect("first page");
+            let cursor = page
+                .next_cursor
+                .expect("two records produce a continuation cursor");
+            let proof = sample_proof(&second);
+            coordinator
+                .record_proof(&proof, &provider_key())
+                .expect("persist same-cardinality proof mutation");
+            coordinator
+                .rollback_proof(&proof)
+                .expect("persist same-cardinality compensating rollback");
+            assert_eq!(
+                coordinator.status_indexes.read().generation,
+                page.snapshot_generation + 2
+            );
+            (cursor, page.snapshot_generation)
+        };
+
+        let coordinator =
+            PorCoordinator::with_persistence(&snapshot_path).expect("reload coordinator");
+        let restored_generation = coordinator.status_indexes.read().generation;
+        assert_eq!(restored_generation, issued_generation + 2);
+        let error = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                limits,
+                PorStatusPageCursor::from_opaque(Some(&cursor)).expect("decode old cursor"),
+            )
+            .expect_err("a compensated mutation must not revive its old cursor after restart");
+        assert!(matches!(
+            error,
+            PorCoordinatorError::StalePageGeneration { expected, current }
+                if expected == issued_generation && current == restored_generation
+        ));
+    }
+
+    #[test]
+    fn post_publication_failure_retains_state_and_fail_stops_until_restart() {
+        fn challenge_for(provider: u8, issued_at_offset: u64) -> PorChallengeV1 {
+            let mut challenge = sample_challenge(false);
+            challenge.provider_id = [provider; 32];
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
+            challenge.issued_at += issued_at_offset;
+            challenge.deadline_at += issued_at_offset;
+            challenge
+        }
+
+        let dir = tempdir().expect("temp dir");
+        let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
+        let limits = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
+            .expect("page limits");
+        let coordinator = PorCoordinator::with_persistence(&snapshot_path).expect("coordinator");
+        let first = challenge_for(0x81, 0);
+        let second = challenge_for(0x82, 1);
+        for challenge in [&first, &second] {
+            coordinator
+                .record_challenge(challenge)
+                .expect("record initial challenge");
+        }
+        let page = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                limits,
+                PorStatusPageCursor::First,
+            )
+            .expect("first page");
+        let cursor = page
+            .next_cursor
+            .expect("two records produce a continuation cursor");
+        let issued_generation = page.snapshot_generation;
+
+        let proof = sample_proof(&second);
+        coordinator.inject_persistence_commit_uncertain_once();
+        let error = coordinator
+            .record_proof(&proof, &provider_key())
+            .expect_err("injected post-publication failure must surface");
+        assert!(matches!(
+            &error,
+            PorCoordinatorError::Persistence(PorPersistenceError::CommitUncertain(_))
+        ));
+        assert!(
+            error.to_string().contains("may already be durable"),
+            "the first failure must explicitly disclose uncertain commit state"
+        );
+        assert_eq!(
+            coordinator
+                .records
+                .get(&second.challenge_id)
+                .expect("committed proof remains in memory")
+                .proof_digest,
+            Some(proof.proof_digest())
+        );
+        assert_eq!(
+            coordinator.status_indexes.read().generation,
+            issued_generation + 1
+        );
+        coordinator
+            .status_indexes
+            .read()
+            .validate_against_records(&coordinator.records)
+            .expect("retained memory and indexes remain consistent");
+
+        assert!(matches!(
+            coordinator.query_status_page(
+                &PorStatusFilter::default(),
+                limits,
+                PorStatusPageCursor::First,
+            ),
+            Err(PorCoordinatorError::PersistenceFaultLatched { .. })
+        ));
+        let third = challenge_for(0x83, 2);
+        assert!(matches!(
+            coordinator.record_challenge(&third),
+            Err(PorCoordinatorError::PersistenceFaultLatched { .. })
+        ));
+        assert!(!coordinator.records.contains_key(&third.challenge_id));
+        drop(coordinator);
+
+        let coordinator =
+            PorCoordinator::with_persistence(&snapshot_path).expect("reload coordinator");
+        assert_eq!(
+            coordinator.status_indexes.read().generation,
+            issued_generation + 1
+        );
+        assert_eq!(
+            coordinator
+                .records
+                .get(&second.challenge_id)
+                .expect("published proof reloads")
+                .proof_digest,
+            Some(proof.proof_digest())
+        );
+        assert!(!coordinator.records.contains_key(&third.challenge_id));
+        let error = coordinator
+            .query_status_page(
+                &PorStatusFilter::default(),
+                limits,
+                PorStatusPageCursor::from_opaque(Some(&cursor)).expect("decode old cursor"),
+            )
+            .expect_err("pre-mutation cursor must not revive after reconciliation");
+        assert!(matches!(
+            error,
+            PorCoordinatorError::StalePageGeneration { expected, current }
+                if expected == issued_generation && current == issued_generation + 1
+        ));
+    }
+
+    #[test]
+    fn persistence_rejects_zero_or_missing_status_generation() {
+        #[derive(NoritoSerialize)]
+        struct SnapshotWithoutStatusGeneration {
+            version: u8,
+            records: Vec<ChallengeRecordSnapshot>,
+            forced: Vec<ForcedProviderSnapshot>,
+            prepared_weekly_report: Option<PreparedWeeklyReportV1>,
+        }
+
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        let zero_path = root.join("zero-generation.to");
+        let zero_snapshot = PorCoordinatorSnapshot {
+            version: POR_COORDINATOR_SNAPSHOT_VERSION_V1,
+            status_generation: 0,
+            records: Vec::new(),
+            forced: Vec::new(),
+            prepared_weekly_report: None,
+        };
+        let zero_bytes = to_bytes(&zero_snapshot).expect("encode zero-generation snapshot");
+        secure_atomic_write(
+            &zero_path,
+            &zero_bytes,
+            MAX_POR_COORDINATOR_SNAPSHOT_BYTES,
+            true,
+        )
+        .expect("write zero-generation snapshot");
+        assert!(matches!(
+            PorCoordinator::with_persistence(&zero_path),
+            Err(PorPersistenceError::Decode(message))
+                if message.contains("status generation must be non-zero")
+        ));
+
+        let missing_path = root.join("missing-generation.to");
+        let missing_bytes = to_bytes(&SnapshotWithoutStatusGeneration {
+            version: POR_COORDINATOR_SNAPSHOT_VERSION_V1,
+            records: Vec::new(),
+            forced: Vec::new(),
+            prepared_weekly_report: None,
+        })
+        .expect("encode snapshot without required generation");
+        secure_atomic_write(
+            &missing_path,
+            &missing_bytes,
+            MAX_POR_COORDINATOR_SNAPSHOT_BYTES,
+            true,
+        )
+        .expect("write snapshot without generation");
+        assert!(matches!(
+            PorCoordinator::with_persistence(&missing_path),
+            Err(PorPersistenceError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn persistence_rejects_status_generation_below_record_floor() {
+        let dir = tempdir().expect("temp dir");
+        let snapshot_path = canonical_temp_root(&dir).join("generation-below-record-floor.to");
+        let record = ChallengeRecord::from_challenge(sample_challenge(false));
+        let snapshot = PorCoordinatorSnapshot {
+            version: POR_COORDINATOR_SNAPSHOT_VERSION_V1,
+            status_generation: 1,
+            records: vec![ChallengeRecordSnapshot::from(&record)],
+            forced: Vec::new(),
+            prepared_weekly_report: None,
+        };
+        let bytes = to_bytes(&snapshot).expect("encode malformed-generation snapshot");
+        secure_atomic_write(
+            &snapshot_path,
+            &bytes,
+            MAX_POR_COORDINATOR_SNAPSHOT_BYTES,
+            true,
+        )
+        .expect("write malformed-generation snapshot");
+
+        assert!(matches!(
+            PorCoordinator::with_persistence(&snapshot_path),
+            Err(PorPersistenceError::Decode(message))
+                if message.contains("below the record floor")
+        ));
+    }
+
+    #[test]
+    fn status_generation_exhaustion_fails_before_mutation() {
+        let coordinator = PorCoordinator::new();
+        coordinator.status_indexes.write().generation = u64::MAX;
+        let challenge = sample_challenge(false);
+
+        assert!(matches!(
+            coordinator.record_challenge(&challenge),
+            Err(PorCoordinatorError::StatusGenerationExhausted)
+        ));
+        assert!(coordinator.records.is_empty());
+        assert_eq!(coordinator.status_indexes.read().generation, u64::MAX);
     }
 
     #[test]
@@ -5371,14 +4963,24 @@ mod tests {
             fn record_challenge(
                 &self,
                 challenge: &PorChallengeV1,
-            ) -> Result<(), sorafs_node::PorTrackerError> {
+            ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1> {
                 let mut recorded = self.recorded.lock();
                 match recorded.as_ref() {
-                    Some(existing) if existing == challenge => Ok(()),
-                    Some(_) => Err(sorafs_node::PorTrackerError::ChallengeConflict),
+                    Some(existing) if existing == challenge => Ok(PorStatusAuthorityUpdateV1 {
+                        generation: 2,
+                        status: ChallengeRecord::from_challenge(challenge.clone()).to_status(),
+                        removed_challenge_ids: Vec::new(),
+                    }),
+                    Some(_) => Err(PorMutationFailureV1::no_mutation(
+                        sorafs_node::PorTrackerError::ChallengeConflict,
+                    )),
                     None => {
                         *recorded = Some(challenge.clone());
-                        Ok(())
+                        Ok(PorStatusAuthorityUpdateV1 {
+                            generation: 2,
+                            status: ChallengeRecord::from_challenge(challenge.clone()).to_status(),
+                            removed_challenge_ids: Vec::new(),
+                        })
                     }
                 }
             }

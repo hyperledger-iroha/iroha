@@ -1672,6 +1672,8 @@ def validate_runner_context_evidence_plan(
     known_kinds: Mapping[str, Any],
     evidence_contract: Mapping[str, Mapping[str, Any]],
     evidence_required_fields: Mapping[str, Sequence[str]],
+    external_evidence: Mapping[str, str] | None = None,
+    external_evidence_fields: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Validate a schema-closed plan with reviewed deployment context."""
 
@@ -1724,6 +1726,44 @@ def validate_runner_context_evidence_plan(
             errors.extend(deployment_context_errors)
     if rendered_context != dict(deployment_context):
         errors.append(f"{prefix} deployment_context must match args")
+
+    if external_evidence is not None:
+        rendered_external_evidence = rendered.get("external_evidence")
+        if not isinstance(rendered_external_evidence, Mapping):
+            errors.append(f"{prefix} external_evidence must be an object")
+        else:
+            emitted: set[str] = set()
+            for kind_name, path in rendered_external_evidence.items():
+                kind_label = canonical_runner_plan_string(kind_name)
+                if kind_label is None:
+                    _append_once(
+                        errors,
+                        emitted,
+                        f"{prefix} external_evidence keys must be canonical kind names",
+                    )
+                    continue
+                if kind_label not in known_kinds:
+                    _append_once(
+                        errors,
+                        emitted,
+                        f"{prefix} external_evidence keys must use known kind names",
+                    )
+                elif kind_label not in external_evidence_fields:
+                    _append_once(
+                        errors,
+                        emitted,
+                        f"{prefix} external_evidence must contain only configured evidence fields",
+                    )
+                if canonical_runner_plan_string(path) is None:
+                    _append_once(
+                        errors,
+                        emitted,
+                        f"{prefix} external_evidence values must be canonical strings",
+                    )
+            if set(rendered_external_evidence) != external_evidence_fields:
+                errors.append(f"{prefix} external_evidence must match configured fields")
+        if rendered_external_evidence != dict(external_evidence):
+            errors.append(f"{prefix} external_evidence must match args")
 
     errors.extend(
         _validate_runner_evidence_contract(

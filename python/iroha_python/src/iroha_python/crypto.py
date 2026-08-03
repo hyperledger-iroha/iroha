@@ -337,6 +337,20 @@ if TYPE_CHECKING:
             ...
 
         @staticmethod
+        def unshield_prepared(
+            asset_definition_id: str,
+            to_account_id: str,
+            public_amount: str,
+            inputs: Iterable[FixedBytesLike],
+            proof: Mapping[str, Any],
+            *,
+            root_hint: Optional[FixedBytesLike] = None,
+        ) -> Instruction:
+            """Build the output-free first-release unshield instruction."""
+
+            ...
+
+        @staticmethod
         def issue_replication_order(
             order_id: str,
             order_payload: str,
@@ -430,6 +444,27 @@ else:
             return _NativeInstruction.cancel_asset_lock(
                 _require_cancel_asset_lock_id(escrow_id),
                 expected_remaining_amount,
+            )
+
+        @staticmethod
+        def unshield_prepared(
+            asset_definition_id: str,
+            to_account_id: str,
+            public_amount: str,
+            inputs: Iterable[FixedBytesLike],
+            proof: Mapping[str, Any],
+            *,
+            root_hint: Optional[FixedBytesLike] = None,
+        ) -> Any:
+            """Build the output-free first-release unshield instruction."""
+
+            return _NativeInstruction.unshield_prepared(
+                asset_definition_id,
+                to_account_id,
+                public_amount,
+                inputs,
+                proof,
+                root_hint=root_hint,
             )
 
         @staticmethod

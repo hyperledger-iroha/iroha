@@ -239,6 +239,7 @@ from .sorafs import (
 from .sorafs_hedging_billing import (
     encode_sorafs_billing_acknowledgement_proof_v1,
 )
+from .sorafs_por import normalize_cursor as _normalize_sorafs_por_cursor
 from .stream_events import EventCursor, SseEvent, SseStreamError, WebSocketEvent
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -911,16 +912,6 @@ def _dedupe_strings(values: Iterable[str]) -> List[str]:
         if value not in deduped:
             deduped.append(value)
     return deduped
-
-
-def _response_text(response: requests.Response) -> str:
-    return response.text.strip() if response.text else ""
-
-
-def _response_has_network_prefix_error(response: requests.Response) -> bool:
-    return response.status_code == 400 and "ERR_UNEXPECTED_NETWORK_PREFIX" in _response_text(
-        response
-    )
 
 
 def _extract_page_items(payload: Any) -> List[Mapping[str, Any]]:
@@ -1644,6 +1635,9 @@ def _normalize_sorafs_reputation_provider_id(value: Any, context: str) -> str:
 _SORAFS_REPUTATION_RESPONSE_MAX_BYTES = 4_194_304
 _SORAFS_REPUTATION_SSE_MAX_EVENT_BYTES = 65_536
 _SORAFS_REPUTATION_U64_MAX = (1 << 64) - 1
+_SORAFS_POR_PAGE_DEFAULT_LIMIT = 100
+_SORAFS_POR_PAGE_MAX_LIMIT = 1_000
+_SORAFS_POR_PAGE_MAX_BYTES = 4_194_304
 _SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES = 1_048_576
 _SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES = 23_068_672
 _SORAFS_REPUTATION_SNAPSHOT_FIELDS = frozenset(
@@ -3083,7 +3077,8 @@ def _build_sorafs_por_status_params(
     epoch: Optional[int],
     status: Optional[str],
     limit: Optional[int],
-    page_token_hex: Optional[str],
+    max_bytes: Optional[int],
+    cursor: Optional[str],
 ) -> Optional[Dict[str, Any]]:
     params: Dict[str, Any] = {}
     if manifest_hex is not None:
@@ -3103,22 +3098,46 @@ def _build_sorafs_por_status_params(
         if not trimmed:
             raise ValueError("sorafs_por_status.status must be non-empty")
         params["status"] = trimmed
-    if limit is not None:
-        params["limit"] = _normalize_positive_int(
-            limit, "sorafs_por_status.limit", allow_zero=False
+    normalized_limit = _normalize_positive_int(
+        _SORAFS_POR_PAGE_DEFAULT_LIMIT if limit is None else limit,
+        "sorafs_por_status.limit",
+        allow_zero=False,
+    )
+    if normalized_limit > _SORAFS_POR_PAGE_MAX_LIMIT:
+        raise ValueError(
+            f"sorafs_por_status.limit must be at most {_SORAFS_POR_PAGE_MAX_LIMIT}"
         )
-    if page_token_hex is not None:
-        params["page_token"] = _normalize_hex_string(
-            page_token_hex, "sorafs_por_status.page_token_hex", expected_length=64
+    params["limit"] = normalized_limit
+    normalized_max_bytes = _normalize_positive_int(
+        _SORAFS_POR_PAGE_MAX_BYTES if max_bytes is None else max_bytes,
+        "sorafs_por_status.max_bytes",
+        allow_zero=False,
+    )
+    if normalized_max_bytes > _SORAFS_POR_PAGE_MAX_BYTES:
+        raise ValueError(
+            f"sorafs_por_status.max_bytes must be at most {_SORAFS_POR_PAGE_MAX_BYTES}"
         )
-    return params or None
+    params["max_bytes"] = normalized_max_bytes
+    if cursor is not None:
+        params["cursor"] = _normalize_sorafs_por_cursor(
+            cursor, "sorafs_por_status.cursor"
+        )
+    return params
 
 
 def _build_sorafs_por_export_params(
     start_epoch: Optional[int],
     end_epoch: Optional[int],
+    limit: Optional[int],
+    max_bytes: Optional[int],
+    cursor: Optional[str],
 ) -> Optional[Dict[str, Any]]:
     params: Dict[str, Any] = {}
+    if (start_epoch is None) != (end_epoch is None):
+        raise ValueError(
+            "sorafs_por_export.start_epoch and sorafs_por_export.end_epoch "
+            "must be supplied together"
+        )
     if start_epoch is not None:
         params["start_epoch"] = _normalize_positive_int(
             start_epoch, "sorafs_por_export.start_epoch", allow_zero=False
@@ -3127,7 +3146,31 @@ def _build_sorafs_por_export_params(
         params["end_epoch"] = _normalize_positive_int(
             end_epoch, "sorafs_por_export.end_epoch", allow_zero=False
         )
-    return params or None
+    normalized_limit = _normalize_positive_int(
+        _SORAFS_POR_PAGE_DEFAULT_LIMIT if limit is None else limit,
+        "sorafs_por_export.limit",
+        allow_zero=False,
+    )
+    if normalized_limit > _SORAFS_POR_PAGE_MAX_LIMIT:
+        raise ValueError(
+            f"sorafs_por_export.limit must be at most {_SORAFS_POR_PAGE_MAX_LIMIT}"
+        )
+    params["limit"] = normalized_limit
+    normalized_max_bytes = _normalize_positive_int(
+        _SORAFS_POR_PAGE_MAX_BYTES if max_bytes is None else max_bytes,
+        "sorafs_por_export.max_bytes",
+        allow_zero=False,
+    )
+    if normalized_max_bytes > _SORAFS_POR_PAGE_MAX_BYTES:
+        raise ValueError(
+            f"sorafs_por_export.max_bytes must be at most {_SORAFS_POR_PAGE_MAX_BYTES}"
+        )
+    params["max_bytes"] = normalized_max_bytes
+    if cursor is not None:
+        params["cursor"] = _normalize_sorafs_por_cursor(
+            cursor, "sorafs_por_export.cursor"
+        )
+    return params
 
 
 _CRYPTO_MODULE: Optional[ModuleType] = None
@@ -3499,45 +3542,80 @@ class ExplorerAccountQrSnapshot:
         )
 
 
-@dataclass(frozen=True)
-class ExplorerPaginationMeta:
-    """Pagination metadata returned by explorer list endpoints."""
+_EXPLORER_CURSOR_MAX_LENGTH = 1_424
+_EXPLORER_CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-    page: int
-    per_page: int
-    total_pages: int
-    total_items: int
+
+def _normalize_explorer_cursor(value: Any, label: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{label} must be a string")
+    if not value or len(value) > _EXPLORER_CURSOR_MAX_LENGTH:
+        raise ValueError(f"{label} must contain 1..{_EXPLORER_CURSOR_MAX_LENGTH} characters")
+    if _EXPLORER_CURSOR_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{label} must be canonical base64url without padding")
+    padding = "=" * ((4 - len(value) % 4) % 4)
+    try:
+        decoded = base64.b64decode(
+            value + padding,
+            altchars=b"-_",
+            validate=True,
+        )
+    except (binascii.Error, ValueError) as error:
+        raise ValueError(f"{label} must be canonical base64url without padding") from error
+    if base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
+        raise ValueError(f"{label} must be canonical base64url without padding")
+    return value
+
+
+def _normalize_explorer_limit(value: Any, label: str) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{label} must be an integer")
+    if value < 1 or value > 100:
+        raise ValueError(f"{label} must be between 1 and 100")
+    return value
+
+
+@dataclass(frozen=True)
+class ExplorerCursorMeta:
+    """Strict seek-cursor metadata returned by world-backed Explorer lists."""
+
+    limit: int
+    next_cursor: Optional[str]
+    has_more: bool
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerPaginationMeta":
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerCursorMeta":
         if not isinstance(payload, Mapping):
-            raise TypeError("explorer pagination payload must be an object")
-        page = _coerce_int(payload.get("page"), "explorer_pagination.page")
-        per_page = _coerce_int(payload.get("per_page"), "explorer_pagination.per_page")
-        total_pages = _coerce_int(
-            payload.get("total_pages"),
-            "explorer_pagination.total_pages",
-            allow_zero=True,
+            raise TypeError("explorer cursor pagination payload must be an object")
+        expected = {"limit", "next_cursor", "has_more"}
+        actual = set(payload)
+        if actual != expected:
+            unknown = sorted(str(key) for key in actual - expected)
+            missing = sorted(expected - actual)
+            raise TypeError(
+                "explorer cursor pagination fields must be exactly "
+                f"{sorted(expected)}; missing={missing}, unknown={unknown}"
+            )
+        limit = _normalize_explorer_limit(
+            payload["limit"],
+            "explorer_cursor_pagination.limit",
         )
-        total_items = _coerce_int(
-            payload.get("total_items"),
-            "explorer_pagination.total_items",
-            allow_zero=True,
+        if limit is None:
+            raise TypeError("explorer_cursor_pagination.limit must be an integer")
+        next_cursor = _normalize_explorer_cursor(
+            payload["next_cursor"],
+            "explorer_cursor_pagination.next_cursor",
         )
-        if page is None:
-            raise TypeError("explorer pagination missing numeric `page` field")
-        if per_page is None:
-            raise TypeError("explorer pagination missing numeric `per_page` field")
-        if total_pages is None:
-            raise TypeError("explorer pagination missing numeric `total_pages` field")
-        if total_items is None:
-            raise TypeError("explorer pagination missing numeric `total_items` field")
-        return cls(
-            page=page,
-            per_page=per_page,
-            total_pages=total_pages,
-            total_items=total_items,
-        )
+        has_more = payload["has_more"]
+        if not isinstance(has_more, bool):
+            raise TypeError("explorer_cursor_pagination.has_more must be a boolean")
+        if has_more != (next_cursor is not None):
+            raise ValueError("explorer_cursor_pagination.has_more must match next_cursor presence")
+        return cls(limit=limit, next_cursor=next_cursor, has_more=has_more)
 
 
 @dataclass(frozen=True)
@@ -3615,26 +3693,36 @@ class ExplorerRwaRecord:
 
 @dataclass(frozen=True)
 class ExplorerRwasPage:
-    """Paginated explorer RWA list returned by `/v1/explorer/rwas`."""
+    """Bounded cursor page returned by `/v1/explorer/rwas`."""
 
-    pagination: ExplorerPaginationMeta
+    pagination: ExplorerCursorMeta
     items: List[ExplorerRwaRecord]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerRwasPage":
         if not isinstance(payload, Mapping):
             raise TypeError("explorer RWA page payload must be an object")
+        expected = {"pagination", "items"}
+        actual = set(payload)
+        if actual != expected:
+            unknown = sorted(str(key) for key in actual - expected)
+            missing = sorted(expected - actual)
+            raise TypeError(
+                "explorer RWA page fields must be exactly "
+                f"{sorted(expected)}; missing={missing}, unknown={unknown}"
+            )
         pagination_payload = payload.get("pagination")
         if not isinstance(pagination_payload, Mapping):
             raise TypeError("explorer RWA page missing object `pagination` field")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
+        pagination = ExplorerCursorMeta.from_payload(pagination_payload)
+        items_payload = payload.get("items")
         if not isinstance(items_payload, list):
             raise TypeError("explorer RWA page `items` must be a list")
+        if len(items_payload) > pagination.limit:
+            raise ValueError("explorer RWA page contains more items than its limit")
         items = [ExplorerRwaRecord.from_payload(entry) for entry in items_payload]
         return cls(
-            pagination=ExplorerPaginationMeta.from_payload(pagination_payload),
+            pagination=pagination,
             items=items,
         )
 
@@ -13632,20 +13720,20 @@ class ToriiClient(_BaseToriiClient):
     def list_explorer_rwas(
         self,
         *,
-        page: Optional[int] = None,
-        per_page: Optional[int] = None,
+        cursor: Optional[str] = None,
+        limit: Optional[int] = None,
         owned_by: Optional[str] = None,
         domain: Optional[str] = None,
     ) -> Mapping[str, Any]:
-        """List explorer RWAs via `GET /v1/explorer/rwas`."""
+        """Fetch one bounded seek page from `GET /v1/explorer/rwas`."""
 
         params: Dict[str, Any] = {}
-        page_value = _coerce_int(page, "list_explorer_rwas.page")
-        if page_value is not None:
-            params["page"] = page_value
-        per_page_value = _coerce_int(per_page, "list_explorer_rwas.per_page")
-        if per_page_value is not None:
-            params["per_page"] = per_page_value
+        cursor_value = _normalize_explorer_cursor(cursor, "list_explorer_rwas.cursor")
+        if cursor_value is not None:
+            params["cursor"] = cursor_value
+        limit_value = _normalize_explorer_limit(limit, "list_explorer_rwas.limit")
+        if limit_value is not None:
+            params["limit"] = limit_value
         owned_by_value = _normalize_optional_string(owned_by, "list_explorer_rwas.owned_by")
         if owned_by_value is not None:
             params["owned_by"] = owned_by_value
@@ -13663,21 +13751,22 @@ class ToriiClient(_BaseToriiClient):
             raise RuntimeError("explorer RWA endpoint returned no payload")
         if not isinstance(payload, Mapping):
             raise RuntimeError("explorer RWA endpoint returned malformed payload")
+        ExplorerRwasPage.from_payload(payload)
         return payload
 
     def list_explorer_rwas_typed(
         self,
         *,
-        page: Optional[int] = None,
-        per_page: Optional[int] = None,
+        cursor: Optional[str] = None,
+        limit: Optional[int] = None,
         owned_by: Optional[str] = None,
         domain: Optional[str] = None,
     ) -> ExplorerRwasPage:
         """Typed wrapper for :meth:`list_explorer_rwas`."""
 
         payload = self.list_explorer_rwas(
-            page=page,
-            per_page=per_page,
+            cursor=cursor,
+            limit=limit,
             owned_by=owned_by,
             domain=domain,
         )
@@ -15311,13 +15400,14 @@ class ToriiClient(_BaseToriiClient):
         epoch: Optional[int] = None,
         status: Optional[str] = None,
         limit: Optional[int] = None,
-        page_token_hex: Optional[str] = None,
+        max_bytes: Optional[int] = None,
+        cursor: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> bytes:
         """Return Norito-encoded `PorChallengeStatusV1` records for the given filters."""
 
         params = _build_sorafs_por_status_params(
-            manifest_hex, provider_hex, epoch, status, limit, page_token_hex
+            manifest_hex, provider_hex, epoch, status, limit, max_bytes, cursor
         )
         response = self._request(
             "GET",
@@ -15334,11 +15424,16 @@ class ToriiClient(_BaseToriiClient):
         *,
         start_epoch: Optional[int] = None,
         end_epoch: Optional[int] = None,
+        limit: Optional[int] = None,
+        max_bytes: Optional[int] = None,
+        cursor: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> bytes:
         """Return a Norito-exported history for the supplied epoch range."""
 
-        params = _build_sorafs_por_export_params(start_epoch, end_epoch)
+        params = _build_sorafs_por_export_params(
+            start_epoch, end_epoch, limit, max_bytes, cursor
+        )
         response = self._request(
             "GET",
             "/v1/sorafs/por/export",
@@ -17553,13 +17648,13 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         definition_id: str,
-        owner: str,
-        name: Optional[str] = None,
+        owning_domain: Optional[str],
+        balance_scope_policy: str,
+        name: str,
         description: Optional[str] = None,
         alias: Optional[str] = None,
         scale: Optional[Union[int, str]] = None,
         mintable: Optional[str] = "Infinitely",
-        balance_scope_policy: Optional[str] = None,
         confidential_policy: Optional[str] = None,
         asset_metadata: Optional[Mapping[str, Any]] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
@@ -17567,7 +17662,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Register a quantity asset definition and optionally wait for commit."""
+        """Register an asset owned by ``authority`` and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
@@ -17577,7 +17672,7 @@ class ToriiClient(_BaseToriiClient):
         )
         draft.register_asset_definition(
             definition_id,
-            self._native_transaction_account_id(owner, "owner"),
+            owning_domain=owning_domain,
             name=name,
             description=description,
             alias=alias,
@@ -18600,14 +18695,17 @@ class ToriiClient(_BaseToriiClient):
         public_amount: QuantityLike,
         inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
         proof: Mapping[str, Any],
-        outputs: Optional[Iterable[Union[str, bytes, bytearray, memoryview]]] = None,
         root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Submit a prepared ZK unshield transaction."""
+        """Submit an output-free first-release ZK unshield transaction.
+
+        Private outputs are derived from the verified statement; the retired
+        caller-supplied ``outputs`` keyword is intentionally unsupported.
+        """
 
         draft = self._transaction_draft(
             chain_id=chain_id,
@@ -18621,7 +18719,6 @@ class ToriiClient(_BaseToriiClient):
             public_amount,
             inputs=inputs,
             proof=proof,
-            outputs=outputs,
             root_hint=root_hint,
         )
         return self._submit_transaction_draft_result(
@@ -18633,69 +18730,19 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def account_id_variants(
-        account_id: str,
-        *,
-        include_taira_prefix_variant: bool = False,
-    ) -> List[str]:
-        """Return account-id literals to try for REST reads.
-
-        Taira public ingress has historically exposed both ``testu`` and
-        ``sorau`` I105 sentinels during rollout windows. SDK callers can opt in
-        to trying the alternate sentinel without copying that compatibility
-        rule into application code.
-        """
-
-        literal = _require_non_empty_string(account_id, "account_id")
-        variants = [literal]
-        if include_taira_prefix_variant:
-            if literal.startswith("testu"):
-                variants.append(f"sorau{literal[5:]}")
-            elif literal.startswith("sorau"):
-                variants.append(f"testu{literal[5:]}")
-        return _dedupe_strings(variants)
-
-    @staticmethod
-    def _normalize_account_id_variants(
-        account_id: str,
-        account_id_variants: Optional[Iterable[str]],
-        *,
-        include_taira_prefix_variant: bool,
-    ) -> List[str]:
-        if account_id_variants is None:
-            return ToriiClient.account_id_variants(
-                account_id,
-                include_taira_prefix_variant=include_taira_prefix_variant,
-            )
-        variants = [
-            _require_non_empty_string(item, "account_id_variants[]") for item in account_id_variants
-        ]
-        if account_id not in variants:
-            variants.insert(0, account_id)
-        return _dedupe_strings(variants)
-
     def _account_record_from_listing(
         self,
         account_id: str,
         *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
         limit: int = 200,
     ) -> Optional[Mapping[str, Any]]:
-        candidates = set(
-            self._normalize_account_id_variants(
-                account_id,
-                account_id_variants,
-                include_taira_prefix_variant=include_taira_prefix_variant,
-            )
-        )
         offset = 0
         while True:
             payload = self.list_accounts(limit=limit, offset=offset)
             items = _extract_page_items(payload)
             for item in items:
                 candidate = str(item.get("id") or item.get("account_id") or "")
-                if candidate in candidates:
+                if candidate == account_id:
                     return item
             batch_size = len(items)
             total = _page_total(payload)
@@ -18708,86 +18755,51 @@ class ToriiClient(_BaseToriiClient):
     def find_account(
         self,
         account_id: str,
-        *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
     ) -> Optional[Mapping[str, Any]]:
         """Fetch an account by id, returning ``None`` when it is absent.
 
-        The helper retries supplied account-id variants and falls back to the
-        paginated account list when Torii reports route or network-prefix
-        compatibility errors.
+        The helper falls back to the paginated account list only when the
+        exact-id route is unavailable.
         """
 
-        variants = self._normalize_account_id_variants(
-            account_id,
-            account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
+        literal = _require_non_empty_string(account_id, "account_id")
+        response = self._request(
+            "GET",
+            f"/v1/accounts/{quote(literal, safe='')}",
         )
-        saw_network_prefix_error = False
-        for candidate in variants:
-            response = self._request(
-                "GET",
-                f"/v1/accounts/{quote(candidate, safe='')}",
-            )
-            if response.status_code == 404:
-                continue
-            if response.status_code == 200:
-                payload = self._maybe_json(response)
-                if not isinstance(payload, Mapping):
-                    raise RuntimeError("account endpoint returned non-object payload")
-                return payload
-            if (
-                response.status_code == 503
-                and response.headers.get("x-iroha-reject-code") == "route_unavailable"
-            ):
-                return self._account_record_from_listing(
-                    account_id,
-                    account_id_variants=variants,
-                )
-            if _response_has_network_prefix_error(response):
-                saw_network_prefix_error = True
-                continue
-            self._expect_status(response, {200, 404})
-        if saw_network_prefix_error:
-            return self._account_record_from_listing(
-                account_id,
-                account_id_variants=variants,
-            )
+        if response.status_code == 404:
+            return None
+        if response.status_code == 200:
+            payload = self._maybe_json(response)
+            if not isinstance(payload, Mapping):
+                raise RuntimeError("account endpoint returned non-object payload")
+            return payload
+        if (
+            response.status_code == 503
+            and response.headers.get("x-iroha-reject-code") == "route_unavailable"
+        ):
+            return self._account_record_from_listing(literal)
+        self._expect_status(response, {200, 404})
         return None
 
     def account_exists(
         self,
         account_id: str,
-        *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
     ) -> bool:
         """Return whether Torii can see the account."""
 
-        return (
-            self.find_account(
-                account_id,
-                account_id_variants=account_id_variants,
-                include_taira_prefix_variant=include_taira_prefix_variant,
-            )
-            is not None
-        )
+        return self.find_account(account_id) is not None
 
     def find_account_assets(
         self,
         account_id: str,
         *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
         asset_id: Optional[str] = None,
     ) -> Optional[List[Mapping[str, Any]]]:
         """Return raw account asset entries, or ``None`` when the account is absent."""
 
-        result = self._find_account_assets_for_variants(
+        result = self._find_account_assets(
             account_id,
-            account_id_variants=account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
             asset_id=asset_id,
         )
         if result is None:
@@ -18795,49 +18807,33 @@ class ToriiClient(_BaseToriiClient):
         _resolved_account_id, items = result
         return items
 
-    def _find_account_assets_for_variants(
+    def _find_account_assets(
         self,
         account_id: str,
         *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
         asset_id: Optional[str] = None,
     ) -> Optional[Tuple[str, List[Mapping[str, Any]]]]:
-        variants = self._normalize_account_id_variants(
-            account_id,
-            account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
-        )
+        literal = _require_non_empty_string(account_id, "account_id")
         params: Dict[str, Any] = {}
         asset_id_value = _normalize_optional_string(asset_id, "find_account_assets.asset_id")
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
-        last_network_prefix_error: Optional[requests.Response] = None
-        for candidate in variants:
-            response = self._request(
-                "GET",
-                f"/v1/accounts/{quote(candidate, safe='')}/assets",
-                params=params or None,
-            )
-            if response.status_code == 404:
-                continue
-            if response.status_code == 200:
-                return candidate, _extract_page_items(self._maybe_json(response))
-            if _response_has_network_prefix_error(response):
-                last_network_prefix_error = response
-                continue
-            self._expect_status(response, {200, 404})
-        if last_network_prefix_error is not None:
-            self._expect_status(last_network_prefix_error, {200, 404})
+        response = self._request(
+            "GET",
+            f"/v1/accounts/{quote(literal, safe='')}/assets",
+            params=params or None,
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code == 200:
+            return literal, _extract_page_items(self._maybe_json(response))
+        self._expect_status(response, {200, 404})
         return None
 
     def find_account_asset_items(
         self,
         account_id: str,
         asset_definition_id: str,
-        *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
     ) -> List[Mapping[str, Any]]:
         """Return raw asset entries matching an asset definition for an account."""
 
@@ -18845,11 +18841,7 @@ class ToriiClient(_BaseToriiClient):
             asset_definition_id,
             "asset_definition_id",
         )
-        result = self._find_account_assets_for_variants(
-            account_id,
-            account_id_variants=account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
-        )
+        result = self._find_account_assets(account_id)
         if result is None:
             return []
         resolved_account_id, items = result
@@ -18863,9 +18855,6 @@ class ToriiClient(_BaseToriiClient):
         self,
         account_id: str,
         asset_definition_id: str,
-        *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
     ) -> Decimal:
         """Return an exact canonical quantity parsed from account asset listings."""
 
@@ -18873,11 +18862,7 @@ class ToriiClient(_BaseToriiClient):
             asset_definition_id,
             "asset_definition_id",
         )
-        result = self._find_account_assets_for_variants(
-            account_id,
-            account_id_variants=account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
-        )
+        result = self._find_account_assets(account_id)
         if result is None:
             raise RuntimeError(f"account {account_id} not found via Torii REST")
         resolved_account_id, items = result

@@ -24,9 +24,20 @@ import {
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
+import {
+  AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
+} from "./authenticatedBlockProofs.browser.js";
 
 const DEFAULT_SUCCESS_STATUSES = [200];
+const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
+const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
+const EXPLORER_CURSOR_MAX_LIMIT = 100;
+const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
+const EXPLORER_CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
+const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const PRIVACY_CAPABILITIES_REQUEST_OPTION_KEYS = new Set([
   "headers",
   "signal",
@@ -489,6 +500,140 @@ function normalizeQuantityPage(value, context, fields, options) {
   };
 }
 
+function normalizeExplorerAssetDefinitionRecord(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  const fields = [
+    "id",
+    "owning_domain",
+    "mintable",
+    "logo",
+    "metadata",
+    "owned_by",
+    "assets",
+    "total_quantity",
+    "locked_quantity",
+    "circulating_quantity",
+  ];
+  const keys = Object.keys(value);
+  if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
+    throw new TypeError(`${context} has missing or unsupported fields`);
+  }
+  for (const field of ["id", "mintable", "owned_by"]) {
+    const normalized = requireNonEmptyString(value[field], `${context}.${field}`);
+    if (normalized !== value[field]) {
+      throw new TypeError(`${context}.${field} must be an exact string`);
+    }
+  }
+  if (value.owning_domain !== null) {
+    const owningDomain = requireNonEmptyString(
+      value.owning_domain,
+      `${context}.owning_domain`,
+    );
+    if (owningDomain !== value.owning_domain) {
+      throw new TypeError(`${context}.owning_domain must be an exact string or null`);
+    }
+  }
+  for (const field of ["logo", "locked_quantity", "circulating_quantity"]) {
+    if (value[field] !== null && typeof value[field] !== "string") {
+      throw new TypeError(`${context}.${field} must be a string or null`);
+    }
+  }
+  if (!Number.isInteger(value.assets) || value.assets < 0 || value.assets > 0xffff_ffff) {
+    throw new TypeError(`${context}.assets must be a uint32`);
+  }
+  if (!isPlainObject(value.metadata)) {
+    throw new TypeError(`${context}.metadata must be an object`);
+  }
+  const normalized = normalizeQuantityRecord(value, context, ["total_quantity"]);
+  for (const field of ["locked_quantity", "circulating_quantity"]) {
+    if (normalized[field] !== null) {
+      normalized[field] = requireCanonicalQuantity(
+        normalized[field],
+        `${context}.${field}`,
+      );
+    }
+  }
+  return normalized;
+}
+
+function normalizeExplorerCursor(value, context, { nullable = false } = {}) {
+  if (value === null && nullable) return null;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${context} must be a non-empty base64url string`);
+  }
+  const remainder = value.length % 4;
+  const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
+  const hasNonCanonicalTrailingBits =
+    (remainder === 2 && (trailingSextet & 0x0f) !== 0) ||
+    (remainder === 3 && (trailingSextet & 0x03) !== 0);
+  if (
+    value.length > EXPLORER_CURSOR_MAX_LENGTH ||
+    remainder === 1 ||
+    !EXPLORER_CURSOR_PATTERN.test(value) ||
+    hasNonCanonicalTrailingBits
+  ) {
+    throw new TypeError(
+      `${context} must be canonical base64url without padding and at most ${EXPLORER_CURSOR_MAX_LENGTH} characters`,
+    );
+  }
+  return value;
+}
+
+function requireExactExplorerCursorFields(record, expectedFields, context) {
+  const expected = new Set(expectedFields);
+  const unknown = Object.keys(record).find((field) => !expected.has(field));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknown}`);
+  }
+  const missing = expectedFields.find(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  if (missing !== undefined) {
+    throw new TypeError(`${context} is missing required field ${missing}`);
+  }
+  return record;
+}
+
+function normalizeExplorerCursorMeta(value, context) {
+  const meta = requireObject(value, context);
+  requireExactExplorerCursorFields(meta, ["limit", "next_cursor", "has_more"], context);
+  const limit = normalizePositiveInteger(meta.limit, `${context}.limit`, undefined);
+  if (limit === undefined || limit > EXPLORER_CURSOR_MAX_LIMIT) {
+    throw new TypeError(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+  }
+  if (typeof meta.has_more !== "boolean") {
+    throw new TypeError(`${context}.has_more must be a boolean`);
+  }
+  if (meta.next_cursor === undefined) {
+    throw new TypeError(`${context}.next_cursor must be a string or null`);
+  }
+  const nextCursor = normalizeExplorerCursor(meta.next_cursor, `${context}.next_cursor`, {
+    nullable: true,
+  });
+  if (meta.has_more !== (nextCursor !== null)) {
+    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+  }
+  return { limit, next_cursor: nextCursor, has_more: meta.has_more };
+}
+
+function normalizeExplorerCursorPage(value, context, normalizeItem = (item) => item) {
+  const page = requireObject(value, context);
+  requireExactExplorerCursorFields(page, ["pagination", "items"], context);
+  if (!Array.isArray(page.items)) {
+    throw new TypeError(`${context}.items must be an array`);
+  }
+  const pagination = normalizeExplorerCursorMeta(page.pagination, `${context}.pagination`);
+  if (page.items.length > pagination.limit) {
+    throw new TypeError(`${context}.items must not exceed pagination.limit`);
+  }
+  return {
+    pagination,
+    items: page.items.map((item, index) => normalizeItem(item, index)),
+  };
+}
+
 function normalizePositiveInteger(value, context, fallback) {
   if (value === undefined || value === null) return fallback;
   const numeric = Number(value);
@@ -522,6 +667,29 @@ function normalizeExplorerPagination(options, context) {
     25,
   );
   return { page, per_page: perPage };
+}
+
+function normalizeExplorerCursorPagination(options, context) {
+  for (const removed of ["page", "perPage", "per_page", "offset", "pageSize"]) {
+    if (Object.prototype.hasOwnProperty.call(options, removed)) {
+      throw new TypeError(
+        `${context}.${removed} is not supported; use cursor and limit`,
+      );
+    }
+  }
+  const limit = normalizePositiveInteger(
+    options.limit,
+    `${context}.limit`,
+    EXPLORER_CURSOR_DEFAULT_LIMIT,
+  );
+  if (limit > EXPLORER_CURSOR_MAX_LIMIT) {
+    throw new TypeError(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+  }
+  const params = { limit };
+  if (options.cursor !== undefined && options.cursor !== null) {
+    params.cursor = normalizeExplorerCursor(options.cursor, `${context}.cursor`);
+  }
+  return params;
 }
 
 function normalizeIterablePagination(options, context) {
@@ -647,7 +815,34 @@ function normalizeOptionalBoolean(value, context) {
 }
 
 function normalizeLedgerHeight(value, context) {
-  return normalizePositiveInteger(value, context, undefined);
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new TypeError(
+        `${context} must be a positive safe integer number or an exact decimal string/bigint`,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^[0-9]+$/u.test(trimmed)) {
+      throw new TypeError(`${context} must be a positive decimal integer`);
+    }
+    integer = BigInt(trimmed);
+  } else {
+    throw new TypeError(`${context} must be a positive decimal integer`);
+  }
+  if (integer <= 0n) {
+    throw new TypeError(`${context} must be a positive decimal integer`);
+  }
+  if (integer > MAX_UINT64_BIGINT) {
+    throw new RangeError(
+      `${context} must not exceed ${MAX_UINT64_BIGINT.toString(10)}`,
+    );
+  }
+  return integer.toString(10);
 }
 
 function normalizeLedgerEntryHash(value, context) {
@@ -929,11 +1124,12 @@ function requireExactJsonContentType(contentType, context) {
   }
 }
 
-async function readBoundedResponseText(response, maximumBodyBytes, context) {
+async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
   if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
     throw new TypeError(`${context} response byte-size bound is invalid`);
   }
   const rawContentLength = response?.headers?.get?.("content-length");
+  let declaredLength = null;
   if (rawContentLength !== null && rawContentLength !== undefined) {
     if (
       typeof rawContentLength !== "string"
@@ -943,7 +1139,7 @@ async function readBoundedResponseText(response, maximumBodyBytes, context) {
         `${context} Content-Length must be a canonical unsigned decimal integer`,
       );
     }
-    const declaredLength = Number(rawContentLength);
+    declaredLength = Number(rawContentLength);
     if (
       !Number.isSafeInteger(declaredLength)
       || declaredLength > maximumBodyBytes
@@ -976,13 +1172,16 @@ async function readBoundedResponseText(response, maximumBodyBytes, context) {
       if (!(result.value instanceof Uint8Array)) {
         throw new TypeError(`${context} returned a non-byte response stream chunk`);
       }
+      if (chunks.length >= BOUNDED_RESPONSE_MAX_STREAM_CHUNKS) {
+        throw new RangeError(`${context} returned too many fragmented response chunks`);
+      }
       if (result.value.byteLength > maximumBodyBytes - totalBytes) {
         throw new RangeError(
           `${context} exceeds its ${maximumBodyBytes}-byte response limit`,
         );
       }
       totalBytes += result.value.byteLength;
-      chunks.push(result.value);
+      chunks.push(new Uint8Array(result.value));
     }
   } catch (error) {
     if (!complete && typeof reader.cancel === "function") {
@@ -1003,6 +1202,14 @@ async function readBoundedResponseText(response, maximumBodyBytes, context) {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
+  if (declaredLength !== null && declaredLength !== totalBytes) {
+    throw new TypeError(`${context} Content-Length does not match the response body`);
+  }
+  return bytes;
+}
+
+async function readBoundedResponseText(response, maximumBodyBytes, context) {
+  const bytes = await readBoundedResponseBytes(response, maximumBodyBytes, context);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
@@ -1338,6 +1545,15 @@ export class ToriiBrowserClient {
     if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
       throw new TypeError(`${method} ${path} must return application/x-norito`);
     }
+    if (normalizedOptions.maximumBodyBytes !== undefined) {
+      return Buffer.from(
+        await readBoundedResponseBytes(
+          response,
+          normalizedOptions.maximumBodyBytes,
+          `${method} ${path}`,
+        ),
+      );
+    }
     if (typeof response.arrayBuffer !== "function") {
       throw new TypeError(`${method} ${path} requires an arrayBuffer-capable response`);
     }
@@ -1635,13 +1851,15 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, "listExplorerAccounts options");
     return this._json("GET", "/v1/explorer/accounts", {
       params: {
-        ...normalizeExplorerPagination(opts, "listExplorerAccounts options"),
+        ...normalizeExplorerCursorPagination(opts, "listExplorerAccounts options"),
         domain: opts.domain,
         with_asset: opts.withAsset ?? opts.with_asset,
         address_format: opts.addressFormat ?? opts.address_format,
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeExplorerCursorPage(payload, "explorer accounts response"),
+    );
   }
 
   getExplorerAccount(accountId, options = {}) {
@@ -1656,11 +1874,13 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, "listExplorerDomains options");
     return this._json("GET", "/v1/explorer/domains", {
       params: {
-        ...normalizeExplorerPagination(opts, "listExplorerDomains options"),
+        ...normalizeExplorerCursorPagination(opts, "listExplorerDomains options"),
         owned_by: opts.ownedBy ?? opts.owned_by,
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeExplorerCursorPage(payload, "explorer domains response"),
+    );
   }
 
   getExplorerDomain(domainId, options = {}) {
@@ -1674,15 +1894,18 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, "listExplorerAssets options");
     return this._json("GET", "/v1/explorer/assets", {
       params: {
-        ...normalizeExplorerPagination(opts, "listExplorerAssets options"),
+        ...normalizeExplorerCursorPagination(opts, "listExplorerAssets options"),
         owned_by: opts.ownedBy ?? opts.owned_by,
         definition: opts.definition,
         asset_id: opts.assetId ?? opts.asset_id,
       },
       signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeQuantityPage(payload, "explorer assets response", ["quantity"]),
-    );
+    }).then((payload) => {
+      const context = "explorer assets response";
+      return normalizeExplorerCursorPage(payload, context, (item, index) =>
+        normalizeQuantityRecord(item, `${context}.items[${index}]`, ["value"]),
+      );
+    });
   }
 
   getExplorerAsset(assetId, options = {}) {
@@ -1958,19 +2181,17 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, "listExplorerAssetDefinitions options");
     return this._json("GET", "/v1/explorer/asset-definitions", {
       params: {
-        ...normalizeExplorerPagination(opts, "listExplorerAssetDefinitions options"),
-        domain: opts.domain,
+        ...normalizeExplorerCursorPagination(opts, "listExplorerAssetDefinitions options"),
+        owning_domain: opts.owningDomain ?? opts.owning_domain,
         owned_by: opts.ownedBy ?? opts.owned_by,
       },
       signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeQuantityPage(
-        payload,
-        "explorer asset definitions response",
-        ["total_quantity"],
-        { optional: true },
-      ),
-    );
+    }).then((payload) => {
+      const context = "explorer asset definitions response";
+      return normalizeExplorerCursorPage(payload, context, (item, index) =>
+        normalizeExplorerAssetDefinitionRecord(item, `${context}.items[${index}]`),
+      );
+    });
   }
 
   getExplorerAssetDefinitionEconometrics(assetDefinitionId, options = {}) {
@@ -1991,12 +2212,14 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, "listExplorerNfts options");
     return this._json("GET", "/v1/explorer/nfts", {
       params: {
-        ...normalizeExplorerPagination(opts, "listExplorerNfts options"),
+        ...normalizeExplorerCursorPagination(opts, "listExplorerNfts options"),
         owned_by: opts.ownedBy ?? opts.owned_by,
         domain: opts.domain,
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeExplorerCursorPage(payload, "explorer nfts response"),
+    );
   }
 
   getExplorerNft(nftId, options = {}) {
@@ -2010,14 +2233,21 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, "listExplorerRwas options");
     return this._json("GET", "/v1/explorer/rwas", {
       params: {
-        ...normalizeExplorerPagination(opts, "listExplorerRwas options"),
+        ...normalizeExplorerCursorPagination(opts, "listExplorerRwas options"),
         owned_by: opts.ownedBy ?? opts.owned_by,
         domain: opts.domain,
       },
       signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeQuantityPage(payload, "explorer rwas response", ["quantity", "held_quantity"]),
-    );
+    }).then((payload) => {
+      const context = "explorer rwas response";
+      return normalizeExplorerCursorPage(payload, context, (item, index) =>
+        normalizeQuantityRecord(
+          item,
+          `${context}.items[${index}]`,
+          ["quantity", "held_quantity"],
+        ),
+      );
+    });
   }
 
   getExplorerRwa(rwaId, options = {}) {
@@ -2081,6 +2311,28 @@ export class ToriiBrowserClient {
     });
   }
 
+  /** Fetch the exact canonical result-bearing SignedBlockWire at a finalized height. */
+  async getLedgerExecutedBlockWire(height, options = {}) {
+    const context = "getLedgerExecutedBlockWire options";
+    const opts = requireSupportedOptions(options, context, LEDGER_READ_OPTION_KEYS);
+    const normalizedHeight = normalizeLedgerHeight(
+      height,
+      "getLedgerExecutedBlockWire height",
+    );
+    const bytes = await this._bytes(
+      "GET",
+      `/v1/ledger/block/${normalizedHeight}`,
+      {
+        signal: signalFrom(opts),
+        maximumBodyBytes: AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+      },
+    );
+    if (bytes.byteLength === 0) {
+      throw new TypeError("executed block wire response must not be empty");
+    }
+    return bytes;
+  }
+
   /** Fetch and decode the canonical Norito block inclusion/execution proof. */
   async getLedgerBlockProof(height, entryHash, options = {}) {
     const context = "getLedgerBlockProof options";
@@ -2093,7 +2345,10 @@ export class ToriiBrowserClient {
     const bytes = await this._bytes(
       "GET",
       `/v1/ledger/block/${normalizedHeight}/proof/${normalizedHash}`,
-      { signal: signalFrom(opts) },
+      {
+        signal: signalFrom(opts),
+        maximumBodyBytes: AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
+      },
     );
     return noritoDecodeBlockProofs(bytes);
   }

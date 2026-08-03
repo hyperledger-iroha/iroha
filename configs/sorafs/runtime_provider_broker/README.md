@@ -57,16 +57,19 @@ directory with the service UID and mode 0700, passes only the fixed public
 catalog path, and gives the process no environment-based provider selector.
 The broker is the sole unit that manages this directory; the validator's
 separate `/run/iroha` directory has an independent lifetime. The broker
-directory is recreated across broker restarts. The unit uses
-Type=notify: the deployment-owned binary must connect its
-RuntimeProviderBrokerExecutableV1 readiness callback to systemd READY=1 only
-after exact backend qualification and fixed-socket publication. This makes the
-consumer After ordering a readiness boundary instead of merely a process-spawn
-boundary. Provider packages that need a specific device, read-only vendor
-library, or durable sealed-store path must add a reviewed systemd drop-in; do
-not weaken the base unit or place credentials in Environment or
-EnvironmentFile entries. The base unit also sets `LimitCORE=0` so provider
-process memory is not written to a core image.
+directory is recreated across broker restarts. The unit uses `Type=notify`:
+the deployment-owned binary must call
+`RuntimeProviderBrokerExecutableV1::serve_until_shutdown_signal_with_systemd_notify`.
+That entry resolves systemd's `NOTIFY_SOCKET` before provider qualification and
+sends `READY=1` only after exact backend qualification and fixed-socket
+publication. A missing, malformed, unreachable, or disappearing notification
+socket fails closed and tears down the broker endpoint before accepting a
+client. This makes the consumer `After` ordering a readiness boundary instead
+of merely a process-spawn boundary. Provider packages that need a specific
+device, read-only vendor library, or durable sealed-store path must add a
+reviewed systemd drop-in; do not weaken the base unit or place credentials in
+Environment or EnvironmentFile entries. The base unit also sets `LimitCORE=0`
+so provider process memory is not written to a core image.
 
 Both checked-in Linux consumer dependencies are mandatory in an enabled
 production package:

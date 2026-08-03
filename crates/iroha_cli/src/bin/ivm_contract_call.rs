@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn contract_call_metadata_never_duplicates_the_argument_record_as_json() {
         let address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let expected_code_hash = Hash::new(b"metadata-contract-code");

@@ -1,6 +1,4 @@
-//! Terminal body-pipeline and replay refinement cases.
-
-use super::*;
+// Terminal body-pipeline and replay refinement cases.
 
 #[test]
 fn decision_ack_retires_competing_owners_and_keeps_one_body_pipeline() {

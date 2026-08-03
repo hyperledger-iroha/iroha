@@ -5,7 +5,8 @@
 //! - Domain tags for leaves:
 //!   - `TransactionEntrypoint`: "`iroha:merkle:tx_entry:v1\0`"
 //!   - `TransactionResult`:    "`iroha:merkle:tx_result:v1\0`"
-//! - Inner nodes: Hash(left || right)
+//!   - generic Merkle boundary: "`iroha:merkle:leaf:v1\0`"
+//! - Inner nodes: Hash("`iroha:merkle:internal:v1\0`" || left || right)
 //! - Odd leaf: promote left (no duplication)
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
@@ -55,20 +56,20 @@ fn merkle_tx_entry_golden_vectors() {
     let empty: MerkleTree<[u8; 32]> = [].into_iter().collect();
     assert!(empty.root().is_none());
 
-    // One leaf → root = leaf1
+    // One leaf → root = Hash(generic-leaf-domain || leaf1)
     let one: MerkleTree<[u8; 32]> = [l1].into_iter().collect();
     let root1 = one.root().expect("root");
     assert_eq!(
         hex_upper(&Hash::from(root1)),
-        "39E2385BD17D8EEB4E2D188E04462A667B63D05FD78AD83E8382448DA92586AF"
+        "456F653A4B11D8365FD11F548D358190F962DB4F08029CD11B18761E735FB9E9"
     );
 
-    // Two leaves → Hash(l1 || l2)
+    // Two leaves → Hash(internal-domain || domain(l1) || domain(l2))
     let two: MerkleTree<[u8; 32]> = [l1, l2].into_iter().collect();
     let root2 = two.root().expect("root");
     assert_eq!(
         hex_upper(&Hash::from(root2)),
-        "A81EF4E7656DEFA72CE9FF41A6117C7B437432B124BFCD9D06A3105486200C05"
+        "8FAC977219F39BC9814C27646BCDC4E596495298F1B91591DCD0F5FF9A8B83FB"
     );
 
     // Three leaves (odd promotion on rightmost)
@@ -76,7 +77,7 @@ fn merkle_tx_entry_golden_vectors() {
     let root3 = three.root().expect("root");
     assert_eq!(
         hex_upper(&Hash::from(root3)),
-        "0F25401F121BBCDAFBFC5F28F1E9CEB97C834A2BB5BDFD9ADD1620675D562C4D"
+        "CA262FB43518D436EB2911D23EE515E691F8D3BEECE65C17681CB4CCA44EC7C7"
     );
 
     // Four leaves (perfect tree)
@@ -84,7 +85,7 @@ fn merkle_tx_entry_golden_vectors() {
     let root4 = four.root().expect("root");
     assert_eq!(
         hex_upper(&Hash::from(root4)),
-        "E03FF6472B560DEAB6F3A98AC11EAA69CBB6114E835FD53184C0532723709D83"
+        "A43A7568FBE96C94407E0C3DDF7AC2AB34C3861EA0FF0A102B75D90B212FA92B"
     );
 
     // Five leaves (deeper tree)
@@ -92,6 +93,6 @@ fn merkle_tx_entry_golden_vectors() {
     let root5 = five.root().expect("root");
     assert_eq!(
         hex_upper(&Hash::from(root5)),
-        "D3F4166CD99A917CEFDBD95891BCE2F41E126DF4FB3827D5EFF01BCBC5A2587B"
+        "B7152435918EA5C83D1CBE093F9FD720BF1A70CA1AD895ACA7DD08F798D91B39"
     );
 }

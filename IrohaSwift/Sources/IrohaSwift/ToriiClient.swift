@@ -4435,6 +4435,104 @@ public struct ToriiExplorerPaginationMeta: Decodable, Sendable, Equatable {
     }
 }
 
+private let toriiExplorerCursorMaxLength = 1_424
+
+private func normalizeToriiExplorerCursor(_ raw: String?, field: String) throws -> String? {
+    guard let raw else {
+        return nil
+    }
+    guard !raw.isEmpty,
+          raw.utf8.count <= toriiExplorerCursorMaxLength,
+          raw.utf8.allSatisfy({ byte in
+              (48...57).contains(byte)
+                  || (65...90).contains(byte)
+                  || (97...122).contains(byte)
+                  || byte == 45
+                  || byte == 95
+          }) else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be canonical base64url without padding"
+        )
+    }
+    let remainder = raw.utf8.count % 4
+    guard remainder != 1 else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be canonical base64url without padding"
+        )
+    }
+    var standard = raw.replacingOccurrences(of: "-", with: "+")
+        .replacingOccurrences(of: "_", with: "/")
+    if remainder != 0 {
+        standard.append(String(repeating: "=", count: 4 - remainder))
+    }
+    guard let decoded = Data(base64Encoded: standard) else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be canonical base64url without padding"
+        )
+    }
+    let canonical = decoded.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    guard canonical == raw else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be canonical base64url without padding"
+        )
+    }
+    return raw
+}
+
+/// Strict seek-cursor metadata returned by world-backed Explorer lists.
+public struct ToriiExplorerCursorMeta: Decodable, Sendable, Equatable {
+    public let limit: UInt32
+    public let nextCursor: String?
+    public let hasMore: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case nextCursor = "next_cursor"
+        case hasMore = "has_more"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["limit", "next_cursor", "has_more"],
+            debugName: "Explorer cursor pagination"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        limit = try container.decode(UInt32.self, forKey: .limit)
+        guard (1...100).contains(limit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .limit,
+                in: container,
+                debugDescription: "Explorer cursor pagination limit must be between 1 and 100"
+            )
+        }
+        guard container.contains(.nextCursor) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.nextCursor,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "Explorer cursor pagination requires next_cursor"
+                )
+            )
+        }
+        nextCursor = try normalizeToriiExplorerCursor(
+            container.decodeIfPresent(String.self, forKey: .nextCursor),
+            field: "Explorer cursor pagination next_cursor"
+        )
+        hasMore = try container.decode(Bool.self, forKey: .hasMore)
+        guard hasMore == (nextCursor != nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .hasMore,
+                in: container,
+                debugDescription: "Explorer cursor pagination has_more must match next_cursor presence"
+            )
+        }
+    }
+}
+
 /// Instruction payload wrapper returned by `/v1/explorer/instructions`.
 public struct ToriiExplorerInstructionBox: Decodable, Sendable, Equatable {
     public let encoded: String?
@@ -4594,10 +4692,33 @@ public struct ToriiExplorerRwaRecord: Decodable, Sendable, Equatable {
     }
 }
 
-/// Paginated explorer RWA lot list returned by `/v1/explorer/rwas`.
+/// Bounded cursor page returned by `/v1/explorer/rwas`.
 public struct ToriiExplorerRwasPage: Decodable, Sendable, Equatable {
-    public let pagination: ToriiExplorerPaginationMeta
+    public let pagination: ToriiExplorerCursorMeta
     public let items: [ToriiExplorerRwaRecord]
+
+    private enum CodingKeys: String, CodingKey {
+        case pagination
+        case items
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["pagination", "items"],
+            debugName: "Explorer RWA page"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pagination = try container.decode(ToriiExplorerCursorMeta.self, forKey: .pagination)
+        items = try container.decode([ToriiExplorerRwaRecord].self, forKey: .items)
+        guard items.count <= Int(pagination.limit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .items,
+                in: container,
+                debugDescription: "Explorer RWA page contains more items than its limit"
+            )
+        }
+    }
 }
 
 /// Contract-call activity item returned by `/v1/contracts/activity`.
@@ -5258,34 +5379,36 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
 
 /// Query parameters accepted by `/v1/explorer/rwas`.
 public struct ToriiExplorerRwasParams: Sendable, Equatable {
-    public var page: UInt64?
-    public var perPage: UInt64?
+    public var cursor: String?
+    public var limit: UInt32?
     public var ownedBy: String?
     public var domain: String?
 
-    public init(page: UInt64? = nil,
-                perPage: UInt64? = nil,
+    public init(cursor: String? = nil,
+                limit: UInt32? = nil,
                 ownedBy: String? = nil,
                 domain: String? = nil) {
-        self.page = page
-        self.perPage = perPage
+        self.cursor = cursor
+        self.limit = limit
         self.ownedBy = ownedBy
         self.domain = domain
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
         var items: [URLQueryItem] = []
-        if let page {
-            guard page > 0 else {
-                throw ToriiClientError.invalidPayload("page must be at least 1.")
-            }
-            items.append(URLQueryItem(name: "page", value: String(page)))
+        if let cursor = try normalizeToriiExplorerCursor(
+            cursor,
+            field: "Explorer RWA cursor"
+        ) {
+            items.append(URLQueryItem(name: "cursor", value: cursor))
         }
-        if let perPage {
-            guard perPage > 0 else {
-                throw ToriiClientError.invalidPayload("perPage must be at least 1.")
+        if let limit {
+            guard (1...100).contains(limit) else {
+                throw ToriiClientError.invalidPayload(
+                    "Explorer RWA limit must be between 1 and 100."
+                )
             }
-            items.append(URLQueryItem(name: "per_page", value: String(perPage)))
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
         }
         if let ownedBy {
             let exactOwnedBy = try requireToriiExactNonEmptyQueryValue(ownedBy, field: "ownedBy")
@@ -5937,192 +6060,6 @@ public enum ToriiQuerySelectEntry: Codable, Sendable, Equatable, ExpressibleBySt
         case .object(let value):
             try container.encode(value)
         }
-    }
-}
-
-public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
-    public var query: String?
-    public var filter: ToriiJSONValue?
-    public var select: [ToriiQuerySelectEntry]?
-    public var sort: [ToriiQuerySortKey]
-    public var pagination: ToriiQueryPagination
-    public var fetchSize: UInt64?
-    public var countMode: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case query
-        case filter
-        case select
-        case sort
-        case pagination
-        case fetchSize = "fetch_size"
-        case countMode = "count_mode"
-    }
-
-    public init(query: String? = nil,
-                filter: ToriiJSONValue? = nil,
-                select: [String]? = nil,
-                sort: [ToriiQuerySortKey] = [],
-                pagination: ToriiQueryPagination = ToriiQueryPagination(),
-                fetchSize: UInt64? = nil,
-                countMode: String? = nil) {
-        self.query = query
-        self.filter = filter
-        self.select = select?.map { ToriiQuerySelectEntry.fieldPath($0) }
-        self.sort = sort
-        self.pagination = pagination
-        self.fetchSize = fetchSize
-        self.countMode = countMode
-    }
-
-    public init(query: String? = nil,
-                filter: ToriiJSONValue? = nil,
-                selectEntries: [ToriiQuerySelectEntry]? = nil,
-                sort: [ToriiQuerySortKey] = [],
-                pagination: ToriiQueryPagination = ToriiQueryPagination(),
-                fetchSize: UInt64? = nil,
-                countMode: String? = nil) {
-        self.query = query
-        self.filter = filter
-        self.select = selectEntries
-        self.sort = sort
-        self.pagination = pagination
-        self.fetchSize = fetchSize
-        self.countMode = countMode
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        if let query {
-            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw EncodingError.invalidValue(
-                    query,
-                    EncodingError.Context(codingPath: encoder.codingPath,
-                                          debugDescription: "query must be a non-empty string")
-                )
-            }
-            try container.encode(trimmed, forKey: .query)
-        }
-        try container.encodeIfPresent(filter, forKey: .filter)
-        try container.encodeIfPresent(select, forKey: .select)
-        try container.encode(sort, forKey: .sort)
-        try container.encode(pagination, forKey: .pagination)
-        try container.encodeIfPresent(fetchSize, forKey: .fetchSize)
-        if let countMode {
-            let normalized = countMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard normalized == "bounded" || normalized == "exact" else {
-                throw EncodingError.invalidValue(
-                    countMode,
-                    EncodingError.Context(codingPath: encoder.codingPath,
-                                          debugDescription: "countMode must be bounded or exact")
-                )
-            }
-            try container.encode(normalized, forKey: .countMode)
-        }
-    }
-}
-
-fileprivate extension KeyedDecodingContainer {
-    func decodeStringArrayIfPresent(forKey key: Key) throws -> [String] {
-        try decodeIfPresent([String].self, forKey: key) ?? []
-    }
-
-    func decodeFlexibleUInt64(forKey key: Key) throws -> UInt64 {
-        if let direct = try? decode(UInt64.self, forKey: key) {
-            return direct
-        }
-        if let signed = try? decode(Int64.self, forKey: key),
-           signed >= 0 {
-            return UInt64(signed)
-        }
-        if let rendered = try? decode(String.self, forKey: key) {
-            let trimmed = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let parsed = UInt64(trimmed) {
-                return parsed
-            }
-        }
-        throw DecodingError.dataCorruptedError(forKey: key,
-                                               in: self,
-                                               debugDescription: "\(key.stringValue) must be an unsigned integer")
-    }
-
-    func decodeFlexibleUInt8(forKey key: Key) throws -> UInt8 {
-        let value = try decodeFlexibleUInt64(forKey: key)
-        guard value <= UInt64(UInt8.max) else {
-            throw DecodingError.dataCorruptedError(forKey: key,
-                                                   in: self,
-                                                   debugDescription: "\(key.stringValue) exceeds UInt8")
-        }
-        return UInt8(value)
-    }
-
-    func decodeFlexibleUInt16(forKey key: Key) throws -> UInt16 {
-        let value = try decodeFlexibleUInt64(forKey: key)
-        guard value <= UInt64(UInt16.max) else {
-            throw DecodingError.dataCorruptedError(forKey: key,
-                                                   in: self,
-                                                   debugDescription: "\(key.stringValue) exceeds UInt16")
-        }
-        return UInt16(value)
-    }
-}
-
-public struct ToriiCanonicalRequestAuth: Sendable, Equatable {
-    public var accountId: String
-    public var privateKey: Data
-    public var timestampMs: UInt64?
-    public var nonce: String?
-
-    public init(accountId: String,
-                privateKey: Data,
-                timestampMs: UInt64? = nil,
-                nonce: String? = nil) {
-        self.accountId = accountId
-        self.privateKey = privateKey
-        self.timestampMs = timestampMs
-        self.nonce = nonce
-    }
-}
-
-public struct ToriiPushDeviceRequest: Encodable, Sendable, Equatable {
-    public var accountId: String
-    public var platform: String
-    public var token: String
-    public var topics: [String]?
-
-    private enum CodingKeys: String, CodingKey {
-        case accountId = "account_id"
-        case platform
-        case token
-        case topics
-    }
-
-    public init(accountId: String,
-                platform: String,
-                token: String,
-                topics: [String]? = nil) {
-        self.accountId = accountId
-        self.platform = platform
-        self.token = token
-        self.topics = topics
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId,
-                                                                              field: "account_id")
-        let normalizedPlatform = try ToriiRequestValidation.normalizedNonEmpty(platform,
-                                                                               field: "platform")
-        let normalizedToken = try ToriiRequestValidation.normalizedNonEmpty(token,
-                                                                            field: "token")
-        let normalizedTopics = try topics?.map {
-            try ToriiRequestValidation.normalizedNonEmpty($0, field: "topics")
-        }
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(normalizedAccount, forKey: .accountId)
-        try container.encode(normalizedPlatform, forKey: .platform)
-        try container.encode(normalizedToken, forKey: .token)
-        try container.encodeIfPresent(normalizedTopics, forKey: .topics)
     }
 }
 
@@ -14430,45 +14367,6 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
     }
 }
 
-public struct ToriiRegisterContractCodeRequest: Encodable, Sendable {
-    public typealias Manifest = ToriiContractManifest
-
-    public var authority: String
-    public var privateKey: String
-    public var manifest: Manifest
-    public var codeBytes: String?
-
-    public init(authority: String,
-                privateKey: String,
-                manifest: Manifest,
-                codeBytes: String? = nil) {
-        self.authority = authority
-        self.privateKey = privateKey
-        self.manifest = manifest
-        self.codeBytes = codeBytes
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case manifest
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        if codeBytes != nil {
-            throw ToriiClientError.invalidPayload("code_bytes is not accepted by /v1/contracts/code")
-        }
-        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
-                                                                                field: "authority")
-        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                  field: "private_key")
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
-        try container.encode(manifest, forKey: .manifest)
-    }
-}
-
 public struct ToriiContractManifestRecord: Decodable, Sendable {
     public let manifest: ToriiContractManifest
     public let codeHash: String?
@@ -22526,7 +22424,8 @@ private enum ToriiSumeragiV2LivenessBlockerSchema:
     static let values: Set<String> = [
         "missing_proposal", "body_unavailable", "prepare_quorum_missing",
         "commit_quorum_missing", "timeout_certificate_missing",
-        "scheduler_starvation", "application_pending", "local_control_pending",
+        "scheduler_starvation", "application_pending",
+        "successor_activation_pending", "local_control_pending",
     ]
 }
 
@@ -22605,11 +22504,11 @@ public struct ToriiSumeragiV2HeightContextStatus: Decodable, Sendable, Equatable
             : validatorCount - (validatorCount - 1) / 3
         guard epochEndHeight > 0,
               epochSeed.count == 32,
-              validatorCount > 0,
-              validatorCount <= 128,
+              validatorCount >= 4,
+              validatorCount <= 31,
+              (validatorCount - 1) % 3 == 0,
               minSigners == expectedMinSigners,
-              totalPower >= UInt64(validatorCount),
-              mode != "permissioned" || totalPower == UInt64(validatorCount)
+              totalPower == UInt64(validatorCount)
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .quorum,
@@ -22657,18 +22556,14 @@ public struct ToriiSumeragiV2CommitQcStatus: Decodable, Sendable, Equatable {
         minSigners = try container.decode(UInt32.self, forKey: .minSigners)
         signedPower = try container.decode(UInt64.self, forKey: .signedPower)
         totalPower = try container.decode(UInt64.self, forKey: .totalPower)
-        let minimumSignedPower =
-            totalPower / 3 * 2
-            + (totalPower % 3) * 2 / 3
-            + 1
-        guard validatorCount > 0,
+        guard validatorCount >= 4,
+              validatorCount <= 31,
+              (validatorCount - 1) % 3 == 0,
               signerCount <= validatorCount,
               minSigners == validatorCount - (validatorCount - 1) / 3,
               signerCount >= minSigners,
-              totalPower >= UInt64(validatorCount),
-              signedPower >= UInt64(signerCount),
-              signedPower <= totalPower,
-              signedPower >= minimumSignedPower
+              totalPower == UInt64(validatorCount),
+              signedPower == UInt64(signerCount)
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .signerCount,
@@ -22725,14 +22620,13 @@ public struct ToriiSumeragiV2VoteQuorumStatus: Decodable, Sendable, Equatable {
         signedPower = try container.decode(UInt64.self, forKey: .signedPower)
         minSigners = try container.decode(UInt32.self, forKey: .minSigners)
         totalPower = try container.decode(UInt64.self, forKey: .totalPower)
-        guard signerCount <= 128,
-              minSigners > 0,
-              minSigners <= 128,
-              signedPower >= UInt64(signerCount),
-              signedPower <= totalPower,
-              proposalRound.contextID == round.contextID,
-              proposalRound.height == round.height,
-              proposalRound.view <= round.view else {
+        guard totalPower >= 4,
+              totalPower <= 31,
+              (totalPower - 1) % 3 == 0,
+              signerCount <= UInt32(totalPower),
+              minSigners == UInt32(totalPower) - (UInt32(totalPower) - 1) / 3,
+              signedPower == UInt64(signerCount),
+              proposalRound == round else {
             throw DecodingError.dataCorruptedError(
                 forKey: .signerCount,
                 in: container,
@@ -22776,16 +22670,14 @@ public struct ToriiSumeragiV2TimeoutQuorumStatus: Decodable, Sendable, Equatable
         minSigners = try container.decode(UInt32.self, forKey: .minSigners)
         totalPower = try container.decode(UInt64.self, forKey: .totalPower)
         certificateFormed = try container.decode(Bool.self, forKey: .certificateFormed)
-        let minimumSignedPower =
-            totalPower / 3 * 2
-            + (totalPower % 3) * 2 / 3
-            + 1
-        guard signerCount <= 128,
-              minSigners > 0,
-              signedPower >= UInt64(signerCount),
-              signedPower <= totalPower,
+        guard totalPower >= 4,
+              totalPower <= 31,
+              (totalPower - 1) % 3 == 0,
+              signerCount <= UInt32(totalPower),
+              minSigners == UInt32(totalPower) - (UInt32(totalPower) - 1) / 3,
+              signedPower == UInt64(signerCount),
               !certificateFormed
-                || (signerCount >= minSigners && signedPower >= minimumSignedPower) else {
+                || signerCount >= minSigners else {
             throw DecodingError.dataCorruptedError(
                 forKey: .signerCount,
                 in: container,
@@ -23066,9 +22958,9 @@ public struct ToriiSumeragiV2LivenessStatus: Decodable, Sendable, Equatable {
             [ToriiSumeragiV2IgnoreCount].self,
             forKey: .ignoreCounts
         )
-        guard prepareQuorums.count <= 128,
-              commitQuorums.count <= 129,
-              timeoutQuorums.count <= 128,
+        guard prepareQuorums.count <= 31,
+              commitQuorums.count <= 32,
+              timeoutQuorums.count <= 31,
               outboundIntents.count <= 7,
               queues.count <= 10,
               ignoreCounts.count <= 12,
@@ -25247,11 +25139,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func registerContractCode(_ requestBody: ToriiRegisterContractCodeRequest, completion: @escaping (Result<Void, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.registerContractCode(requestBody) }
-    }
-
-    @discardableResult
     public func fetchContractManifest(codeHashHex: String, completion: @escaping (Result<ToriiContractManifestRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.fetchContractManifest(codeHashHex: codeHashHex) }
     }
@@ -26554,18 +26441,22 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         continuation.finish()
                         return
                     }
-                    var currentPage = params.page ?? 1
-                    var currentPerPage = params.perPage
+                    var currentCursor = params.cursor
+                    var currentLimit = params.limit
+                    var seenCursors = Set<String>()
+                    if let currentCursor {
+                        seenCursors.insert(currentCursor)
+                    }
                     var remaining = maxItems
                     while true {
                         try Task.checkCancellation()
-                        let pageParams = ToriiExplorerRwasParams(page: currentPage,
-                                                                 perPage: currentPerPage,
+                        let pageParams = ToriiExplorerRwasParams(cursor: currentCursor,
+                                                                 limit: currentLimit,
                                                                  ownedBy: params.ownedBy,
                                                                  domain: params.domain)
                         let response = try await getExplorerRwas(params: pageParams)
-                        if currentPerPage == nil {
-                            currentPerPage = response.pagination.perPage
+                        if currentLimit == nil {
+                            currentLimit = response.pagination.limit
                         }
                         for item in response.items {
                             continuation.yield(item)
@@ -26580,13 +26471,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         if remaining == 0 {
                             break
                         }
-                        if response.items.isEmpty || response.pagination.totalPages == 0 {
+                        if !response.pagination.hasMore {
                             break
                         }
-                        if currentPage >= response.pagination.totalPages {
-                            break
+                        guard let nextCursor = response.pagination.nextCursor else {
+                            throw ToriiClientError.invalidPayload(
+                                "Explorer RWA response declared more results without a next cursor."
+                            )
                         }
-                        currentPage += 1
+                        guard seenCursors.insert(nextCursor).inserted else {
+                            throw ToriiClientError.invalidPayload(
+                                "Explorer RWA response repeated a cursor."
+                            )
+                        }
+                        currentCursor = nextCursor
                     }
                     continuation.finish()
                 } catch is CancellationError {
@@ -26748,9 +26646,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getVpnProfile() async throws -> ToriiVpnProfile {
-        let request = try makeRequest(path: "/v1/vpn/profile",
-                                      headers: ["Accept": "application/json"])
-        let data = try await data(for: request, acceptedStatus: 200..<201)
+        let request = try requireSecureVpnRequest(
+            makeRequest(path: "/v1/vpn/profile", headers: ["Accept": "application/json"])
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 200..<201,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnProfile.self, from: data)
     }
 
@@ -26777,22 +26680,34 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func createVpnQuote(_ requestBody: ToriiVpnQuoteCreateRequest,
                                canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnQuote {
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeVpnRequest(path: "/v1/vpn/quotes",
-                                         method: .post,
-                                         body: body,
-                                         canonicalAuth: canonicalAuth)
-        let data = try await data(for: request, acceptedStatus: 201..<202)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/quotes",
+                           method: .post,
+                           body: body,
+                           canonicalAuth: canonicalAuth)
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 201..<202,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnQuote.self, from: data)
     }
 
     public func createVpnSession(_ requestBody: ToriiVpnSessionCreateRequest,
                                  canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnSession {
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeVpnRequest(path: "/v1/vpn/sessions",
-                                         method: .post,
-                                         body: body,
-                                         canonicalAuth: canonicalAuth)
-        let data = try await data(for: request, acceptedStatus: 201..<202)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/sessions",
+                           method: .post,
+                           body: body,
+                           canonicalAuth: canonicalAuth)
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 201..<202,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnSession.self, from: data)
     }
 
@@ -26801,9 +26716,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalizedSessionId = try ToriiRequestValidation.normalized32ByteHex(sessionId,
                                                                                  field: "sessionId")
         let encoded = encodePathComponent(normalizedSessionId)
-        let request = try makeVpnRequest(path: "/v1/vpn/sessions/\(encoded)",
-                                         canonicalAuth: canonicalAuth)
-        let (data, response) = try await send(request)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/sessions/\(encoded)", canonicalAuth: canonicalAuth)
+        )
+        let (data, response) = try await send(request, rejectRedirects: true)
         if response.statusCode == 404 {
             return nil
         }
@@ -26819,10 +26735,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalizedSessionId = try ToriiRequestValidation.normalized32ByteHex(sessionId,
                                                                                  field: "sessionId")
         let encoded = encodePathComponent(normalizedSessionId)
-        let request = try makeVpnRequest(path: "/v1/vpn/sessions/\(encoded)",
-                                         method: .delete,
-                                         canonicalAuth: canonicalAuth)
-        let (data, response) = try await send(request)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/sessions/\(encoded)",
+                           method: .delete,
+                           canonicalAuth: canonicalAuth)
+        )
+        let (data, response) = try await send(request, rejectRedirects: true)
         if response.statusCode == 404 {
             return nil
         }
@@ -26836,18 +26754,29 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func submitVpnReceipt(_ requestBody: ToriiVpnReceiptSubmitRequest,
                                  canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnReceipt {
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeVpnRequest(path: "/v1/vpn/receipts",
-                                         method: .post,
-                                         body: body,
-                                         canonicalAuth: canonicalAuth)
-        let data = try await data(for: request, acceptedStatus: 201..<202)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/receipts",
+                           method: .post,
+                           body: body,
+                           canonicalAuth: canonicalAuth)
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 201..<202,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnReceipt.self, from: data)
     }
 
     public func listVpnReceipts(canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnReceiptListResponse {
-        let request = try makeVpnRequest(path: "/v1/vpn/receipts",
-                                         canonicalAuth: canonicalAuth)
-        let data = try await data(for: request, acceptedStatus: 200..<201)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/receipts", canonicalAuth: canonicalAuth)
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 200..<201,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnReceiptListResponse.self, from: data)
     }
 
@@ -27693,16 +27622,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             throw ToriiClientError.invalidPayload("Torii returned an invalid Merkle path count.")
         }
         return path
-    }
-
-    public func registerContractCode(_ requestBody: ToriiRegisterContractCodeRequest) async throws {
-        let request = try makeRequest(path: "/v1/contracts/code",
-                                      method: .post,
-                                      queryItems: nil,
-                                      body: try JSONEncoder().encode(requestBody),
-                                      headers: ["Content-Type": "application/json"])
-        let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300, responseBody: data)
     }
 
     public func fetchContractManifest(codeHashHex: String) async throws -> ToriiContractManifestRecord {
@@ -30408,6 +30327,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return request
     }
 
+    private func requireSecureVpnRequest(_ request: URLRequest) throws -> URLRequest {
+        guard request.url?.scheme?.lowercased() == "https" else {
+            throw ToriiClientError.invalidPayload(
+                "Sora VPN Torii requests require an HTTPS base URL."
+            )
+        }
+        return request
+    }
+
     private func applyCanonicalAuth(_ auth: ToriiCanonicalRequestAuth,
                                     to request: inout URLRequest,
                                     body: Data?) throws {
@@ -30765,8 +30693,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     private func data(for request: URLRequest,
                       acceptedStatus: Range<Int> = 200..<300,
-                      allowEmptyBody: Bool = false) async throws -> Data {
-        let (data, response) = try await send(request)
+                      allowEmptyBody: Bool = false,
+                      rejectRedirects: Bool = false) async throws -> Data {
+        let (data, response) = try await send(request, rejectRedirects: rejectRedirects)
         try ensureStatus(response, in: acceptedStatus, responseBody: data)
         if data.isEmpty && !allowEmptyBody {
             throw ToriiClientError.emptyBody

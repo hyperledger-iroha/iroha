@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Privacy;
 
@@ -108,13 +109,45 @@ public sealed class PrivacyExact12FixtureCodecV1Tests
         var row = bundle.Rows[0];
 
         Assert.Throws<ArgumentException>(() => CopyRow(row, statement: []));
-        Assert.Throws<ArgumentException>(
-            () => CopyRow(
-                row,
-                statement: new byte[PrivacyExact12FixtureCodecV1.MaxStatementBytes + 1]));
+        foreach (var rejected in new Action[]
+                 {
+                     () => CopyRow(
+                         row,
+                         statement: new byte[
+                             PrivacyExact12FixtureCodecV1.MaxStatementBytes + 1]),
+                     () => CopyRow(
+                         row,
+                         envelope: new byte[
+                             PrivacyExact12FixtureCodecV1.MaxEnvelopeBytes + 1]),
+                     () => CopyRow(
+                         row,
+                         instruction: new byte[
+                             PrivacyExact12FixtureCodecV1.MaxInstructionBytes + 1]),
+                     () => CopyRow(
+                         row,
+                         projection: new byte[
+                             PrivacyExact12FixtureCodecV1.MaxIntentProjectionBytes + 1]),
+                     () => CopyRow(
+                         row,
+                         unsignedTransaction: new byte[
+                             PrivacyExact12FixtureCodecV1.MaxUnsignedTransactionBytes + 1]),
+                     () => CopyRow(
+                         row,
+                         signedTransaction: new byte[
+                             PrivacyExact12FixtureCodecV1.MaxSignedTransactionBytes + 1]),
+                 })
+        {
+            Assert.Throws<ArgumentException>(rejected);
+        }
         Assert.Throws<ArgumentException>(() => CopyRow(row, intentDigest: new byte[31]));
         Assert.Throws<ArgumentException>(() => CopyRow(row, transactionHash: new byte[33]));
         Assert.Throws<ArgumentException>(() => CopyRow(row, wireId: "privacy.submit_proof.v1"));
+        Assert.Throws<ArgumentException>(
+            () => CopyRow(row, wireId: "iroha.privacy.submit_proof.v0"));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => CopyRow(row, protocolId: (PrivacyProtocolIdV1)12U));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => CopyRow(row, protocolId: (PrivacyProtocolIdV1)uint.MaxValue));
         Assert.Throws<ArgumentException>(
             () => CopyRow(
                 row,
@@ -132,6 +165,54 @@ public sealed class PrivacyExact12FixtureCodecV1Tests
         (reordered[0], reordered[1]) = (reordered[1], reordered[0]);
         Assert.Throws<ArgumentException>(
             () => new PrivacyExact12FixtureBundleV1(1, reordered));
+    }
+
+    [Fact]
+    public void EveryOpaqueFieldAcceptsItsExactCeilingButNotOneByteMore()
+    {
+        var row = PrivacyExact12FixtureCodecV1
+            .DecodeCanonical(Fixture.Value.Archive)
+            .Rows[0];
+
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.MaxStatementBytes,
+            CopyRow(
+                row,
+                statement: new byte[PrivacyExact12FixtureCodecV1.MaxStatementBytes])
+                .StatementNorito.Length);
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.MaxEnvelopeBytes,
+            CopyRow(
+                row,
+                envelope: new byte[PrivacyExact12FixtureCodecV1.MaxEnvelopeBytes])
+                .EnvelopeNorito.Length);
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.MaxInstructionBytes,
+            CopyRow(
+                row,
+                instruction: new byte[PrivacyExact12FixtureCodecV1.MaxInstructionBytes])
+                .SubmitProofInstructionNorito.Length);
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.MaxIntentProjectionBytes,
+            CopyRow(
+                row,
+                projection: new byte[
+                    PrivacyExact12FixtureCodecV1.MaxIntentProjectionBytes])
+                .TransactionIntentProjectionNorito.Length);
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.MaxUnsignedTransactionBytes,
+            CopyRow(
+                row,
+                unsignedTransaction: new byte[
+                    PrivacyExact12FixtureCodecV1.MaxUnsignedTransactionBytes])
+                .UnsignedTransactionPayloadNorito.Length);
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.MaxSignedTransactionBytes,
+            CopyRow(
+                row,
+                signedTransaction: new byte[
+                    PrivacyExact12FixtureCodecV1.MaxSignedTransactionBytes])
+                .SignedTransactionVersionedNorito.Length);
     }
 
     [Fact]
@@ -327,6 +408,11 @@ public sealed class PrivacyExact12FixtureCodecV1Tests
             payload => payload[wireIdOffset - NoritoHeader.EncodedLength] = 0xFF);
         AssertRejects(invalidUtf8Wire);
 
+        var retiredWire = ReplaceFirstWireId(
+            canonical,
+            "iroha.privacy.submit_proof.v0");
+        AssertRejects(retiredWire);
+
         var protocolValueOffset = LocateFirstRowFieldBody(canonical, 0);
         var unknownProtocol = MutatePayload(
             canonical,
@@ -342,6 +428,56 @@ public sealed class PrivacyExact12FixtureCodecV1Tests
             canonical,
             payload => payload[intentDigestPrefixOffset - NoritoHeader.EncodedLength] = 31);
         AssertRejects(shortDigest);
+    }
+
+    [Fact]
+    public void SubmitProofWireIdUsesOneExactLengthAndRejectsLengthConfusion()
+    {
+        var canonical = Fixture.Value.Archive;
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.SubmitProofWireIdUtf8Bytes,
+            Encoding.UTF8.GetByteCount(PrivacyExact12FixtureCodecV1.SubmitProofWireId));
+
+        var outerPrefix = LocateFirstRowFieldPrefix(canonical, 3);
+        var innerPrefix = LocateFirstRowFieldBody(canonical, 3);
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.SubmitProofWireIdUtf8Bytes + 1,
+            canonical[outerPrefix]);
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.SubmitProofWireIdUtf8Bytes,
+            canonical[innerPrefix]);
+
+        foreach (var length in new byte[] { 0, 28, 30, 31, 127 })
+        {
+            AssertRejects(MutatePayload(
+                canonical,
+                payload => payload[innerPrefix - NoritoHeader.EncodedLength] = length));
+        }
+
+        foreach (var length in new byte[] { 0, 29, 31, 32, 127 })
+        {
+            AssertRejects(MutatePayload(
+                canonical,
+                payload => payload[outerPrefix - NoritoHeader.EncodedLength] = length));
+        }
+    }
+
+    [Fact]
+    public void UnknownAndCrossRowProtocolTagsFailClosedWithFreshChecksums()
+    {
+        var canonical = Fixture.Value.Archive;
+        var protocolValueOffset = LocateFirstRowFieldBody(canonical, 0);
+        foreach (var tag in new[] { 1U, 11U, 12U, uint.MaxValue })
+        {
+            var mutated = MutatePayload(
+                canonical,
+                payload => BinaryPrimitives.WriteUInt32LittleEndian(
+                    payload.AsSpan(
+                        protocolValueOffset - NoritoHeader.EncodedLength,
+                        sizeof(uint)),
+                    tag));
+            AssertRejects(mutated);
+        }
     }
 
     [Fact]
@@ -408,6 +544,7 @@ public sealed class PrivacyExact12FixtureCodecV1Tests
 
     private static PrivacyExact12TypedFixtureRowV1 CopyRow(
         PrivacyExact12TypedFixtureRowV1 row,
+        PrivacyProtocolIdV1? protocolId = null,
         byte[]? statement = null,
         byte[]? envelope = null,
         string? wireId = null,
@@ -418,7 +555,7 @@ public sealed class PrivacyExact12FixtureCodecV1Tests
         byte[]? signedTransaction = null,
         byte[]? transactionHash = null) =>
         new(
-            row.ProtocolId,
+            protocolId ?? row.ProtocolId,
             statement ?? row.StatementNorito,
             envelope ?? row.EnvelopeNorito,
             wireId ?? row.SubmitProofWireId,
@@ -428,6 +565,20 @@ public sealed class PrivacyExact12FixtureCodecV1Tests
             unsignedTransaction ?? row.UnsignedTransactionPayloadNorito,
             signedTransaction ?? row.SignedTransactionVersionedNorito,
             transactionHash ?? row.SignedTransactionHash);
+
+    private static byte[] ReplaceFirstWireId(byte[] archive, string replacement)
+    {
+        var replacementBytes = Encoding.UTF8.GetBytes(replacement);
+        Assert.Equal(
+            PrivacyExact12FixtureCodecV1.SubmitProofWireIdUtf8Bytes,
+            replacementBytes.Length);
+        var wireIdOffset = LocateFirstWireIdBytes(archive);
+        return MutatePayload(
+            archive,
+            payload => replacementBytes.CopyTo(
+                payload,
+                wireIdOffset - NoritoHeader.EncodedLength));
+    }
 
     private static byte[] FlipFirst(byte[] bytes)
     {

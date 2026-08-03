@@ -55,17 +55,24 @@ fn compact_proof_decodes_and_verifies() {
         .expect("load root");
     let root = HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(root_bytes));
 
-    // Convert to full proof with the correct index and verify with SHA-256 semantics
+    // A depth-capped syscall root is a path-fragment root, not a full-tree
+    // membership commitment. Expand the self-contained direction bitset and
+    // reconstruct exactly that partial root.
     let idx = (addr / 32) as u32;
-    // Verify via direct sha256 method as well
-    assert!(compact.clone().verify_sha256(&leaf, &root));
-    let full: MerkleProof<[u8; 32]> = compact.into_full_with_index(idx);
-    assert!(full.verify_sha256(&leaf, &root, 32));
+    let full: MerkleProof<[u8; 32]> = compact
+        .clone()
+        .try_into_full()
+        .expect("syscall emitted a canonical compact proof");
+    assert_eq!(full.leaf_index(), idx);
+    let computed = full
+        .compute_partial_root_sha256(&leaf, usize::from(compact.depth()))
+        .expect("proof height equals compact depth");
+    assert_eq!(computed, root);
 }
 
 #[test]
 fn compact_proof_dir_flip_fails() {
-    use iroha_crypto::{CompactMerkleProof, Hash, HashOf};
+    use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleTree};
     use sha2::{Digest, Sha256};
 
     let mut vm = IVM::new(u64::MAX);
@@ -75,10 +82,11 @@ fn compact_proof_dir_flip_fails() {
 
     // Request compact proof
     let out_ptr = ivm::Memory::OUTPUT_START;
+    let root_ptr = ivm::Memory::OUTPUT_START + 4096;
     vm.set_register(10, addr);
     vm.set_register(11, out_ptr);
     vm.set_register(12, 16);
-    vm.set_register(13, 0);
+    vm.set_register(13, root_ptr);
     let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
@@ -100,11 +108,30 @@ fn compact_proof_dir_flip_fails() {
     let mut leaf_bytes = [0u8; 32];
     leaf_bytes.copy_from_slice(&digest);
     let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_bytes));
-    let typed_root = vm.memory.current_root();
+    let mut root_bytes = [0u8; 32];
+    vm.memory.load_bytes(root_ptr, &mut root_bytes).unwrap();
+    let partial_root =
+        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(root_bytes));
 
-    // Flip the lowest direction bit and expect verification to fail
+    let full = cp
+        .clone()
+        .try_into_full()
+        .expect("syscall emitted a canonical compact proof");
+    assert_eq!(
+        full.compute_partial_root_sha256(&leaf, usize::from(cp.depth())),
+        Some(partial_root.clone())
+    );
+
+    // Flip the lowest direction/index bit and ensure it cannot reconstruct the
+    // syscall's partial root.
     let flipped = CompactMerkleProof::from_parts(cp.depth(), cp.dirs() ^ 1, cp.siblings().to_vec());
-    assert!(!flipped.verify_sha256(&leaf, &typed_root));
+    let flipped_full = flipped
+        .try_into_full()
+        .expect("flipped used direction bit remains canonical");
+    assert_ne!(
+        flipped_full.compute_partial_root_sha256(&leaf, usize::from(cp.depth())),
+        Some(partial_root)
+    );
 }
 
 #[test]

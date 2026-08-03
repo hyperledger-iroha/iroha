@@ -26,11 +26,14 @@ fn run_with_gpu_bucket(
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
+        "coin".to_owned(),
         NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
     .build(alice_id);
     let acc_a = Account::new(alice_id.clone()).build(alice_id);
@@ -76,10 +79,11 @@ fn scheduler_gpu_key_bucket_parity() {
     let chain_id = ChainId::from("chain");
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "coin".parse().unwrap(),
-    );
+    let rose: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
 

@@ -74,51 +74,8 @@ public final class PrivacyNativeBridge {
     }
   }
 
-  /** Closed first-release protocol identity in canonical Norito discriminant order. */
-  public enum ProtocolIdV1 {
-    ZK_ACE_PQ_AUTHORIZATION_V0("zk-ace-pq-authorization-v0"),
-    ANONYMOUS_PGC_K_OUT_OF_N_V1("anonymous-pgc-k-out-of-n-v1"),
-    VERANGE_TRANSPARENT_RANGE_V1("verange-transparent-range-v1"),
-    IROHA_ZK_AMS_V1("iroha-zk-ams-v1"),
-    VEGA_EXISTING_CREDENTIAL_ZK_V0("vega-existing-credential-zk-v0"),
-    IROHA_ZK_X509_STARK_P256_V0("iroha-zk-x509-stark-p256-v0"),
-    IROHA_JINDO_POLYNOMIAL_COMMITMENT_V0("iroha-jindo-polynomial-commitment-v0"),
-    IROHA_BOOTLE_LANTERN_ANONCRED_V1("iroha-bootle-lantern-anoncred-v1"),
-    ORCHARD_HALO2_ACTIONS_V1("orchard-halo2-actions-v1"),
-    MONERO_FCMP_PLUS_PLUS_V1("monero-fcmp-plus-plus-v1"),
-    IROHA_IVM_PRIVATE_NOTE_STARK_V1("iroha-ivm-private-note-stark-v1"),
-    PQ_MASP_STARK_V0("pq-masp-stark-v0");
-
-    private final String canonicalLabel;
-
-    ProtocolIdV1(final String canonicalLabel) {
-      this.canonicalLabel = canonicalLabel;
-    }
-
-    public String canonicalLabel() {
-      return canonicalLabel;
-    }
-
-    /**
-     * Parses one exact canonical label.
-     *
-     * @throws IllegalArgumentException for aliases, retired identifiers, case changes, whitespace,
-     *     or unknown labels
-     */
-    public static ProtocolIdV1 fromCanonicalLabel(final String label) {
-      if (label != null) {
-        for (final ProtocolIdV1 value : values()) {
-          if (value.canonicalLabel.equals(label)) {
-            return value;
-          }
-        }
-      }
-      throw new IllegalArgumentException("unknown canonical privacy protocol id");
-    }
-  }
-
-  private static final List<ProtocolIdV1> PROTOCOLS =
-      Collections.unmodifiableList(Arrays.asList(ProtocolIdV1.values()));
+  private static final List<PrivacyProtocolIdV1> PROTOCOLS =
+      Collections.unmodifiableList(Arrays.asList(PrivacyProtocolIdV1.values()));
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private PrivacyNativeBridge() {}
@@ -128,7 +85,7 @@ public final class PrivacyNativeBridge {
   }
 
   /** Returns all twelve protocol identities in exact wire order. */
-  public static List<ProtocolIdV1> protocolsV1() {
+  public static List<PrivacyProtocolIdV1> protocolsV1() {
     return PROTOCOLS;
   }
 
@@ -150,6 +107,13 @@ public final class PrivacyNativeBridge {
           "native privacy compiled-profile catalog query failed", error);
     }
     return requireCompiledProfileCatalog(archive);
+  }
+
+  /** Returns this binary's local catalog as the closed typed first-release model. */
+  public static org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogV1
+      compiledProfileCatalogTypedV1() {
+    return org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogCodecV1.decodeCanonical(
+        compiledProfileCatalogV1());
   }
 
   /** Validates bytes as the exact compiled-profile catalog of the loaded binary. */
@@ -237,7 +201,9 @@ public final class PrivacyNativeBridge {
     if (status != CompiledProfileCatalogValidationStatusV1.VALID.code()) {
       throw new IllegalStateException("invalid typed privacy compiled-profile catalog");
     }
-    return Arrays.copyOf(archive, archive.length);
+    final byte[] snapshot = Arrays.copyOf(archive, archive.length);
+    org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogCodecV1.decodeCanonical(snapshot);
+    return snapshot;
   }
 
   static byte[] requireExact12FixtureBundle(final byte[] archive) {

@@ -170,6 +170,7 @@ guards:
 	@bash scripts/check_no_direct_serde.sh
 	@bash scripts/deny_handrolled_aos.sh
 	@bash scripts/check_no_legacy_codec.sh
+	@bash scripts/check_contract_address_chain_identity.sh
 
 # Run a local subset of the Norito feature matrix (use --fast for fewer cases)
 norito-matrix:

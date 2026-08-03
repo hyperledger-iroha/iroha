@@ -13,8 +13,9 @@ summary: SF-9b implementation status for PoR validator tooling, status/report/ex
 ## Status
 The local SF-9b status/reporting surfaces are partially implemented. Torii
 exposes PoR status, export, report, and ingestion endpoints backed by
-`PorCoordinator`; `sorafs_cli por status`, `por export`, and `por report`
-consume those endpoints; and `sorafs-validate por` performs deterministic
+an atomic `PorCoordinator` read projection rebuilt from the node's durable PoR
+checkpoint; `sorafs_cli por status`, `por export`, and `por report` consume
+those endpoints; and `sorafs-validate por` performs deterministic
 challenge/proof pair validation for offline fixture and release checks.
 Manual and externally supplied challenge ingress is intentionally absent from
 the first-release API. Live challenges can originate only from the verified
@@ -50,8 +51,8 @@ before promotion can report ready.
 ### Command Inventory
 | Command | Description | Output |
 |---------|-------------|--------|
-| `sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--limit=N] [--page-token=HEX32] [--format=table|json]` | List challenge statuses from Torii. | Table or JSON `Vec<PorChallengeStatusV1>`. |
-| `sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N] [--end-epoch=N]` | Download the coordinator status export. | Raw `PorStatusExportV1` bytes written to disk. |
+| `sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]` | List one bounded challenge-status page from Torii. | Table or JSON records; the next opaque cursor is printed separately when present. |
+| `sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]` | Download one bounded coordinator status-export page. | Raw `PorStatusExportPageV1` bytes written to disk. |
 | `sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]` | Render a weekly coordinator report. | Markdown or JSON `PorWeeklyReportV1`. |
 | `sorafs-validate por --challenge <challenge.to> --proof <proof.to> --format json` | Validate a committed or downloaded challenge/proof pair offline. | `ValidationOutcomeV1`. |
 
@@ -70,7 +71,7 @@ struct PorChallengeStatusV1 {
     provider_id: Digest32,
     epoch_id: U64,
     drand_round: U64,
-    status: PorChallengeOutcome,      // pending|verified|failed|repaired|forced
+    status: PorChallengeOutcome,      // awaiting_proof|proof_submitted|verified|failed|repaired
     sample_count: U16,
     forced: Bool,
     issued_at: Timestamp,
@@ -145,12 +146,75 @@ cycle, and catches up one missing week at a time.
 ## Torii API Extensions
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/v1/sorafs/por/status` | Query `PorChallengeStatusV1` records filtered by manifest, provider, epoch, status, limit, and page token. |
-| `GET` | `/v1/sorafs/por/export` | Return a Norito `PorStatusExportV1` for an optional epoch range. |
+| `GET` | `/v1/sorafs/por/status` | Query a record-, byte-, and 512-candidate-bounded `PorStatusPageV1`; its opaque cursor binds the normalized filters, coordinator generation, and last consumed index candidate. Sparse intersections may return no records with an advancing cursor. |
+| `GET` | `/v1/sorafs/por/export` | Return a bounded Norito `PorStatusExportPageV1`; its opaque cursor binds the optional epoch range, coordinator generation, and last consumed index candidate. |
 | `GET` | `/v1/sorafs/por/report/{iso_week}` | Return a deterministic Norito `PorWeeklyReportV1`; when the cycle is currently prepared for governance publication, return those exact retained bytes. |
 | `GET` | `/v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N` | Return `limit`-bounded provider backlog and last verdict timestamps from `sorafs_node`, with total provider counts retained. |
 | `POST` | `/v1/sorafs/capacity/por-proof` | Record a provider `PorProofV1`; requires a fresh operator request signature whose Ed25519 key matches both the proof signer and the provider's current admitted advert key. |
 | `POST` | `/v1/sorafs/capacity/por-verdict` | Record an auditor `AuditVerdictV1`; every unique signature must belong to the configured operator trust set, the authenticated request signer must be one of them, and `sorafs.por.auditor_signature_threshold` must be met. |
+
+The opaque status/export cursor's generation is a required non-zero field in
+the node's V5 auxiliary checkpoint, not a process-local counter. Every
+lifecycle mutation computes a checked next generation before changing state
+and persists the generation, complete bounded status history, and repair
+outbox state in one checkpoint. Startup builds Torii's projection once from
+that complete checkpoint. Each later challenge, proof, or verdict returns one
+node-authoritative `(generation, status)` update while checkpoint serialization
+is still held; Torii accepts only an identical same-generation replay or the
+immediate next generation and updates its status map, indexes, and
+forced-provider set in place. Rollbacks, gaps, conflicting replays, or identity
+changes invalidate the projection so reads fail closed until restart
+reconciliation. The durable mutation and incremental projection update execute
+on one physically retained blocking worker, so cancellation cannot release the
+pipeline lock while full checkpoint persistence is still running on the async
+event loop. Torii persistence retains only exact weekly-report publication
+state. Missing, zero, or record-inconsistent generations fail projection
+admission, and `u64::MAX` fails further status mutation instead of wrapping or
+saturating.
+
+Mutation failures carry a typed durable disposition. Admission/validation
+failures and exact in-memory rollbacks preserve the installed Torii projection;
+only commit-uncertain or failed-rollback outcomes invalidate it. Thus a validly
+signed proof for an unknown or mismatched challenge cannot turn a routine 4xx
+rejection into a status-read outage.
+
+The first-release lifecycle is `awaiting_proof -> proof_submitted -> terminal`.
+A proofless timeout may advance directly from `awaiting_proof` to `failed`;
+other terminal states require an authenticated proof. `forced` is immutable
+challenge provenance and never substitutes for a lifecycle state. The read
+projection counts forced challenges per provider and epoch, so retiring one
+terminal cannot erase the provenance of a surviving same-epoch challenge.
+Once repair handoff, reputation delivery, and authenticated replay-archive
+append are all
+acknowledged, the oldest compacted terminal may be retired deterministically by
+`(issued_at, challenge_id)` in the same generation that admits a replacement.
+The node-authoritative update carries that exact removal so Torii applies the
+bounded rolling projection atomically.
+Until a valid node projection is installed, production status, export, and
+weekly-report reads fail closed with an authority-unavailable error; only unit
+tests retain the retired in-memory lifecycle path for focused transition tests.
+Consequently a cursor issued before a mutation remains stale across process
+restart and cannot become valid again when indexes are rebuilt.
+
+Filtered status traversal chooses the smallest deterministic one-dimensional
+index and materializes at most 512 candidate statuses per response. The cursor
+anchors the last safely consumed candidate even when it did not satisfy the
+remaining filters, so an empty sparse page still advances. A matching record
+that is examined only to discover a record or byte boundary is not consumed
+and is evaluated again on the next page; continuation therefore neither skips
+nor duplicates returned matches. `inspected_candidates` reports the exact
+number evaluated in the response.
+
+The Torii and Rust CLI surfaces share a 4 MiB ceiling for the sum of canonical
+status-record bytes. The CLI bounds each status or nested export-page field by
+that requested byte ceiling plus the fixed 64 KiB response envelope; the HTTP
+body uses the same bound before decoding. Sequence, cumulative-element,
+allocation, and nesting limits remain independently enforced, so pages larger
+than the former 64 KiB field cap decode without admitting an unbounded field.
+Opaque continuations use one shared bounded canonical Norito/base64url codec.
+The server validates the complete `(epoch, issued_at, challenge_id)` anchor
+against retained authority, while the CLI rejects non-canonical cursors and
+response cursors whose generation does not match their page.
 
 The proof and verdict mutation routes use the canonical `x-iroha-operator-*` request-signature
 envelope. Method, path, canonical query, exact body digest, timestamp, and nonce
@@ -168,13 +232,15 @@ metadata except the signatures themselves.
 Torii derives the trusted verdict-auditor set from the configured operator
 signature allow-list plus the node key when `allow_node_key` is enabled, filters
 it to Ed25519, and requires the non-zero
-`sorafs.por.auditor_signature_threshold`. The manifest, coordinator, and
-node layers independently re-check that policy before committing state, so a
-self-signed key embedded by an attacker is never a trust root.
+`sorafs.por.auditor_signature_threshold`. Route admission and the node's
+lifecycle authority independently re-check that policy before committing
+state, so a self-signed key embedded by an attacker is never a trust root. The
+coordinator is deliberately a read projection and cannot authorize or commit a
+lifecycle transition.
 
 The retired direct-storage challenge, proof, and verdict mutation pairs are not
 registered. Keeping one authenticated capacity lifecycle prevents a
-direct-storage route from bypassing the coordinator, admission binding, replay
+direct-storage route from bypassing node authority, admission binding, replay
 protection, or auditor checks. Torii does not admit externally supplied
 challenges; the verified scheduler is the only permitted production authority
 for the `PorChallengeV1` contract.
@@ -228,14 +294,18 @@ verified inputs.
   or repaired verdicts require the recorded proof digest; failure verdicts may
   omit it only when no proof arrived. Provider/manifest/digest/time mismatches
   leave the legitimate challenge retryable. Exact challenge, proof, and verdict
-  replays are rejected, including attempts to resurrect a finalized challenge.
-  A terminal failure uses the exact-chain durable native repair-transaction
-  forwarder and reconciles the finalized task cursor before storage execution.
-  The retained coordinator snapshot and repair-history store are rebuildable
-  PoR projections only. The competing local repair manager/checkpoint and its
-  GC/reconciliation consumers are removed; cross-peer duplicate submissions
-  must still prove one native terminal outcome before promotion.
-- Export files currently contain the raw Norito `PorStatusExportV1` payload.
+  replays are idempotent; conflicting duplicates and attempts to resurrect a
+  finalized challenge are rejected. A terminal failure commits its
+  deterministic repair intent, task identifier, and unacknowledged outbox
+  state in the same node checkpoint as the verdict. The repair worker retries
+  the exact external enqueue after errors or restart and records the
+  acknowledgement in a following checkpoint, so neither a client retry nor a
+  process-local callback is required for convergence. Coordinator lifecycle
+  persistence is retired; its status/index state is a rebuildable atomic
+  projection, while only exact weekly-report publication state remains durable
+  there. Cross-peer duplicate submissions must still prove one native terminal
+  outcome before promotion.
+- Export files currently contain one raw Norito `PorStatusExportPageV1` payload.
   Parquet/manifest packaging and SoraFS pinning are production archive tasks.
 - Governance meetings can reference `PorWeeklyReportV1` to decide on penalties,
   certify reparations, and update public transparency logs once live evidence is
@@ -272,7 +342,7 @@ the selected required kinds.
 ## Rollout Status
 Implemented locally:
 - `PorChallengeStatusV1`, `PorWeeklyReportV1`, `PorProviderSummaryV1`,
-  `PorSlashingEventV1`, and `PorStatusExportV1`.
+  `PorSlashingEventV1`, and `PorStatusExportPageV1`.
 - Torii status, export, report, ingestion, provider-proof, auditor-verdict, and
   authenticated provider-VRF routes.
 - `sorafs_cli por status`, `por export`, and `por report`.

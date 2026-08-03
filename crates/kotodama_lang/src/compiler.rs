@@ -6926,7 +6926,6 @@ fn main() {
         let account = sample_account_literal();
         let input = "\\x00".repeat(32);
         let nullifier = "\\x00".repeat(32);
-        let outputs = format!("{}{}", "\\x11".repeat(32), "\\x22".repeat(32));
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
@@ -6949,16 +6948,6 @@ fn main() {{
     proof: b"proof",
     verification_key: b"vk",
   );
-  let _unshield_with_outputs = crypto::zk::build_unshield(
-    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    destination: AccountId::parse("{account}"),
-    amount: 6,
-    inputs: b"{input}",
-    outputs: b"{outputs}",
-    backend: "halo2",
-    proof: b"proof",
-    verification_key: b"vk",
-  );
 }}
 
 }}
@@ -6969,8 +6958,7 @@ fn main() {{
         let ir = ir::lower(&typed).expect("lower inline builder source");
 
         let mut saw_submit = false;
-        let mut saw_unshield_without_outputs = false;
-        let mut saw_unshield_with_outputs = false;
+        let mut saw_unshield = false;
         for instr in ir
             .functions
             .iter()
@@ -6979,38 +6967,24 @@ fn main() {{
         {
             match instr {
                 ir::Instr::BuildSubmitBallotInline { .. } => saw_submit = true,
-                ir::Instr::BuildUnshieldInline { outputs, .. } => {
-                    if outputs.is_some() {
-                        saw_unshield_with_outputs = true;
-                    } else {
-                        saw_unshield_without_outputs = true;
-                    }
-                }
+                ir::Instr::BuildUnshieldInline { .. } => saw_unshield = true,
                 _ => {}
             }
         }
 
         assert!(saw_submit, "expected BuildSubmitBallotInline IR");
-        assert!(
-            saw_unshield_without_outputs,
-            "expected legacy BuildUnshieldInline IR"
-        );
-        assert!(
-            saw_unshield_with_outputs,
-            "expected BuildUnshieldInline IR with private change outputs"
-        );
+        assert!(saw_unshield, "expected output-free BuildUnshieldInline IR");
     }
 
     #[test]
-    fn unshield_inline_literal_encodes_input_and_output_chunks() {
+    fn unshield_inline_literal_encodes_exact_output_free_instruction() {
         let asset = ir::Temp(0);
         let to = ir::Temp(1);
         let amount = ir::Temp(2);
         let inputs = ir::Temp(3);
-        let outputs = ir::Temp(4);
-        let backend = ir::Temp(5);
-        let proof = ir::Temp(6);
-        let vk = ir::Temp(7);
+        let backend = ir::Temp(4);
+        let proof = ir::Temp(5);
+        let vk = ir::Temp(6);
         let func_idx = 0;
         let mut string_map = HashMap::new();
         string_map.insert(
@@ -7022,13 +6996,9 @@ fn main() {{
             (func_idx, inputs),
             format!("0x{}{}", "11".repeat(32), "12".repeat(32)),
         );
-        string_map.insert(
-            (func_idx, outputs),
-            format!("0x{}{}", "21".repeat(32), "22".repeat(32)),
-        );
         string_map.insert((func_idx, backend), "halo2/ipa".to_string());
         string_map.insert((func_idx, proof), "0xab".to_string());
-        string_map.insert((func_idx, vk), "vk_unshield_outputs".to_string());
+        string_map.insert((func_idx, vk), "vk_unshield".to_string());
         let public_amount = u128::try_from(i64::MAX).expect("i64::MAX is non-negative") + 1;
         string_map.insert((func_idx, amount), public_amount.to_string());
 
@@ -7039,7 +7009,6 @@ fn main() {{
             to,
             amount,
             inputs,
-            Some(outputs),
             backend,
             proof,
             vk,
@@ -7057,7 +7026,8 @@ fn main() {{
             public_amount.to_string()
         );
         assert_eq!(unshield.inputs().as_slice(), &[[0x11u8; 32], [0x12u8; 32]]);
-        assert_eq!(unshield.outputs().as_slice(), &[[0x21u8; 32], [0x22u8; 32]]);
+        assert_eq!(unshield.proof().backend, "halo2/ipa");
+        assert!(unshield.root_hint().is_none());
     }
 
     #[test]
@@ -7231,7 +7201,7 @@ fn main() {
 
 }
 "#,
-                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)",
+                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, string backend, bytes proof, bytes vk)",
             ),
             (
                 r#"
@@ -7251,7 +7221,28 @@ fn main() {
 
 }
 "#,
-                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)",
+                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, string backend, bytes proof, bytes vk)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+
+fn main() {
+  let _bytes = crypto::zk::build_unshield(
+    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    destination: context::authority(),
+    amount: 1,
+    inputs: b"00",
+    outputs: b"00",
+    backend: "halo2",
+    proof: b"proof",
+    verification_key: b"vk",
+  );
+}
+
+}
+"#,
+                "has no parameter named `outputs`",
             ),
         ] {
             let parsed = parse(src).expect("parse invalid inline builder source");
@@ -10190,7 +10181,7 @@ seiyaku Test {
     fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            7,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &sample_account_id(),
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -10645,7 +10636,7 @@ seiyaku Hello {
             },
         };
 
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -10716,7 +10707,7 @@ seiyaku Test {{
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
         let peer: PeerId = peer_literal.parse().expect("peer");
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -11540,7 +11531,8 @@ seiyaku Test {
             Repeats::Indefinitely,
             authority,
             filter,
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id.clone(), action);
         let json_value = norito::json::to_value(&trigger).expect("trigger json value");
         let raw_json = norito::json::to_string(&json_value).expect("trigger json");
@@ -13875,7 +13867,6 @@ impl Compiler {
                         to,
                         amount,
                         inputs,
-                        outputs,
                         backend,
                         proof,
                         vk,
@@ -13887,7 +13878,6 @@ impl Compiler {
                             *to,
                             *amount,
                             *inputs,
-                            *outputs,
                             *backend,
                             *proof,
                             *vk,
@@ -16149,7 +16139,6 @@ impl Compiler {
                             to,
                             amount,
                             inputs,
-                            outputs,
                             backend,
                             proof,
                             vk,
@@ -16196,17 +16185,6 @@ impl Compiler {
                                     let err = format!("build_unshield_inline {e}");
                                     i18n::translate(self.lang, Message::SemanticError(&err))
                                 })?;
-                            let outs = if let Some(outputs) = outputs {
-                                let outputs_literal = require_literal("outputs", outputs)?;
-                                decode_fixed32_chunks(&outputs_literal, "outputs", true).map_err(
-                                    |e| {
-                                        let err = format!("build_unshield_inline {e}");
-                                        i18n::translate(self.lang, Message::SemanticError(&err))
-                                    },
-                                )?
-                            } else {
-                                Vec::new()
-                            };
                             let backend_str = require_literal("backend", backend)?;
                             let proof_literal = require_literal("proof", proof)?;
                             let proof_bytes =
@@ -16225,7 +16203,6 @@ impl Compiler {
                                 to: acct,
                                 public_amount: amt,
                                 inputs: ins,
-                                outputs: outs,
                                 proof: pa,
                                 root_hint: None,
                             };
@@ -22033,7 +22010,7 @@ fn record_isi_access(
         }
         ir::Instr::UnregisterAsset { asset } => {
             if let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
-                add_asset_def_domain_r_if_projected(access_set, &id);
+                add_asset_definition_ownership_r(access_set, &id);
                 add_asset_def_rw(access_set, &id);
             } else {
                 add_dynamic_asset_definition_rw(access_set);
@@ -22145,7 +22122,7 @@ fn record_isi_access(
         }
         ir::Instr::RegisterAsset { asset, .. } => {
             if let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
-                add_asset_def_domain_r_if_projected(access_set, &id);
+                add_asset_definition_ownership_r(access_set, &id);
                 add_asset_def_rw(access_set, &id);
             } else {
                 add_dynamic_asset_definition_rw(access_set);
@@ -22159,7 +22136,7 @@ fn record_isi_access(
                 *account,
             );
             if let Some(asset_def) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
-                add_asset_def_domain_r_if_projected(access_set, &asset_def);
+                add_asset_definition_ownership_r(access_set, &asset_def);
                 add_asset_def_rw(access_set, &asset_def);
                 add_asset_rw_for_optional_account_hint(access_set, &asset_def, account.as_ref());
             } else {
@@ -22813,7 +22790,6 @@ fn unshield_inline_instruction_literal(
     to: ir::Temp,
     amount: ir::Temp,
     inputs: ir::Temp,
-    outputs: Option<ir::Temp>,
     backend: ir::Temp,
     proof: ir::Temp,
     vk: ir::Temp,
@@ -22830,11 +22806,6 @@ fn unshield_inline_instruction_literal(
         .ok()?;
     let public_amount = parse_unshield_public_amount(&literal(amount)?).ok()?;
     let inputs = decode_fixed32_chunks(&literal(inputs)?, "inputs", false).ok()?;
-    let outputs = if let Some(outputs) = outputs {
-        decode_fixed32_chunks(&literal(outputs)?, "outputs", true).ok()?
-    } else {
-        Vec::new()
-    };
     let backend_str = literal(backend)?;
     let proof_bytes = decode_hex_or_raw_bytes(&literal(proof)?).ok()?;
     let vk_ref = literal(vk)?;
@@ -22848,7 +22819,6 @@ fn unshield_inline_instruction_literal(
         to: account,
         public_amount,
         inputs,
-        outputs,
         proof,
         root_hint: None,
     };
@@ -23070,7 +23040,9 @@ fn record_instruction_box_access(
                 add_account_rw(access_set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {
-                add_asset_def_domain_r_if_projected(access_set, r.object.id());
+                if let Some(domain_id) = r.object.owning_domain.as_ref() {
+                    add_domain_r(access_set, domain_id);
+                }
                 add_asset_def_rw(access_set, r.object.id());
             }
             RegisterBox::Nft(r) => add_nft_rw(access_set, r.object.id()),
@@ -23734,16 +23706,14 @@ fn add_asset_def_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_asset_def(id));
 }
 
-fn add_asset_def_domain_r_if_projected(set: &mut AccessSets, id: &AssetDefinitionId) {
-    if let Some(domain) = id.try_domain() {
-        add_domain_r(set, domain);
-    }
+fn add_asset_definition_ownership_r(set: &mut AccessSets, id: &AssetDefinitionId) {
+    add_asset_def_r(set, id);
 }
 
 fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key_asset(id));
     add_account_r(set, id.account());
-    add_asset_def_domain_r_if_projected(set, id.definition());
+    add_asset_definition_ownership_r(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
 
@@ -23755,7 +23725,7 @@ fn add_asset_r_for_account_hint(
     set.reads
         .insert(key_asset_for_account_hint(definition, account));
     add_account_hint_r(set, account);
-    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_definition_ownership_r(set, definition);
     add_asset_def_r(set, definition);
 }
 
@@ -23873,7 +23843,7 @@ fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_r(set, id.account());
-    add_asset_def_domain_r_if_projected(set, id.definition());
+    add_asset_definition_ownership_r(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
 
@@ -23888,7 +23858,7 @@ fn add_asset_rw_for_account_hint(
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_hint_r(set, account);
-    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_definition_ownership_r(set, definition);
     add_asset_def_r(set, definition);
 }
 
@@ -23904,7 +23874,7 @@ fn add_scoped_asset_rw_for_account_hint(
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_hint_r(set, account);
-    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_definition_ownership_r(set, definition);
     add_asset_def_r(set, definition);
 }
 
@@ -23912,7 +23882,7 @@ fn add_dynamic_asset_account_rw(set: &mut AccessSets, definition: &AssetDefiniti
     set.reads.insert(ASSET_WILDCARD_KEY.to_string());
     set.writes.insert(ASSET_WILDCARD_KEY.to_string());
     set.reads.insert(ACCOUNT_WILDCARD_KEY.to_string());
-    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_definition_ownership_r(set, definition);
     add_asset_def_rw(set, definition);
 }
 
@@ -24133,7 +24103,7 @@ fn record_asset_escrow_open_access(
     set.reads.insert(ACCOUNT_WILDCARD_KEY.to_string());
     set.writes.insert(ACCOUNT_WILDCARD_KEY.to_string());
     if let Some(asset_definition) = asset_definition {
-        add_asset_def_domain_r_if_projected(set, asset_definition);
+        add_asset_definition_ownership_r(set, asset_definition);
         add_asset_rw_for_account_hint(set, asset_definition, &AccountAccessHint::Authority);
         add_dynamic_asset_account_rw(set, asset_definition);
     } else {
@@ -24159,7 +24129,7 @@ fn record_anonymous_asset_escrow_open_access(
     asset_definition: &AssetDefinitionId,
 ) {
     add_anonymous_asset_escrow_rw(set, escrow_id);
-    add_asset_def_domain_r_if_projected(set, asset_definition);
+    add_asset_definition_ownership_r(set, asset_definition);
     add_asset_def_r(set, asset_definition);
     add_zk_asset_rw(set, asset_definition);
 }

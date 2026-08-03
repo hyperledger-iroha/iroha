@@ -46,8 +46,8 @@ fn soracloud_uploaded_model_finalize_rejects_pin_digest_changed_after_register()
 }
 
 #[test]
-fn soracloud_uploaded_model_finalize_rejects_provenance_signer_mismatch() -> Result<(), eyre::Report>
-{
+fn soracloud_uploaded_model_finalize_rejects_provenance_signer_mismatch()
+-> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
     let state = state_with_soracloud_permission(&kura)?;
     let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
@@ -100,8 +100,8 @@ fn soracloud_uploaded_model_finalize_rejects_provenance_signer_mismatch() -> Res
 }
 
 #[test]
-fn soracloud_uploaded_model_finalize_rejects_retired_pin_after_register() -> Result<(), eyre::Report>
-{
+fn soracloud_uploaded_model_finalize_rejects_retired_pin_after_register()
+-> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
     let state = state_with_soracloud_permission(&kura)?;
     let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)

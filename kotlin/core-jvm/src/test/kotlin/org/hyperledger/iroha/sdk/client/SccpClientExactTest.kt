@@ -1197,10 +1197,31 @@ class SccpClientExactTest {
         )
         assertEquals("0x${finalityAnchorHash().lowercase()}", request.soraFinalityAnchor.anchorHash)
 
+        val historicalValue = proofRequest()
+        @Suppress("UNCHECKED_CAST")
+        val historicalAnchor =
+            historicalValue["sora_finality_anchor"] as MutableMap<String, Any?>
+        historicalAnchor["protocol_version"] = 3
+        historicalValue["sora_finality_anchor_hash"] =
+            "0x${finalityAnchorHash(3).lowercase()}"
+        val historicalRequest = SccpJsonParser.parseProofRequest(jsonBytes(historicalValue))
+        assertEquals(3, historicalRequest.soraFinalityAnchor.protocolVersion)
+        assertEquals(
+            "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba",
+            historicalRequest.soraFinalityAnchor.anchorHash,
+        )
+        assertFalse(
+            historicalRequest.soraFinalityAnchor.anchorHash ==
+                request.soraFinalityAnchor.anchorHash,
+        )
+
         val invalidFinalityAnchors: List<(MutableMap<String, Any?>) -> Unit> = listOf(
             { it["protocol_version"] = 1 },
             { it["protocol_version"] = "4" },
             { it["protocol_version"] = 4.0 },
+            { it["protocol_version"] = 5 },
+            { it["protocol_version"] = "3" },
+            { it["protocol_version"] = 3.0 },
             { it["protocol_version"] = true },
             { it["validator_set_epoch"] = 3 },
             { it["checkpoint_context_id"] = upper(0, 32) },
@@ -1661,7 +1682,7 @@ class SccpClientExactTest {
             ),
             "settlement" to linkedMapOf(
                 "asset_definition_id" to "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_account_id" to "sorau-test-account",
+                "custody_account_id" to "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
             ),
         )
@@ -1959,7 +1980,7 @@ class SccpClientExactTest {
             "asset_home_domain" to 0,
             "asset_id" to canonicalProjectionText("xor"),
             "amount" to 1000,
-            "sender" to canonicalProjectionText("sorau-test-account"),
+            "sender" to canonicalProjectionText("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "recipient" to linkedMapOf(
                 "EvmAddress20" to linkedMapOf("bytes" to "0x${"11".repeat(20)}"),
             ),
@@ -2057,11 +2078,11 @@ class SccpClientExactTest {
             publicSignalSchemaHash().hexToBytes(),
     ).toUpperHex()
 
-    private fun finalityAnchorHash(): String {
+    private fun finalityAnchorHash(protocolVersion: Int = 4): String {
         val canonical = ByteArrayOutputStream().also { output ->
             output.write(1)
             output.write(1)
-            writeU16(output, 4)
+            writeU16(output, protocolVersion)
             output.write(tairaChainIdHash().hexToBytes())
             writeU64(output, 7)
             output.write(upper(0xa1, 32).hexToBytes())

@@ -15,7 +15,7 @@ Usage:
     --output-dir /absolute/private/output
 
 Builds a marker-bearing, device-only iOS XCFramework from the exact reviewed
-dirty source closure. This profile is solely for physical Taira-testnet
+clean signed source closure. This profile is solely for physical Taira-testnet
 candidate evidence. It contains no simulator slice and must never ship.
 USAGE
 }
@@ -175,7 +175,7 @@ expected = {
     "source_commit": sys.argv[2],
     "source_tree_sha256": sys.argv[3],
     "reviewed_source_closure_descriptor_sha256": sys.argv[4],
-    "source_repo_dirty": True,
+    "source_repo_dirty": False,
 }
 for key, wanted in expected.items():
     if value.get(key) != wanted:
@@ -344,7 +344,7 @@ manifest = {
     "candidate_record_sha256": digest(candidate),
     "source_commit": sys.argv[4],
     "source_tree_sha256": sys.argv[5],
-    "source_repo_dirty": True,
+    "source_repo_dirty": False,
     "reviewed_source_closure_descriptor_sha256": sys.argv[6],
     "iphoneos_sdk_version": sys.argv[7],
     "xcode_version": sys.argv[8],

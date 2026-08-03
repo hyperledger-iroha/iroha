@@ -74,7 +74,7 @@ fn require_test_network_feature(feature: &str) -> Result<()> {
 }
 
 fn asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("default domain"),
         "zkace_typed".parse().expect("asset name"),
     )
@@ -253,8 +253,7 @@ fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let builder = NetworkBuilder::new()
         .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
+            AssetDefinition::numeric(asset_definition_id.clone(), "zkace_typed".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None),
         ))
         .with_genesis_instruction(Mint::asset_quantity(100_u64, alice_asset))
         .with_config_layer(|layer| {

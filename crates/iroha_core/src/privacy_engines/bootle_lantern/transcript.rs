@@ -536,8 +536,8 @@ pub struct BlindIssuanceRequestChallengeBindingV1 {
     pub issuer_policy_record_digest: [u8; 32],
     /// Digest of the eight-polynomial masked target `t`.
     pub masked_target_digest: [u8; 32],
-    /// Fresh holder request nonce, unrelated to any transaction intent.
-    pub request_nonce: [u8; 32],
+    /// Issuer-generated one-shot authorization digest for this request.
+    pub issuance_authorization_digest: [u8; 32],
 }
 
 impl BlindIssuanceRequestChallengeBindingV1 {
@@ -552,7 +552,10 @@ impl BlindIssuanceRequestChallengeBindingV1 {
                 self.issuer_policy_record_digest,
             ),
             ("masked_target_digest", self.masked_target_digest),
-            ("request_nonce", self.request_nonce),
+            (
+                "issuance_authorization_digest",
+                self.issuance_authorization_digest,
+            ),
         ] {
             if digest == [0; 32] {
                 return Err(TranscriptErrorV1::ZeroDigest { field });
@@ -926,7 +929,7 @@ fn absorb_transcript_binding_v1(
             absorb_frame_checked(state, &binding.credential_scope_digest)?;
             absorb_frame_checked(state, &binding.issuer_policy_record_digest)?;
             absorb_frame_checked(state, &binding.masked_target_digest)?;
-            absorb_frame_checked(state, &binding.request_nonce)?;
+            absorb_frame_checked(state, &binding.issuance_authorization_digest)?;
         }
     }
     Ok(())
@@ -1259,9 +1262,9 @@ mod tests {
         assert_eq!(
             public_parameter_seed_v1(),
             [
-                0x1f, 0x89, 0x07, 0x53, 0xc8, 0x1e, 0x53, 0xcf, 0x9b, 0x9c, 0x4e, 0xcc, 0xa5, 0x75,
-                0xd8, 0xc8, 0x85, 0x81, 0xe8, 0xff, 0x3c, 0x46, 0xff, 0xce, 0xe1, 0x62, 0x83, 0xc8,
-                0xb9, 0xf6, 0xb2, 0x19,
+                0x5a, 0xeb, 0xdf, 0x8c, 0x53, 0x95, 0xb6, 0x82, 0xf6, 0x95, 0xd6, 0xa4, 0x08, 0x86,
+                0xf4, 0x41, 0x26, 0x1e, 0x85, 0xfc, 0xd6, 0x78, 0x4a, 0xf5, 0x8a, 0x05, 0x12, 0xbe,
+                0x7b, 0x06, 0x1c, 0xc2,
             ]
         );
         assert_eq!(
@@ -1705,7 +1708,11 @@ mod tests {
                 .expect("binding");
         changed
             .proof_core()
-            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
+            .derive_bytes(
+                b"stage-a",
+                &[b"ab".as_slice(), b"c".as_slice()],
+                &mut second,
+            )
             .expect("stage");
         assert_ne!(first, second);
 
@@ -1713,7 +1720,11 @@ mod tests {
             .expect("relation binding");
         changed
             .proof_core()
-            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
+            .derive_bytes(
+                b"stage-a",
+                &[b"ab".as_slice(), b"c".as_slice()],
+                &mut second,
+            )
             .expect("stage");
         assert_ne!(first, second);
     }

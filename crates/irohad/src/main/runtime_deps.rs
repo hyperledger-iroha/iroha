@@ -16,6 +16,11 @@
 /// those implementations and must never be sourced from `iroha_config`.
 #[derive(Clone, Default)]
 pub struct IrohaRuntimeDeps {
+    bootle_lantern_issuance_provider_registry: Option<
+        Arc<
+            dyn iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1,
+        >,
+    >,
     moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider:
         Option<Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>>,
@@ -145,7 +150,8 @@ impl IrohaRuntimeDeps {
     /// process-local authority when configuration requested no provider.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.moderation_quarantine_key_wrapper.is_none()
+        self.bootle_lantern_issuance_provider_registry.is_none()
+            && self.moderation_quarantine_key_wrapper.is_none()
             && self.privacy_cycle_prf_provider.is_none()
             && self.privacy_release_anchor.is_none()
             && self.transparency_leader_lease_provider.is_none()
@@ -200,6 +206,18 @@ impl IrohaRuntimeDeps {
             && self.sorafs_por_finalized_replay_archive.is_none()
             && self.soracloud_runtime_mutation_signer.is_none()
             && self.soracloud_hf_inference_credential_provider.is_none()
+    }
+
+    /// Attach the deployment-owned Bootle/Lantern issuer and authentication registry.
+    #[must_use]
+    pub fn with_bootle_lantern_issuance_provider_registry(
+        mut self,
+        registry: Arc<
+            dyn iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1,
+        >,
+    ) -> Self {
+        self.bootle_lantern_issuance_provider_registry = Some(registry);
+        self
     }
 
     /// Attach the production PKCS#11/KMS wrapper for moderation quarantine

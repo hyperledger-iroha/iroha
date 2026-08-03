@@ -791,6 +791,21 @@ impl StoredManifest {
 
     /// Load and decode the persisted manifest payload from disk.
     pub fn load_manifest(&self) -> Result<ManifestV1, StorageError> {
+        self.load_manifest_with_bytes()
+            .map(|(manifest, _)| manifest)
+    }
+
+    /// Load the exact canonical manifest bytes after revalidating their retained identity.
+    ///
+    /// The read is byte-bounded, refuses links, verifies that the opened file did not change,
+    /// and binds the decoded manifest back to this immutable storage record before returning the
+    /// bytes. Callers that need to relay the original payload should use this method instead of
+    /// reopening [`Self::manifest_path`] by pathname.
+    pub fn load_manifest_bytes(&self) -> Result<Vec<u8>, StorageError> {
+        self.load_manifest_with_bytes().map(|(_, bytes)| bytes)
+    }
+
+    fn load_manifest_with_bytes(&self) -> Result<(ManifestV1, Vec<u8>), StorageError> {
         let _io_guard = self
             .io_lock
             .read()
@@ -814,7 +829,7 @@ impl StoredManifest {
                 "manifest no longer matches its immutable stored identity",
             ));
         }
-        Ok(manifest)
+        Ok((manifest, bytes))
     }
 
     /// Reconstruct a [`CarBuildPlan`] matching the stored manifest chunk metadata.
@@ -6912,6 +6927,12 @@ mod tests {
 
         let decoded = stored.load_manifest().expect("load manifest");
         assert_eq!(decoded, manifest);
+        assert_eq!(
+            stored
+                .load_manifest_bytes()
+                .expect("load canonical manifest bytes"),
+            norito::to_bytes(&manifest).expect("encode canonical manifest")
+        );
     }
 
     #[test]
@@ -8760,46 +8781,5 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn write_atomic_rejects_symlink_parent() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let temp_path = canonical_temp_path(&temp_dir);
-        let real_dir = temp_path.join("real");
-        fs::create_dir(&real_dir).expect("create real dir");
-        let linked_dir = temp_path.join("linked");
-        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
-        let output_path = linked_dir.join("index.norito");
-
-        let err = write_atomic(&output_path, b"replace").expect_err("reject symlink parent");
-        let message = err.to_string();
-
-        assert!(
-            message.contains("parent") && message.contains("must not be a symlink"),
-            "unexpected error: {message}"
-        );
-        assert!(
-            !real_dir.join("index.norito").exists(),
-            "symlink parent should not receive output"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn open_atomic_temp_file_rejects_preexisting_symlink() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let temp_path = canonical_temp_path(&temp_dir);
-        let target_path = temp_path.join("target.tmp");
-        fs::write(&target_path, b"unchanged\n").expect("write target");
-        let tmp_path = temp_path.join("index.norito.tmp");
-        std::os::unix::fs::symlink(&target_path, &tmp_path).expect("create symlink");
-
-        let err = open_atomic_temp_file(&tmp_path).expect_err("reject temp symlink");
-        let message = err.to_string();
-
-        assert!(
-            message.contains("failed to create atomic temp"),
-            "unexpected error: {message}"
-        );
-        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
-    }
+    include!("store_atomic_path_tests.rs");
 }

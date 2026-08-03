@@ -1220,8 +1220,11 @@ def test_repository_wires_exact_abi21_release_contract() -> None:
         "nativeSignerContractRevision() == REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION"
         in java_signer
     )
-    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 1" in kotlin_signer
-    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 1" in java_signer
+    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 2" in kotlin_signer
+    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 2" in java_signer
+    roadmap = read("roadmap.md")
+    assert "`NativeSignerBridge` JNI contract revision 2" in roadmap
+    assert "`NativeSignerBridge` JNI contract revision 1" not in roadmap
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in kotlin_signer
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in java_signer
     assert (

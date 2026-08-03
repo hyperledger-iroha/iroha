@@ -18,9 +18,10 @@ from scripts import taira_rollout_admission as admission
 
 
 COMMIT = "1" * 40
+DPN_COMMIT = "d" * 40
 WORKSPACE_SHA = "2" * 64
 CARGO_SHA = "3" * 64
-SOURCE = admission.SourceIdentity(COMMIT, CARGO_SHA, WORKSPACE_SHA)
+SOURCE = admission.SourceIdentity(COMMIT, DPN_COMMIT, CARGO_SHA, WORKSPACE_SHA)
 
 
 def _write(path: Path, payload: bytes) -> str:
@@ -48,6 +49,7 @@ def _fixture(tmp_path: Path) -> tuple[argparse.Namespace, dict[str, object]]:
     start_hash = "4" * 64
     end_hash = "5" * 64
     body: dict[str, object] = {
+        "artifact_handoff_sha256": "7" * 64,
         "end": {"block_hash": end_hash, "height": 102},
         "expires_at_unix": now + 900,
         "issued_at_unix": now - 10,
@@ -81,6 +83,7 @@ def _fixture(tmp_path: Path) -> tuple[argparse.Namespace, dict[str, object]]:
     receipt_path.write_bytes(contract.canonical_json_bytes(receipt))
     args = argparse.Namespace(
         cargo_lock_sha256=CARGO_SHA,
+        dpn_validator_release_commit=DPN_COMMIT,
         macos_receipt=receipt_path,
         now_unix=now,
         output=tmp_path / "one" / "taira-macos-deploy.tar.gz",
@@ -146,6 +149,9 @@ def test_pack_deploy_payload_is_closed_deterministic_and_receipt_bound(
     validation_args = calls["kwargs"]
     assert isinstance(validation_args, dict)
     assert validation_args["expected_source_commit"] == COMMIT
+    assert (
+        validation_args["expected_dpn_validator_release_commit"] == DPN_COMMIT
+    )
     assert (
         validation_args["expected_binary_sha256"] == receipt["validator_binary_sha256"]
     )
@@ -280,5 +286,19 @@ def test_pack_deploy_payload_rejects_bundle_that_production_validator_refuses(
     with pytest.raises(
         candidate.TairaCandidateBuildError,
         match="production revalidation: unexpected reset inventory",
+    ):
+        candidate.pack_deploy_payload(args)
+
+
+def test_pack_deploy_payload_rejects_dpn_only_receipt_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args, receipt = _fixture(tmp_path)
+    _stub_production_validation(monkeypatch, receipt)
+    args.dpn_validator_release_commit = "e" * 40
+
+    with pytest.raises(
+        admission.TairaRolloutAdmissionError,
+        match="source identity differs",
     ):
         candidate.pack_deploy_payload(args)

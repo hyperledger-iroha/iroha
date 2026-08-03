@@ -33,14 +33,21 @@ pub mod isi {
         Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature, blake2::Blake2b512,
     };
     use iroha_executor_data_model::permission::{
-        account::CanRegisterAccount,
-        asset::{
-            CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-            CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanTransferAsset,
-            CanTransferAssetWithDefinition,
+        account::{
+            AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
+            CanRegisterAccount, CanResolveAccountAlias,
         },
-        asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
+        asset::{
+            CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
+            CanMintAssetWithDefinition, CanModifyAssetMetadata,
+            CanModifyAssetMetadataWithDefinition, CanTransferAsset, CanTransferAssetWithDefinition,
+        },
+        asset_definition::{
+            AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
+            CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+        },
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
+        executor::CanUpgradeExecutor,
         governance::{CanEnactGovernance, CanManageVerifyingKeys},
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
@@ -115,15 +122,11 @@ pub mod isi {
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_GAS_SCHEDULE_ID_V1,
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
-            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1,
-            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
             SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
             SORACLOUD_FHE_INPUT_ADMISSION_GAS_SCHEDULE_ID_V1,
             SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
             soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
             soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1,
-            soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1,
             soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
         },
         validation_fee::{
@@ -139,6 +142,107 @@ pub mod isi {
             OpenVerifyEnvelopeValidationError, StarkFriOpenProofV1,
         },
     };
+
+    /// Exact governance purpose carried by a one-shot retained movement capability.
+    pub(in crate::smartcontracts::isi) enum VerifiedGovernanceNumericPurpose {
+        LockSlash {
+            referendum_id: String,
+            owner: AccountId,
+            reason: GovernanceSlashReason,
+        },
+        LockRestitution {
+            referendum_id: String,
+            owner: AccountId,
+            reason: GovernanceSlashReason,
+        },
+        CitizenshipSlash {
+            owner: AccountId,
+            slash_bps: u16,
+        },
+        CitizenshipRelease {
+            owner: AccountId,
+        },
+    }
+
+    /// Non-reusable proof that governance validated one exact retained balance movement.
+    pub(in crate::smartcontracts::isi) struct VerifiedGovernanceNumericMovement {
+        purpose: VerifiedGovernanceNumericPurpose,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    }
+
+    /// Non-reusable proof that a sponsor-vault withdrawal passed program authorization.
+    pub(in crate::smartcontracts::isi) struct VerifiedFeeSponsorVaultWithdrawal {
+        authority: AccountId,
+        program_id: iroha_data_model::nexus::FeeSponsorProgramId,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Quantity,
+    }
+
+    impl VerifiedFeeSponsorVaultWithdrawal {
+        fn new(
+            authority: AccountId,
+            program_id: iroha_data_model::nexus::FeeSponsorProgramId,
+            source_id: AssetId,
+            destination: AccountId,
+            amount: Quantity,
+        ) -> Self {
+            Self {
+                authority,
+                program_id,
+                source_id,
+                destination,
+                amount,
+            }
+        }
+
+        pub(in crate::smartcontracts::isi) fn into_parts(
+            self,
+        ) -> (
+            AccountId,
+            iroha_data_model::nexus::FeeSponsorProgramId,
+            AssetId,
+            AccountId,
+            Quantity,
+        ) {
+            (
+                self.authority,
+                self.program_id,
+                self.source_id,
+                self.destination,
+                self.amount,
+            )
+        }
+    }
+
+    impl VerifiedGovernanceNumericMovement {
+        fn new(
+            purpose: VerifiedGovernanceNumericPurpose,
+            source_id: AssetId,
+            destination_id: AssetId,
+            amount: Quantity,
+        ) -> Self {
+            Self {
+                purpose,
+                source_id,
+                destination_id,
+                amount,
+            }
+        }
+
+        pub(in crate::smartcontracts::isi) fn into_parts(
+            self,
+        ) -> (VerifiedGovernanceNumericPurpose, AssetId, AssetId, Quantity) {
+            (
+                self.purpose,
+                self.source_id,
+                self.destination_id,
+                self.amount,
+            )
+        }
+    }
     #[cfg(test)]
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
@@ -601,6 +705,12 @@ pub mod isi {
                     trigger_authority,
                     descriptor.filter.clone(),
                 )
+                .map_err(|error| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid manifest trigger `{}` action: {error}",
+                        descriptor.id
+                    ))
+                })?
                 .with_metadata(metadata);
                 let trigger = Trigger::new(descriptor.id.clone(), action);
                 // The lifecycle path may register only a manifest trigger owned
@@ -1356,14 +1466,6 @@ pub mod isi {
                 soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
         },
         SoracloudFheStarkVerifierProfile {
-            label: "FHE full-bootstrap material",
-            circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-            version: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
-            gas_schedule_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1,
-            public_inputs_schema_hash:
-                soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1,
-        },
-        SoracloudFheStarkVerifierProfile {
             label: "FHE full-bootstrap execution",
             circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
             version: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
@@ -1675,70 +1777,32 @@ pub mod isi {
         Ok(())
     }
 
-    fn zk_binding_record(
-        state_transaction: &StateTransaction<'_, '_>,
-        binding: Option<&crate::state::ZkAssetVerifierBinding>,
-    ) -> Option<VerifyingKeyRecord> {
-        binding.and_then(|binding| {
-            state_transaction
-                .world
-                .verifying_keys
-                .get(&binding.id)
-                .cloned()
-        })
-    }
-
-    fn asset_uses_confidential_transfer_v2(
-        state_transaction: &StateTransaction<'_, '_>,
-        st: &crate::state::ZkAssetState,
-    ) -> bool {
-        zk_binding_record(state_transaction, st.vk_transfer.as_ref()).is_some_and(|record| {
-            crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(&record.circuit_id)
-        })
-    }
-
-    fn trim_confidential_root_history(st: &mut crate::state::ZkAssetState, cap: usize) {
-        let max_keep = cap.max(1);
-        let len = st.root_history.len();
-        if len > max_keep {
-            st.root_history.drain(0..(len - max_keep));
-        }
-    }
-
     pub(in crate::smartcontracts::isi) fn push_confidential_commitment_for_asset(
         st: &mut crate::state::ZkAssetState,
         commitment: [u8; 32],
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<[u8; 32], Error> {
-        if asset_uses_confidential_transfer_v2(state_transaction, st) {
-            push_confidential_commitment_with_v2_root(
-                st,
-                commitment,
-                state_transaction.zk.root_history_cap,
-            )
-        } else {
-            Ok(st.push_commitment(commitment, state_transaction.zk.root_history_cap))
-        }
+        push_confidential_commitments_for_asset(st, &[commitment], state_transaction)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                Error::from(InstructionExecutionError::InvariantViolation(
+                    "single confidential commitment append produced no root".into(),
+                ))
+            })
     }
 
-    pub(in crate::smartcontracts::isi) fn push_confidential_commitment_with_v2_root(
+    fn push_confidential_commitments_for_asset(
         st: &mut crate::state::ZkAssetState,
-        commitment: [u8; 32],
-        root_history_cap: usize,
-    ) -> Result<[u8; 32], Error> {
-        let mut commitments = st.commitments.clone();
-        commitments.push(commitment);
-        let root = crate::zk::confidential_v2::compute_confidential_root_v2(&commitments).map_err(
-            |err| {
+        commitments: &[[u8; 32]],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Vec<[u8; 32]>, Error> {
+        st.push_commitments(commitments, state_transaction.zk.tree_roots_history_len)
+            .map_err(|err| {
                 InstructionExecutionError::InvariantViolation(
-                    format!("failed to update confidential v2 root: {err}").into(),
+                    format!("failed to update canonical confidential tree: {err}").into(),
                 )
-            },
-        )?;
-        st.commitments = commitments;
-        st.root_history.push(root);
-        trim_confidential_root_history(st, root_history_cap);
-        Ok(root)
+            })
     }
 
     fn validate_confidential_transfer_v2_public_inputs(
@@ -1903,7 +1967,7 @@ pub mod isi {
         attachment: &iroha_data_model::proof::ProofAttachment,
         state_transaction: &StateTransaction<'_, '_>,
         vk_record: &VerifyingKeyRecord,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<[u8; 32]>, Error> {
         if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential unshield v2 requires halo2/ipa backend".into(),
@@ -1970,7 +2034,8 @@ pub mod isi {
                 "confidential unshield v2 chain tag mismatch".into(),
             ));
         }
-        Ok(())
+        // The full-unshield circuit has no authenticated private output column.
+        Ok(Vec::new())
     }
 
     fn validate_confidential_unshield_v3_public_inputs(
@@ -1979,7 +2044,7 @@ pub mod isi {
         attachment: &iroha_data_model::proof::ProofAttachment,
         state_transaction: &StateTransaction<'_, '_>,
         vk_record: &VerifyingKeyRecord,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<[u8; 32]>, Error> {
         if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential unshield v3 requires halo2/ipa backend".into(),
@@ -1995,11 +2060,6 @@ pub mod isi {
         if unshield.inputs().is_empty() || unshield.inputs().len() > 2 {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential unshield v3 requires 1-2 inputs".into(),
-            ));
-        }
-        if unshield.outputs().len() > 1 {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v3 supports at most one private change output".into(),
             ));
         }
         let (
@@ -2042,12 +2102,6 @@ pub mod isi {
                 ));
             }
         }
-        let expected_output = unshield.outputs().first().copied().unwrap_or(zero);
-        if proof_outputs != expected_output {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v3 output commitment mismatch".into(),
-            ));
-        }
         let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
             &unshield.asset().to_string(),
         );
@@ -2064,7 +2118,13 @@ pub mod isi {
                 "confidential unshield v3 chain tag mismatch".into(),
             ));
         }
-        Ok(())
+        // A zero public column denotes no change note; otherwise the proof itself
+        // authenticates the sole commitment that execution must append.
+        Ok(if proof_outputs == zero {
+            Vec::new()
+        } else {
+            vec![proof_outputs]
+        })
     }
 
     fn validate_confidential_unshield_public_inputs(
@@ -2073,7 +2133,7 @@ pub mod isi {
         attachment: &iroha_data_model::proof::ProofAttachment,
         state_transaction: &StateTransaction<'_, '_>,
         vk_record: &VerifyingKeyRecord,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<[u8; 32]>, Error> {
         if crate::zk::confidential_v2::is_confidential_unshield_v2_circuit_id(&vk_record.circuit_id)
         {
             let vk_box = vk_record.key.as_ref().ok_or_else(|| {
@@ -2401,6 +2461,7 @@ pub mod isi {
     }
 
     fn slash_citizenship_bond(
+        owner: &AccountId,
         record: &mut crate::state::CitizenshipRecord,
         slash_bps: u16,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -2426,12 +2487,19 @@ pub mod isi {
             slash_amount.as_numeric(),
             spec,
         )?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&escrow_asset_id, &slash_amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&receiver_asset_id, &slash_amount)?;
+        let movement = VerifiedGovernanceNumericMovement::new(
+            VerifiedGovernanceNumericPurpose::CitizenshipSlash {
+                owner: owner.clone(),
+                slash_bps,
+            },
+            escrow_asset_id,
+            receiver_asset_id,
+            slash_amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
+            state_transaction,
+            movement,
+        )?;
         record.amount = record
             .amount
             .try_sub(&slash_amount)
@@ -2658,10 +2726,13 @@ pub mod isi {
         );
         let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(delta.as_numeric(), spec)?;
-        state_transaction.world.transfer_numeric_asset_exact(
-            &owner_asset_id,
-            &escrow_asset_id,
-            &delta,
+        crate::smartcontracts::isi::asset::isi::execute_governance_bond_transfer(
+            state_transaction,
+            authority,
+            referendum_id,
+            owner_asset_id,
+            escrow_asset_id,
+            delta,
         )?;
         Ok(())
     }
@@ -2839,18 +2910,26 @@ pub mod isi {
         }
 
         // No fallible lock or ledger arithmetic may remain after custody moves.
-        state_transaction.world.transfer_numeric_asset_exact(
-            &escrow_asset_id,
-            &receiver_asset_id,
-            &request.amount,
+        let movement = VerifiedGovernanceNumericMovement::new(
+            VerifiedGovernanceNumericPurpose::LockSlash {
+                referendum_id: request.referendum_id.to_owned(),
+                owner: request.owner.clone(),
+                reason: request.reason,
+            },
+            escrow_asset_id,
+            receiver_asset_id,
+            request.amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
+            state_transaction,
+            movement,
         )?;
         rec.amount = next_amount;
         rec.slashed = next_slashed;
         locks.locks.insert(request.owner.clone(), rec.clone());
         state_transaction
             .world
-            .governance_locks
-            .insert(request.referendum_id.to_owned(), locks.clone());
+            .put_governance_locks(request.referendum_id.to_owned(), locks.clone());
 
         state_transaction
             .world
@@ -2969,18 +3048,26 @@ pub mod isi {
         entry.last_height = state_transaction._curr_block.height().get();
 
         // No fallible lock or ledger validation may remain after custody moves.
-        state_transaction.world.transfer_numeric_asset_exact(
-            &receiver_asset_id,
-            &escrow_asset_id,
-            &amount,
+        let movement = VerifiedGovernanceNumericMovement::new(
+            VerifiedGovernanceNumericPurpose::LockRestitution {
+                referendum_id: referendum_id.to_owned(),
+                owner: owner.clone(),
+                reason,
+            },
+            receiver_asset_id,
+            escrow_asset_id,
+            amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
+            state_transaction,
+            movement,
         )?;
         rec.amount = next_amount;
         rec.slashed = next_slashed;
         locks.locks.insert(owner.clone(), rec);
         state_transaction
             .world
-            .governance_locks
-            .insert(referendum_id.to_owned(), locks);
+            .put_governance_locks(referendum_id.to_owned(), locks);
         state_transaction
             .world
             .governance_slashes
@@ -3569,7 +3656,7 @@ pub mod isi {
                 finalization_evidence: None,
                 enacted_at_height: None,
             };
-            state_transaction.world.governance_proposals.insert(id, rec);
+            state_transaction.world.put_governance_proposal(id, rec);
 
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
@@ -3787,7 +3874,7 @@ pub mod isi {
                 ),
                 GovernanceApprovalMode::LegacyCouncilEpoch => None,
             };
-            state_transaction.world.governance_proposals.insert(
+            state_transaction.world.put_governance_proposal(
                 id,
                 crate::state::GovernanceProposalRecord {
                     proposer: authority.clone(),
@@ -3932,7 +4019,7 @@ pub mod isi {
                 ),
                 GovernanceApprovalMode::LegacyCouncilEpoch => None,
             };
-            state_transaction.world.governance_proposals.insert(
+            state_transaction.world.put_governance_proposal(
                 id,
                 crate::state::GovernanceProposalRecord {
                     proposer: authority.clone(),
@@ -4118,7 +4205,8 @@ pub mod isi {
             }
             ProposalKind::DeployContract(_)
             | ProposalKind::RuntimeUpgrade(_)
-            | ProposalKind::SccpRouteGovernance(_) => None,
+            | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
     }
 
@@ -4335,7 +4423,7 @@ pub mod isi {
             );
             let parliament_snapshot =
                 Some(derive_jit_parliament_snapshot(id, now, state_transaction)?);
-            state_transaction.world.governance_proposals.insert(
+            state_transaction.world.put_governance_proposal(
                 id,
                 crate::state::GovernanceProposalRecord {
                     proposer: authority.clone(),
@@ -4560,7 +4648,7 @@ pub mod isi {
             );
             let parliament_snapshot =
                 Some(derive_jit_parliament_snapshot(id, now, state_transaction)?);
-            state_transaction.world.governance_proposals.insert(
+            state_transaction.world.put_governance_proposal(
                 id,
                 crate::state::GovernanceProposalRecord {
                     proposer: authority.clone(),
@@ -5576,8 +5664,7 @@ pub mod isi {
                     locks.locks.insert(owner.clone(), rec.clone());
                     state_transaction
                         .world
-                        .governance_locks
-                        .insert(rid.clone(), locks);
+                        .put_governance_locks(rid.clone(), locks);
                     if existed {
                         state_transaction.world.emit_events(Some(
                             iroha_data_model::events::data::governance::GovernanceEvent::LockExtended(
@@ -6130,8 +6217,7 @@ pub mod isi {
         locks.locks.insert(authority.clone(), rec.clone());
         state_transaction
             .world
-            .governance_locks
-            .insert(rid.clone(), locks);
+            .put_governance_locks(rid.clone(), locks);
 
         record_plain_ballot_events(&rec, existed, &rid, weight, state_transaction);
         Ok(())
@@ -6488,10 +6574,7 @@ pub mod isi {
         {
             rec.status = crate::state::GovernanceProposalStatus::Enacted;
             rec.enacted_at_height = Some(state_transaction._curr_block.height().get());
-            state_transaction
-                .world
-                .governance_proposals
-                .insert(pid, rec);
+            state_transaction.world.put_governance_proposal(pid, rec);
         }
     }
 
@@ -6503,10 +6586,7 @@ pub mod isi {
             .cloned()
         {
             record.status = crate::state::GovernanceProposalStatus::Superseded;
-            state_transaction
-                .world
-                .governance_proposals
-                .insert(pid, record);
+            state_transaction.world.put_governance_proposal(pid, record);
         }
     }
 
@@ -7665,6 +7745,16 @@ pub mod isi {
                         state_transaction,
                     )?;
                 }
+                ProposalKind::MusubiRegistryGovernance(action) => {
+                    action.validate().map_err(|error| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(error.reason().to_owned()),
+                        )
+                    })?;
+                    // Every Musubi Parliament action retains the enacted proposal as
+                    // its action-bound authorization and executes only after the
+                    // separate mandatory delay enforced by the target instruction.
+                }
                 ProposalKind::ValidationFeePolicy(payload) => {
                     if !enact_validation_fee_policy(pid, &proposal, payload, state_transaction)? {
                         close_referendum_if_open(state_transaction, &pid_hex);
@@ -7980,7 +8070,7 @@ pub mod isi {
                 ));
             }
             let derived_address = iroha_data_model::smart_contract::ContractAddress::derive(
-                iroha_data_model::account::address::chain_discriminant(),
+                state_transaction.chain_id(),
                 authority,
                 current_nonce,
                 alias_dataspace_id,
@@ -9532,6 +9622,7 @@ pub mod isi {
             ],
             ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::MusubiRegistryGovernance(_)
             | ProposalKind::ValidationFeePolicy(_)
             | ProposalKind::ValidationFeePayoutLifecycle(_) => &[
                 ParliamentBody::RulesCommittee,
@@ -9575,8 +9666,7 @@ pub mod isi {
                 proposal.status = crate::state::GovernanceProposalStatus::Rejected;
                 state_transaction
                     .world
-                    .governance_proposals
-                    .insert(ctx.proposal_id, proposal);
+                    .put_governance_proposal(ctx.proposal_id, proposal);
                 state_transaction
                     .world
                     .emit_events(Some(GovernanceEvent::ProposalRejected(
@@ -9802,12 +9892,14 @@ pub mod isi {
                     delta.as_numeric(),
                     spec,
                 )?;
-                state_transaction
-                    .world
-                    .withdraw_numeric_asset(&owner_asset_id, &delta)?;
-                state_transaction
-                    .world
-                    .deposit_numeric_asset(&escrow_asset_id, &delta)?;
+                crate::smartcontracts::isi::asset::isi::execute_citizenship_bond_transfer(
+                    state_transaction,
+                    authority,
+                    &self.owner,
+                    owner_asset_id,
+                    escrow_asset_id,
+                    delta,
+                )?;
             }
             let record = if let Some(mut record) = existing {
                 // A top-up (including a same-amount no-op) continues the
@@ -9869,12 +9961,18 @@ pub mod isi {
                 record.amount.as_numeric(),
                 spec,
             )?;
-            state_transaction
-                .world
-                .withdraw_numeric_asset(&escrow_asset_id, &record.amount)?;
-            state_transaction
-                .world
-                .deposit_numeric_asset(&owner_asset_id, &record.amount)?;
+            let movement = VerifiedGovernanceNumericMovement::new(
+                VerifiedGovernanceNumericPurpose::CitizenshipRelease {
+                    owner: self.owner.clone(),
+                },
+                escrow_asset_id,
+                owner_asset_id,
+                record.amount.clone(),
+            );
+            crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
+                state_transaction,
+                movement,
+            )?;
             state_transaction.world.citizens.remove(self.owner.clone());
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::CitizenRevoked(
@@ -9936,6 +10034,7 @@ pub mod isi {
                 gov::CitizenServiceEvent::Decline => {
                     let penalty = if record.declines_used >= citizen_cfg.free_declines_per_epoch {
                         slash_citizenship_bond(
+                            &self.owner,
                             &mut record,
                             citizen_cfg.decline_slash_bps,
                             state_transaction,
@@ -9953,6 +10052,7 @@ pub mod isi {
                     let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
                     record.cooldown_until = record.cooldown_until.max(cooldown);
                     slash_citizenship_bond(
+                        &self.owner,
                         &mut record,
                         citizen_cfg.no_show_slash_bps,
                         state_transaction,
@@ -9963,6 +10063,7 @@ pub mod isi {
                     let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
                     record.cooldown_until = record.cooldown_until.max(cooldown);
                     slash_citizenship_bond(
+                        &self.owner,
                         &mut record,
                         citizen_cfg.misconduct_slash_bps,
                         state_transaction,
@@ -15028,6 +15129,87 @@ pub mod isi {
                     )
                 })?;
             }
+            if let Some(binding) = vk_shield_binding.as_ref() {
+                let record = state_transaction
+                    .world
+                    .verifying_keys
+                    .get(&binding.id)
+                    .expect("binding was resolved from the verifying-key registry");
+                if !crate::zk::confidential_v2::is_kagemusha_topup_shield_v2_circuit_id(
+                    &record.circuit_id,
+                ) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "vk_shield must name the canonical Kagemusha top-up shield circuit".into(),
+                    ));
+                }
+                let vk_box = record.key.as_ref().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "vk_shield verifying key bytes are missing".into(),
+                    )
+                })?;
+                crate::zk::confidential_v2::ensure_kagemusha_topup_shield_v2_canonical_vk_box(
+                    vk_box,
+                )
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid vk_shield verifying key: {err}").into(),
+                    )
+                })?;
+            }
+
+            let mut derived_tree_profile = None;
+            for (role, binding) in [
+                ("vk_transfer", vk_transfer_binding.as_ref()),
+                ("vk_unshield", vk_unshield_binding.as_ref()),
+                ("vk_shield", vk_shield_binding.as_ref()),
+            ] {
+                let Some(binding) = binding else {
+                    continue;
+                };
+                let record = state_transaction
+                    .world
+                    .verifying_keys
+                    .get(&binding.id)
+                    .expect("binding was resolved from the verifying-key registry");
+                let profile = crate::state::ConfidentialTreeProfile::for_circuit_id(
+                    &record.circuit_id,
+                )
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "{role} circuit `{}` does not authenticate a supported confidential tree profile",
+                            record.circuit_id,
+                        )
+                        .into(),
+                    )
+                })?;
+                if derived_tree_profile.is_some_and(|current| current != profile) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "configured confidential verifier roles authenticate different tree profiles"
+                            .into(),
+                    ));
+                }
+                derived_tree_profile = Some(profile);
+            }
+            let derived_tree_profile = derived_tree_profile.unwrap_or_default();
+            let existing_state = state_transaction
+                .world
+                .zk_assets
+                .get(&asset_def_id)
+                .cloned();
+            let already_registered = existing_state.is_some();
+            let mut st = existing_state.unwrap_or_default();
+            st.validate_tree_integrity().map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid persisted confidential tree state: {err}").into(),
+                )
+            })?;
+            if already_registered && st.tree_profile != derived_tree_profile {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "confidential tree profile is immutable after asset registration".into(),
+                ));
+            }
+            st.tree_profile = derived_tree_profile;
 
             let mut vk_fingerprints: Vec<String> = [
                 self.vk_transfer().clone(),
@@ -15080,12 +15262,6 @@ pub mod isi {
                 &metadata_context,
             )?;
             // Persist/Update internal ZK policy state
-            let mut st = state_transaction
-                .world
-                .zk_assets
-                .get(&asset_def_id)
-                .cloned()
-                .unwrap_or_default();
             st.mode = *self.mode();
             st.allow_shield = *self.allow_shield();
             st.allow_unshield = *self.allow_unshield();
@@ -15244,20 +15420,21 @@ pub mod isi {
     ) -> Option<DataSpaceId> {
         let dataspace_alias = state_transaction
             .world
-            .asset_definition_alias_bindings
+            .asset_definition_domains
             .get(asset_definition.id())
-            .map(|binding| binding.alias.dataspace_segment().to_owned())
+            .map(|domain| domain.dataspace().as_ref().to_owned())
+            .or_else(|| {
+                state_transaction
+                    .world
+                    .asset_definition_alias_bindings
+                    .get(asset_definition.id())
+                    .map(|binding| binding.alias.dataspace_segment().to_owned())
+            })
             .or_else(|| {
                 asset_definition
                     .alias()
                     .as_ref()
                     .map(|alias| alias.dataspace_segment().to_owned())
-            })
-            .or_else(|| {
-                asset_definition
-                    .id()
-                    .try_domain()
-                    .map(|domain| domain.dataspace().as_ref().to_owned())
             })?;
 
         if dataspace_alias.eq_ignore_ascii_case("universal") {
@@ -15285,7 +15462,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            // Debit public balance by burning, then append a note commitment to shielded ledger.
+            // Plan the complete tree transition before debiting the public balance.
             // Policy: ZkNative always ok; Hybrid requires allow_shield.
             let def_id = self.asset().clone();
             validate_asset_quantity(state_transaction, &def_id, self.amount())?;
@@ -15317,8 +15494,6 @@ pub mod isi {
                     err.to_string(),
                 ))
             })?;
-            let burn = Burn::asset_quantity(self.amount().clone(), asset_id);
-            burn.execute(authority, state_transaction)?;
             state_transaction.register_commitments(1)?;
             // Append commitment and update root; emit audit metadata with roots and commitment.
             let mut st = state_transaction
@@ -15336,11 +15511,17 @@ pub mod isi {
                 *self.note_commitment(),
                 state_transaction,
             )?;
-            let frontier_update = st.record_frontier_checkpoint(
-                state_transaction.block_height(),
-                state_transaction.zk.tree_frontier_checkpoint_interval,
-                state_transaction.zk.reorg_depth_bound,
-            );
+            let frontier_update = st
+                .record_frontier_checkpoint(
+                    state_transaction.block_height(),
+                    state_transaction.zk.tree_frontier_checkpoint_interval,
+                    state_transaction.zk.reorg_depth_bound,
+                )
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("failed to checkpoint canonical confidential tree: {err}").into(),
+                    )
+                })?;
             #[cfg(feature = "telemetry")]
             let frontier_evictions = frontier_update.evicted;
             #[cfg(not(feature = "telemetry"))]
@@ -15352,6 +15533,8 @@ pub mod isi {
                     root_evictions_since(root_history_before, 1, st.root_history.len());
                 st.telemetry_stats(root_evictions, frontier_evictions)
             };
+            let burn = Burn::asset_quantity(self.amount().clone(), asset_id);
+            burn.execute(authority, state_transaction)?;
             state_transaction.world.zk_assets.remove(def_id.clone());
             state_transaction.world.zk_assets.insert(def_id.clone(), st);
             #[cfg(feature = "telemetry")]
@@ -15503,28 +15686,37 @@ pub mod isi {
             }
             let root_before = st.root_history.last().copied();
             let root_before_hex = root_before.map_or_else(|| hex::encode([0u8; 32]), hex::encode);
-            let mut outputs_sorted = self.outputs().clone();
-            // Enforce deterministic output ordering to keep the shielded tree consistent
-            // across peers regardless of transaction construction order.
-            outputs_sorted.sort_unstable();
+            // Proof public inputs authenticate this exact order; append it unchanged.
+            let authenticated_outputs = self.outputs().clone();
             #[cfg(feature = "telemetry")]
             let root_history_before = st.root_history.len();
             #[cfg(feature = "telemetry")]
-            let appended_outputs = outputs_sorted.len();
-            for &commitment in &outputs_sorted {
-                let _ =
-                    push_confidential_commitment_for_asset(&mut st, commitment, state_transaction)?;
-            }
-            let frontier_update = st.record_frontier_checkpoint(
-                state_transaction.block_height(),
-                state_transaction.zk.tree_frontier_checkpoint_interval,
-                state_transaction.zk.reorg_depth_bound,
-            );
+            let appended_outputs = authenticated_outputs.len();
+            let _ = push_confidential_commitments_for_asset(
+                &mut st,
+                &authenticated_outputs,
+                state_transaction,
+            )?;
+            let frontier_update = st
+                .record_frontier_checkpoint(
+                    state_transaction.block_height(),
+                    state_transaction.zk.tree_frontier_checkpoint_interval,
+                    state_transaction.zk.reorg_depth_bound,
+                )
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("failed to checkpoint canonical confidential tree: {err}").into(),
+                    )
+                })?;
             #[cfg(feature = "telemetry")]
             let frontier_evictions = frontier_update.evicted;
             #[cfg(not(feature = "telemetry"))]
             let _ = frontier_update;
-            let root_after = st.root_history.last().copied().unwrap_or([0u8; 32]);
+            let root_after = st.current_root().map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("failed to read canonical confidential root: {err}").into(),
+                )
+            })?;
             let root_after_hex = hex::encode(root_after);
             #[cfg(feature = "telemetry")]
             let telemetry_stats = {
@@ -15557,7 +15749,7 @@ pub mod isi {
             );
             summary_map.insert(
                 "outputs".into(),
-                norito::json::native::Value::from(outputs_sorted.len() as u64),
+                norito::json::native::Value::from(authenticated_outputs.len() as u64),
             );
             summary_map.insert(
                 "proof_hash".into(),
@@ -15579,7 +15771,7 @@ pub mod isi {
                 "root_after".into(),
                 norito::json::native::Value::from(root_after_hex),
             );
-            let outputs_value = outputs_sorted
+            let outputs_value = authenticated_outputs
                 .iter()
                 .map(|commitment| norito::json::native::Value::from(hex::encode(commitment)))
                 .collect();
@@ -15627,7 +15819,7 @@ pub mod isi {
                     ConfidentialEvent::Transferred(ConfidentialTransferred {
                         asset_definition: asset_def_id,
                         nullifiers: self.inputs().clone(),
-                        outputs: outputs_sorted,
+                        outputs: authenticated_outputs,
                         root_before,
                         root_after,
                         proof_hash,
@@ -15681,7 +15873,6 @@ pub mod isi {
                 .cloned()
                 .unwrap_or_default();
             state_transaction.register_nullifiers(self.inputs().len())?;
-            state_transaction.register_commitments(self.outputs().len())?;
             let attachment = self.proof();
             if attachment.backend != attachment.proof.backend {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -15704,13 +15895,14 @@ pub mod isi {
                 st.vk_unshield.as_ref(),
                 attachment,
             )?;
-            validate_confidential_unshield_public_inputs(
+            let authenticated_outputs = validate_confidential_unshield_public_inputs(
                 &self,
                 proof_public_amount,
                 attachment,
                 state_transaction,
                 &vk_record,
             )?;
+            state_transaction.register_commitments(authenticated_outputs.len())?;
             let proof_len = attachment.proof.bytes.len();
             enforce_vk_max_proof_bytes("unshield", &vk_record, proof_len)?;
             state_transaction.register_confidential_proof(proof_len)?;
@@ -15733,17 +15925,22 @@ pub mod isi {
                 }
             }
             let root_before = st.root_history.last().copied();
-            let mut outputs_sorted = self.outputs().clone();
-            outputs_sorted.sort_unstable();
-            for &commitment in &outputs_sorted {
-                let _ =
-                    push_confidential_commitment_for_asset(&mut st, commitment, state_transaction)?;
-            }
-            let _frontier_update = st.record_frontier_checkpoint(
-                state_transaction.block_height(),
-                state_transaction.zk.tree_frontier_checkpoint_interval,
-                state_transaction.zk.reorg_depth_bound,
-            );
+            let _ = push_confidential_commitments_for_asset(
+                &mut st,
+                &authenticated_outputs,
+                state_transaction,
+            )?;
+            let _frontier_update = st
+                .record_frontier_checkpoint(
+                    state_transaction.block_height(),
+                    state_transaction.zk.tree_frontier_checkpoint_interval,
+                    state_transaction.zk.reorg_depth_bound,
+                )
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("failed to checkpoint canonical confidential tree: {err}").into(),
+                    )
+                })?;
             let mint = Mint::asset_quantity(self.public_amount().clone(), asset_id);
             mint.execute(authority, state_transaction)?;
             // Emit an audit pulse with latest unshield info, including proof hash
@@ -16789,20 +16986,6 @@ pub mod isi {
                     }
                 }
             };
-            let selector =
-                iroha_data_model::account::AccountDomainSelector::from_domain(&canonical_id)
-                    .map_err(|err| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(err.code_str().into()),
-                        )
-                    })?;
-            if let Some(existing) = state_transaction.world.domain_selectors.get(&selector) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!("Domain selector {selector:?} already bound to domain {existing}")
-                        .into(),
-                ));
-            }
-
             let mut domain = new_domain.build(authority);
             domain.id = canonical_id.clone();
             let requires_endorsement = state_transaction
@@ -16828,16 +17011,6 @@ pub mod isi {
                 .into());
             }
             world.insert_domain_entry(canonical_id.clone(), domain);
-            if world
-                .domain_selectors
-                .insert(selector, canonical_id.clone())
-                .is_some()
-            {
-                world.remove_domain_entry(&canonical_id);
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Domain selector already registered".to_owned().into(),
-                ));
-            }
             if should_seed_domain_name_lease {
                 let lease_selector =
                     crate::sns::selector_for_domain(&canonical_id).map_err(|err| {
@@ -17645,6 +17818,56 @@ pub mod isi {
                 .into());
             }
 
+            // Derive the exact post-execution effect before consulting either
+            // proof carrier. The QC vote preimage commits this hash through its
+            // strict mode tag; authentication is required before state mutation.
+            let lane_finality_statement_hash =
+                envelope.lane_finality_statement_hash().map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay finality statement is invalid: {err}"
+                        )),
+                    )
+                })?;
+            let relay_ref = envelope.relay_ref();
+            let key = verified_lane_relay_state_key(&relay_ref)?;
+            let contract_map_key = verified_lane_relay_contract_map_state_key(&key)?;
+
+            // The durable identity is one effect per
+            // (lane, dataspace, incarnation, lane-local height). Never allow a
+            // second effect to hide behind a proof-controlled settlement hash.
+            for existing_key in [&key, &contract_map_key] {
+                let Some(existing) = state_transaction
+                    .world
+                    .smart_contract_state
+                    .get(existing_key)
+                else {
+                    continue;
+                };
+                let decoded = decode_verified_lane_relay_record_state(existing).map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!("stored {err}")),
+                    )
+                })?;
+                let existing_statement_hash = decoded
+                    .relay_envelope
+                    .lane_finality_statement_hash()
+                    .map_err(|err| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("stored lane relay finality statement is invalid: {err}")
+                                .into(),
+                        )
+                    })?;
+                if decoded.relay_ref != relay_ref
+                    || existing_statement_hash != lane_finality_statement_hash
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "conflicting verified lane relay effect already exists".into(),
+                    )
+                    .into());
+                }
+            }
+
             let proof_blob = self.proof_blob().clone();
             if proof_blob.payload.is_empty() {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -17701,10 +17924,14 @@ pub mod isi {
                 })?;
             if proof_envelope.dsid != envelope.dataspace_id
                 || proof_envelope.manifest_root != manifest_root
+                || proof_envelope.da_commitment
+                    != envelope
+                        .da_commitment_hash
+                        .map(|commitment| Hash::from(commitment).into())
             {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
-                        "verified lane relay proof does not match the declared manifest_root"
+                        "verified lane relay proof does not match the declared manifest_root or DA commitment"
                             .into(),
                     ),
                 )
@@ -17765,6 +17992,35 @@ pub mod isi {
                         format!("verified lane relay FASTPQ verification failed: {err}").into(),
                     )
                 })?;
+            state_transaction
+                .authenticate_finalized_lane_relay(&envelope)
+                .map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay finality authentication failed: {err}"
+                        )),
+                    )
+                })?;
+            let qc = envelope.qc.as_ref().ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "lane relay finality authentication requires a QC".into(),
+                ))
+            })?;
+            let expected_old_root: [u8; 32] = qc.parent_state_root.into();
+            let expected_new_root: [u8; 32] = qc.post_state_root.into();
+            let expected_tx_set_hash: [u8; 32] = lane_finality_statement_hash.into();
+            if verified_fastpq.old_root != expected_old_root
+                || verified_fastpq.new_root != expected_new_root
+                || verified_fastpq.tx_set_hash != expected_tx_set_hash
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay FastPQ roots do not match the finalized lane effect"
+                            .into(),
+                    ),
+                )
+                .into());
+            }
             let record_statement_digest = verified_fastpq.statement_digest;
             let record_proof_digest = verified_fastpq.proof_digest;
             let record_binding = binding;
@@ -17773,13 +18029,15 @@ pub mod isi {
                 envelope,
                 proof_payload_hash,
                 record_statement_digest,
+                lane_finality_statement_hash,
+                verified_fastpq.old_root,
+                verified_fastpq.new_root,
+                verified_fastpq.tx_set_hash,
                 record_proof_digest,
                 verified_at_height,
                 manifest_root,
                 record_binding,
             );
-            let key = verified_lane_relay_state_key(&record.relay_ref)?;
-            let contract_map_key = verified_lane_relay_contract_map_state_key(&key)?;
             let encoded = encode_verified_lane_relay_record_state(&record).map_err(|err| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     err,
@@ -17812,16 +18070,6 @@ pub mod isi {
                     .into());
                 }
             }
-
-            state_transaction
-                .authenticate_finalized_lane_relay(&record.relay_envelope)
-                .map_err(|err| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!(
-                            "lane relay finality authentication failed: {err}"
-                        )),
-                    )
-                })?;
 
             let mut inserted = false;
             if state_transaction
@@ -19069,12 +19317,16 @@ pub mod isi {
                     .clone(),
                 fee_sponsor_asset_scope(&definition, dataspace),
             );
-            crate::smartcontracts::isi::asset::isi::execute_fee_sponsor_custody_transfer(
-                state_transaction,
-                authority,
+            let withdrawal = VerifiedFeeSponsorVaultWithdrawal::new(
+                authority.clone(),
+                program_id.clone(),
                 source,
                 self.destination().clone(),
                 self.amount().clone(),
+            );
+            crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_vault_withdrawal(
+                state_transaction,
+                withdrawal,
             )?;
             if vault.balance.is_zero() {
                 state_transaction.world.fee_sponsor_vaults.remove(key);
@@ -19096,9 +19348,13 @@ pub mod isi {
         crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
 
-    fn is_permission_domain_associated(permission: &Permission, domain_id: &DomainId) -> bool {
+    fn is_permission_domain_associated(
+        permission: &Permission,
+        domain_id: &DomainId,
+        asset_definition_ids: &BTreeSet<AssetDefinitionId>,
+    ) -> bool {
         let asset_definition_matches_domain = |asset_definition: &AssetDefinitionId| -> bool {
-            asset_definition.try_domain() == Some(domain_id)
+            asset_definition_ids.contains(asset_definition)
         };
         if let Ok(permission) = CanUnregisterDomain::try_from(permission) {
             return &permission.domain == domain_id;
@@ -19108,6 +19364,47 @@ pub mod isi {
         }
         if let Ok(permission) = CanRegisterAccount::try_from(permission) {
             return &permission.domain == domain_id;
+        }
+        if let Ok(permission) = CanResolveAccountAlias::try_from(permission) {
+            return match &permission.scope {
+                AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                AccountAliasPermissionScope::Alias(alias) => {
+                    alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                        && &alias.canonical_name.dataspace == domain_id.dataspace()
+                }
+                AccountAliasPermissionScope::Dataspace(_) => false,
+            };
+        }
+        if let Ok(permission) = CanDelegateAccountAliasResolution::try_from(permission) {
+            return match &permission.scope {
+                AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                AccountAliasPermissionScope::Alias(alias) => {
+                    alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                        && &alias.canonical_name.dataspace == domain_id.dataspace()
+                }
+                AccountAliasPermissionScope::Dataspace(_) => false,
+            };
+        }
+        if let Ok(permission) = CanManageAccountAlias::try_from(permission) {
+            return match &permission.scope {
+                AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                AccountAliasPermissionScope::Alias(alias) => {
+                    alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                        && &alias.canonical_name.dataspace == domain_id.dataspace()
+                }
+                AccountAliasPermissionScope::Dataspace(_) => false,
+            };
+        }
+        if let Ok(permission) = CanManageAssetDefinitionAlias::try_from(permission) {
+            return match &permission.scope {
+                AssetDefinitionAliasPermissionScope::Domain(domain) => domain == domain_id,
+                AssetDefinitionAliasPermissionScope::Alias(alias) => {
+                    alias.canonical_name.domain_segment() == Some(domain_id.name().as_ref())
+                        && alias.canonical_name.dataspace_segment()
+                            == domain_id.dataspace().as_ref()
+                }
+                AssetDefinitionAliasPermissionScope::Dataspace(_) => false,
+            };
         }
         if let Ok(permission) = CanUnregisterAssetDefinition::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
@@ -19127,8 +19424,8 @@ pub mod isi {
         if let Ok(permission) = CanModifyAssetMetadataWithDefinition::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
-        if let Ok(permission) = CanMintAsset::try_from(permission) {
-            return asset_definition_matches_domain(permission.asset.definition());
+        if let Ok(permission) = CanMintAssetToAccount::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanBurnAsset::try_from(permission) {
             return asset_definition_matches_domain(permission.asset.definition());
@@ -19158,6 +19455,7 @@ pub mod isi {
     fn remove_domain_associated_permissions(
         state_transaction: &mut StateTransaction<'_, '_>,
         domain_id: &DomainId,
+        asset_definition_ids: &BTreeSet<AssetDefinitionId>,
     ) {
         let account_ids: Vec<AccountId> = state_transaction
             .world
@@ -19172,9 +19470,9 @@ pub mod isi {
                 .account_permissions
                 .get(&account_id)
                 .is_some_and(|permissions| {
-                    permissions
-                        .iter()
-                        .any(|permission| is_permission_domain_associated(permission, domain_id))
+                    permissions.iter().any(|permission| {
+                        is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                    })
                 });
             if !should_remove {
                 continue;
@@ -19185,8 +19483,9 @@ pub mod isi {
                 .account_permissions
                 .get_mut(&account_id)
             {
-                permissions
-                    .retain(|permission| !is_permission_domain_associated(permission, domain_id));
+                permissions.retain(|permission| {
+                    !is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                });
                 permissions.is_empty()
             } else {
                 false
@@ -19215,8 +19514,9 @@ pub mod isi {
                 .roles
                 .get(&role_id)
                 .is_some_and(|role| {
-                    role.permissions()
-                        .any(|permission| is_permission_domain_associated(permission, domain_id))
+                    role.permissions().any(|permission| {
+                        is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                    })
                 });
             if !should_remove {
                 continue;
@@ -19225,8 +19525,9 @@ pub mod isi {
             let impacted_accounts = state_transaction.accounts_with_role(&role_id);
 
             if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
-                role.permissions
-                    .retain(|permission| !is_permission_domain_associated(permission, domain_id));
+                role.permissions.retain(|permission| {
+                    !is_permission_domain_associated(permission, domain_id, asset_definition_ids)
+                });
                 role.permission_epochs
                     .retain(|permission, _| role.permissions.contains(permission));
             }
@@ -19251,11 +19552,132 @@ pub mod isi {
                 .accounts_in_domain_iter(&domain_id)
                 .map(|account| account.id().clone())
                 .collect();
-            let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
+            // This reverse index is rebuilt from the persisted authoritative mapping at restore
+            // and maintained atomically by the world mutators. Enumerating it keeps teardown
+            // proportional to the domain being removed instead of scanning every definition.
+            let remove_asset_definitions: BTreeSet<AssetDefinitionId> = state_transaction
                 .world
-                .asset_definitions_in_domain_iter(&domain_id)
-                .map(|ad| ad.id().clone())
-                .collect();
+                .domain_asset_definitions
+                .get(&domain_id)
+                .cloned()
+                .unwrap_or_default();
+            let remove_assets = state_transaction
+                .world
+                .assets_by_domain
+                .get(&domain_id)
+                .cloned()
+                .unwrap_or_default();
+            let mut assets_from_definitions = BTreeSet::new();
+            for asset_definition_id in &remove_asset_definitions {
+                if state_transaction
+                    .world
+                    .asset_definitions
+                    .get(asset_definition_id)
+                    .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: domain asset-definition index references missing definition {asset_definition_id}"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if state_transaction
+                    .world
+                    .asset_definition_domains
+                    .get(asset_definition_id)
+                    != Some(&domain_id)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has inconsistent authoritative domain context"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+
+                let definition_assets = state_transaction
+                    .world
+                    .asset_definition_assets
+                    .get(asset_definition_id)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut expected_holders = BTreeSet::new();
+                let mut expected_nonzero_holders = BTreeSet::new();
+                for asset_id in &definition_assets {
+                    if asset_id.definition() != asset_definition_id {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "cannot unregister domain {domain_id}: asset-definition index for {asset_definition_id} contains foreign asset {asset_id}"
+                            )
+                            .into(),
+                        )
+                        .into());
+                    }
+                    let Some(value) = state_transaction.world.assets.get(asset_id) else {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "cannot unregister domain {domain_id}: asset-definition index references missing asset {asset_id}"
+                            )
+                            .into(),
+                        )
+                        .into());
+                    };
+                    if !state_transaction
+                        .world
+                        .assets_by_account
+                        .get(asset_id.account())
+                        .is_some_and(|assets| assets.contains(asset_id))
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "cannot unregister domain {domain_id}: account asset index omits {asset_id}"
+                            )
+                            .into(),
+                        )
+                        .into());
+                    }
+                    expected_holders.insert(asset_id.account().clone());
+                    if !value.as_ref().is_zero() {
+                        expected_nonzero_holders.insert(asset_id.account().clone());
+                    }
+                }
+                if state_transaction
+                    .world
+                    .asset_definition_holders
+                    .get(asset_definition_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    != expected_holders
+                    || state_transaction
+                        .world
+                        .asset_definition_nonzero_holders
+                        .get(asset_definition_id)
+                        .cloned()
+                        .unwrap_or_default()
+                        != expected_nonzero_holders
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: holder indexes for asset definition {asset_definition_id} are inconsistent"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                assets_from_definitions.extend(definition_assets);
+            }
+            if remove_assets != assets_from_definitions {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: domain and asset-definition asset indexes disagree"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             let orchard_pool_references =
                 crate::privacy_state::load_privacy_orchard_pool_references_v1(
                     &state_transaction.world.privacy_commitments,
@@ -19385,7 +19807,11 @@ pub mod isi {
                 }
             }
 
-            remove_domain_associated_permissions(state_transaction, &domain_id);
+            remove_domain_associated_permissions(
+                state_transaction,
+                &domain_id,
+                &remove_asset_definitions,
+            );
 
             state_transaction
                 .world
@@ -19610,17 +20036,66 @@ pub mod isi {
                 }
             }
 
-            let remove_assets: Vec<AssetId> = state_transaction
-                .world
-                .assets
-                .iter()
-                .filter(|(asset_id, _)| asset_id.definition().try_domain() == Some(&domain_id))
-                .map(|(asset_id, _)| asset_id.clone())
-                .collect();
-            for asset_id in remove_assets {
+            for asset_id in &remove_assets {
                 state_transaction
                     .world
-                    .remove_asset_and_metadata_with_total(&asset_id)?;
+                    .remove_asset_and_metadata_with_total(asset_id)?;
+            }
+            if state_transaction
+                .world
+                .assets_by_domain
+                .get(&domain_id)
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: domain asset index remained after exact asset removal"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            for asset_id in &remove_assets {
+                if state_transaction
+                    .world
+                    .assets_by_account
+                    .get(asset_id.account())
+                    .is_some_and(|assets| assets.contains(asset_id))
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account asset index retained removed asset {asset_id}"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+            for asset_definition_id in &remove_asset_definitions {
+                if state_transaction
+                    .world
+                    .asset_definition_assets
+                    .get(asset_definition_id)
+                    .is_some()
+                    || state_transaction
+                        .world
+                        .asset_definition_holders
+                        .get(asset_definition_id)
+                        .is_some()
+                    || state_transaction
+                        .world
+                        .asset_definition_nonzero_holders
+                        .get(asset_definition_id)
+                        .is_some()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset indexes remained after removing assets for definition {asset_definition_id}"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
             }
 
             for asset_definition_id in remove_asset_definitions {
@@ -19686,14 +20161,6 @@ pub mod isi {
                     state_transaction.world.remove_account_alias_binding(&label);
                 }
             }
-            let selector = iroha_data_model::account::AccountDomainSelector::from_domain(
-                &domain_id,
-            )
-            .map_err(|err| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    err.code_str().into(),
-                ))
-            })?;
             if state_transaction
                 .world
                 .remove_domain_entry(&domain_id)
@@ -19701,7 +20168,6 @@ pub mod isi {
             {
                 return Err(FindError::Domain(domain_id).into());
             }
-            state_transaction.world.domain_selectors.remove(selector);
 
             state_transaction
                 .world
@@ -19723,6 +20189,19 @@ pub mod isi {
             let initial_owner = new_role.grant_to().clone();
             let mut role = new_role.build(authority);
             role.ensure_permission_epochs(state_transaction.block_height());
+
+            if role.permissions().any(|permission| {
+                !crate::alias::asset_definition_alias_permission_targets_active_binding(
+                    &state_transaction.world,
+                    permission,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "exact asset-definition alias role permission does not target its current live binding"
+                        .into(),
+                ));
+            }
 
             if role.permissions().any(|permission| {
                 crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
@@ -19813,6 +20292,17 @@ pub mod isi {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
             let current_epoch = state_transaction.block_height();
+
+            if !crate::alias::asset_definition_alias_permission_targets_active_binding(
+                &state_transaction.world,
+                &permission,
+                state_transaction.block_unix_timestamp_ms(),
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "exact asset-definition alias role permission does not target its current live binding"
+                        .into(),
+                ));
+            }
 
             if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                 state_transaction,
@@ -20167,6 +20657,15 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            let required: Permission = CanUpgradeExecutor.into();
+            if !crate::executor::is_initial_genesis_context(state_transaction)
+                && !has_exact_permission(&state_transaction.world, authority, &required)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: CanUpgradeExecutor".into(),
+                ));
+            }
+
             let raw_executor = self.executor();
 
             // Cloning executor to avoid multiple mutable borrows of `state_transaction`.
@@ -20304,524 +20803,7 @@ pub mod isi {
                 .expect("world ISI fixture key generation for requested algorithm should succeed")
         }
 
-        #[test]
-        fn validation_fee_activation_delay_enforces_exact_boundary_and_overflow() {
-            let enacted_at_height = 40;
-            let minimum = enacted_at_height
-                + iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
-            assert!(
-                super::ensure_validation_fee_policy_activation_delay(
-                    minimum.saturating_sub(1),
-                    enacted_at_height,
-                )
-                .is_err()
-            );
-            assert_eq!(
-                super::ensure_validation_fee_policy_activation_delay(minimum, enacted_at_height)
-                    .expect("exact activation boundary"),
-                minimum
-            );
-            assert!(
-                super::ensure_validation_fee_policy_activation_delay(
-                    minimum.saturating_add(1),
-                    enacted_at_height,
-                )
-                .is_err(),
-                "late activation must not weaken the exact 120,960-block relation"
-            );
-            assert!(
-                super::ensure_validation_fee_policy_activation_delay(
-                    u64::MAX,
-                    u64::MAX
-                        - iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS
-                        + 1,
-                )
-                .is_err()
-            );
-        }
-
-        #[test]
-        fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role_holders() {
-            use iroha_data_model::permission::Permissions;
-            use iroha_executor_data_model::permission::asset::CanTransferAsset;
-
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
-                .parse()
-                .expect("canonical asset definition id");
-            let permission: Permission = CanTransferAsset {
-                asset: AssetId::new(asset_definition_id, ALICE_ID.clone()),
-            }
-            .into();
-
-            super::require_absent_validation_fee_runtime_permission(
-                &stx,
-                &permission,
-                "the wrapper SBD asset transfer effect",
-            )
-            .expect("an absent effect permission is eligible for protected derivation");
-
-            stx.world
-                .account_permissions
-                .insert(BOB_ID.clone(), Permissions::from([permission.clone()]));
-            let direct_error = super::require_absent_validation_fee_runtime_permission(
-                &stx,
-                &permission,
-                "the wrapper SBD asset transfer effect",
-            )
-            .expect_err("a caller-made direct effect grant must fail closed");
-            assert!(
-                format!("{direct_error:?}").contains("absent before enactment"),
-                "unexpected direct-holder error: {direct_error:?}"
-            );
-            stx.world.account_permissions.remove(BOB_ID.clone());
-
-            let role_id: RoleId = "validation_fee_effect_holder".parse().expect("role id");
-            let role = Role::new(role_id.clone(), ALICE_ID.clone())
-                .add_permission(permission.clone())
-                .build(&ALICE_ID);
-            stx.world.roles.insert(role_id, role);
-            let role_error = super::require_absent_validation_fee_runtime_permission(
-                &stx,
-                &permission,
-                "the wrapper SBD asset transfer effect",
-            )
-            .expect_err("a role-owned effect grant must fail closed");
-            assert!(
-                format!("{role_error:?}").contains("forbids role ownership"),
-                "unexpected role-holder error: {role_error:?}"
-            );
-            assert!(
-                stx.world
-                    .account_permissions
-                    .iter()
-                    .all(|(_, permissions)| !permissions.contains(&permission)),
-                "a failed derivation preflight must leave no direct effect token"
-            );
-        }
-
-        #[test]
-        fn validation_fee_derived_runtime_permissions_roll_back_atomically() {
-            use iroha_executor_data_model::permission::asset::CanTransferAsset;
-            use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
-
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
-                .parse()
-                .expect("canonical asset definition id");
-            let effect_permission: Permission = CanTransferAsset {
-                asset: AssetId::new(asset_definition_id, ALICE_ID.clone()),
-            }
-            .into();
-            let contract_address: iroha_data_model::smart_contract::ContractAddress =
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
-                    .parse()
-                    .expect("canonical contract address");
-            let wrapper_permission: Permission = CanInvokeContractEntrypoint {
-                contract: contract_address.clone(),
-                entrypoint: "autonomous_validation_fee_tick".to_owned(),
-            }
-            .into();
-            let pool_permission: Permission = CanInvokeContractEntrypoint {
-                contract: contract_address,
-                entrypoint: "swap_exact_in_quote_public".to_owned(),
-            }
-            .into();
-            let permissions = vec![
-                (
-                    wrapper_permission.clone(),
-                    ALICE_ID.clone(),
-                    "the wrapper payout selector",
-                ),
-                (
-                    pool_permission.clone(),
-                    ALICE_ID.clone(),
-                    "the pool swap selector",
-                ),
-                (
-                    effect_permission.clone(),
-                    BOB_ID.clone(),
-                    "the wrapper SBD asset transfer effect",
-                ),
-            ];
-
-            let error = super::install_derived_validation_fee_runtime_permissions_with_validation(
-                permissions,
-                &mut stx,
-                |_| {
-                    Err(InstructionExecutionError::InvariantViolation(
-                        "forced post-install topology failure".into(),
-                    ))
-                },
-            )
-            .expect_err("post-install validation failure must reject lifecycle derivation");
-            assert!(
-                format!("{error:?}").contains("forced post-install topology failure"),
-                "unexpected rollback error: {error:?}"
-            );
-            for permission in [wrapper_permission, pool_permission, effect_permission] {
-                assert!(
-                    stx.world
-                        .account_permissions
-                        .iter()
-                        .all(|(_, permissions)| !permissions.contains(&permission)),
-                    "failed post-install validation must roll back every derived permission"
-                );
-            }
-        }
-
-        fn fee_sponsor_revision_fixture(
-            program_id: iroha_data_model::nexus::FeeSponsorProgramId,
-            asset_definition_id: AssetDefinitionId,
-            revision: u64,
-        ) -> iroha_data_model::nexus::FeeSponsorProgramRevision {
-            use iroha_data_model::nexus::{
-                FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorIvmSelector,
-                FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
-                FeeSponsorRuleSelector,
-            };
-
-            FeeSponsorProgramRevision {
-                program_id,
-                revision,
-                eligibility: FeeSponsorEligibility::EnrolledOnly,
-                rules: vec![FeeSponsorRule {
-                    id: "allow_ivm".parse().expect("rule name"),
-                    effect: FeeSponsorRuleEffect::Allow,
-                    selectors: vec![FeeSponsorRuleSelector::Ivm(FeeSponsorIvmSelector {
-                        code_hash: Hash::new(b"fee-sponsor-global-scope-test"),
-                    })],
-                }],
-                asset_budgets: vec![FeeSponsorAssetBudget {
-                    asset_definition_id,
-                    per_transaction: Quantity::from(1_u32),
-                    per_block: Quantity::from(10_u32),
-                    per_program_epoch: Quantity::from(100_u32),
-                    per_beneficiary_epoch: Quantity::from(5_u32),
-                    reserve_floor: Quantity::zero(),
-                    epoch_length_blocks: NonZeroU64::new(100).expect("nonzero epoch"),
-                }],
-            }
-        }
-
-        #[test]
-        fn fee_sponsor_vault_allocation_requires_program_management_authority() {
-            use iroha_data_model::{
-                isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
-                nexus::{
-                    DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
-                    FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey, ProofBlob,
-                },
-                permission::Permissions,
-            };
-            use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
-
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            stx.nexus.enabled = true;
-
-            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
-                .parse()
-                .expect("canonical asset definition id");
-            let program_id = FeeSponsorProgramId::new(
-                ALICE_ID.clone(),
-                "allocation_auth".parse().expect("program name"),
-            );
-            stx.world.fee_sponsor_program_revisions.insert(
-                FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
-                fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
-            );
-            let mut program = FeeSponsorProgram::new(program_id.clone());
-            program.lifecycle = FeeSponsorProgramLifecycle::Active;
-            program.active_revision = Some(1);
-            stx.world
-                .fee_sponsor_programs
-                .insert(program_id.clone(), program);
-
-            let error = RegisterVerifiedFeeSponsorVaultAllocation {
-                program_id: program_id.clone(),
-                program_revision: 1,
-                asset_definition_id: asset_definition_id.clone(),
-                verified_allocation: Quantity::from(1_u32),
-                source_dataspace_id: DataSpaceId::UNIVERSAL,
-                source_height: 1,
-                source_state_root: Hash::new(b"allocation-auth-source"),
-                expires_at_height: 2,
-                lease_id: Hash::new(b"allocation-auth-lease"),
-                manifest_root: [1; 32],
-                proof_blob: ProofBlob {
-                    payload: vec![1],
-                    expiry_slot: None,
-                },
-            }
-            .execute(&BOB_ID, &mut stx)
-            .expect_err("ordinary accounts must not reserve a sponsor vault");
-            assert!(
-                error
-                    .to_string()
-                    .contains("cannot manage fee sponsor program")
-            );
-
-            let mut permissions = Permissions::new();
-            permissions.insert(
-                CanManageFeeSponsorProgram {
-                    sponsor: ALICE_ID.clone(),
-                }
-                .into(),
-            );
-            stx.world
-                .account_permissions
-                .insert(BOB_ID.clone(), permissions);
-            ensure_fee_sponsor_program_owner(&BOB_ID, &program_id, &stx)
-                .expect("delegated manager must be authorized to register allocations");
-        }
-
-        #[test]
-        fn fee_sponsor_vault_allocation_rejects_future_source_height() {
-            use iroha_data_model::{
-                isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
-                nexus::{
-                    DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
-                    FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey, FeeSponsorVault,
-                    FeeSponsorVaultKey, ProofBlob,
-                },
-            };
-
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            stx.nexus.enabled = true;
-
-            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
-                .parse()
-                .expect("canonical asset definition id");
-            stx.world.asset_definitions.insert(
-                asset_definition_id.clone(),
-                AssetDefinition::numeric(asset_definition_id.clone())
-                    .with_name("global fee asset".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&ALICE_ID),
-            );
-            let program_id = FeeSponsorProgramId::new(
-                ALICE_ID.clone(),
-                "future_source".parse().expect("program name"),
-            );
-            stx.world.fee_sponsor_program_revisions.insert(
-                FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
-                fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
-            );
-            let mut program = FeeSponsorProgram::new(program_id.clone());
-            program.lifecycle = FeeSponsorProgramLifecycle::Active;
-            program.active_revision = Some(1);
-            stx.world
-                .fee_sponsor_programs
-                .insert(program_id.clone(), program);
-            let vault_key = FeeSponsorVaultKey {
-                program_id: program_id.clone(),
-                asset_definition_id: asset_definition_id.clone(),
-            };
-            stx.world.fee_sponsor_vaults.insert(
-                vault_key.clone(),
-                FeeSponsorVault {
-                    key: vault_key,
-                    balance: Quantity::from(10_u32),
-                },
-            );
-
-            let error = RegisterVerifiedFeeSponsorVaultAllocation {
-                program_id,
-                program_revision: 1,
-                asset_definition_id,
-                verified_allocation: Quantity::from(10_u32),
-                source_dataspace_id: DataSpaceId::UNIVERSAL,
-                source_height: 2,
-                source_state_root: Hash::new(b"future-source-state"),
-                expires_at_height: u64::MAX,
-                lease_id: Hash::new(b"future-source-lease"),
-                manifest_root: [1; 32],
-                proof_blob: ProofBlob {
-                    payload: vec![1],
-                    expiry_slot: None,
-                },
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("a source snapshot cannot come from a future height");
-            match error {
-                InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(message),
-                ) => assert!(
-                    message.contains("invalid source height"),
-                    "unexpected error: {message}"
-                ),
-                other => panic!("unexpected error: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
-            use iroha_data_model::{
-                isi::nexus::{
-                    FundFeeSponsorProgram, RegisterVerifiedFeeSponsorVaultAllocation,
-                    StageFeeSponsorProgramRevision,
-                },
-                nexus::{
-                    DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
-                    FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey, ProofBlob,
-                },
-            };
-
-            let state = State::new_for_testing(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).expect("nonzero height"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            stx.nexus.enabled = true;
-
-            let authority = ALICE_ID.clone();
-            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
-                .parse()
-                .expect("canonical asset definition id");
-            let definition = AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name("restricted fee asset".to_owned())
-                .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                .build(&authority);
-            stx.world
-                .asset_definitions
-                .insert(asset_definition_id.clone(), definition);
-
-            let program_id = FeeSponsorProgramId::new(
-                authority.clone(),
-                "restricted_asset".parse().expect("program name"),
-            );
-            let revision_one =
-                fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1);
-            stx.world.fee_sponsor_program_revisions.insert(
-                FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
-                revision_one,
-            );
-            let mut program = FeeSponsorProgram::new(program_id.clone());
-            program.lifecycle = FeeSponsorProgramLifecycle::Active;
-            program.active_revision = Some(1);
-            stx.world
-                .fee_sponsor_programs
-                .insert(program_id.clone(), program);
-
-            let stage_error = StageFeeSponsorProgramRevision {
-                revision: fee_sponsor_revision_fixture(
-                    program_id.clone(),
-                    asset_definition_id.clone(),
-                    2,
-                ),
-            }
-            .execute(&authority, &mut stx)
-            .expect_err("restricted fee asset revision must fail");
-            let is_restricted_asset_error = |error: &Error| {
-                matches!(
-                    error,
-                    Error::InvalidParameter(InvalidParameterError::SmartContract(message))
-                        if message.contains("requires global-balance")
-                )
-            };
-            assert!(is_restricted_asset_error(&stage_error));
-            assert!(
-                stx.world
-                    .fee_sponsor_program_revisions
-                    .get(&FeeSponsorProgramRevisionKey::new(program_id.clone(), 2))
-                    .is_none()
-            );
-
-            let fund_error = FundFeeSponsorProgram {
-                program_id: program_id.clone(),
-                asset_definition_id: asset_definition_id.clone(),
-                amount: Quantity::from(1_u32),
-            }
-            .execute(&authority, &mut stx)
-            .expect_err("restricted fee asset funding must fail");
-            assert!(is_restricted_asset_error(&fund_error));
-
-            let allocation_error = RegisterVerifiedFeeSponsorVaultAllocation {
-                program_id,
-                program_revision: 1,
-                asset_definition_id,
-                verified_allocation: Quantity::from(1_u32),
-                source_dataspace_id: DataSpaceId::new(1),
-                source_height: 1,
-                source_state_root: Hash::new(b"source-state-root"),
-                expires_at_height: 10,
-                lease_id: Hash::new(b"restricted-fee-asset-lease"),
-                manifest_root: [1; 32],
-                proof_blob: ProofBlob {
-                    payload: vec![1],
-                    expiry_slot: None,
-                },
-            }
-            .execute(&authority, &mut stx)
-            .expect_err("restricted fee asset allocation must fail");
-            assert!(is_restricted_asset_error(&allocation_error));
-        }
+        include!("world_validation_fee_tests.rs");
 
         #[test]
         fn set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate() {
@@ -21526,9 +21508,7 @@ pub mod isi {
                 sender: vec![0x31; 20],
                 recipient_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
                 recipient: ALICE_ID
-                    .to_i105_for_discriminant(
-                        iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_TAIRA,
-                    )
+                    .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
                     .expect("canonical Taira inbound recipient fixture")
                     .into_bytes(),
                 route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
@@ -21539,9 +21519,7 @@ pub mod isi {
         #[test]
         fn sccp_taira_recipient_requires_exact_single_ed25519_i105() {
             let taira = ALICE_ID
-                .to_i105_for_discriminant(
-                    iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_TAIRA,
-                )
+                .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
                 .expect("Taira recipient fixture");
             assert_eq!(
                 parse_sccp_taira_recipient_v1(&taira).expect("exact Taira Ed25519 recipient"),
@@ -21549,9 +21527,7 @@ pub mod isi {
             );
 
             let wrong_network = ALICE_ID
-                .to_i105_for_discriminant(
-                    iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
-                )
+                .to_i105_for_discriminant(753)
                 .expect("mainnet recipient fixture");
             let custom_network = ALICE_ID
                 .to_i105_for_discriminant(42)
@@ -21577,9 +21553,7 @@ pub mod isi {
             )
             .expect("multisig policy");
             let multisig = AccountId::new_multisig(multisig_policy)
-                .to_i105_for_discriminant(
-                    iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_TAIRA,
-                )
+                .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
                 .expect("multisig Taira address");
             assert!(
                 parse_sccp_taira_recipient_v1(&multisig).is_err(),
@@ -21591,7 +21565,7 @@ pub mod isi {
                     .public_key()
                     .clone(),
             )
-            .to_i105_for_discriminant(iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_TAIRA)
+            .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
             .expect("secp256k1 Taira address");
             assert!(
                 parse_sccp_taira_recipient_v1(&secp).is_err(),
@@ -21900,7 +21874,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
             let domain_id =
                 DomainId::try_new("confidential", "universal").expect("valid test domain");
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
                 "coin".parse().expect("valid asset name"),
             );
@@ -21913,10 +21887,12 @@ pub mod isi {
                     .execute(&ALICE_ID, &mut stx)
                     .expect("register test account");
             }
-            Register::asset_definition(
-                AssetDefinition::numeric(asset_definition_id.clone())
-                    .with_name("Confidential coin".to_owned()),
-            )
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "Confidential coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register owner-controlled asset definition");
 
@@ -22019,7 +21995,7 @@ pub mod isi {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            let asset = AssetDefinitionId::new(
+            let asset = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("missing", "universal").expect("valid domain"),
                 "asset".parse().expect("valid asset name"),
             );
@@ -23594,9 +23570,7 @@ pub mod isi {
             let mut payload = sora_outbound_sccp_payload(73);
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.sender = ALICE_ID
-                .to_i105_for_discriminant(
-                    iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
-                )
+                .to_i105_for_discriminant(753)
                 .expect("canonical mainnet-discriminant sender")
                 .into_bytes();
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
@@ -23756,10 +23730,13 @@ pub mod isi {
             Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register SCCP sender fixture");
-            Register::asset_definition(
-                AssetDefinition::new(settlement_asset.clone(), NumericSpec::integer())
-                    .with_name("xor".to_owned()),
-            )
+            Register::asset_definition(AssetDefinition::new(
+                settlement_asset.clone(),
+                "xor".to_owned(),
+                NumericSpec::integer(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register integer-only SCCP settlement asset");
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
@@ -24120,7 +24097,7 @@ seiyaku GovernanceLifecycle {
             let abi_hash_bytes: [u8; 32] = abi_hash.into();
             DeployContractProposal {
                 contract_address: ContractAddress::derive(
-                    iroha_data_model::account::address::chain_discriminant(),
+                    &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                     authority,
                     nonce,
                     DataSpaceId::UNIVERSAL,
@@ -24527,7 +24504,10 @@ seiyaku GovernanceLifecycle {
                 0,
             )
             .expect("valid envelope")
-            .with_manifest_root(Some(manifest_root));
+            .with_manifest_root(Some(manifest_root))
+            .with_lane_block_descriptor_hash(Some(Hash::new(
+                b"world-isi-test-lane-block-descriptor",
+            )));
             let verified_at_height = base_envelope.block_height;
             let proof_digest =
                 Hash::new(b"sample-verified-lane-relay-external-fastpq-proof-payload");
@@ -24559,10 +24539,17 @@ seiyaku GovernanceLifecycle {
                 target_dsids: vec![10],
                 effect_binding: None,
             };
+            let lane_finality_statement_hash = envelope
+                .lane_finality_statement_hash()
+                .expect("complete test lane finality statement");
             VerifiedLaneRelayRecord::new(
                 envelope,
                 Hash::new(b"proof"),
                 [0xAB; 32],
+                lane_finality_statement_hash,
+                [0; 32],
+                [0; 32],
+                lane_finality_statement_hash.into(),
                 Hash::new(b"fastpq-proof"),
                 42,
                 manifest_root,
@@ -24575,18 +24562,19 @@ seiyaku GovernanceLifecycle {
             let record = sample_verified_lane_relay_record();
             let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
             let key = key.to_string();
-            let expected_prefix = format!(
-                "{}_{}_{}_{}_",
+            let expected = format!(
+                "{}_{}_{}_{}_{}",
                 iroha_data_model::nexus::VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
                 record.relay_ref.dataspace_id.as_u64(),
                 record.relay_ref.lane_id.as_u32(),
+                hex::encode(record.relay_ref.lane_incarnation.as_ref()),
                 record.relay_ref.block_height,
             );
-            assert!(key.starts_with(&expected_prefix));
+            assert_eq!(key, expected);
             assert!(!key.contains('/'));
-            let suffix = key.rsplit('_').next().expect("hash suffix");
-            assert_eq!(suffix.len(), 64);
-            assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
+            let incarnation = key.split('_').nth_back(1).expect("incarnation segment");
+            assert_eq!(incarnation.len(), 64);
+            assert!(incarnation.chars().all(|ch| ch.is_ascii_hexdigit()));
         }
 
         #[test]
@@ -26286,10 +26274,12 @@ seiyaku GovernanceLifecycle {
                 .asset_definition(&settlement_asset_definition_id)
                 .is_err()
             {
-                Register::asset_definition(
-                    AssetDefinition::numeric(settlement_asset_definition_id.clone())
-                        .with_name("xor".to_owned()),
-                )
+                Register::asset_definition(AssetDefinition::numeric(
+                    settlement_asset_definition_id.clone(),
+                    "xor",
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ))
                 .execute(&ALICE_ID, stx)
                 .expect("register SCCP settlement asset fixture");
             }
@@ -26672,9 +26662,13 @@ seiyaku GovernanceLifecycle {
                 }
             }
             if stx.world.asset_definition(&asset).is_err() {
-                Register::asset_definition(
-                    AssetDefinition::new(asset.clone(), asset_spec).with_name("xor".to_owned()),
-                )
+                Register::asset_definition(AssetDefinition::new(
+                    asset.clone(),
+                    "xor".to_owned(),
+                    asset_spec,
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ))
                 .execute(&ALICE_ID, stx)
                 .expect("register SCCP settlement asset fixture");
             }
@@ -26697,13 +26691,18 @@ seiyaku GovernanceLifecycle {
             let account = new_account_in_domain(&ALICE_ID)
                 .with_uaid(account_uaid)
                 .build(&ALICE_ID);
-            let asset_def_id =
-                AssetDefinitionId::new(domain_id.clone(), "ticket".parse().expect("asset name"));
-            let mut asset_definition = AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string())
-                .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                .confidential_policy(AssetConfidentialPolicy::convertible())
-                .build(&ALICE_ID);
+            let asset_def_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "ticket".parse().expect("asset name"),
+            );
+            let mut asset_definition = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "ticket",
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
+            )
+            .with_confidential_policy(AssetConfidentialPolicy::convertible())
+            .build(&ALICE_ID);
             asset_definition.total_quantity =
                 balances
                     .iter()
@@ -27143,13 +27142,18 @@ seiyaku GovernanceLifecycle {
                 DomainId::try_new("wonderland", "universal").expect("domain id parses");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
-            let asset_def_id =
-                AssetDefinitionId::new(domain_id.clone(), "coupon".parse().expect("asset name"));
-            let mut asset_definition = AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string())
-                .with_balance_scope_policy(AssetBalancePolicy::Global)
-                .confidential_policy(AssetConfidentialPolicy::convertible())
-                .build(&ALICE_ID);
+            let asset_def_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "coupon".parse().expect("asset name"),
+            );
+            let mut asset_definition = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "coupon",
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .with_confidential_policy(AssetConfidentialPolicy::convertible())
+            .build(&ALICE_ID);
             asset_definition.total_quantity = Quantity::from(10_u32);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
             let asset = Asset::new(asset_id.clone(), Quantity::from(10_u32));
@@ -27312,13 +27316,16 @@ seiyaku GovernanceLifecycle {
 
             stx.world.tx_sequences.insert(account_id.clone(), 7);
 
-            let asset_def_id: AssetDefinitionId =
-                AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "rose".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
@@ -27528,13 +27535,16 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
-            let asset_def_id: AssetDefinitionId =
-                AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "rose".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
 
@@ -27605,13 +27615,16 @@ seiyaku GovernanceLifecycle {
             stx.world
                 .replace_domain_owner_index(&foreign_domain, &ALICE_ID, &account_id);
 
-            let asset_def_id: AssetDefinitionId =
-                AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+                foreign_domain.clone(),
+                "bond".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "bond",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(foreign_domain.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register foreign asset definition");
             stx.world
@@ -27808,17 +27821,23 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register foreign counterparty");
 
-            let cash_def = AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = cash_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let cash_def = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "usd".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                cash_def.clone(),
+                "usd",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain asset definition");
 
-            let collateral_def =
-                AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
+            let collateral_def = AssetDefinitionId::derive_from_components(
+                foreign_domain.clone(),
+                "bond".parse().unwrap(),
+            );
             let repo_id: iroha_data_model::repo::RepoAgreementId =
                 "foreign_ref_guard".parse().expect("repo agreement id");
             stx.world
@@ -27883,15 +27902,22 @@ seiyaku GovernanceLifecycle {
             Register::domain(Domain::new(foreign_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register foreign domain");
-            let target_definition =
-                AssetDefinitionId::new(domain_id.clone(), "bond".parse().expect("asset name"));
-            let payment_definition =
-                AssetDefinitionId::new(foreign_domain.clone(), "cash".parse().expect("asset name"));
-            for definition in [&target_definition, &payment_definition] {
-                Register::asset_definition(
-                    AssetDefinition::numeric((*definition).clone())
-                        .with_name(definition.name().to_string()),
-                )
+            let target_definition = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "bond".parse().expect("asset name"),
+            );
+            let payment_definition = AssetDefinitionId::derive_from_components(
+                foreign_domain.clone(),
+                "cash".parse().expect("asset name"),
+            );
+            for (definition, name) in [(&target_definition, "bond"), (&payment_definition, "cash")]
+            {
+                Register::asset_definition(AssetDefinition::numeric(
+                    (*definition).clone(),
+                    name,
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register settlement asset definition");
             }
@@ -27968,12 +27994,16 @@ seiyaku GovernanceLifecycle {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
-            let reward_def = AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = reward_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let reward_def = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "fee".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                reward_def.clone(),
+                "fee",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain reward definition");
             stx.world.public_lane_rewards.insert(
@@ -28030,12 +28060,16 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
 
-            let voting_def = AssetDefinitionId::new(domain_id.clone(), "vote".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = voting_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let voting_def = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "vote".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                voting_def.clone(),
+                "vote",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain asset definition");
             stx.gov.voting_asset_id = voting_def.clone();
@@ -28075,13 +28109,16 @@ seiyaku GovernanceLifecycle {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register custody domain");
-            let custody_definition =
-                AssetDefinitionId::new(domain_id.clone(), "locked".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = custody_definition.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let custody_definition = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "locked".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                custody_definition.clone(),
+                "locked",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register retained custody asset definition");
 
@@ -28105,8 +28142,7 @@ seiyaku GovernanceLifecycle {
                 },
             );
             stx.world
-                .governance_locks
-                .insert("retained-domain-custody".to_owned(), locks);
+                .put_governance_locks("retained-domain-custody".to_owned(), locks);
 
             let err = Unregister::domain(domain_id.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -28147,12 +28183,16 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
 
-            let reward_def = AssetDefinitionId::new(domain_id.clone(), "viral".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = reward_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let reward_def = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "viral".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                reward_def.clone(),
+                "viral",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain asset definition");
             stx.gov.viral_incentives.reward_asset_definition_id = reward_def.clone();
@@ -28194,12 +28234,16 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
 
-            let reward_def = AssetDefinitionId::new(domain_id.clone(), "oracle".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = reward_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let reward_def = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "oracle".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                reward_def.clone(),
+                "oracle",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain asset definition");
             stx.oracle.economics.reward_asset = reward_def.clone();
@@ -28239,12 +28283,16 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
 
-            let fee_def = AssetDefinitionId::new(domain_id.clone(), "nexusfee".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = fee_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let fee_def = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "nexusfee".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                fee_def.clone(),
+                "nexusfee",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain asset definition");
             stx.nexus.fees.fee_asset_id = fee_def.to_string();
@@ -28284,12 +28332,16 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
 
-            let stake_def = AssetDefinitionId::new(domain_id.clone(), "stake".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = stake_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let stake_def = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "stake".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                stake_def.clone(),
+                "stake",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain asset definition");
             stx.nexus.staking.stake_asset_id = stake_def.to_string();
@@ -28329,7 +28381,10 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
 
-            let reward_def = AssetDefinitionId::new(domain_id.clone(), "offline".parse().unwrap());
+            let reward_def = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "offline".parse().unwrap(),
+            );
             Register::asset_definition(NewAssetDefinition {
                 id: reward_def.clone(),
                 name: "offline".to_owned(),
@@ -28340,6 +28395,7 @@ seiyaku GovernanceLifecycle {
                 logo: None,
                 metadata: Metadata::default(),
                 balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+                owning_domain: None,
                 confidential_policy: AssetConfidentialPolicy::transparent(),
             })
             .execute(&ALICE_ID, &mut stx)
@@ -28407,30 +28463,40 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
-            let cash_def = AssetDefinitionId::new(external_domain.clone(), "usd".parse().unwrap());
-            let collateral_def =
-                AssetDefinitionId::new(external_domain.clone(), "bond".parse().unwrap());
-            let reward_def =
-                AssetDefinitionId::new(external_domain.clone(), "fee".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = cash_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            let cash_def = AssetDefinitionId::derive_from_components(
+                external_domain.clone(),
+                "usd".parse().unwrap(),
+            );
+            let collateral_def = AssetDefinitionId::derive_from_components(
+                external_domain.clone(),
+                "bond".parse().unwrap(),
+            );
+            let reward_def = AssetDefinitionId::derive_from_components(
+                external_domain.clone(),
+                "fee".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                cash_def.clone(),
+                "usd",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(external_domain.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register external cash definition");
-            Register::asset_definition({
-                let __asset_definition_id = collateral_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            Register::asset_definition(AssetDefinition::numeric(
+                collateral_def.clone(),
+                "bond",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(external_domain.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register external collateral definition");
-            Register::asset_definition({
-                let __asset_definition_id = reward_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
+            Register::asset_definition(AssetDefinition::numeric(
+                reward_def.clone(),
+                "fee",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(external_domain.clone()),
+            ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register external reward definition");
             let repo_id: iroha_data_model::repo::RepoAgreementId =
@@ -28482,7 +28548,7 @@ seiyaku GovernanceLifecycle {
                     iroha_data_model::isi::SettlementLegSnapshot {
                         role: iroha_data_model::isi::SettlementLegRole::Payment,
                         leg: iroha_data_model::isi::SettlementLeg::new(
-                            AssetDefinitionId::new(
+                            AssetDefinitionId::derive_from_components(
                                 external_domain.clone(),
                                 "settlement_cash".parse().expect("asset name"),
                             ),
@@ -28613,7 +28679,7 @@ seiyaku GovernanceLifecycle {
 
             let proposal_id = [0xB7; 32];
             let kind = ProposalKind::DeployContract(DeployContractProposal {
-                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                     .parse()
                     .expect("contract address"),
                 code_hash_hex: ContractCodeHash::new([0x31; 32]),
@@ -28621,7 +28687,7 @@ seiyaku GovernanceLifecycle {
                 abi_version: AbiVersion::new(1),
                 manifest_provenance: None,
             });
-            stx.world.governance_proposals.insert(
+            stx.world.put_governance_proposal(
                 proposal_id,
                 crate::state::GovernanceProposalRecord {
                     proposer: account_id.clone(),
@@ -32231,7 +32297,7 @@ seiyaku GovernanceLifecycle {
             commitment_fill: u8,
         }
 
-        fn soracloud_fhe_stark_vk_test_profiles() -> [SoracloudFheVkTestProfile; 4] {
+        fn soracloud_fhe_stark_vk_test_profiles() -> [SoracloudFheVkTestProfile; 3] {
             [
                 SoracloudFheVkTestProfile {
                     label: "input_admission",
@@ -32250,15 +32316,6 @@ seiyaku GovernanceLifecycle {
                     public_inputs_schema_hash:
                         soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
                     commitment_fill: 0x91,
-                },
-                SoracloudFheVkTestProfile {
-                    label: "full_bootstrap_material",
-                    circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-                    version: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
-                    gas_schedule_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1,
-                    public_inputs_schema_hash:
-                        soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1,
-                    commitment_fill: 0x94,
                 },
                 SoracloudFheVkTestProfile {
                     label: "full_bootstrap_execution",
@@ -32305,10 +32362,6 @@ seiyaku GovernanceLifecycle {
             soracloud_fhe_stark_vk_test_profiles()[1]
         }
 
-        fn soracloud_full_bootstrap_material_vk_profile() -> SoracloudFheVkTestProfile {
-            soracloud_fhe_stark_vk_test_profiles()[2]
-        }
-
         #[cfg(feature = "zk-stark")]
         fn soracloud_fhe_stark_vk_box_for_test(
             profile: SoracloudFheVkTestProfile,
@@ -32351,14 +32404,6 @@ seiyaku GovernanceLifecycle {
 
         fn soracloud_bootstrap_vk_record(version: u32) -> VerifyingKeyRecord {
             soracloud_fhe_stark_vk_record(soracloud_bootstrap_vk_profile(), version)
-        }
-
-        fn soracloud_full_bootstrap_material_vk_id() -> VerifyingKeyId {
-            soracloud_fhe_stark_vk_id(soracloud_full_bootstrap_material_vk_profile())
-        }
-
-        fn soracloud_full_bootstrap_material_vk_record(version: u32) -> VerifyingKeyRecord {
-            soracloud_fhe_stark_vk_record(soracloud_full_bootstrap_material_vk_profile(), version)
         }
 
         const UNSUPPORTED_PROTOCOL_BACKEND_LABELS: &[&str] = &[
@@ -32417,12 +32462,18 @@ seiyaku GovernanceLifecycle {
             let domain_id = DomainId::try_new(domain_name, "universal").expect("domain id parses");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
-            let asset_definition_id =
-                AssetDefinitionId::new(domain_id, "token".parse().expect("asset name"));
-            let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string())
-                .confidential_policy(AssetConfidentialPolicy::convertible())
-                .build(&ALICE_ID);
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id,
+                "token".parse().expect("asset name"),
+            );
+            let asset_definition = AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "token",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_confidential_policy(AssetConfidentialPolicy::convertible())
+            .build(&ALICE_ID);
             let mut world = World::with_assets([domain], [account], [asset_definition], [], []);
             world.zk_assets.insert(asset_definition_id.clone(), {
                 let mut state = crate::state::ZkAssetState::default();
@@ -33972,185 +34023,6 @@ seiyaku GovernanceLifecycle {
             assert!(msg.contains("public-input schema mismatch"));
         }
 
-        #[test]
-        fn register_vk_accepts_canonical_soracloud_full_bootstrap_material_record() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            grant_manage_verifying_keys(&mut stx);
-            stx.apply();
-
-            let mut stx = state_block.transaction();
-            let exec = Executor::default();
-            let id = soracloud_full_bootstrap_material_vk_id();
-            let record = soracloud_full_bootstrap_material_vk_record(u32::from(
-                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
-            ));
-            let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
-                id: id.clone(),
-                record,
-            }
-            .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                .expect(
-                    "canonical Soracloud full-bootstrap material verifier record should register",
-                );
-            let stored = stx
-                .world
-                .verifying_keys
-                .get(&id)
-                .expect("verifying key stored");
-            assert_eq!(
-                stored.circuit_id,
-                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1
-            );
-        }
-
-        #[test]
-        fn register_vk_rejects_soracloud_full_bootstrap_material_metadata_drift() {
-            #[derive(Clone, Copy)]
-            enum Tamper {
-                IdName,
-                Namespace,
-                Schema,
-                Version,
-                GasSchedule,
-            }
-
-            for (suffix, tamper, expected_msg) in [
-                (
-                    "id_name",
-                    Tamper::IdName,
-                    "id name must use the canonical v1 circuit",
-                ),
-                (
-                    "namespace",
-                    Tamper::Namespace,
-                    "must be in the soracloud namespace",
-                ),
-                ("schema", Tamper::Schema, "public-input schema mismatch"),
-                ("version", Tamper::Version, "canonical v1 circuit version"),
-                ("gas", Tamper::GasSchedule, "canonical gas_schedule_id"),
-            ] {
-                let kura = Kura::blank_kura_for_testing();
-                let query_handle = LiveQueryStore::start_test();
-                let state = State::new(World::default(), kura, query_handle);
-
-                let block = new_dummy_block();
-                let mut state_block = state.block(block.as_ref().header());
-                let mut stx = state_block.transaction();
-                bootstrap_alice_account(&mut stx);
-                grant_manage_verifying_keys(&mut stx);
-                stx.apply();
-
-                let mut id = soracloud_full_bootstrap_material_vk_id();
-                let mut record = soracloud_full_bootstrap_material_vk_record(u32::from(
-                    SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
-                ));
-                match tamper {
-                    Tamper::IdName => id.name = format!("{}_drift", id.name),
-                    Tamper::Namespace => record.namespace = "test".to_owned(),
-                    Tamper::Schema => record.public_inputs_schema_hash = [0x95; 32],
-                    Tamper::Version => record.version += 1,
-                    Tamper::GasSchedule => record.gas_schedule_id = Some("stark_default".into()),
-                }
-
-                let mut stx = state_block.transaction();
-                let exec = Executor::default();
-                let instr: InstructionBox =
-                    verifying_keys::RegisterVerifyingKey { id, record }.into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err(
-                        "Soracloud full-bootstrap material verifier metadata drift must fail",
-                    );
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains(expected_msg),
-                    "unexpected msg for {suffix}: {msg}"
-                );
-            }
-        }
-
-        #[test]
-        fn register_vk_rejects_active_soracloud_full_bootstrap_material_without_inline_key() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            grant_manage_verifying_keys(&mut stx);
-            stx.apply();
-
-            let mut stx = state_block.transaction();
-            let exec = Executor::default();
-            let id = soracloud_full_bootstrap_material_vk_id();
-            let mut record = soracloud_full_bootstrap_material_vk_record(u32::from(
-                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
-            ));
-            record.status = ConfidentialStatus::Active;
-            let instr: InstructionBox = verifying_keys::RegisterVerifyingKey { id, record }.into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                .expect_err(
-                    "active Soracloud full-bootstrap material verifier requires inline key bytes",
-                );
-            let msg = smart_contract_error_message(err);
-            assert!(msg.contains("active verifying key bytes missing"));
-        }
-
-        #[test]
-        fn update_vk_rejects_soracloud_full_bootstrap_material_metadata_drift() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            grant_manage_verifying_keys(&mut stx);
-            stx.apply();
-
-            let id = soracloud_full_bootstrap_material_vk_id();
-            let old_record = soracloud_full_bootstrap_material_vk_record(0);
-            let mut seed_stx = state_block.transaction();
-            seed_stx
-                .world
-                .verifying_keys
-                .insert(id.clone(), old_record.clone());
-            seed_stx.world.verifying_keys_by_circuit.insert(
-                (old_record.circuit_id.clone(), old_record.version),
-                id.clone(),
-            );
-            seed_stx.apply();
-
-            let mut new_record = soracloud_full_bootstrap_material_vk_record(u32::from(
-                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
-            ));
-            new_record.public_inputs_schema_hash = [0x96; 32];
-            let mut stx = state_block.transaction();
-            let exec = Executor::default();
-            let instr: InstructionBox = verifying_keys::UpdateVerifyingKey {
-                id,
-                record: new_record,
-            }
-            .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                .expect_err("Soracloud full-bootstrap material verifier update drift must fail");
-            let msg = smart_contract_error_message(err);
-            assert!(msg.contains("public-input schema mismatch"));
-        }
-
         #[cfg(feature = "zk-stark")]
         #[test]
         fn register_vk_accepts_soracloud_fhe_stark_verifier_payload_at_production_floor() {
@@ -34330,7 +34202,7 @@ seiyaku GovernanceLifecycle {
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
 
-            let profile = soracloud_fhe_stark_vk_test_profiles()[3];
+            let profile = soracloud_fhe_stark_vk_test_profiles()[2];
             let id = soracloud_fhe_stark_vk_id(profile);
             let old_record = soracloud_fhe_stark_vk_record(profile, 0);
             let mut seed_stx = state_block.transaction();
@@ -38184,7 +38056,7 @@ seiyaku GovernanceLifecycle {
                 .expect("authorized manifest registration");
 
             let contract_address = ContractAddress::derive(
-                iroha_data_model::account::address::chain_discriminant(),
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &ALICE_ID,
                 0,
                 DataSpaceId::UNIVERSAL,
@@ -38392,19 +38264,51 @@ seiyaku GovernanceLifecycle {
 
             let alias: ContractAlias = "payments::universal".parse().expect("contract alias");
             let address_at_nonce_0 = ContractAddress::derive(
-                iroha_data_model::account::address::chain_discriminant(),
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &ALICE_ID,
                 0,
                 DataSpaceId::UNIVERSAL,
             )
             .expect("nonce zero address");
             let address_at_nonce_1 = ContractAddress::derive(
-                iroha_data_model::account::address::chain_discriminant(),
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &ALICE_ID,
                 1,
                 DataSpaceId::UNIVERSAL,
             )
             .expect("nonce one address");
+
+            let foreign_chain_address = ContractAddress::derive(
+                &iroha_data_model::ChainId::from("foreign-contract-deployment-chain"),
+                &ALICE_ID,
+                0,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("foreign-chain address");
+            let error = scode::CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: foreign_chain_address.clone(),
+                code_hash,
+                contract_alias: alias.clone(),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("an address bound to another chain must fail");
+            let message = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(error),
+            );
+            assert!(
+                message.contains("does not match authority"),
+                "unexpected foreign-chain error: {message}"
+            );
+            assert!(
+                stx.world
+                    .contract_instances
+                    .get(&foreign_chain_address)
+                    .is_none(),
+                "rejected foreign-chain deployment must not mutate state"
+            );
 
             let error = scode::CommitContractDeployment {
                 expected_deploy_nonce: 0,
@@ -38425,7 +38329,7 @@ seiyaku GovernanceLifecycle {
             );
 
             let wrong_dataspace_address = ContractAddress::derive(
-                iroha_data_model::account::address::chain_discriminant(),
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &ALICE_ID,
                 0,
                 DataSpaceId::new(7),
@@ -38632,7 +38536,7 @@ seiyaku GovernanceLifecycle {
             stx.world.contract_manifests.insert(code_hash, manifest);
 
             let contract_address = ContractAddress::derive(
-                iroha_data_model::account::address::chain_discriminant(),
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &ALICE_ID,
                 1,
                 DataSpaceId::UNIVERSAL,

@@ -24,6 +24,11 @@
       "import": "./dist/privacyCapabilities.js",
       "types": "./privacy-capabilities.d.ts"
     },
+    "./bootle-lantern-issuance": {
+      "browser": "./dist/bootleLanternIssuance.js",
+      "import": "./dist/bootleLanternIssuance.js",
+      "types": "./bootle-lantern-issuance.d.ts"
+    },
     "./transaction-codec": {
       "browser": "./dist/transactionCodec.js",
       "import": "./dist/transactionCodec.js",
@@ -110,6 +115,9 @@
       ],
       "privacy-capabilities": [
         "./privacy-capabilities.d.ts"
+      ],
+      "bootle-lantern-issuance": [
+        "./bootle-lantern-issuance.d.ts"
       ],
       "transaction-codec": [
         "./transaction-codec.d.ts"
@@ -211,6 +219,7 @@
     "index.d.ts",
     "repo-agreement.d.ts",
     "privacy-capabilities.d.ts",
+    "bootle-lantern-issuance.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
     "transaction-codec.d.ts",
@@ -227,6 +236,7 @@
     "src"
   ],
   "browser": {
+    "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",
     "./dist/crypto.js": "./dist/crypto.browser.js",
     "./dist/cryptoHash.js": "./dist/cryptoHash.browser.js",
     "./dist/native.js": "./dist/native.browser.js"

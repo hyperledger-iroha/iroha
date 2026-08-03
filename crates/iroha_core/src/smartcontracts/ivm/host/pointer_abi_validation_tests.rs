@@ -131,7 +131,7 @@ fn pointer_abi_transfer_availability_packs_flags_and_preserves_reason() {
     use iroha_data_model::asset::AssetTransferAvailability::{Disabled, Enabled};
 
     let account = fixture_account("alice");
-    let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+    let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
@@ -156,7 +156,9 @@ fn pointer_abi_transfer_availability_packs_flags_and_preserves_reason() {
                 ivm::sum::allocate_words(&mut vm, layout, 1, &[string_ptr])
                     .expect("Option::some reason")
             }
-            None => ivm::sum::allocate_words(&mut vm, layout, 0, &[]).expect("Option::none reason"),
+            None => {
+                ivm::sum::allocate_words(&mut vm, layout, 0, &[]).expect("Option::none reason")
+            }
         };
         vm.set_register(10, account_ptr);
         vm.set_register(11, asset_ptr);
@@ -213,7 +215,7 @@ fn pointer_abi_transfer_availability_packs_flags_and_preserves_reason() {
 #[test]
 fn pointer_abi_daily_limit_preserves_some_and_none() {
     let account = fixture_account("alice");
-    let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+    let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
@@ -229,13 +231,13 @@ fn pointer_abi_daily_limit_preserves_some_and_none() {
         let layout = ivm::sum::SumLayoutV1::option(1).expect("quantity option layout");
         let cap_ptr = match &expected {
             Some(amount) => {
-                let amount_ptr = store_tlv(&mut vm, PointerType::Quantity, &quantity_frame(amount));
+                let amount_ptr =
+                    store_tlv(&mut vm, PointerType::Quantity, &quantity_frame(amount));
                 ivm::sum::allocate_words(&mut vm, layout, 1, &[amount_ptr])
                     .expect("Option::some quantity")
             }
-            None => {
-                ivm::sum::allocate_words(&mut vm, layout, 0, &[]).expect("Option::none quantity")
-            }
+            None => ivm::sum::allocate_words(&mut vm, layout, 0, &[])
+                .expect("Option::none quantity"),
         };
         vm.set_register(10, account_ptr);
         vm.set_register(11, asset_ptr);

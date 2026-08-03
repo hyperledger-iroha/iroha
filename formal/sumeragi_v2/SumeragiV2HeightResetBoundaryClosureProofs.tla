@@ -1213,7 +1213,7 @@ runner removes an owner.
 ***************************************************************************)
 
 THEOREM PositivePhysicalCompletionDebtAdmissionPreservesDebt ==
-  \A blocked,
+  \A blocked \in AsyncNetworkItems,
      recipient \in ValidatorIds,
      source \in AsyncIngressSources:
     /\ AsyncStrongTypeInvariant
