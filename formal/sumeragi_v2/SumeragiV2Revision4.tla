@@ -6,7 +6,20 @@
 
 EXTENDS FiniteSets, Integers, Naturals, Sequences, TLC
 
-CONSTANTS Validators, Faulty, Bodies, NoBody, BaseOrder, LocalValidator
+CONSTANTS
+    Validators,
+    Faulty,
+    Bodies,
+    NoBody,
+    BaseOrder,
+    LocalValidator,
+    BaseValidator1,
+    BaseValidator2,
+    BaseValidator3,
+    BaseValidator4
+
+Revision4BaseOrder ==
+    <<BaseValidator1, BaseValidator2, BaseValidator3, BaseValidator4>>
 
 N == Cardinality(Validators)
 F == (N - 1) \div 3
@@ -33,6 +46,7 @@ ConstantOK ==
     /\ N >= 4
     /\ N <= 31
     /\ N = 3 * F + 1
+    /\ Faulty \subseteq Validators
     /\ Cardinality(Faulty) <= F
     /\ Bodies /= {}
     /\ NoBody \notin Bodies

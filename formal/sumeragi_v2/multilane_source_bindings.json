@@ -200,7 +200,12 @@
           "path": "crates/iroha_core/src/state.rs",
           "required_tokens": [
             "pub fn native_amx_participant_applications_diagnostics(",
-            "No adapter/session cache is consulted.",
+            "No adapter/session cache is consulted."
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/tests.rs",
+          "required_tokens": [
             "native_amx_participant_diagnostics_fold_all_durable_stage_transitions",
             "native_amx_participant_diagnostics_report_same_height_conflict_deterministically"
           ]
@@ -1718,7 +1723,7 @@
             "MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES",
             "manifest_leaf_count",
             "manifest_root",
-            "proof.clone().verify",
+            "artifact.proof.verify",
             "NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT"
           ]
         },
@@ -1988,7 +1993,7 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
           "kind": "method",
-          "symbol": "V2LaneWorkAdapter::new_with_output_guard_and_transport",
+          "symbol": "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner",
           "required_tokens": [
             "begin_fail_stop_operation",
             "prune_finalized_pending_certified_merge_entries",
@@ -2035,7 +2040,7 @@
             "schedule_retransmission",
             "deadline_after(now, retransmit_interval)",
             "block_sync_frame_byte_capacity",
-            "has_pending_historical_recovery",
+            "service_historical_recovery_tick",
             "dispatch_lane_work_effects"
           ]
         },
@@ -3776,8 +3781,7 @@
             "routing_plan.digest",
             "durable_plan_claims.remove",
             "remove_hashes_from_fifo_locked",
-            "remove_transaction_locked",
-            "removed_hashes.insert"
+            "remove_transaction_locked"
           ]
         },
         {
@@ -3987,7 +3991,7 @@
             "install_plan_journal(",
             "replay_plan_journal(&state)",
             "finalize_plan_journal_startup_recovery()",
-            "IrohaNetwork::start_with_crypto("
+            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources("
           ]
         },
         {

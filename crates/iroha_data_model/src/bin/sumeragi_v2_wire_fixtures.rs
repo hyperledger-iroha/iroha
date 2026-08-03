@@ -2,10 +2,10 @@
 //!
 //! Run `cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures`
 //! to refresh `fixtures/sumeragi_v2/wire_v2.tsv` and
-//! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. The default mode writes;
-//! pass `--out-dir <path>` to target a cache staging directory and add `--check`
-//! to verify that destination against the current canonical Rust encodings and
-//! JSON models.
+//! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. The default mode writes.
+//! Pass `--check` to verify a destination against the current canonical Rust
+//! encodings and JSON models, and use `--out-dir <path>` to target a cache
+//! staging directory.
 
 mod native_amx_grouped;
 
