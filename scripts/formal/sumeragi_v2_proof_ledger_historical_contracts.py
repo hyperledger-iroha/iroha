@@ -2,6 +2,7 @@
 
 REQUIRED_MODEL_MODULES = (
     "SumeragiV2Revision4",
+    "SumeragiV2Revision4AdversarialSafety",
     "SumeragiV2",
     "SumeragiV2Quorums",
     "SumeragiV2QuorumProofs",
@@ -72,6 +73,7 @@ REQUIRED_MODEL_MODULES = (
 
 REQUIRED_TLC_CONFIGS = (
     "SumeragiV2Revision4.cfg",
+    "SumeragiV2Revision4AdversarialSafety.cfg",
     "SumeragiV2Revision4Liveness.cfg",
     "quorum_count.cfg",
     "quorum_stake.cfg",
@@ -85,6 +87,7 @@ REQUIRED_TLC_CONFIGS = (
 
 REQUIRED_TLC_CONFIG_HEADERS = {
     "SumeragiV2Revision4.cfg": "SPECIFICATION Spec",
+    "SumeragiV2Revision4AdversarialSafety.cfg": "SPECIFICATION Spec",
     "SumeragiV2Revision4Liveness.cfg": "SPECIFICATION PostGSTSpec",
     "quorum_count.cfg": "INIT Init\nNEXT QuorumCheckNext",
     "quorum_stake.cfg": "INIT Init\nNEXT QuorumCheckNext",

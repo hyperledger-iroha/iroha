@@ -19290,8 +19290,11 @@ pub(super) mod tests {
             &mut self,
             max_pending_work: usize,
         ) -> Result<(), String> {
+            let retained_capacity = MAX_EFFECTS_PER_STEP.checked_mul(2).ok_or_else(|| {
+                "saturated test runtime external-owner capacity overflowed".to_owned()
+            })?;
             let capacity = max_pending_work
-                .checked_add(MAX_EFFECTS_PER_STEP)
+                .checked_add(retained_capacity)
                 .ok_or_else(|| {
                     "saturated test runtime external-owner capacity overflowed".to_owned()
                 })?;

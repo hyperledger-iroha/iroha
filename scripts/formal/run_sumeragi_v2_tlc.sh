@@ -105,6 +105,7 @@ allowed_configs=(
   chain_epoch
   liveness
   revision4_safety
+  revision4_adversarial_safety
   revision4_liveness
   effective_lock_acquisition
   resume_locked_commit_witness
@@ -140,6 +141,7 @@ seed=424242
 for config in "${configs[@]}"; do
   case "$config" in
     revision4_safety) cfg="SumeragiV2Revision4.cfg" ;;
+    revision4_adversarial_safety) cfg="SumeragiV2Revision4AdversarialSafety.cfg" ;;
     revision4_liveness) cfg="SumeragiV2Revision4Liveness.cfg" ;;
     *) cfg="${config}.cfg" ;;
   esac
@@ -183,6 +185,9 @@ for config in "${configs[@]}"; do
         ;;
       revision4_safety|revision4_liveness)
         "${common[@]}" SumeragiV2Revision4.tla
+        ;;
+      revision4_adversarial_safety)
+        "${common[@]}" SumeragiV2Revision4AdversarialSafety.tla
         ;;
       effective_lock_acquisition)
         "${common[@]}" SumeragiV2EffectiveLockAcquisition.tla

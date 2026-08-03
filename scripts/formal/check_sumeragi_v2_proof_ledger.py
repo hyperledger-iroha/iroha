@@ -10009,6 +10009,208 @@ def _revision4_model_contract_errors(
     return errors
 
 
+def _revision4_adversarial_safety_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the non-vacuous four-validator/two-body adversarial safety search."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4AdversarialSafety.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [
+            f"{module_path}: revision-4 adversarial safety model must be a "
+            "regular file"
+        ]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "ConstantOK": (
+            "N = 4",
+            "F = 1",
+            "Q = 3",
+            "Cardinality(Faulty) = 1",
+            "Cardinality(Bodies) = 2",
+        ),
+        "HonestCommitVote": (
+            "validator \\in Honest",
+            "<<validator, body>> \\in fullBodies",
+            "VoteBodies(validator) = {}",
+            "commitVotes' = commitVotes \\cup {<<validator, body>>}",
+        ),
+        "ByzantineCommitVote": (
+            "validator \\in Faulty",
+            "<<validator, body>> \\notin commitVotes",
+            "commitVotes' = commitVotes \\cup {<<validator, body>>}",
+        ),
+        "FormCommitQC": (
+            "body \\notin commitQCs",
+            "VoteCount(body) >= Q",
+            "commitQCs' = commitQCs \\cup {body}",
+        ),
+        "Decide": (
+            "body \\in commitQCs",
+            "body \\notin decisions",
+            "decisions' = decisions \\cup {body}",
+        ),
+        "Next": (
+            "DeliverFullBody(validator, body)",
+            "HonestCommitVote(validator, body)",
+            "ByzantineCommitVote(validator, body)",
+            "FormCommitQC(body)",
+            "Decide(body)",
+        ),
+        "FixedAdversarialGeometry": (
+            "Cardinality(Validators) = 4",
+            "Cardinality(Honest) = 3",
+            "Cardinality(Faulty) = 1",
+            "Q = 3",
+        ),
+        "HonestSignOncePerRound": (
+            "validator \\in Honest",
+            "Cardinality(VoteBodies(validator)) <= 1",
+        ),
+        "ByzantineEquivocationRemainsEnabled": (
+            "validator \\in Faulty",
+            "<<validator, body>> \\notin commitVotes",
+            "ENABLED ByzantineCommitVote(validator, body)",
+        ),
+        "CommitQCsHaveQuorum": (
+            "body \\in commitQCs",
+            "VoteCount(body) >= Q",
+        ),
+        "DecisionsHaveCommitQC": ("decisions \\subseteq commitQCs",),
+        "PostQCExecutionRemainsOpen": (
+            "commitQCs /= {}",
+            "ENABLED DeliverFullBody(validator, body)",
+            "ENABLED HonestCommitVote(validator, body)",
+            "ENABLED ByzantineCommitVote(validator, body)",
+            "ENABLED FormCommitQC(body)",
+            "ENABLED Decide(body)",
+        ),
+        "ConflictingCommitQCsImpossible": (
+            "Cardinality(commitQCs) <= 1",
+        ),
+        "DecisionAgreement": ("Cardinality(decisions) <= 1",),
+    }
+    operator_bodies: dict[str, tuple[str, int]] = {}
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 adversarial operator "
+                f"{operator}"
+            )
+            continue
+        operator_bodies[operator] = extracted
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 adversarial operator "
+                f"{operator} is missing {missing}"
+            )
+
+    byzantine_body = operator_bodies.get("ByzantineCommitVote")
+    if byzantine_body is not None:
+        body, line = byzantine_body
+        normalized = " ".join(body.split())
+        if "VoteBodies(" in normalized:
+            errors.append(
+                f"{module_path}:{line}: ByzantineCommitVote must permit the "
+                "faulty validator to vote for both bodies"
+            )
+
+    for operator in (
+        "DeliverFullBody",
+        "HonestCommitVote",
+        "ByzantineCommitVote",
+        "FormCommitQC",
+        "Decide",
+    ):
+        extracted = operator_bodies.get(operator)
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        forbidden = (
+            "commitQCs = {}",
+            "decisions = {}",
+            "Cardinality(commitQCs) = 0",
+            "Cardinality(decisions) = 0",
+        )
+        present = [token for token in forbidden if token in normalized]
+        if present:
+            errors.append(
+                f"{module_path}:{line}: {operator} must remain enabled after "
+                f"the first QC or decision; found global stop guards {present}"
+            )
+
+    config_path = formal_dir / "SumeragiV2Revision4AdversarialSafety.cfg"
+    if not config_path.is_file() or config_path.is_symlink():
+        errors.append(
+            f"{config_path}: revision-4 adversarial TLC config must be a "
+            "regular file"
+        )
+    else:
+        config_source = config_path.read_text(encoding="utf-8")
+        required_config_tokens = (
+            "SPECIFICATION Spec",
+            "Validators = {v1, v2, v3, v4}",
+            "Faulty = {v4}",
+            "Bodies = {b1, b2}",
+            "INVARIANT FixedAdversarialGeometry",
+            "INVARIANT HonestSignOncePerRound",
+            "INVARIANT ByzantineEquivocationRemainsEnabled",
+            "INVARIANT CommitQCsHaveQuorum",
+            "INVARIANT DecisionsHaveCommitQC",
+            "INVARIANT PostQCExecutionRemainsOpen",
+            "INVARIANT ConflictingCommitQCsImpossible",
+            "INVARIANT DecisionAgreement",
+        )
+        missing = [
+            token
+            for token in required_config_tokens
+            if token not in config_source
+        ]
+        if missing:
+            errors.append(
+                f"{config_path}: revision-4 adversarial TLC configuration is "
+                f"missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: revision-4 adversarial TLC runner must be a "
+            "regular file"
+        )
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_adversarial_safety",
+            (
+                'revision4_adversarial_safety) cfg='
+                '"SumeragiV2Revision4AdversarialSafety.cfg"'
+            ),
+            "SumeragiV2Revision4AdversarialSafety.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 adversarial TLC runner is "
+                f"missing {missing}"
+            )
+    return errors
+
+
 def _top_level_declaration_span(
     source: str,
     symbol: str,
@@ -17998,12 +18200,12 @@ if self.dormant_local_fifo_reservations.contains(&expected) {
         runtime_items,
         "step",
         (
-            "self.retain_effect_ownership(effect_source, Some(&effect_parent), &effects)",
-            "token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()",
-            "token.identity().causal_lifecycle_key() != effect_parent.causal_origin().lifecycle_key",
-            "self.driver.acknowledge_producer_handoff(token, evidence)",
+            "self.finish_dispatched_step(",
+            "effect_parent_statement",
+            "producer_handoff",
+            "retained_deferred_ingress",
         ),
-        "runtime must retain successors and verify parent identity before acknowledgement",
+        "runtime step must transfer the exact parent statement and handoff into shared completion",
     )
     require_item_order(
         "runtime",
@@ -39937,9 +40139,10 @@ fn fair_v2_ingress_newer_timeout_certificate_cannot_bypass_live_predecessor()
     # FairV2Ingress dequeue is only the first half of the live-control
     # predecessor cut.  Once the predecessor has transferred into the
     # serialized runtime, the successor may leave the outer queue, but its
-    # freshly minted lifecycle ordinal must remain behind the predecessor in
-    # FIFO, Busy-deferred, and effect-owned form.  Pin that complete
-    # composition rather than treating an outer dequeue as reducer service.
+    # freshly minted lifecycle ordinal remains immutable through FIFO,
+    # Busy-deferred, and effect-owned form. Class service itself is bounded
+    # round-robin: a permanently retrying oldest Normal item cannot suppress
+    # later Progress. Within each selected class, lifecycle order is strict.
     runtime_path = paths["runtime"]
     runtime_source = sources["runtime"]
     oldest_lifecycle = _require_rust_item(
@@ -39975,26 +40178,30 @@ Ok(Some(
         runtime_path,
         pop_next,
         """
-let Some(oldest_lifecycle_ordinal) = self.oldest_lifecycle_ordinal()? else {
+if self.oldest_lifecycle_ordinal()?.is_none() {
     return Ok(None);
-};
+}
 let (completion_ready, progress_ready, normal_ready) =
-    self.class_readiness_at_lifecycle(oldest_lifecycle_ordinal);
+    self.class_readiness();
 """,
-        "runtime class arbitration is restricted to the oldest live lifecycle",
+        "runtime class arbitration sees every globally ready bounded service class",
         errors,
     )
     _require_rust_token_sequence(
         runtime_path,
         pop_next,
         """
+let oldest_class_lifecycle_ordinal = self
+    .minimum_lifecycle_for_class(class)
+    .ok_or(EnqueueError::FailClosed)?;
 let Some(index) = self.commands.iter().position(|queued| {
-    queued.class == class && queued.lifecycle_ordinal == Some(oldest_lifecycle_ordinal)
+    queued.class == class
+        && queued.lifecycle_ordinal == Some(oldest_class_lifecycle_ordinal)
 }) else {
     return Err(EnqueueError::FailClosed);
 };
 """,
-        "runtime FIFO cannot select a later lifecycle within the chosen class",
+        "runtime FIFO selects the oldest lifecycle within the chosen fair class",
         errors,
     )
     accept_dispatch = _require_rust_item(
@@ -40083,8 +40290,16 @@ for queued in &self.ingress.commands {
         runtime_path,
         minimum_active_excluding,
         """
-for owner in self.deferred_lifecycle_ownership.values() {
-    observe(owner)?;
+for (ordinal, owner) in &self.deferred_lifecycle_ownership {
+    if owner.deferred_admission_ordinal != *ordinal
+        || !owner.validate_active_against_ingress(
+            self.deferred_ingress_ownership.get(ordinal),
+            self.driver.deferred_admission_ordinal_source(),
+        )
+    {
+        return Err(EnqueueError::FailClosed);
+    }
+    observe(owner.owner())?;
 }
 """,
         "global runtime predecessor cut includes Busy-deferred ownership",
@@ -40110,11 +40325,16 @@ if let Some(ownership) = &self.pending_effect_ownership {
         runtime_path,
         arbitration,
         """
-let global_minimum = self.minimum_active_lifecycle_ordinal()?;
+let _ = self.minimum_active_lifecycle_ordinal()?;
 let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;
-let fifo_ready = fifo_minimum.is_some() && fifo_minimum == global_minimum;
+let fifo_ready = fifo_minimum.is_some();
+let (completion_ready, progress_ready, normal_ready) = if fifo_ready {
+    self.ingress.class_readiness()
+} else {
+    (false, false, false)
+};
 """,
-        "runtime FIFO is ready only at the global live-lifecycle minimum",
+        "passive lifecycle capabilities cannot suppress runnable FIFO classes",
         errors,
     )
     _require_rust_token_sequence(
@@ -56032,22 +56252,24 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
             observed_runtime_items.get("scheduler_arbitration_inputs"),
             (
                 "self.validate_clock_owner_physical_cuts()?;",
-                "let global_minimum = self.minimum_active_lifecycle_ordinal()?;",
+                "let _ = self.minimum_active_lifecycle_ordinal()?;",
                 "let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;",
+                "self.ingress.class_readiness()",
                 "self.timeout_owner_physical_cut",
                 "let raw_periodic_timer_due = timers_enabled",
                 "self.retransmit_owner_physical_cut",
                 "Ok(RuntimeSchedulerArbitrationInputs",
             ),
-            "scheduler arbitration must validate clock pairs and compare only "
-            "their frozen physical prefixes",
+            "scheduler arbitration must validate all ownership, expose every "
+            "runnable FIFO class, and compare clocks only through frozen cuts",
         )
         require_runtime_item_order(
             observed_runtime_items.get("step"),
             (
                 "self.freeze_due_clock_owners(now)",
                 "self.dispatch_one_fence_dependency(now)?",
-                "self.dispatch_one_adapter_deferred(now)?",
+                "!timeout_preempts",
+                "self.dispatch_one_adapter_deferred(now, None)?",
                 "let selected_round_tag = self.round_tag;",
             ),
             "live scheduling must freeze clock owners, service one exact fence "
@@ -56324,6 +56546,19 @@ Ok((
             "with_driver_and_lifecycle_ordinals",
             errors,
         )
+        finish_dispatched_step = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "finish_dispatched_step",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            finish_dispatched_step,
+            runtime_context,
+            "shared live-dispatch successor and parent terminal handoff",
+            errors,
+        )
         _require_rust_item_context(
             runtime_path,
             dormant_constructor,
@@ -56345,6 +56580,7 @@ ingress.install_dormant_local_fifo_reservations(
 runtime.retain_effect_ownership(
     RuntimeEffectSource::Startup,
     None,
+    None,
     startup_effects.as_slice(),
 )
 """,
@@ -56353,9 +56589,16 @@ runtime.retain_effect_ownership(
             "retaining any startup successor",
         )
         require_runtime_item_order(
-            observed_runtime_items.get("step"),
+            finish_dispatched_step,
             (
-                "self.retain_effect_ownership(effect_source, Some(&effect_parent), &effects)",
+                """
+self.retain_effect_ownership(
+    effect_source,
+    Some(&effect_parent),
+    effect_parent_statement.as_ref(),
+    &effects,
+)
+""",
                 "token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()",
                 "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
                 "self.driver.acknowledge_producer_handoff(token, evidence)",
@@ -56368,14 +56611,21 @@ self.complete_driver_dispatch_leader_wire_owners(
 """,
                 "self.observe_effects(now, &effects)",
             ),
-            "live dispatch must retain successors, acknowledge the exact "
+            "live dispatch completion must retain successors, acknowledge the exact "
             "producer, terminalize the selected parent before adapter-side "
             "orphans, and publish every terminal before observing effects",
         )
         require_runtime_item_order(
             observed_runtime_items.get("step_recovery"),
             (
-                "self.retain_effect_ownership(RuntimeEffectSource::Fifo, Some(&owner), &effects)",
+                """
+self.retain_effect_ownership(
+    RuntimeEffectSource::Fifo,
+    Some(&owner),
+    parent_statement.as_ref(),
+    &effects,
+)
+""",
                 "token.identity().admission_ordinal() != owner.lifecycle_ordinal()",
                 "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
                 "self.driver.acknowledge_producer_handoff(token, evidence)",
@@ -56424,7 +56674,7 @@ self.complete_driver_dispatch_leader_wire_owners(
                 continue
             item_tokens = rust_code_tokens(item.source)
             dispatch_tokens = rust_code_tokens(
-                "self.dispatch_one_adapter_deferred(now)?"
+                "self.dispatch_one_adapter_deferred(now, None)?"
             )
             later_tokens = rust_code_tokens(later_contract)
             dispatch_positions = [
@@ -90695,6 +90945,9 @@ def validate_ledger(
     errors.extend(_retired_liveness_errors(formal_dir))
     errors.extend(_bounded_view_dependency_errors(formal_dir))
     errors.extend(_revision4_model_contract_errors(formal_dir, ROOT_DIR))
+    errors.extend(
+        _revision4_adversarial_safety_contract_errors(formal_dir, ROOT_DIR)
+    )
     errors.extend(_reachable_oracle_guard_errors(formal_dir))
     errors.extend(_generalized_context_init_errors(formal_dir))
     errors.extend(_safety_property_source_fidelity_errors(formal_dir))
@@ -90919,6 +91172,7 @@ def validate_ledger(
             not in {
                 "effective_lock_acquisition.cfg",
                 "SumeragiV2Revision4.cfg",
+                "SumeragiV2Revision4AdversarialSafety.cfg",
                 "SumeragiV2Revision4Liveness.cfg",
             }
             and '  ValidSubjects = {"A"}\n' not in source

@@ -8953,10 +8953,13 @@ impl SumeragiV2Adapter {
         }
     }
 
-    /// Conservatively prove that authenticated ingress reaches `Reducer::step`
-    /// in the current adapter state. Once this returns `true`, the active
-    /// signing fence makes the non-`Signed` reducer event unconditionally
-    /// `Busy` before any phase handler can run.
+    /// Conservatively prove that authenticated ingress reaches the reducer's
+    /// active signing fence in the current adapter state.
+    ///
+    /// A verified TC or CommitQC is deliberately excluded: those certified
+    /// transitions supersede the fenced reducer incarnation. Every other
+    /// non-`Signed` event which returns `true` is unconditionally `Busy`
+    /// before its phase handler can run.
     fn authenticated_command_reaches_fenced_reducer(
         &self,
         authenticated: &AuthenticatedConsensusMessage,
@@ -9059,15 +9062,29 @@ impl SumeragiV2Adapter {
             wire::ConsensusMessageV2Payload::Vote(vote) => {
                 registry.vote_to_core(vote, &self.wire_context).is_ok()
             }
-            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
-                registry.qc_to_core(certificate, &self.wire_context).is_ok()
-            }
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => registry
+                .qc_to_core(certificate, &self.wire_context)
+                .is_ok_and(|certificate| {
+                    !reducer::Reducer::certified_progress_bypasses_signature_fence(
+                        &reducer::Event::QuorumCertificateReceived {
+                            tag: self.reducer.current_tag(),
+                            certificate,
+                        },
+                    )
+                }),
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => registry
                 .timeout_vote_to_core(vote, &self.wire_context)
                 .is_ok(),
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
-                registry.tc_to_core(certificate, &self.wire_context).is_ok()
-            }
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => registry
+                .tc_to_core(certificate, &self.wire_context)
+                .is_ok_and(|certificate| {
+                    !reducer::Reducer::certified_progress_bypasses_signature_fence(
+                        &reducer::Event::TimeoutCertificateReceived {
+                            tag: self.reducer.current_tag(),
+                            certificate,
+                        },
+                    )
+                }),
             wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
@@ -17985,7 +18002,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn unowned_busy_certificates_roll_back_staged_registry_and_active_subject() {
+    fn unowned_busy_prepare_certificate_rolls_back_staged_registry_and_active_subject() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
@@ -18015,66 +18032,27 @@ mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: vec![marker; 96],
         };
-        let deferred_qcs = [
-            qc(wire::GlobalPhase::Prepare, 0xE0),
-            qc(wire::GlobalPhase::Commit, 0xE1),
-        ];
-        for (ordinal, certificate) in deferred_qcs.into_iter().enumerate() {
-            let certificate_wire_identity = authenticated_wire_identity(
-                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone()),
-            );
-            let certificate = adapter
-                .registry
-                .qc_to_core(&certificate, &adapter.wire_context)
-                .expect("convert certificate lane fixture");
-            adapter.deferred_progress_inputs.push_back(DeferredInput {
-                admission_ordinal: u128::try_from(ordinal)
-                    .expect("bounded fixture ordinal fits u128")
-                    .saturating_add(1),
-                admission_capability: DeferredAdmissionCapability::for_authenticated_test(
-                    u128::try_from(ordinal)
-                        .expect("bounded fixture ordinal fits u128")
-                        .saturating_add(1),
-                ),
-                event: reducer::Event::QuorumCertificateReceived { tag, certificate },
-                completion_evidence: None,
-                retag_authenticated_ingress: true,
-                priority: DeferredPriority::Progress,
-                protected_progress: false,
-                admission: None,
-                authenticated_wire_identity: Some(certificate_wire_identity),
-                admitted_at: Instant::now(),
-                eligible_skips: 0,
-            });
-        }
-        let deferred_timeout = wire::TimeoutCertificate {
-            round: wire_round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: None,
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xE2; 96],
-            }],
-        };
-        let deferred_timeout_wire_identity = authenticated_wire_identity(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(deferred_timeout.clone()),
+        let deferred_prepare = qc(wire::GlobalPhase::Prepare, 0xE0);
+        let deferred_prepare_wire_identity = authenticated_wire_identity(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(deferred_prepare.clone()),
         );
-        let deferred_timeout = adapter
+        let deferred_prepare = adapter
             .registry
-            .tc_to_core(&deferred_timeout, &adapter.wire_context)
-            .expect("convert timeout-certificate lane fixture");
+            .qc_to_core(&deferred_prepare, &adapter.wire_context)
+            .expect("convert PrepareQC lane fixture");
         adapter.deferred_progress_inputs.push_back(DeferredInput {
-            admission_ordinal: 4,
-            admission_capability: DeferredAdmissionCapability::for_authenticated_test(4),
-            event: reducer::Event::TimeoutCertificateReceived {
+            admission_ordinal: 1,
+            admission_capability: DeferredAdmissionCapability::for_authenticated_test(1),
+            event: reducer::Event::QuorumCertificateReceived {
                 tag,
-                certificate: deferred_timeout,
+                certificate: deferred_prepare,
             },
             completion_evidence: None,
             retag_authenticated_ingress: true,
             priority: DeferredPriority::Progress,
             protected_progress: false,
             admission: None,
-            authenticated_wire_identity: Some(deferred_timeout_wire_identity),
+            authenticated_wire_identity: Some(deferred_prepare_wire_identity),
             admitted_at: Instant::now(),
             eligible_skips: 0,
         });
@@ -18082,37 +18060,14 @@ mod tests {
         let registry_before = adapter.registry.clone();
         let active_subject_before = adapter.active_subject;
         let deferred_before = adapter.deferred_progress_inputs.clone();
-        for certificate in [
-            qc(wire::GlobalPhase::Prepare, 0xE3),
-            qc(wire::GlobalPhase::Commit, 0xE4),
-        ] {
-            let outcome = adapter
-                .receive_verified(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
-                ))
-                .expect("apply certificate-class backpressure");
-            assert_eq!(
-                outcome.disposition(),
-                reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-            );
-            assert_eq!(adapter.deferred_progress_inputs, deferred_before);
-            assert_registry_eq(&adapter.registry, &registry_before);
-            assert_eq!(adapter.active_subject, active_subject_before);
-        }
-
-        let timeout_with_new_high_qc = wire::TimeoutCertificate {
-            round: wire_round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: Some(qc(wire::GlobalPhase::Prepare, 0xE5)),
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xE5; 96],
-            }],
-        };
         let outcome = adapter
             .receive_verified(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_with_new_high_qc),
+                wire::ConsensusMessageV2Payload::QuorumCertificate(qc(
+                    wire::GlobalPhase::Prepare,
+                    0xE3,
+                )),
             ))
-            .expect("apply timeout-certificate-class backpressure");
+            .expect("apply PrepareQC-class backpressure");
         assert_eq!(
             outcome.disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
@@ -18843,7 +18798,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn adjacent_future_timeout_vote_remains_retryable_until_current_view_advances() {
+    fn certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
@@ -18857,15 +18812,13 @@ mod tests {
         let local_timeout = adapter
             .timeout_elapsed(current_tag)
             .expect("start the local TimeoutVote signature fence");
-        let sign_tag = match local_timeout.effects() {
-            [
-                AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::TimeoutVote(_),
-                },
-            ] => *tag,
-            effects => panic!("unexpected timeout effects: {effects:?}"),
-        };
+        assert!(matches!(
+            local_timeout.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            },]
+        ));
 
         let timeout_certificate = wire::TimeoutCertificate {
             round: current_round,
@@ -18875,37 +18828,22 @@ mod tests {
                 aggregate_signature: vec![0xC1; 96],
             }],
         };
-        let deferred_tc = adapter
+        let installed = adapter
             .receive_verified(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
             ))
-            .expect("defer the current-view TC behind the signature fence");
-        assert_eq!(
-            deferred_tc.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-        );
-
-        let current_vote = wire::TimeoutVote {
-            round: current_round,
-            highest_prepare_qc: None,
-            signer: 1,
-            signature: vec![0xC2],
-        };
-        let current_key = IngressSemanticKey::TimeoutVote {
-            round: current_round,
-            signer: 1,
-        };
-        let deferred_current = adapter
-            .receive_verified(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutVote(current_vote),
-            ))
-            .expect("defer one current-view owner for the signer");
-        assert_eq!(
-            deferred_current.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-        );
-        assert!(adapter.ingress_deliveries.contains_key(&current_key));
-        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+            .expect("authenticated TC bypasses the hung local signature");
+        assert_eq!(installed.disposition(), reducer::StepDisposition::Applied);
+        assert!(matches!(
+            installed.effects(),
+            [AdapterEffect::EnterView {
+                tag,
+                protected_body: None,
+                ..
+            }] if tag.view() == current_round.view + 1
+        ));
+        assert_eq!(adapter.current_tag().view(), current_round.view + 1);
+        assert!(adapter.deferred_progress_inputs.is_empty());
 
         let adjacent_round = wire::ConsensusRound {
             view: current_round
@@ -18923,41 +18861,6 @@ mod tests {
             round: adjacent_round,
             signer: 1,
         };
-        for attempt in 0..2 {
-            let busy = adapter
-                .receive_verified(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
-                ))
-                .expect("adjacent TimeoutVote remains retryable behind its current owner");
-            assert_eq!(
-                busy.disposition(),
-                reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy),
-                "pre-advance attempt {attempt} must remain retryable"
-            );
-            assert_eq!(
-                adapter.deferred_progress_inputs.len(),
-                2,
-                "one signer cannot consume both retained timeout-round partitions"
-            );
-            assert!(adapter.ingress_equivocations.contains_key(&adjacent_key));
-            assert!(
-                !adapter.ingress_deliveries.contains_key(&adjacent_key),
-                "unowned adjacent traffic must not be poisoned as delivered"
-            );
-        }
-
-        adapter
-            .signature_completed(sign_tag, vec![0xC4; 96])
-            .expect("complete the local TimeoutVote signature");
-        let enter_view = adapter
-            .drain_deferred()
-            .expect("install the deferred TC in its own macro-step");
-        assert!(enter_view.iter().any(|effect| matches!(
-            effect,
-            AdapterEffect::EnterView { tag, .. } if tag.view() == adjacent_round.view
-        )));
-        assert_eq!(adapter.current_tag().view(), adjacent_round.view);
-
         let applied = adapter
             .receive_verified(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
@@ -18994,7 +18897,7 @@ mod tests {
         let first_timeout = adapter
             .timeout_elapsed(first_tag)
             .expect("start the first local TimeoutVote signature fence");
-        let first_sign_tag = match first_timeout.effects() {
+        let _first_sign_tag = match first_timeout.effects() {
             [
                 AdapterEffect::Sign {
                     tag,
@@ -19003,24 +18906,6 @@ mod tests {
             ] => *tag,
             effects => panic!("unexpected first timeout effects: {effects:?}"),
         };
-
-        let timeout_certificate = wire::TimeoutCertificate {
-            round: first_round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: None,
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xD7; 96],
-            }],
-        };
-        let deferred_tc = adapter
-            .receive_verified(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
-            ))
-            .expect("defer the TC behind the first signature fence");
-        assert_eq!(
-            deferred_tc.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-        );
 
         let old_timeout = wire::TimeoutVote {
             round: first_round,
@@ -19036,7 +18921,7 @@ mod tests {
             .receive_verified(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::TimeoutVote(old_timeout.clone()),
             ))
-            .expect("defer the old-view TimeoutVote behind the TC");
+            .expect("defer the old-view TimeoutVote behind the signature fence");
         assert_eq!(
             deferred_old.disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
@@ -19048,7 +18933,7 @@ mod tests {
                 .is_some_and(|record| record.capacity_bypass)
         );
         assert!(adapter.ingress_deliveries.contains_key(&old_key));
-        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+        assert_eq!(adapter.deferred_progress_inputs.len(), 1);
         let old_input = adapter
             .deferred_progress_inputs
             .back()
@@ -19077,21 +18962,23 @@ mod tests {
             duplicate_old.disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
         );
-        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+        assert_eq!(adapter.deferred_progress_inputs.len(), 1);
 
-        let signed = adapter
-            .signature_completed(first_sign_tag, vec![0xD9; 96])
-            .expect("complete the first signature before installing the deferred TC")
-            .into_effects();
-        assert!(
-            signed
-                .iter()
-                .all(|effect| !matches!(effect, AdapterEffect::EnterView { .. }))
-        );
+        let timeout_certificate = wire::TimeoutCertificate {
+            round: first_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xD7; 96],
+            }],
+        };
         let enter_view = adapter
-            .drain_deferred()
-            .expect("install the deferred TC as a separate macro-step");
-        assert!(enter_view.iter().any(|effect| matches!(
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+            ))
+            .expect("authenticated TC bypasses the first signature fence");
+        assert_eq!(enter_view.disposition(), reducer::StepDisposition::Applied);
+        assert!(enter_view.effects().iter().any(|effect| matches!(
             effect,
             AdapterEffect::EnterView { tag, .. } if tag.view() == 1
         )));

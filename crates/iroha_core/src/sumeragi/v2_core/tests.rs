@@ -5159,7 +5159,7 @@ fn decision_persistence_fences_timeout_certificate_view_change() {
 }
 
 #[test]
-fn commit_qc_cannot_overtake_timeout_frontier() {
+fn commit_qc_preempts_hung_timeout_signature_but_not_pending_wal() {
     let context = context();
     let round = Round::new(context.height(), 0);
     let subject = Subject::repeat(0x93);
@@ -5215,92 +5215,53 @@ fn commit_qc_cannot_overtake_timeout_frontier() {
         }] if *tag == original_tag && vote.round() == round && vote.signer() == id(1)
     ));
 
-    let before_timeout_signature = reducer.clone();
+    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let before_prepare = reducer.clone();
     let busy = reducer
         .step(Event::QuorumCertificateReceived {
             tag: original_tag,
-            certificate: commit.clone(),
+            certificate: prepare,
         })
-        .expect("CommitQC cannot overtake timeout signing");
+        .expect("PrepareQC remains behind the exact signing fence");
     assert_eq!(
         busy.disposition(),
         StepDisposition::Ignored(IgnoreReason::Busy)
     );
     assert!(busy.effects().is_empty());
-    assert_eq!(reducer, before_timeout_signature);
-
-    let formed = reducer
-        .step(Event::Signed {
-            tag: original_tag,
-            signature: signature(1),
-        })
-        .expect("the local timeout signature atomically forms its TC");
-    let install_entry = match formed.effects() {
-        [
-            Effect::Broadcast(ConsensusMessageV2::TimeoutVote(vote)),
-            Effect::Persist { tag, entry },
-        ] if vote.vote().round() == round
-            && vote.vote().signer() == id(1)
-            && *tag == original_tag
-            && matches!(entry.record(), WalRecord::InstallTimeout(_)) =>
-        {
-            entry.clone()
-        }
-        effects => panic!("timeout quorum must broadcast then persist its TC: {effects:?}"),
-    };
-    assert!(
-        reducer
-            .timeout_pool_snapshots()
-            .iter()
-            .all(|pool| pool.certificate_formed)
-    );
-    assert!(reducer.durable_state().decision().is_none());
-
-    let before_install_ack = reducer.clone();
-    let busy = reducer
-        .step(Event::QuorumCertificateReceived {
-            tag: original_tag,
-            certificate: commit.clone(),
-        })
-        .expect("CommitQC cannot overtake InstallTimeout persistence");
-    assert_eq!(
-        busy.disposition(),
-        StepDisposition::Ignored(IgnoreReason::Busy)
-    );
-    assert!(busy.effects().is_empty());
-    assert_eq!(reducer, before_install_ack);
-
-    let entered = acknowledge(&mut reducer, &install_entry);
-    assert!(matches!(
-        entered.effects(),
-        [
-            Effect::Broadcast(ConsensusMessageV2::TimeoutCertificate(certificate)),
-            Effect::EnterView {
-                tag,
-                certificate: entered_certificate,
-                protected_lock: None,
-            },
-        ] if certificate == entered_certificate
-            && certificate.round() == round
-            && tag.view() == 1
-            && tag.strictly_advances(original_tag)
-    ));
-    assert_eq!(reducer.current_tag().view(), 1);
-    assert!(reducer.durable_state().decision().is_none());
-    assert_eq!(reducer.progress_witness_violation(), None);
+    assert_eq!(reducer, before_prepare);
 
     let decision_entry = only_persist(
         reducer
             .step(Event::QuorumCertificateReceived {
-                tag: reducer.current_tag(),
+                tag: original_tag,
                 certificate: commit.clone(),
             })
-            .expect("retagged historical CommitQC starts Decision persistence"),
+            .expect("authenticated CommitQC supersedes the hung local signature"),
     );
     assert!(matches!(
         decision_entry.record(),
         WalRecord::Decision(certificate) if certificate == &commit
     ));
+    assert!(reducer.awaiting_signature().is_none());
+    assert!(reducer.queued_signatures().any(
+        |message| matches!(message, SignableMessage::TimeoutVote(vote) if vote.round() == round)
+    ));
+    assert!(reducer.durable_state().decision().is_none());
+
+    let before_stale_completion = reducer.clone();
+    let busy = reducer
+        .step(Event::Signed {
+            tag: original_tag,
+            signature: signature(1),
+        })
+        .expect("pending Decision WAL still fences the old signature completion");
+    assert_eq!(
+        busy.disposition(),
+        StepDisposition::Ignored(IgnoreReason::Busy)
+    );
+    assert!(busy.effects().is_empty());
+    assert_eq!(reducer, before_stale_completion);
+
     let decided = acknowledge(&mut reducer, &decision_entry);
     assert!(matches!(
         decided.effects(),
@@ -5314,11 +5275,12 @@ fn commit_qc_cannot_overtake_timeout_frontier() {
             && certificate == &commit
     ));
     assert_eq!(reducer.durable_state().decision(), Some(&commit));
+    assert!(reducer.awaiting_signature().is_none());
+    assert_eq!(reducer.queued_signatures().count(), 0);
     assert_eq!(reducer.progress_witness_violation(), None);
 
     let application_owner = reducer.current_tag();
-    assert_eq!(application_owner.view(), 1);
-    assert_ne!(application_owner.generation(), original_tag.generation());
+    assert_eq!(application_owner, original_tag);
 
     let available = reducer
         .step(Event::BodyAvailable {
@@ -5387,6 +5349,130 @@ fn commit_qc_cannot_overtake_timeout_frontier() {
     assert!(completed.effects().is_empty());
     assert_eq!(reducer.applied_subject(), Some(subject));
     assert!(reducer.ready_to_finish());
+    assert_eq!(reducer.progress_witness_violation(), None);
+}
+
+#[test]
+fn same_view_tc_upgrade_reissues_hung_signature_under_new_generation() {
+    let context = context();
+    let mut reducer =
+        Reducer::new(context.clone(), Some(id(1)), Generation::new(48)).expect("reducer");
+    let initial_tag = reducer.current_tag();
+    let first_timeout = tc_without_high(&context, 0, &[1, 2, 3]);
+    let first_entry = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: initial_tag,
+                certificate: first_timeout,
+            })
+            .expect("initial TC starts the view-advance WAL transition"),
+    );
+    let first_install = acknowledge(&mut reducer, &first_entry);
+    assert!(matches!(
+        first_install.effects(),
+        [Effect::EnterView {
+            tag,
+            protected_lock: None,
+            ..
+        }] if tag.view() == 1 && tag.strictly_advances(initial_tag)
+    ));
+
+    let signing_tag = reducer.current_tag();
+    let timeout_round = Round::new(context.height(), signing_tag.view());
+    let timeout_entry = only_persist(
+        reducer
+            .step(Event::TimeoutElapsed { tag: signing_tag })
+            .expect("current-view timeout starts its durable intent"),
+    );
+    let sign = acknowledge(&mut reducer, &timeout_entry);
+    assert!(matches!(
+        sign.effects(),
+        [Effect::Sign {
+            tag,
+            message: SignableMessage::TimeoutVote(vote),
+        }] if *tag == signing_tag && vote.round() == timeout_round
+    ));
+
+    let locked_subject = Subject::repeat(0x95);
+    let high = qc(&context, 0, Phase::Prepare, locked_subject, &[1, 2, 3]);
+    let upgrade = tc_with_high(&context, 0, high.clone(), &[1, 2, 3]);
+    let upgrade_entry = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: signing_tag,
+                certificate: upgrade.clone(),
+            })
+            .expect("strict same-view TC upgrade supersedes the hung signing task"),
+    );
+    assert!(reducer.awaiting_signature().is_none());
+    assert!(reducer.queued_signatures().any(
+        |message| matches!(message, SignableMessage::TimeoutVote(vote) if vote.round() == timeout_round)
+    ));
+
+    let upgraded = acknowledge(&mut reducer, &upgrade_entry);
+    let upgraded_tag = reducer.current_tag();
+    assert_eq!(upgraded_tag.view(), signing_tag.view());
+    assert!(upgraded_tag.strictly_advances(signing_tag));
+    assert!(matches!(
+        upgraded.effects(),
+        [
+            Effect::EnterView {
+                tag,
+                certificate,
+                protected_lock: Some(locked),
+            },
+            Effect::FetchBody {
+                tag: fetch_tag,
+                round,
+                subject,
+                certificate: Some(fetch_certificate),
+                ..
+            },
+            Effect::Sign {
+                tag: sign_tag,
+                message: SignableMessage::TimeoutVote(vote),
+            },
+        ] if *tag == upgraded_tag
+            && certificate == &upgrade
+            && locked == &high
+            && *fetch_tag == upgraded_tag
+            && *round == high.round()
+            && *subject == locked_subject
+            && fetch_certificate == &high
+            && *sign_tag == upgraded_tag
+            && vote.round() == timeout_round
+    ));
+    assert!(matches!(
+        reducer.awaiting_signature(),
+        Some(SignableMessage::TimeoutVote(vote)) if vote.round() == timeout_round
+    ));
+
+    let before_stale = reducer.clone();
+    let stale = reducer
+        .step(Event::Signed {
+            tag: signing_tag,
+            signature: signature(1),
+        })
+        .expect("old-generation signature completion is a typed stale stutter");
+    assert_eq!(
+        stale.disposition(),
+        StepDisposition::Ignored(IgnoreReason::StaleGeneration)
+    );
+    assert!(stale.effects().is_empty());
+    assert_eq!(reducer, before_stale);
+
+    let completed = reducer
+        .step(Event::Signed {
+            tag: upgraded_tag,
+            signature: signature(1),
+        })
+        .expect("reissued signing task completes under the new generation");
+    assert!(matches!(
+        completed.effects(),
+        [Effect::Broadcast(ConsensusMessageV2::TimeoutVote(vote))]
+            if vote.vote().round() == timeout_round
+    ));
+    assert!(reducer.awaiting_signature().is_none());
     assert_eq!(reducer.progress_witness_violation(), None);
 }
 
