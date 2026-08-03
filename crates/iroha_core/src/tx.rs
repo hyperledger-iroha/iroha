@@ -6831,7 +6831,7 @@ pub mod tests {
         let chain: ChainId = "single-ed25519-fast-path-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain,
+            chain.clone(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6844,7 +6844,7 @@ pub mod tests {
         let secp_keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let secp_authority = AccountId::new(secp_keypair.public_key().clone());
         let secp_signed = TransactionBuilder::new(
-            chain.clone(),
+            chain,
             secp_authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

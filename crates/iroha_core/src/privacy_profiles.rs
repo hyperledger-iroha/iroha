@@ -3846,16 +3846,16 @@ mod tests {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
                     "b5db09ae42957802c502855459a102ba8e829bfb86a0356691455de0a08fbec0".to_owned(),
                     "a665cfcbea5576a1cf533997e575ebd49957ce320c483c019e784f8fc93457e1".to_owned(),
-                    "5f2214526473a3b617e09c43dd9f48795f11d7f169bb645e76ce0693b0483abb".to_owned(),
-                    "b30e388a3f3dbb6d2e93aa8c53a5df355238b763d6c3fcd766f7d0c3f0afca5f".to_owned(),
-                    "99158955397f0aa94c2bae5285cb2e6f7602506366e6f583a6797ffaa77874d1".to_owned(),
+                    "8fd68669b9ef735fa227de44ced8fb204c55e46ac1c8f05efc128667e1a69dbb".to_owned(),
+                    "9c83cc55b7098221d7361dfb2f09ae834f4b5e46af777d24266e2e70ceefc45c".to_owned(),
+                    "d8e8f893f2541b0929a8bc9c44f995a38cd6023072e6d94fc362c6f67bdc4cd8".to_owned(),
                 ),
                 PrivacyProtocolIdV1::PqMaspStarkV0 => (
                     "10a8697291331061099a6c67eaeac3bc29f77aea951f2f2ad55ca29d0f816951".to_owned(),
-                    "120ad9e6f616fdd05168a2dde5608654094a18b97bfc89ebedf86b7fbaf335b8".to_owned(),
-                    "dc7c983c9b683ec2b4efc998408a59afd213272ac37bcee5720cf68a0f4516c9".to_owned(),
-                    "4932c64b8f113632ba145e18ca5cc85496fbc96d103b19d712643348f3153727".to_owned(),
-                    "e6cd364435e6ef1d85ef0a825b05cbf48a65ecf10e9f152d68935f84246c9601".to_owned(),
+                    "06fbee48b23572d6496ba068dfe819300176a9422ffbcd79c6ccfe1b0b4f9cd2".to_owned(),
+                    "4ee67f01e2268c1b5b14ab576352ba379661c0fab93a4c2f5507f2786ec7b00f".to_owned(),
+                    "776487d416a46123b2146c0e9455be474999f2d8de8994532d8fbf4bf63def9d".to_owned(),
+                    "f05f4f90c69e39a64942426d3ddd6f8d2c2bddbcc25143c7df71a2f495e34fbc".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };
