@@ -25816,7 +25816,8 @@ signed ancestor-linked solid-block header proof,
   verifier-key hashes, empty payloads, oversized payloads, and admission
   auxiliary bytes before backend-specific proof logic runs.
 - Fold focused ZK/FHE adversarial tests into the long workspace validation
-  corridor.
+  corridor, including the explicit full-domain PQ-MASP, IVM private-note, and
+  maximum-batch ZK-AMS release gates in a serial, resource-isolated lane.
 
 **Next checkpoints:** replace the generated full-bootstrap proof-key fixture
 payloads with externally audited prover/verifier artifacts, carry the

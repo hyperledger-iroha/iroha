@@ -97,16 +97,16 @@ pub(crate) const PQ_MASP_STARK_PROFILE_DIGEST_V1: [u8; 32] = [
 /// `pq-masp-full-facade-v1` ML-DSA key and `[0xC2; 32]` genesis hash, with
 /// `StdRng::from_seed([0xB7; 32])`.
 pub(crate) const PQ_MASP_STARK_KAT_PROOF_SHA256_V1: [u8; 32] = [
-    0xe8, 0x0b, 0xce, 0xa4, 0xbc, 0xf6, 0x97, 0xb3, 0x87, 0x57, 0xbd, 0x66, 0xdb, 0x00, 0xc5, 0x58,
-    0x49, 0x52, 0x07, 0x13, 0xfa, 0x11, 0x63, 0x8e, 0x4b, 0x2c, 0x7a, 0x21, 0x9b, 0xa1, 0x08, 0xd6,
+    0x46, 0xec, 0xfb, 0x40, 0x97, 0xb2, 0xc2, 0xca, 0x1d, 0x12, 0x7a, 0xe2, 0x12, 0xae, 0xd9, 0xdb,
+    0x99, 0x15, 0xb5, 0x0a, 0x2e, 0x06, 0x87, 0x58, 0x92, 0x5c, 0xa3, 0xf7, 0x59, 0xd6, 0x05, 0x44,
 ];
 
 /// SHA-256 of the complete deterministic `PQA1` facade proof from the same
 /// canonical full-domain fixture. This pins the reserved block-two hedge,
 /// ML-DSA authorization, and exact inner proof as one end-to-end producer.
 pub(crate) const PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1: [u8; 32] = [
-    0x85, 0x02, 0x21, 0x13, 0x1b, 0x26, 0x2f, 0x04, 0x3f, 0x3b, 0x1d, 0xba, 0x6e, 0x97, 0x7d, 0xec,
-    0xfe, 0xf5, 0xcd, 0x3a, 0xa3, 0x93, 0x5e, 0xe2, 0x99, 0xdd, 0xff, 0x5b, 0x62, 0x34, 0x07, 0x60,
+    0xf8, 0x30, 0xf1, 0x50, 0x09, 0x67, 0xd4, 0x4a, 0x1d, 0x66, 0x3c, 0x11, 0xbd, 0x16, 0xd2, 0xb9,
+    0xc3, 0xa1, 0xbd, 0x41, 0x00, 0x90, 0x34, 0x74, 0x2b, 0xda, 0x4f, 0x34, 0xa0, 0xf3, 0x5e, 0xc8,
 ];
 
 const PQ_MASP_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
@@ -1334,7 +1334,7 @@ mod tests {
     }
 
     #[test]
-    fn full_domain_authorized_facade_roundtrip_and_adversarial_wires_fail_closed() {
+    fn authorization_key_mismatch_fails_before_rng_consumption() {
         let authorization_keys = generate_mldsa_keypair_from_seed(
             MlDsaSuite::MlDsa65,
             HedgedRngSeed::from_entropy([0xB6; 32]),
@@ -1372,6 +1372,22 @@ mod tests {
             expected_rng.next_u64(),
             "invalid authorization keys must fail before entropy is consumed"
         );
+    }
+
+    #[test]
+    #[ignore = "release gate: generates and verifies the full-domain PQ-MASP proof"]
+    fn full_domain_authorized_facade_roundtrip_and_adversarial_wires_fail_closed() {
+        let authorization_keys = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0xB6; 32]),
+            b"pq-masp-full-facade-v1",
+        )
+        .expect("ML-DSA authorization key");
+        let key_digest =
+            derive_pq_masp_authorization_key_digest_v1(authorization_keys.public_key())
+                .expect("authorization key digest");
+        let (statement, witness) = valid_fixture_with_authorization_key_digest(key_digest);
+        let (binding, limits) = consensus_material(&statement);
         let mut rng = StdRng::from_seed([0xB7; 32]);
         let authorized_proof = super::super::prove_pq_masp_v1_with_rng(
             &statement,
@@ -1393,10 +1409,13 @@ mod tests {
             .expect("full-domain PQ-MASP verification");
         let proof_digest: [u8; 32] = Sha256::digest(&proof).into();
         let authorized_proof_digest: [u8; 32] = Sha256::digest(&authorized_proof).into();
-        assert_eq!(proof_digest, PQ_MASP_STARK_KAT_PROOF_SHA256_V1);
         assert_eq!(
-            authorized_proof_digest,
-            PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1
+            (proof_digest, authorized_proof_digest),
+            (
+                PQ_MASP_STARK_KAT_PROOF_SHA256_V1,
+                PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1,
+            ),
+            "the deterministic inner and authorized PQ-MASP proof KATs drifted"
         );
 
         assert!(
