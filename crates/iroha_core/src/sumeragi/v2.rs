@@ -74,10 +74,10 @@ const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACR
 
 /// Largest record-specific `Persist -> Persisted` flattened batch.
 ///
-/// The witness is locally formed `InstallTimeout`: one local TimeoutVote
-/// broadcast precedes `Persist`, then the acknowledgement can emit the TC
-/// broadcast, `EnterView`, one protected-body fetch, and one reconstructed
-/// locked Commit signature. Thus `2 - 1 + 4 = 5`.
+/// The witness is locally formed `InstallTimeout`: `Persist` precedes one
+/// retained local TimeoutVote broadcast, while its acknowledgement causally
+/// prepends `EnterView`, one protected-body fetch, the TC broadcast, and one
+/// reconstructed locked Commit signature. Thus `2 - 1 + 4 = 5`.
 const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 5;
 
 // Every persistence-flattened batch must fit the executor's already verified
@@ -138,8 +138,9 @@ impl PersistenceMacroStepClass {
             Self::LockAndCommit => PersistenceMacroStepBudget::new(3, 1),
             // TimeoutElapsed emits only Persist; Persisted emits Sign.
             Self::TimeoutIntent => PersistenceMacroStepBudget::new(1, 1),
-            // Signed TimeoutVote can prefix Persist with its vote broadcast;
-            // Persisted can emit TC broadcast, EnterView, fetch, and Sign.
+            // Signed TimeoutVote emits Persist before its retained old-view
+            // vote broadcast. The durable continuation can causally prepend
+            // EnterView, fetch, TC broadcast, and Sign to that old-view tail.
             Self::InstallTimeout => PersistenceMacroStepBudget::new(2, 4),
             // Signed CommitVote can prefix Persist with its vote broadcast;
             // Persisted can emit the CommitQC broadcast and one body/apply
@@ -18340,6 +18341,116 @@ mod tests {
                 .expect("same-episode duplicate is reducer-idempotent")
                 .disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
+        );
+    }
+
+    #[test]
+    fn locally_signed_timeout_quorum_leads_with_enter_view_after_wal() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+
+        for signer in [1, 2] {
+            let retained = adapter
+                .receive_verified(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                        round,
+                        highest_prepare_qc: None,
+                        signer,
+                        signature: vec![signer as u8; 96],
+                    }),
+                ))
+                .expect("retain a remote TimeoutVote before the local timeout");
+            assert_eq!(retained.disposition(), reducer::StepDisposition::Applied);
+            assert!(retained.effects().is_empty());
+        }
+
+        let timeout = adapter
+            .timeout_elapsed(tag)
+            .expect("persist the local timeout intent");
+        let sign_tag = match timeout.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected local TimeoutVote effects: {effects:?}"),
+        };
+        let entered = adapter
+            .signature_completed(sign_tag, vec![0xF2; 96])
+            .expect("the local signature completes the retained timeout quorum")
+            .into_effects();
+
+        assert!(
+            matches!(
+                entered.as_slice(),
+                [
+                    AdapterEffect::EnterView {
+                        tag: entered_tag,
+                        protected_body: None,
+                        ..
+                    },
+                    AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(_),
+                        ..
+                    }),
+                    AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+                        ..
+                    }),
+                ] if entered_tag.view() == round.view + 1
+                    && vote.round == round
+                    && vote.signer == 0
+            ),
+            "the advancing WAL continuation must precede its retained old-view broadcast: {entered:?}"
+        );
+    }
+
+    #[test]
+    fn locally_signed_timeout_without_quorum_broadcasts_only_the_vote() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+
+        let timeout = adapter
+            .timeout_elapsed(tag)
+            .expect("persist the local timeout intent");
+        let sign_tag = match timeout.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected local TimeoutVote effects: {effects:?}"),
+        };
+        let signed = adapter
+            .signature_completed(sign_tag, vec![0xF3; 96])
+            .expect("complete the non-quorum local TimeoutVote")
+            .into_effects();
+
+        assert!(
+            matches!(
+                signed.as_slice(),
+                [AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+                    ..
+                })] if vote.round == round && vote.signer == 0
+            ),
+            "a non-quorum local timeout must emit only its vote broadcast: {signed:?}"
         );
     }
 

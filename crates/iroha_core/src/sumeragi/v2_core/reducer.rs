@@ -4833,9 +4833,9 @@ impl Reducer {
                 let signed = SignedTimeoutVote::new(vote, signature);
                 let message = ConsensusMessageV2::TimeoutVote(signed.clone());
                 self.remember_control(message.clone());
-                effects.push(Effect::Broadcast(message));
                 let mut local = self.on_timeout_vote(signed)?.into_effects();
                 effects.append(&mut local);
+                effects.push(Effect::Broadcast(message));
             }
         }
         if self.pending_persistence.is_none() && self.awaiting_signature.is_none() {
