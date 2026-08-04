@@ -294,9 +294,10 @@ resume process through compare-and-set.
 ## Private publication service outage
 
 1. Confirm the stock daemon has not exposed a Torii upload route. The private
-   service exists only when a deployment runner was explicitly injected and
+   service exists only when an explicitly injected late-bound factory assembles
+   a deployment runner from the trusted live daemon handles and that runner is
    supervised through `run_with_musubi_publication` or the combined
-   runtime-provider launcher; `Unavailable` with no runner is the intended
+   runtime-provider launcher; `Unavailable` with no factory is the intended
    fail-closed state.
 2. Check the deployment-owned HTTPS listener, TLS identity, qualified durable
    clock source and private root, durable replay journal and its separate root, broker
