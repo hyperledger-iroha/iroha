@@ -5956,6 +5956,74 @@ impl SumeragiV2Adapter {
             .collect()
     }
 
+    /// Return exact body-stage terminal evidence retained behind the Busy
+    /// reducer boundary. `BodyAvailable` is intentionally excluded because
+    /// its persistent producer and restart aliases have stricter ownership
+    /// rules than the cached Store/Validate terminal stages.
+    pub(crate) fn deferred_body_pipeline_terminal_candidates(
+        &self,
+    ) -> Vec<(u128, reducer::EventTag, BodyPipelineCompletionEvidence)> {
+        self.deferred_completions
+            .iter()
+            .chain(&self.deferred_inputs)
+            .filter_map(|input| {
+                let evidence = input.completion_evidence.as_ref()?;
+                let tag = match (&input.event, evidence) {
+                    (
+                        reducer::Event::LocalProposalReady { tag, .. },
+                        BodyPipelineCompletionEvidence::LocalProposalReady { .. },
+                    )
+                    | (
+                        reducer::Event::BodyStored { tag, .. },
+                        BodyPipelineCompletionEvidence::BodyStored { .. },
+                    )
+                    | (
+                        reducer::Event::ValidationCompleted {
+                            tag, valid: true, ..
+                        },
+                        BodyPipelineCompletionEvidence::ValidationSucceeded { .. },
+                    )
+                    | (
+                        reducer::Event::ValidationCompleted {
+                            tag, valid: false, ..
+                        },
+                        BodyPipelineCompletionEvidence::ValidationFailed { .. },
+                    ) => *tag,
+                    _ => return None,
+                };
+                let (wire_round, wire_subject, expected_stage) = match evidence {
+                    BodyPipelineCompletionEvidence::LocalProposalReady { manifest, .. } => (
+                        manifest.round,
+                        manifest.subject,
+                        DeferredBodyPipelineCompletionStage::LocalProposalReady,
+                    ),
+                    BodyPipelineCompletionEvidence::BodyStored { round, subject, .. } => (
+                        *round,
+                        *subject,
+                        DeferredBodyPipelineCompletionStage::BodyStored,
+                    ),
+                    BodyPipelineCompletionEvidence::ValidationSucceeded {
+                        round, subject, ..
+                    }
+                    | BodyPipelineCompletionEvidence::ValidationFailed { round, subject } => (
+                        *round,
+                        *subject,
+                        DeferredBodyPipelineCompletionStage::Validation,
+                    ),
+                    BodyPipelineCompletionEvidence::BodyAvailable { .. } => return None,
+                };
+                let round = reducer::Round::new(wire_round.height, wire_round.view);
+                let subject = reducer::Subject::new(Hash::new(wire_subject.encode()).into());
+                if deferred_body_pipeline_completion_stage(input, tag, round, subject)
+                    != Some(expected_stage)
+                {
+                    return None;
+                }
+                Some((input.admission_ordinal, tag, evidence.clone()))
+            })
+            .collect()
+    }
+
     /// Report whether the exact Busy-deferred `BodyAvailable` owner carries
     /// the adapter's sole persistent producer reservation.
     ///
