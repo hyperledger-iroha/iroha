@@ -269,6 +269,7 @@ impl GenerationTransaction {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_with_fault(
         self,
         context: GenerationInventoryContext<'_>,
