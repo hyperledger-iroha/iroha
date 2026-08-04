@@ -3696,7 +3696,7 @@ mod tests {
         let signer_error = load_test_prepared_bundle(&config_dir, &projection_root, count)
             .expect_err("mismatched prepared signer must fail");
         assert!(
-            signer_error.to_string().contains("signer"),
+            format!("{signer_error:#}").contains("signer"),
             "unexpected signer mismatch: {signer_error:#}"
         );
         fs::write(&public_path, original_public).expect("restore public-key fixture");
@@ -3710,7 +3710,7 @@ mod tests {
         let hash_error = load_test_prepared_bundle(&config_dir, &projection_root, count)
             .expect_err("mismatched prepared hash must fail");
         assert!(
-            hash_error.to_string().contains("body hashes"),
+            format!("{hash_error:#}").contains("body hashes"),
             "unexpected hash mismatch: {hash_error:#}"
         );
         fs::write(&hash_path, original_hash).expect("restore hash fixture");
