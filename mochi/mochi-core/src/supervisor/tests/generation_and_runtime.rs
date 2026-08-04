@@ -746,7 +746,8 @@ fn wipe_and_regenerate_resets_storage_and_genesis() {
     }
 
     let retired_genesis_path = supervisor.genesis_manifest().to_path_buf();
-    fs::write(&retired_genesis_path, b"not-json").expect("corrupt genesis manifest");
+    let retired_genesis_bytes =
+        fs::read(&retired_genesis_path).expect("read retired genesis manifest");
 
     supervisor
         .wipe_and_regenerate()
@@ -758,6 +759,15 @@ fn wipe_and_regenerate_resets_storage_and_genesis() {
         "regeneration must select a new immutable generation"
     );
     let manifest_bytes = fs::read(&genesis_path).expect("read regenerated genesis");
+    assert_ne!(
+        manifest_bytes, retired_genesis_bytes,
+        "regeneration must produce a distinct signed-genesis manifest"
+    );
+    assert_eq!(
+        fs::read(&retired_genesis_path).expect("read retained immutable genesis history"),
+        retired_genesis_bytes,
+        "regeneration must preserve the retired immutable genesis exactly"
+    );
     let manifest: Value =
         norito::json::from_slice(&manifest_bytes).expect("genesis should be valid JSON");
     assert_eq!(
@@ -1447,7 +1457,9 @@ fn supervisor_exposes_config_overrides() {
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), toml::Value::Boolean(true));
     let mut sumeragi = toml::Table::new();
-    sumeragi.insert("msg_channel_cap_votes".into(), toml::Value::Integer(16));
+    let mut sumeragi_block = toml::Table::new();
+    sumeragi_block.insert("max_transactions".into(), toml::Value::Integer(16));
+    sumeragi.insert("block".into(), toml::Value::Table(sumeragi_block));
     let mut torii = toml::Table::new();
     torii.insert(
         "address".into(),
@@ -1473,7 +1485,9 @@ fn supervisor_exposes_config_overrides() {
     assert_eq!(
         supervisor
             .sumeragi_config_overrides()
-            .and_then(|table| table.get("msg_channel_cap_votes"))
+            .and_then(|table| table.get("block"))
+            .and_then(toml::Value::as_table)
+            .and_then(|block| block.get("max_transactions"))
             .and_then(toml::Value::as_integer),
         Some(16)
     );
@@ -2697,14 +2711,16 @@ fn supervisor_session_info_reports_workspace_and_mcp_urls() {
     assert_eq!(info.mcp_url, "http://127.0.0.1:8080/v1/mcp");
     assert!(info.account_id.is_some());
     assert!(info.private_key.is_some());
+    let canonical_sandbox_root =
+        fs::canonicalize(&info.sandbox_root).expect("canonical sandbox root");
     assert_eq!(
         info.onboarding_token_file,
-        info.sandbox_root.join("runtime/onboarding.token")
+        canonical_sandbox_root.join("runtime/onboarding.token")
     );
     assert_eq!(info.onboarding_credential_id, "local-dev");
     assert_eq!(
         info.onboarding_signer_file,
-        info.sandbox_root.join("runtime/onboarding-signer.key")
+        canonical_sandbox_root.join("runtime/onboarding-signer.key")
     );
 }
 
@@ -2804,17 +2820,15 @@ fn managed_peer_process_uses_its_peer_directory_as_cwd() {
     let ownership = SupervisorOwnershipLock::acquire(paths.root()).expect("acquire ownership");
     peer.start(&stub, StartReason::Manual, &ownership)
         .expect("start peer");
-    for _ in 0..50 {
-        if cwd_capture.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let status = peer
+        .process
+        .as_mut()
+        .expect("running peer stub")
+        .wait()
+        .expect("wait for peer stub");
+    assert!(status.success(), "peer cwd stub must exit successfully");
     let captured = fs::read_to_string(&cwd_capture).expect("captured peer cwd");
     assert_eq!(Path::new(captured.trim()), expected);
-    if let Some(child) = peer.process.as_mut() {
-        child.wait().expect("wait for peer stub");
-    }
 }
 
 #[test]
