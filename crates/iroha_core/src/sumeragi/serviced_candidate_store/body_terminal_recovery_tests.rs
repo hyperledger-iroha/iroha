@@ -81,6 +81,11 @@
             LeaderWireLifecycleStatus::Dormant
         );
         assert_eq!(restore.records()[0].runtime_owner(), Some(runtime_owner));
+        let replay = reopened
+            .reserve(token.clone())
+            .expect("reactivate the exact restart-dormant body owner");
+        assert!(!replay.inserted());
+        assert_eq!(replay.token(), &token);
         reopened.mark_ingress(&token).expect("replay ingress");
         let runtime = reopened
             .mark_runtime(&token, runtime_owner)
@@ -203,4 +208,3 @@
             Some(LeaderWireStableTerminalEvidence::DurableBody(_))
         ));
     }
-

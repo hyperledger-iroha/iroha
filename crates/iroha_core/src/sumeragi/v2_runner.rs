@@ -6037,12 +6037,18 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         let directory = TempDir::new().expect("temporary runner leader-wire directory");
-        let ingress = FairV2Ingress::new(
+        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             64,
             512 * 1024 * 1024,
             64 * 1024 * 1024,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
             8 * 1024 * 1024,
             8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
         );
         ingress
             .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)

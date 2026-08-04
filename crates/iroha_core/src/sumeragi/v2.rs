@@ -15343,12 +15343,42 @@ mod tests {
             height: adapter.wire_context.height,
             view: tag.view(),
         };
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS-normal key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let timeout_signers = vec![0, 1, 2];
+        let timeout_preimage = wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: timeout_signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let timeout_shares = timeout_signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("small fixture signer")].private_key(),
+                    &timeout_preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let timeout_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &timeout_shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate strict-view timeout votes");
         let timeout = wire::TimeoutCertificate {
             round,
             groups: vec![wire::TimeoutVoteGroup {
                 highest_prepare_qc: None,
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xA5; 96],
+                signers: timeout_signers,
+                aggregate_signature: timeout_signature,
             }],
         };
         adapter

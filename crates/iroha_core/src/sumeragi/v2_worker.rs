@@ -25993,12 +25993,18 @@ pub(super) mod tests {
             ("prepare-qc", qc_message),
         ] {
             let (command_tx, command_rx, _admission) = test_io_command_channel(4);
-            let ingress = FairV2Ingress::new(
+            let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
                 128,
-                128 * 1024 * 1024,
+                512 * 1024 * 1024,
                 64 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
                 8 * 1024 * 1024,
                 8 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
             );
             let roster = service
                 .context
@@ -26182,12 +26188,18 @@ pub(super) mod tests {
             }),
         ));
         let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
-        let ingress = FairV2Ingress::new(
+        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             128,
-            128 * 1024 * 1024,
+            512 * 1024 * 1024,
             64 * 1024 * 1024,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
             8 * 1024 * 1024,
             8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
         );
         let roster = service
             .context
@@ -26433,12 +26445,18 @@ pub(super) mod tests {
             })
             .last()
             .expect("the shared prefix is non-empty");
-        let ingress = FairV2Ingress::new(
+        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             128,
-            128 * 1024 * 1024,
+            512 * 1024 * 1024,
             64 * 1024 * 1024,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
             8 * 1024 * 1024,
             8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
         );
         let roster = service
             .context
@@ -26661,13 +26679,27 @@ pub(super) mod tests {
         command_tx
             .acknowledge_serve_completion(
                 admission.lifecycle_id,
-                V2IoServeTerminal::Response(response),
+                V2IoServeTerminal::Response(response.clone()),
             )
             .expect("retain the drained logical request as a terminal tombstone");
-        assert!(
-            command_tx.queue.lock().serves.is_empty(),
-            "acknowledged Serve leaves no recreatable live lifecycle"
-        );
+        {
+            let state = command_tx.queue.lock();
+            assert_eq!(
+                state.serves.len(),
+                1,
+                "acknowledged Serve retains only its exact replay tombstone"
+            );
+            let tracked = state
+                .serves
+                .get(&admission.lifecycle_id)
+                .expect("acknowledged Serve retains its exact replay tombstone");
+            assert_eq!(tracked.state, V2IoServeState::Terminal);
+            assert_eq!(
+                tracked.terminal.as_ref(),
+                Some(&V2IoServeTerminal::Response(response))
+            );
+            assert!(state.commands.is_empty());
+        }
 
         let mut leader = ingress
             .try_recv_if_checked(|inbound| {
@@ -33191,13 +33223,21 @@ pub(super) mod tests {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
-        let ingress = Arc::new(FairV2Ingress::new(
-            64,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-        ));
+        let ingress = Arc::new(
+            FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                64,
+                512 * 1024 * 1024,
+                64 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            ),
+        );
         ingress
             .configure_roster_for_context(
                 roster.clone(),
@@ -33310,7 +33350,10 @@ pub(super) mod tests {
         let (canonical_wire, payload) =
             proposal_body_and_payload_at_view(&service.context, keys, view);
         let (manifest, chunks) = payload.into_parts();
-        assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
+        assert!(
+            !chunks.is_empty(),
+            "fixture body must have an exact data chunk"
+        );
         let proposer = service.context.leader(view);
         let proposer_index = usize::try_from(proposer).expect("small proposer index");
         let sender = service.context.roster[proposer_index].validator.clone();
@@ -33327,7 +33370,7 @@ pub(super) mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&manifest),
             index: 0,
-            bytes: chunks.into_iter().next().expect("one fixture chunk"),
+            bytes: chunks.into_iter().next().expect("fixture data chunk"),
             sender: proposer,
             signature: Vec::new(),
         };

@@ -16229,13 +16229,21 @@ mod tests {
         Vec<FairV2IngressOwnershipEvidence>,
     ) {
         let directory = TempDir::new().expect("temporary preowned leader-wire directory");
-        let ingress = Arc::new(super::super::FairV2Ingress::new(
-            64,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-        ));
+        let ingress = Arc::new(
+            super::super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                64,
+                512 * 1024 * 1024,
+                64 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            ),
+        );
         let roster = context
             .roster
             .iter()
@@ -16360,13 +16368,21 @@ mod tests {
         let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload else {
             unreachable!("signed runtime proposal fixture carries Proposal")
         };
-        let ingress = Arc::new(super::super::FairV2Ingress::new(
-            64,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-        ));
+        let ingress = Arc::new(
+            super::super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                64,
+                512 * 1024 * 1024,
+                64 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            ),
+        );
         let roster = context
             .roster
             .iter()

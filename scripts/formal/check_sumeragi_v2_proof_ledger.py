@@ -38331,6 +38331,9 @@ let frontier = self
     .reconciliation_frontier()
     .map_err(EffectExecutorError::Runtime)
     .map_err(|error| self.close(error, services))?;
+if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
+    return Err(self.close(error, services));
+}
 let ownership = match self.runtime.take_effect_ownership(&effects) {
     Ok(ownership) => ownership,
     Err(error) => {
@@ -70621,6 +70624,9 @@ let frontier = self
     .reconciliation_frontier()
     .map_err(EffectExecutorError::Runtime)
     .map_err(|error| self.close(error, services))?;
+if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
+    return Err(self.close(error, services));
+}
 let ownership = match self.runtime.take_effect_ownership(&effects) {
     Ok(ownership) => ownership,
     Err(error) => {
@@ -70646,6 +70652,9 @@ let count = self
             consume_tokens = rust_code_tokens(consume.source)
             ownership_tokens = rust_code_tokens(
                 "self.runtime.take_effect_ownership(&effects)"
+            )
+            preflight_tokens = rust_code_tokens(
+                "self.preflight_effect_batch_frontier(&effects, frontier)"
             )
             retain_tokens = rust_code_tokens(
                 "self.retain_effect_batch_at_frontier(effects, ownership, frontier)"
@@ -70673,6 +70682,14 @@ let count = self
                 if consume_tokens[index : index + len(ownership_tokens)]
                 == ownership_tokens
             ]
+            preflight_positions = [
+                index
+                for index in range(
+                    len(consume_tokens) - len(preflight_tokens) + 1
+                )
+                if consume_tokens[index : index + len(preflight_tokens)]
+                == preflight_tokens
+            ]
             retain_positions = [
                 index
                 for index in range(len(consume_tokens) - len(retain_tokens) + 1)
@@ -70690,11 +70707,13 @@ let count = self
             ]
             if not (
                 len(frontier_positions) == 1
+                and len(preflight_positions) == 1
                 and len(ownership_positions) == 1
                 and len(retain_positions) == 1
                 and len(commit_positions) == 1
                 and len(drain_positions) == 1
                 and frontier_positions[0]
+                < preflight_positions[0]
                 < ownership_positions[0]
                 < retain_positions[0]
                 < commit_positions[0]
@@ -70702,11 +70721,59 @@ let count = self
             ):
                 errors.append(
                     f"{effects_path}:{consume.line}: consume_effects must acquire "
-                    "one frontier and ownership vector, retain exactly once, "
+                    "one frontier, preflight before consuming its ownership "
+                    "vector, retain exactly once, "
                     "commit reconciliation, then perform one retained-batch drain"
                 )
 
+        consume_recovery = executor_items["consume_pending_tip_recovery_effects"]
+        _require_rust_token_sequence(
+            effects_path,
+            consume_recovery,
+            """
+let frontier = self
+    .runtime
+    .reconciliation_frontier()
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
+if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
+    return Err(self.close(error, services));
+}
+let ownership = self
+    .runtime
+    .take_effect_ownership(&effects)
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
+if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
+    return Err(self.close(error, services));
+}
+""",
+            "pending-tip recovery must preflight one frozen reducer frontier before consuming and retaining its exact ownership sidecar",
+            errors,
+        )
+
         consume_pacemaker = executor_items["consume_pacemaker_effects"]
+        _require_rust_token_sequence(
+            effects_path,
+            consume_pacemaker,
+            """
+let frontier = self
+    .runtime
+    .reconciliation_frontier()
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
+if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
+    return Err(self.close(error, services));
+}
+let ownership = self
+    .runtime
+    .take_effect_ownership(&effects)
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
+""",
+            "typed pacemaker consumption must preflight the reducer frontier before consuming its move-only lifecycle sidecar",
+            errors,
+        )
         _require_rust_token_sequence(
             effects_path,
             consume_pacemaker,

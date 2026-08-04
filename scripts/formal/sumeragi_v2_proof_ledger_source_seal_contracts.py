@@ -1082,6 +1082,9 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     "retain_effect_batch_at_frontier": (
         "b7fbdd5ae5da857c63f2a5adbea69698c4b1f76bca99649d1ff7cf7674eb7535"
     ),
+    "preflight_effect_batch_frontier": (
+        "0000000000000000000000000000000000000000000000000000000000000000"
+    ),
     "prepare_parked_effects_for_frontier": (
         "2311f641861b3fafe8f90c34a7824596287bf1d6d8e791e30ba7b59438c178db"
     ),
@@ -1093,6 +1096,9 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     ),
     "consume_pacemaker_effects": (
         "f9675525191cc1f949cdd7fef4d86facf0a974f8c96c627eba96123246e738db"
+    ),
+    "consume_pending_tip_recovery_effects": (
+        "0000000000000000000000000000000000000000000000000000000000000000"
     ),
     "step_pacemaker_once": (
         "09140d1b32a493a591303e376d5ed642ea1479cb2fddae358d8d4d9b5b2a7df5"

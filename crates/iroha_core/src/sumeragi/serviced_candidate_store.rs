@@ -3013,15 +3013,15 @@ mod tests {
     const OWNER_B: [u8; 32] = [0xB2; 32];
 
     fn context() -> wire::HeightContext {
-        context_with_roster_len(1)
+        context_with_roster_len(4)
     }
 
     fn context_with_roster_len(roster_len: usize) -> wire::HeightContext {
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::peer::PeerId;
 
-        assert!(roster_len != 0 && roster_len <= usize::from(u8::MAX) - 7);
-        let roster = (0..roster_len)
+        assert!((4..=31).contains(&roster_len) && (roster_len - 1) % 3 == 0);
+        let mut roster = (0..roster_len)
             .map(|index| {
                 let seed = u8::try_from(index + 7).expect("bounded deterministic seed");
                 let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -3032,6 +3032,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
+        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let context = wire::HeightContext {
             chain_id: "serviced-candidate-test".into(),
             protocol_version: wire::PROTOCOL_VERSION,
@@ -3092,9 +3093,12 @@ mod tests {
                 Hash::new(b"predecessor ordinary writes"),
                 Hash::new(b"predecessor wire"),
             ),
-            signers: vec![0],
+            signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA7; 96],
         };
+        parent
+            .validate(predecessor)
+            .expect("structurally quorum-valid predecessor CommitQC");
         let mut successor = predecessor.clone();
         successor.height = predecessor
             .height
@@ -3791,6 +3795,11 @@ mod tests {
             .find(|token| token.slot.phase == FairV2IngressLeaderWirePhase::PrepareVote)
             .expect("one PrepareVote slot")
             .clone();
+        let replay = reopened
+            .reserve(terminal_target.clone())
+            .expect("reactivate the exact restart-dormant target");
+        assert!(!replay.inserted());
+        assert_eq!(replay.token(), &terminal_target);
         reopened
             .mark_ingress(&terminal_target)
             .expect("replay target ingress after restart");
@@ -3998,6 +4007,11 @@ mod tests {
             LeaderWireLifecycleStatus::Dormant
         );
         assert!(restore.records()[0].terminal_evidence().is_none());
+        let replay = reopened
+            .reserve(token.clone())
+            .expect("reactivate the exact restart-dormant owner");
+        assert!(!replay.inserted());
+        assert_eq!(replay.token(), &token);
         reopened.mark_ingress(&token).expect("replay exact ingress");
         let runtime = reopened
             .mark_runtime(&token, runtime_owner)
@@ -4078,9 +4092,23 @@ mod tests {
                 reopened.reserve(token).is_err(),
                 "{label} cannot reuse the retired physical ordinals"
             );
-            reopened
-                .reserve(leader_wire_token(&context, 3, 12, 74, 3))
-                .expect("a strictly newer owner remains admissible");
+            let newer = leader_wire_token(
+                &context,
+                durable_view.checked_add(1).expect("fixture view advances"),
+                12,
+                74,
+                3,
+            );
+            if decision_durable {
+                assert!(
+                    reopened.reserve(newer).is_err(),
+                    "Decision retires every same-height lifecycle"
+                );
+            } else {
+                reopened
+                    .reserve(newer)
+                    .expect("a strictly newer view remains admissible");
+            }
         }
     }
 
@@ -4448,7 +4476,11 @@ mod tests {
     #[test]
     fn leader_wire_gate_rolls_back_failed_atomic_status_publications() {
         fn replace_snapshot_with_directory(gate: &LeaderWireLifecycleStoreGate) {
-            std::fs::remove_file(&gate.path).expect("remove prior gate snapshot");
+            if let Err(error) = std::fs::remove_file(&gate.path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                panic!("remove prior gate snapshot: {error}");
+            }
             std::fs::create_dir(&gate.path).expect("replace snapshot with directory");
         }
 

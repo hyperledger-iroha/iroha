@@ -4479,6 +4479,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .reconciliation_frontier()
             .map_err(EffectExecutorError::Runtime)
             .map_err(|error| self.close(error, services))?;
+        if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
+            return Err(self.close(error, services));
+        }
         let ownership = match self.runtime.take_effect_ownership(&effects) {
             Ok(ownership) => ownership,
             Err(error) => {
@@ -4687,12 +4690,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
     }
 
-    /// Retire only not-yet-dispatched ordinary work which the reducer's new
-    /// durable frontier makes impossible. This pure in-memory phase runs before
-    /// candidate coalescing; service/runtime cancellation waits until the full
-    /// replacement batch is retained.
-    fn prepare_parked_effects_for_frontier(
-        &mut self,
+    /// Reject a malformed reducer frontier before consuming its move-only
+    /// lifecycle sidecar. A rejected view transition must leave that exact
+    /// owner available to the fail-stop/restart boundary.
+    fn preflight_effect_batch_frontier(
+        &self,
         effects: &[AdapterEffect],
         frontier: RuntimeReconciliationFrontier,
     ) -> Result<Option<EventTag>, EffectExecutorError> {
@@ -4764,6 +4766,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
         }
+
+        Ok(entering_view)
+    }
+
+    /// Retire only not-yet-dispatched ordinary work which the reducer's new
+    /// durable frontier makes impossible. This pure in-memory phase runs before
+    /// candidate coalescing; service/runtime cancellation waits until the full
+    /// replacement batch is retained.
+    fn prepare_parked_effects_for_frontier(
+        &mut self,
+        effects: &[AdapterEffect],
+        frontier: RuntimeReconciliationFrontier,
+    ) -> Result<Option<EventTag>, EffectExecutorError> {
+        let entering_view = self.preflight_effect_batch_frontier(effects, frontier)?;
 
         let lock_transition = frontier
             .decision
@@ -5527,12 +5543,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(self.close(error, services));
             }
         }
+        let frontier = self
+            .runtime
+            .reconciliation_frontier()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
+            return Err(self.close(error, services));
+        }
         let ownership = self
             .runtime
             .take_effect_ownership(&effects)
             .map_err(EffectExecutorError::Runtime)
             .map_err(|error| self.close(error, services))?;
-        if let Err(error) = self.retain_effect_batch(effects, ownership) {
+        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
             return Err(self.close(error, services));
         }
         if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
@@ -5558,6 +5582,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .reconciliation_frontier()
             .map_err(EffectExecutorError::Runtime)
             .map_err(|error| self.close(error, services))?;
+        if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
+            return Err(self.close(error, services));
+        }
         let ownership = self
             .runtime
             .take_effect_ownership(&effects)
@@ -11475,6 +11502,7 @@ mod tests {
         omit_scheduler_ownership: bool,
         reject_scheduler_ownership: bool,
         next_lifecycle_ordinal: u128,
+        effect_ownership_calls: usize,
         effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
         external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
         external_lifecycle_owner_capacity: Option<usize>,
@@ -11636,6 +11664,10 @@ mod tests {
             &mut self,
             effects: &[AdapterEffect],
         ) -> Result<Vec<RuntimeEffectOwnership>, String> {
+            self.effect_ownership_calls = self.effect_ownership_calls.saturating_add(1);
+            if effects.is_empty() {
+                return Ok(Vec::new());
+            }
             let ownership = effects
                 .iter()
                 .map(|effect| self.test_effect_ownership(effect))
@@ -16783,7 +16815,45 @@ mod tests {
             Err(EffectExecutorError::Contract(reason))
                 if reason.contains("omitted its leading EnterView")
         ));
+        assert_eq!(executor.runtime.effect_ownership_calls, 0);
+        assert!(executor.runtime.effect_owners.is_empty());
         assert!(services.sign_tasks.is_empty());
+        assert!(services.entered_views.is_empty());
+        assert!(executor.status().fail_closed);
+    }
+
+    #[test]
+    fn advancing_pacemaker_frontier_without_enter_view_preserves_effect_sidecar() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor.runtime.round_tag = Some(tag(1));
+
+        assert!(matches!(
+            executor.consume_pacemaker_effects(Vec::new(), &mut services),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("omitted its leading EnterView")
+        ));
+        assert_eq!(executor.runtime.effect_ownership_calls, 0);
+        assert!(executor.runtime.effect_owners.is_empty());
+        assert!(services.entered_views.is_empty());
+        assert!(executor.status().fail_closed);
+    }
+
+    #[test]
+    fn advancing_recovery_frontier_without_enter_view_preserves_effect_sidecar() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor.runtime.round_tag = Some(tag(1));
+
+        assert!(matches!(
+            executor.consume_pending_tip_recovery_effects(Vec::new(), &mut services),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("omitted its leading EnterView")
+        ));
+        assert_eq!(executor.runtime.effect_ownership_calls, 0);
+        assert!(executor.runtime.effect_owners.is_empty());
         assert!(services.entered_views.is_empty());
         assert!(executor.status().fail_closed);
     }
@@ -16817,6 +16887,8 @@ mod tests {
             Err(EffectExecutorError::Contract(reason))
                 if reason.contains("must be the first effect")
         ));
+        assert_eq!(executor.runtime.effect_ownership_calls, 0);
+        assert!(executor.runtime.effect_owners.is_empty());
         assert!(services.sign_tasks.is_empty());
         assert!(services.entered_views.is_empty());
         assert!(executor.status().fail_closed);
