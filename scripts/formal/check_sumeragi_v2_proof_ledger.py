@@ -55899,6 +55899,14 @@ def _persistent_recovery_cut_source_fidelity_errors(
     for sequence, description in (
         (
             """
+if self.ensure_canonical_reclaimed_producer_state_after_decision()? {
+    return Ok(());
+}
+""",
+            "producer release must not resurrect an epoch reclaimed by durable Decision",
+        ),
+        (
+            """
 if !addresses.insert(token.address) {
     return Err(self.fail_serviced_candidate_store(
         "one producer address had multiple simultaneous release authorities"
@@ -56528,8 +56536,33 @@ if decided_subject.is_some() {
         ),
         (
             "adapter",
+            "restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline",
+            "retains every exact protected-lock body-pipeline stage",
+        ),
+        (
+            "adapter",
+            "restart_frontier_rejects_reserved_producer_beyond_the_durable_view",
+            "rejects a future-view producer during replay reconciliation",
+        ),
+        (
+            "adapter",
+            "durable_decision_release_does_not_restore_stale_process_only_predecessor",
+            "keeps the canonical empty producer epoch after durable Decision",
+        ),
+        (
+            "adapter",
             "body_rebind_coalescence_preserves_the_only_persistent_producer",
             "keeps the sole persistent rebind root across a second restart",
+        ),
+        (
+            "runtime",
+            "body_available_rebind_coalesces_exact_busy_deferred_destination_owner",
+            "retains a persistent destination while retiring an ordinary source",
+        ),
+        (
+            "runtime",
+            "body_available_rebind_rejects_two_persistent_roots_before_mutation",
+            "rejects two durable roots before either serialized owner changes",
         ),
         (
             "store",
@@ -56583,6 +56616,29 @@ assert!(
 );
 """,
         "live leader-wire regression must reject view and Decision regression",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        live_cut_regression,
+        """
+for retained_status in [
+    LeaderWireLifecycleStatus::Ingress,
+    LeaderWireLifecycleStatus::Runtime,
+] {
+""",
+        "live leader-wire regression must retain active Ingress and Runtime owners",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        live_cut_regression,
+        """
+std::fs::create_dir(&gate.path).expect("block recovery-cut publication");
+assert!(
+    gate.advance_recovery_cut(
+""",
+        "live leader-wire regression must inject and observe persistent-cut rollback",
         errors,
     )
 

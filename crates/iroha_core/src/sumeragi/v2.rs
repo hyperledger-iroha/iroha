@@ -7723,6 +7723,35 @@ impl SumeragiV2Adapter {
         AdapterError::ServicedCandidateStore(reason)
     }
 
+    /// Verify the sole producer-owner state permitted after a durable Decision.
+    ///
+    /// The Decision WAL acknowledgement reclaims every candidate and producer
+    /// owner for the height in one adjacent durable snapshot. Producer tokens
+    /// reserved before that acknowledgement are therefore obsolete once this
+    /// canonical empty epoch is published; applying their undo payload would
+    /// resurrect state which the Decision permanently retired.
+    fn ensure_canonical_reclaimed_producer_state_after_decision(
+        &mut self,
+    ) -> Result<bool, AdapterError> {
+        if self.reducer.durable_state().decision().is_none() {
+            return Ok(false);
+        }
+        if !self.serviced_candidates_decision_reclaimed
+            || !self.serviced_candidates.is_empty()
+            || !self.durable_serviced_candidates.is_empty()
+            || !self.producer_continuations.is_empty()
+            || !self.durable_producer_continuations.is_empty()
+            || !self.restored_dormant_producer_continuations.is_empty()
+            || !self.deferred_producer_continuations.is_empty()
+            || !self.pending_producer_handoffs.is_empty()
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "durable Decision did not retain canonical reclaimed producer state".to_owned(),
+            ));
+        }
+        Ok(true)
+    }
+
     /// Bind the immutable lifecycle selected by the serialized runtime to the
     /// next adapter transition.
     ///
@@ -7795,26 +7824,13 @@ impl SumeragiV2Adapter {
         &mut self,
         candidate: Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)>,
     ) -> Result<Option<ProducerReservationToken>, AdapterError> {
-        if self.reducer.durable_state().decision().is_some() {
+        if self.ensure_canonical_reclaimed_producer_state_after_decision()? {
             // The durable Decision is the sole restart owner for the rest of
             // this height. Reclamation publishes an empty owner epoch before
             // any post-Decision application, timer, or queued ingress can be
             // serviced. Reserving another producer here would persist a live
             // owner beside `decision_reclaimed = true`, contradicting that
             // durable boundary before the reducer can discard the occurrence.
-            if !self.serviced_candidates_decision_reclaimed
-                || !self.serviced_candidates.is_empty()
-                || !self.durable_serviced_candidates.is_empty()
-                || !self.producer_continuations.is_empty()
-                || !self.durable_producer_continuations.is_empty()
-                || !self.restored_dormant_producer_continuations.is_empty()
-                || !self.deferred_producer_continuations.is_empty()
-                || !self.pending_producer_handoffs.is_empty()
-            {
-                return Err(self.fail_serviced_candidate_store(
-                    "durable Decision did not retain canonical reclaimed producer state".to_owned(),
-                ));
-            }
             return Ok(None);
         }
         let (Some((candidate, _, _)), Some(selected)) =
@@ -8032,6 +8048,12 @@ impl SumeragiV2Adapter {
         if tokens.is_empty() {
             return Ok(());
         }
+        if self.ensure_canonical_reclaimed_producer_state_after_decision()? {
+            // Decision reclamation is the authoritative release for every
+            // token reserved before its WAL acknowledgement. Applying an old
+            // token's undo payload here would resurrect the reclaimed epoch.
+            return Ok(());
+        }
         let mut addresses = BTreeSet::new();
         for token in tokens {
             if !addresses.insert(token.address) {
@@ -8171,9 +8193,10 @@ impl SumeragiV2Adapter {
 
     /// Release a speculative active record when the same macro-step reached a
     /// durable goal (Decision or strict view advance) before a producer
-    /// continuation was needed. If the active reservation temporarily
-    /// replaced an older durable terminal at the same bounded address, restore
-    /// that exact restart-safe incumbent in process memory.
+    /// continuation was needed. A strict view advance restores an exact older
+    /// incumbent temporarily replaced at the same bounded address. A Decision
+    /// instead discards the obsolete token after verifying its canonical empty
+    /// owner epoch.
     fn release_goal_reached_producer(
         &mut self,
         reservation: Option<ProducerReservationToken>,
@@ -14737,6 +14760,99 @@ mod tests {
 
         drop(adapter);
         assert_process_only_predecessor_absent_after_restart(&directory);
+    }
+
+    #[test]
+    fn durable_decision_release_does_not_restore_stale_process_only_predecessor() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let replacement = reserve_process_only_producer_replacement(&mut adapter, 0x4B);
+        adapter.clear_selected_producer_lifecycle();
+
+        let decided_subject = subject(0x4C);
+        let leader = adapter.wire_context.leader(0);
+        let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal helper returns a proposal")
+        };
+        let manifest = proposal.manifest;
+        let (_, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+        let mut decision = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: decided_subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS-normal key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        authenticate_qc(&mut decision, &keys);
+        adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    decision,
+                )),
+            ))
+            .expect("install the durable Decision and reclaim producer ownership");
+        assert!(adapter.serviced_candidates_decision_reclaimed);
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        assert!(adapter.restored_dormant_producer_continuations.is_empty());
+        assert!(adapter.deferred_producer_continuations.is_empty());
+        assert!(adapter.pending_producer_handoffs.is_empty());
+        let reclaimed_snapshot = std::fs::read(adapter.serviced_candidate_store_path_for_test())
+            .expect("read canonical reclaimed owner snapshot");
+
+        adapter
+            .release_unrecorded_producer(Some(replacement.reservation))
+            .expect("discard stale pre-Decision undo token");
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        assert!(adapter.restored_dormant_producer_continuations.is_empty());
+        assert!(adapter.deferred_producer_continuations.is_empty());
+        assert!(adapter.pending_producer_handoffs.is_empty());
+        assert_eq!(
+            std::fs::read(adapter.serviced_candidate_store_path_for_test())
+                .expect("reread canonical reclaimed owner snapshot"),
+            reclaimed_snapshot,
+            "a stale pre-Decision undo token cannot republish reclaimed ownership"
+        );
+
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"post-Decision retry"), 3)
+            .expect("bind post-Decision retry");
+        assert!(
+            adapter
+                .reserve_selected_producer_continuation(Some(replacement.candidate))
+                .expect("canonical post-Decision retry remains serviceable")
+                .is_none(),
+            "the durable Decision remains the sole restart owner"
+        );
+        assert!(!adapter.fail_closed);
+
+        drop(adapter);
+        let (restarted, _) = open_test(&directory).expect("replay the durable Decision");
+        assert!(restarted.reducer.durable_state().decision().is_some());
+        assert!(restarted.serviced_candidates_decision_reclaimed);
+        assert!(restarted.serviced_candidates.is_empty());
+        assert!(restarted.durable_serviced_candidates.is_empty());
+        assert!(restarted.producer_continuations.is_empty());
+        assert!(restarted.durable_producer_continuations.is_empty());
+        assert!(restarted.restored_dormant_producer_continuations.is_empty());
+        assert!(restarted.deferred_producer_continuations.is_empty());
+        assert!(restarted.pending_producer_handoffs.is_empty());
     }
 
     #[test]
