@@ -275,6 +275,12 @@ hash-tree artifacts now describe the 110-entry release schema. Focused
 data-model, Core, IVM, bridge, fixture, and cross-SDK execution remains required
 before these audit items can close; physical Kagemusha recursion also remains
 blocked on a clean SSH-signed source seal and reviewed external inputs.
+Before cross-SDK closure, replace the Swift, Kotlin, and Android confidential
+Merkle helpers' legacy polynomial compressor and raw-zero leaves with Core's
+current `cfleaf03`/`cfnode03` Axiom Poseidon construction. Publish shared
+empty-root, one-leaf, and authentication-path vectors and require every SDK to
+consume those exact vectors; self-consistent legacy fixtures are not parity
+evidence.
 The H24 Governance DAG source remediation is implemented: the publisher uses a
 deterministic fixed Kubo UnixFS profile, signed-HTTP-only head CAS, sealed
 intent/checkpoint recovery with pre-CAS and post-loss object repair, fixed V1
