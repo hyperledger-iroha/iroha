@@ -89,13 +89,23 @@ is carried by the signed genesis/height context, so Mochi does not emit the reti
 `sumeragi.consensus_mode` setting. If you enable Nexus, Mochi fails fast unless the selected profile
 generates an NPoS signed genesis.
 
-Each peer keeps its runtime data under `peers/<alias>/storage`, with independent `kura`, `snapshot`,
-and `torii` children. Kura receives the dedicated `storage/kura` root so it can establish and
-authenticate its configured-catalog baseline without unrelated runtime files in that directory.
-Mochi initializes `storage/snapshot/generations` whenever it creates the explicit snapshot root,
-matching the snapshot reader's authenticated directory contract.
+Mochi publishes configs and genesis as immutable generations under `generations/<generation-id>`.
+The closed `generation.json` inventory binds every artifact and its BLAKE3 digest; the
+`current-generation` record is replaced atomically while `.generation.lock` serializes writers.
+Failed candidates never replace the selected record, and previously published generations remain
+available for audit.
+
+Each peer keeps mutable runtime data under
+`peers/<alias>/storage-generations/<generation-id>`, with independent `kura`, `snapshot`, and
+`torii` children. A config-only generation keeps using the current storage generation, while wipe
+and re-genesis prepares a fresh empty storage generation before committing its config/genesis
+generation. This avoids a partially wiped peer set after the atomic selection point. Kura receives
+the dedicated `storage-generations/<generation-id>/kura` root, and Mochi initializes the matching
+`snapshot/generations` directory whenever it creates a fresh runtime generation.
 Snapshot metadata pins this as `storage_layout = "kura-subdirectory-v1"`; restore rejects older
-unmarked aggregate-layout snapshots because their Kura data cannot be relocated safely by inference.
+unmarked aggregate-layout snapshots and snapshots from another immutable generation. Config and
+genesis copies in a snapshot are audit evidence; restore verifies them and rewrites only mutable
+storage and logs.
 
 ## Repo-Shared Skill
 

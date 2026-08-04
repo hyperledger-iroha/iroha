@@ -18,9 +18,8 @@ use iroha_data_model::{
         consensus_v2::{
             ConsensusMode as WireConsensusMode, MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
         },
-        decode_framed_signed_block,
     },
-    isi::{SetParameter, register::RegisterBox},
+    isi::SetParameter,
     parameter::{
         Parameter,
         system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
@@ -211,6 +210,7 @@ fn validate_prepared_genesis(
     signed_block: &Path,
     public_key_path: &Path,
     expected_hash_path: &Path,
+    manifest: &RawGenesisTransaction,
 ) -> color_eyre::Result<ValidatedGenesis> {
     let public_record = read_exact_record(public_key_path, "genesis public-key")?;
     let public_key = public_record
@@ -241,86 +241,26 @@ fn validate_prepared_genesis(
         "signed genesis body {} is empty",
         signed_block.display()
     );
-    iroha_genesis::init_instruction_registry();
-    let block = decode_framed_signed_block(&signed)
-        .wrap_err("decode prepared canonical signed genesis body")?;
-    let canonical = block
-        .encode_wire()
-        .wrap_err("re-encode prepared signed genesis body")?;
-    ensure!(
-        canonical == signed,
-        "prepared signed genesis body is not canonical framed Norito"
-    );
-    ensure!(
-        block.hash() == expected_hash,
-        "prepared signed genesis body hashes to {}, expected {}",
-        block.hash(),
-        expected_hash
-    );
-
-    let first = block
-        .external_transactions()
-        .next()
-        .ok_or_else(|| eyre!("prepared signed genesis contains no external transactions"))?;
-    let embedded_signer = first.authority().try_signatory().ok_or_else(|| {
-        eyre!("prepared genesis authority must be one canonical single-key account")
-    })?;
-    ensure!(
-        embedded_signer == &public_key,
-        "prepared genesis signer {embedded_signer} differs from verifier key {public_key}"
-    );
-
-    {
-        let mut signatures = block.signatures();
-        let signature = signatures
-            .next()
-            .ok_or_else(|| eyre!("prepared signed genesis has no block signature"))?;
-        ensure!(
-            signature.index() == 0 && signatures.next().is_none(),
-            "prepared signed genesis must have exactly one block signature at index 0"
-        );
-        signature
-            .signature()
-            .verify_hash(&public_key, block.hash())
-            .wrap_err("verify prepared genesis block signature")?;
-    }
-    for transaction in block.external_transactions() {
-        transaction
-            .verify_signature()
-            .wrap_err("verify prepared genesis transaction signature")?;
-    }
-
-    let mut validator_pops = BTreeMap::new();
-    for transaction in block.external_transactions() {
-        let Executable::Instructions(instructions) = transaction.instructions() else {
-            continue;
-        };
-        for instruction in instructions {
-            let Some(RegisterBox::Peer(register)) =
-                instruction.as_any().downcast_ref::<RegisterBox>()
-            else {
-                continue;
-            };
-            let public_key = register.peer.public_key().clone();
-            ensure!(
-                validator_pops
-                    .insert(public_key.clone(), register.pop.clone())
-                    .is_none(),
-                "prepared genesis registers validator {public_key} more than once"
-            );
-        }
-    }
-    ensure!(
-        !validator_pops.is_empty(),
-        "prepared genesis contains no RegisterPeerWithPop validator roster"
-    );
+    let validated = iroha_genesis::validate_prepared_genesis_bundle(
+        &signed,
+        manifest,
+        &public_key,
+        expected_hash,
+    )
+    .wrap_err("independently validate prepared genesis bundle")?;
+    iroha_core::validate_genesis_block(
+        validated.block(),
+        &AccountId::new(public_key.clone()),
+        manifest.chain_id(),
+    )
+    .map_err(|error| eyre!("prepared genesis failed full core validation: {error}"))?;
 
     Ok(ValidatedGenesis {
-        block,
-        canonical_wire: canonical,
-        public_key,
-        expected_hash,
-        validator_pops,
+        block: validated.block().clone(),
+        canonical_wire: validated.canonical_wire().to_vec(),
+        public_key: validated.public_key().clone(),
+        expected_hash: validated.expected_hash(),
+        validator_pops: validated.validator_pops().clone(),
     })
 }
 
@@ -354,71 +294,6 @@ fn signed_genesis_consensus_metadata(
     }
     metadata
         .ok_or_else(|| eyre!("prepared signed genesis contains no consensus metadata instruction"))
-}
-
-fn validate_prepared_manifest_binding(
-    manifest: &RawGenesisTransaction,
-    block: &SignedBlock,
-    public_key: &PublicKey,
-) -> color_eyre::Result<()> {
-    let signed_metadata = signed_genesis_consensus_metadata(block)?;
-    ensure!(
-        signed_metadata.mode == manifest.consensus_mode(),
-        "prepared genesis manifest consensus mode {} differs from signed body mode {}",
-        manifest.consensus_mode(),
-        signed_metadata.mode
-    );
-    ensure!(
-        manifest.wire_protocol_version() == signed_metadata.wire_protocol_version,
-        "prepared genesis manifest wire protocol version {} differs from signed body version {}",
-        manifest.wire_protocol_version(),
-        signed_metadata.wire_protocol_version
-    );
-    ensure!(
-        manifest.consensus_fingerprint() == Some(signed_metadata.consensus_fingerprint),
-        "prepared genesis manifest consensus fingerprint differs from signed body"
-    );
-    ensure!(
-        manifest.sumeragi_v2_context_parameters() == signed_metadata.sumeragi_v2,
-        "prepared genesis manifest Sumeragi v2 context differs from signed body"
-    );
-
-    let expected = manifest
-        .clone()
-        .with_consensus_meta()
-        .parse()
-        .wrap_err("expand prepared genesis manifest instructions")?;
-    let actual = block.external_transactions().collect::<Vec<_>>();
-    ensure!(
-        expected.len() == actual.len(),
-        "prepared signed genesis transaction count differs from genesis manifest"
-    );
-    let genesis_account = AccountId::new(public_key.clone());
-    for (index, (expected_batch, transaction)) in expected.iter().zip(&actual).enumerate() {
-        ensure!(
-            transaction.chain() == manifest.chain_id()
-                && transaction.authority() == &genesis_account,
-            "prepared signed genesis transaction {index} has the wrong chain or root authority"
-        );
-        let Executable::Instructions(actual_batch) = transaction.instructions() else {
-            return Err(eyre!(
-                "prepared signed genesis transaction {index} is not an instruction batch"
-            ));
-        };
-        let expected_semantic = expected_batch
-            .iter()
-            .map(iroha_data_model::Encode::encode)
-            .collect::<Vec<_>>();
-        let actual_semantic = actual_batch
-            .iter()
-            .map(iroha_data_model::Encode::encode)
-            .collect::<Vec<_>>();
-        ensure!(
-            expected_semantic == actual_semantic,
-            "prepared signed genesis transaction {index} differs from genesis manifest"
-        );
-    }
-    Ok(())
 }
 
 fn prepared_peer_config_paths(
@@ -2710,9 +2585,12 @@ fn load_prepared_bundle(
             signed_block.display()
         )
     })?;
-    let validated =
-        validate_prepared_genesis(&signed_block, &public_key_path, &expected_hash_path)?;
-    validate_prepared_manifest_binding(manifest, &validated.block, &validated.public_key)?;
+    let validated = validate_prepared_genesis(
+        &signed_block,
+        &public_key_path,
+        &expected_hash_path,
+        manifest,
+    )?;
     let signed_metadata = signed_genesis_consensus_metadata(&validated.block)?;
     let config_paths = prepared_peer_config_paths(config_dir, count)?;
 
@@ -3300,15 +3178,16 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId,
         parameter::{
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
+        peer::PeerId,
     };
-    use iroha_genesis::GenesisBuilder;
+    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_swarm::PreparedBuildLine;
     use iroha_version::BuildLine;
 
@@ -3762,8 +3641,12 @@ mod tests {
         let signed_path = config_dir.join("genesis.signed.nrt");
         let public_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
         let hash_path = config_dir.join(crate::localnet::GENESIS_EXPECTED_HASH_FILE);
-        let validated = validate_prepared_genesis(&signed_path, &public_path, &hash_path)
-            .expect("validate prepared genesis fixture");
+        let manifest =
+            iroha_genesis::RawGenesisTransaction::from_path(config_dir.join("genesis.json"))
+                .expect("parse prepared genesis fixture manifest");
+        let validated =
+            validate_prepared_genesis(&signed_path, &public_path, &hash_path, &manifest)
+                .expect("validate prepared genesis fixture");
         let metadata = signed_genesis_consensus_metadata(&validated.block)
             .expect("prepared fixture has consensus metadata");
         let parsed = parse_prepared_peer_config(&config_dir.join("peer0.toml"))
@@ -3931,6 +3814,73 @@ mod tests {
             "unexpected manifest-binding mismatch: {manifest_error}"
         );
         fs::write(&manifest_path, original_manifest).expect("restore genesis manifest fixture");
+    }
+
+    #[test]
+    fn prepared_bundle_rejects_resultless_genesis_after_shared_bundle_checks() {
+        let temp_dir = tempfile::tempdir().expect("resultless prepared temp dir");
+        let config_dir = temp_dir.path().join("resultless-prepared-bundle");
+        fs::create_dir_all(&config_dir).expect("create resultless fixture directory");
+        let signed_path = config_dir.join("genesis.signed.nrt");
+        let public_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
+        let hash_path = config_dir.join(crate::localnet::GENESIS_EXPECTED_HASH_FILE);
+        let manifest_path = config_dir.join("genesis.json");
+        let topology = (0..4)
+            .map(|_| {
+                let validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+                let pop = bls_normal_pop_prove(validator.private_key())
+                    .expect("generate resultless fixture validator PoP");
+                GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+            })
+            .collect::<Vec<_>>();
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("resultless-prepared-bundle"),
+            PathBuf::from("."),
+        )
+        .set_topology(topology)
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+        .with_consensus_meta();
+        let genesis_key = KeyPair::random();
+        let signed = manifest
+            .clone()
+            .build_and_sign(&genesis_key)
+            .expect("sign resultless prepared fixture")
+            .0;
+        iroha_core::validate_genesis_block(
+            &signed,
+            &iroha_data_model::account::AccountId::new(genesis_key.public_key().clone()),
+            manifest.chain_id(),
+        )
+        .expect("resultful fixture must pass full core validation");
+        fs::write(
+            &manifest_path,
+            norito::json::to_vec_pretty(&manifest).expect("encode resultless fixture manifest"),
+        )
+        .expect("write resultless fixture manifest");
+        fs::write(&public_path, format!("{}\n", genesis_key.public_key()))
+            .expect("write resultless fixture public key");
+        fs::write(&hash_path, format!("{}\n", signed.hash()))
+            .expect("write resultless fixture hash");
+        let resultless = signed.canonical_resultless_proposal();
+        assert_eq!(
+            resultless.hash(),
+            signed.hash(),
+            "removing execution results must preserve the authenticated intent header"
+        );
+        fs::write(
+            &signed_path,
+            resultless.encode_wire().expect("encode resultless block"),
+        )
+        .expect("write resultless prepared block");
+
+        let error = validate_prepared_genesis(&signed_path, &public_path, &hash_path, &manifest)
+            .err()
+            .expect("resultless prepared genesis must fail full core validation");
+        assert!(
+            error.to_string().contains("full core validation"),
+            "unexpected resultless-genesis rejection: {error:#}"
+        );
     }
 
     #[test]

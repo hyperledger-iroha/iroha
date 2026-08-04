@@ -701,6 +701,7 @@ http_request() {
   local method="$1"
   local url="$2"
   local payload="${3:-}"
+  local accept="${4:-application/json}"
   local body_file header_file error_file
   local curl_output curl_rc
   # The first-release /v1 API has no version-negotiation request header.
@@ -709,7 +710,7 @@ http_request() {
     --silent
     --show-error
     -H
-    "accept: application/json"
+    "accept: ${accept}"
     --connect-timeout
     "$MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS"
     --max-time
@@ -1504,7 +1505,7 @@ check_ordinary_health() {
 
   health_url="$(normalize_root_url "$root")/health"
   echo "==> ${label}: GET ${health_url}" >&2
-  http_request GET "$health_url"
+  http_request GET "$health_url" "" "text/plain"
   if [[ "$last_status" != "200" ]]; then
     echo "${label}: /health failed with HTTP ${last_status}" >&2
     sed -n '1,80p' "$last_body" >&2 || true
@@ -1519,7 +1520,7 @@ check_ordinary_readyz() {
 
   readiness_url="$(normalize_root_url "$root")/readyz"
   echo "==> ${label}: GET ${readiness_url}" >&2
-  http_request GET "$readiness_url"
+  http_request GET "$readiness_url" "" "text/plain"
   if [[ "$last_status" != "200" ]]; then
     echo "${label}: /readyz failed with HTTP ${last_status}" >&2
     sed -n '1,80p' "$last_body" >&2 || true

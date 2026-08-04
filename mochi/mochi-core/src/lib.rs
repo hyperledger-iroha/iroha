@@ -8,6 +8,7 @@ pub mod chaos;
 pub mod compose;
 pub mod config;
 pub mod dashboard;
+mod generation;
 mod genesis;
 pub mod logs;
 pub mod state;

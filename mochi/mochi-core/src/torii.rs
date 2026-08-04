@@ -6111,7 +6111,7 @@ mod tests {
         isi::InstructionBox,
         nexus::{LaneCatalog, LaneLifecyclePlan, LaneLifecycleStatusV1},
         peer::PeerId,
-        prelude::Quantity,
+        prelude::{DomainId, Quantity},
         query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
             executor::FindExecutorDataModel, prelude::SingularQueryBox,
@@ -6124,6 +6124,7 @@ mod tests {
         StatusCode,
         header::{HeaderMap, HeaderValue},
     };
+    use tokio_tungstenite::tungstenite::http;
 
     use super::*;
 
@@ -6512,7 +6513,7 @@ mod tests {
             .header(reqwest::header::RETRY_AFTER, "3")
             .body(None)
             .expect("valid WebSocket HTTP response");
-        let error = websocket_connect_error(WebSocketError::Http(response));
+        let error = websocket_connect_error(WebSocketError::Http(Box::new(response)));
         assert!(matches!(
             error,
             ToriiError::RateLimited {

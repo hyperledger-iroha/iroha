@@ -34,7 +34,7 @@ use iroha::{
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
         },
         isi::{
-            Grant, InstructionBox, Log, Mint, Register, SetParameter,
+            Grant, Instruction, InstructionBox, Log, Mint, Register, SetParameter,
             musubi::{
                 AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1,
                 RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
@@ -916,8 +916,8 @@ fn assert_musubi_universal_home_execution_context(
             && leg.commit_qc.body.phase == NativeAmxPhase::Commit
             && leg.prepare_qc.body.plan_digest == context.routing_plan_digest
             && leg.commit_qc.body.plan_digest == context.routing_plan_digest
-            && leg.prepare_qc.validator_set.len() == PEERS
-            && leg.commit_qc.validator_set.len() == PEERS,
+            && leg.prepare_qc.validator_set().len() == PEERS
+            && leg.commit_qc.validator_set().len() == PEERS,
         "Musubi Native AMX home leg omitted exact four-peer prepare/commit evidence"
     );
     Ok(receipt.clone())
@@ -1043,10 +1043,13 @@ async fn prepare_selectable_musubi_publication(
     let providers = musubi_fault_replica_providers();
     let mut provider_instructions = Vec::with_capacity(providers.len() * 2);
     for provider in providers {
-        provider_instructions.push(InstructionBox::from(RegisterProviderOwner::new(
-            provider,
-            submitter.account.clone(),
-        )));
+        provider_instructions.push(
+            Box::new(RegisterProviderOwner::new(
+                provider,
+                submitter.account.clone(),
+            ))
+            .into_instruction_box(),
+        );
         provider_instructions.push(InstructionBox::from(
             SetProviderIngestCompletionAuthority::new(
                 provider,
@@ -1515,10 +1518,10 @@ fn assert_selectable_musubi_publication_present(
             release: fixture.release.clone(),
         }))?;
     ensure!(
-        release.manifest == fixture.manifest
-            && release.release_digest == fixture.manifest.release_digest()
-            && release.published_by == ALICE_ID.clone()
-            && !release.yank.yanked,
+        release.home_release.manifest == fixture.manifest
+            && release.home_release.release_digest == fixture.manifest.release_digest()
+            && release.home_release.published_by == ALICE_ID.clone()
+            && !release.home_release.yank.yanked,
         "{context}: home release record is incomplete: {release:?}"
     );
 
@@ -1728,8 +1731,8 @@ fn assert_native_amx_execution_context(
             "participant QC entrypoint hash differs from submitted tx"
         );
         ensure!(
-            leg.prepare_qc.validator_set.len() == PEERS
-                && leg.commit_qc.validator_set.len() == PEERS,
+            leg.prepare_qc.validator_set().len() == PEERS
+                && leg.commit_qc.validator_set().len() == PEERS,
             "participant QCs should carry the 4-peer validator set"
         );
         ensure!(
@@ -1779,8 +1782,10 @@ fn next_universal_autonomous_lane_author_peer(
                 .ok_or_else(|| {
                     eyre!("{context}: pre-cut peer {index} has no universal-lane frontier")
                 })?;
-            ownership.validate_replay_material().wrap_err_with(|| {
-                format!("{context}: pre-cut peer {index} has an invalid universal-lane frontier")
+            ownership.validate_replay_material().map_err(|err| {
+                eyre!(
+                    "{context}: pre-cut peer {index} has an invalid universal-lane frontier: {err:?}"
+                )
             })?;
             let descriptor_hash = ownership.lane_block_descriptor_hash.ok_or_else(|| {
                 eyre!("{context}: universal-lane frontier has no descriptor hash")
@@ -3146,10 +3151,11 @@ async fn musubi_publication_below_quorum_queue_crash_replay_keeps_projection_tup
         let submitter = admitting_peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
 
         let provider_transaction = submitter.build_transaction(
-            [InstructionBox::from(RegisterProviderOwner::new(
+            [Box::new(RegisterProviderOwner::new(
                 musubi_fault_provider(),
                 submitter.account.clone(),
-            ))],
+            ))
+            .into_instruction_box()],
             FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         );
@@ -3329,12 +3335,11 @@ async fn musubi_publication_below_quorum_queue_crash_replay_keeps_projection_tup
             let occurrences = blocks
                 .iter()
                 .flat_map(|block| {
-                    block
-                        .entrypoint_hashes()
-                        .enumerate()
-                        .filter_map(|(entrypoint_index, hash)| {
+                    block.entrypoint_hashes().enumerate().filter_map(
+                        move |(entrypoint_index, hash)| {
                             (hash == publish_entrypoint).then_some((block, entrypoint_index))
-                        })
+                        },
+                    )
                 })
                 .collect::<Vec<_>>();
             ensure!(
@@ -3429,6 +3434,49 @@ async fn run_selectable_musubi_publication_phase_cut(
             .find(|(index, _)| *index != target_index)
             .map(|(_, peer)| peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone()))
             .ok_or_else(|| eyre!("{context}: phase cut has no live ingress peer"))?;
+        let mut pre_cut_tip = None;
+        let mut pre_cut_blocks_non_empty = None;
+        for (index, peer) in peers.iter().enumerate() {
+            let status = peer
+                .status()
+                .await
+                .wrap_err_with(|| format!("{context}: query pre-cut status from peer {index}"))?;
+            let blocks = peer.client().query(FindBlocks).execute_all()?;
+            let latest = blocks
+                .first()
+                .ok_or_else(|| eyre!("{context}: pre-cut peer {index} returned an empty chain"))?;
+            let observed_tip = (latest.header().height().get(), latest.hash());
+            let observed_non_empty = u64::try_from(
+                blocks.iter().filter(|block| !block.is_empty()).count(),
+            )
+            .wrap_err_with(|| format!("{context}: pre-cut non-empty count overflows u64"))?;
+            ensure!(
+                status.blocks == observed_tip.0
+                    && status.blocks_non_empty == observed_non_empty
+                    && status.queue_size == 0,
+                "{context}: pre-cut peer {index} did not expose one settled empty-queue tip: status={status:?}, tip={observed_tip:?}, queried_non_empty={observed_non_empty}"
+            );
+            if let Some(expected) = pre_cut_tip {
+                ensure!(
+                    observed_tip == expected,
+                    "{context}: pre-cut peer {index} did not share the canonical tip"
+                );
+            } else {
+                pre_cut_tip = Some(observed_tip);
+            }
+            if let Some(expected) = pre_cut_blocks_non_empty {
+                ensure!(
+                    observed_non_empty == expected,
+                    "{context}: pre-cut peer {index} reported another non-empty height"
+                );
+            } else {
+                pre_cut_blocks_non_empty = Some(observed_non_empty);
+            }
+        }
+        let (pre_cut_height, pre_cut_hash) =
+            pre_cut_tip.ok_or_else(|| eyre!("{context}: phase cut has no canonical pre-cut tip"))?;
+        let pre_cut_blocks_non_empty = pre_cut_blocks_non_empty
+            .ok_or_else(|| eyre!("{context}: phase cut has no pre-cut non-empty counter"))?;
         let source_id = native_amx_source_id(&fixture.transaction);
         let target_control = target
             .consensus_message_control()
@@ -3453,6 +3501,7 @@ async fn run_selectable_musubi_publication_phase_cut(
         );
 
         let publish_entrypoint = fixture.transaction.hash_as_entrypoint();
+        let mut recovery_heartbeat = None;
         let live_block_before_restart = if phase == NativeAmxFaultPhase::BeforeWorldCommit {
             // This cut is after the complete block overlay exists. The other
             // three validators must finalize the exact publication while the
@@ -3488,9 +3537,9 @@ async fn run_selectable_musubi_publication_phase_cut(
             Some(live_block)
         } else {
             // Prepare/Commit cuts abort the sole autonomous author before it
-            // can assemble and publish the executable payload. Progress is
-            // impossible until that exact author restarts; requiring a live
-            // commit here would turn these cuts into deterministic timeouts.
+            // can assemble and publish the executable payload. The bounded
+            // recovery path advances one empty global heartbeat, but the exact
+            // publication remains deferred until that author restarts.
             for (index, peer) in peers
                 .iter()
                 .enumerate()
@@ -3502,6 +3551,118 @@ async fn run_selectable_musubi_publication_phase_cut(
                     &format!("{context}: live peer {index} before author restart"),
                 )?;
             }
+
+            let heartbeat_deadline = Instant::now() + STATUS_WAIT_TIMEOUT;
+            let heartbeat = loop {
+                let mut canonical = None;
+                let mut all_live_peers_observed = true;
+                for (index, peer) in peers
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != target_index)
+                {
+                    let blocks = peer.client().query(FindBlocks).execute_all()?;
+                    ensure!(
+                        !blocks.iter().any(|block| {
+                            block
+                                .entrypoint_hashes()
+                                .any(|hash| hash == publish_entrypoint)
+                        }),
+                        "{context}: live peer {index} committed the deferred publication before author restart"
+                    );
+                    let successors = blocks
+                        .iter()
+                        .filter(|block| block.header().height().get() > pre_cut_height)
+                        .collect::<Vec<_>>();
+                    ensure!(
+                        successors.len() <= 1,
+                        "{context}: live peer {index} manufactured {} successors while one recovery heartbeat was armed",
+                        successors.len()
+                    );
+                    let Some(block) = successors.first().copied() else {
+                        all_live_peers_observed = false;
+                        continue;
+                    };
+                    ensure!(
+                        block.header().height().get() == pre_cut_height.saturating_add(1)
+                            && block.is_empty()
+                            && block.external_entrypoint_count() == 0
+                            && block.time_triggers().len() == 0,
+                        "{context}: live peer {index} did not commit the exact empty recovery-heartbeat successor: {block:?}"
+                    );
+                    let observed = (block.header().height().get(), block.hash());
+                    if let Some(expected) = canonical {
+                        ensure!(
+                            observed == expected,
+                            "{context}: live peer {index} committed another recovery heartbeat"
+                        );
+                    } else {
+                        canonical = Some(observed);
+                    }
+                }
+                if all_live_peers_observed {
+                    break canonical.ok_or_else(|| {
+                        eyre!("{context}: no live peer returned a recovery heartbeat")
+                    })?;
+                }
+                ensure!(
+                    Instant::now() < heartbeat_deadline,
+                    "{context}: timed out waiting for the explicitly armed recovery heartbeat after pre-cut tip h{pre_cut_height} {pre_cut_hash}"
+                );
+                sleep(STATUS_POLL_INTERVAL).await;
+            };
+
+            for (index, peer) in peers
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != target_index)
+            {
+                let status = peer.status().await.wrap_err_with(|| {
+                    format!("{context}: query recovery-heartbeat status from peer {index}")
+                })?;
+                ensure!(
+                    status.blocks == heartbeat.0
+                        && status.blocks_non_empty == pre_cut_blocks_non_empty,
+                    "{context}: live peer {index} did not expose height-only recovery progress: before_non_empty={pre_cut_blocks_non_empty}, status={status:?}"
+                );
+            }
+
+            // Keep the author down for several complete signed cadences. The
+            // owner-scoped heartbeat is one-shot: it must not turn the stalled
+            // publication into an empty-block loop.
+            let quiescence_deadline = Instant::now() + PIPELINE_TIME.saturating_mul(4);
+            while Instant::now() < quiescence_deadline {
+                sleep(STATUS_POLL_INTERVAL).await;
+                for (index, peer) in peers
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != target_index)
+                {
+                    let blocks = peer.client().query(FindBlocks).execute_all()?;
+                    let latest = blocks.first().ok_or_else(|| {
+                        eyre!("{context}: live peer {index} returned an empty chain")
+                    })?;
+                    ensure!(
+                        latest.header().height().get() == heartbeat.0
+                            && latest.hash() == heartbeat.1
+                            && blocks
+                                .iter()
+                                .filter(|block| {
+                                    block.header().height().get() > pre_cut_height
+                                        && block.is_empty()
+                                })
+                                .count()
+                                == 1
+                            && !blocks.iter().any(|block| {
+                                block
+                                    .entrypoint_hashes()
+                                    .any(|hash| hash == publish_entrypoint)
+                            }),
+                        "{context}: live peer {index} advanced beyond the one armed heartbeat before author restart"
+                    );
+                }
+            }
+            recovery_heartbeat = Some(heartbeat);
             None
         };
 
@@ -3572,6 +3733,20 @@ async fn run_selectable_musubi_publication_phase_cut(
             }
 
             let blocks = client.query(FindBlocks).execute_all()?;
+            if let Some((heartbeat_height, heartbeat_hash)) = recovery_heartbeat {
+                let empty_successors = blocks
+                    .iter()
+                    .filter(|block| {
+                        block.header().height().get() > pre_cut_height && block.is_empty()
+                    })
+                    .collect::<Vec<_>>();
+                ensure!(
+                    empty_successors.len() == 1
+                        && empty_successors[0].header().height().get() == heartbeat_height
+                        && empty_successors[0].hash() == heartbeat_hash,
+                    "{context}: post-replay peer {index} did not retain exactly one canonical recovery heartbeat: {empty_successors:?}"
+                );
+            }
             let occurrences = blocks
                 .iter()
                 .flat_map(|block| {
@@ -3592,6 +3767,12 @@ async fn run_selectable_musubi_publication_phase_cut(
                 publication_block.error(entrypoint_index).is_none(),
                 "{context}: post-replay peer {index} retained a rejected publication occurrence"
             );
+            if let Some((heartbeat_height, _)) = recovery_heartbeat {
+                ensure!(
+                    publication_block.header().height().get() > heartbeat_height,
+                    "{context}: post-replay peer {index} ordered the deferred publication before its recovery heartbeat"
+                );
+            }
             if let Some(expected) = canonical_publication_block {
                 ensure!(
                     publication_block.hash() == expected,
@@ -3601,6 +3782,22 @@ async fn run_selectable_musubi_publication_phase_cut(
                 canonical_publication_block = Some(publication_block.hash());
             }
         }
+        if let Some((heartbeat_height, heartbeat_hash)) = recovery_heartbeat {
+            eprintln!(
+                "EX-297 recovery-heartbeat evidence: phase={phase_label}, pre_cut_height={pre_cut_height}, pre_cut_hash={pre_cut_hash}, heartbeat_height={heartbeat_height}, heartbeat_hash={heartbeat_hash}, pre_cut_blocks_non_empty={pre_cut_blocks_non_empty}"
+            );
+        }
+        let publication_block_hash = canonical_publication_block
+            .ok_or_else(|| eyre!("{context}: no canonical publication block was observed"))?;
+        let heartbeat_height = recovery_heartbeat
+            .map(|(height, _)| height.to_string())
+            .unwrap_or_else(|| "none".to_owned());
+        let heartbeat_hash = recovery_heartbeat
+            .map(|(_, hash)| hash.to_string())
+            .unwrap_or_else(|| "none".to_owned());
+        eprintln!(
+            "EX-297 phase-completion evidence: phase={phase_label}, pre_cut_height={pre_cut_height}, pre_cut_hash={pre_cut_hash}, pre_cut_blocks_non_empty={pre_cut_blocks_non_empty}, heartbeat_height={heartbeat_height}, heartbeat_hash={heartbeat_hash}, publication_block_hash={publication_block_hash}"
+        );
         Ok(())
     }
     .await;
@@ -3625,9 +3822,10 @@ async fn musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay()
             "before-world-commit",
         ),
     ] {
-        if !run_selectable_musubi_publication_phase_cut(phase, label).await? {
-            return Ok(());
-        }
+        ensure!(
+            run_selectable_musubi_publication_phase_cut(phase, label).await?,
+            "{context}: sandbox restrictions skipped required phase {label}"
+        );
     }
     Ok(())
 }

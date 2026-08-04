@@ -261,18 +261,12 @@ fn public_xor_profile_for_manifest(
 
 fn configured_npos_bootstrap_stake_asset_id(
     manifest: &RawGenesisTransaction,
-    config_path: Option<&Path>,
+    config: Option<&actual::Root>,
 ) -> Result<AssetDefinitionId, color_eyre::eyre::Error> {
     let public_profile = public_xor_profile_for_manifest(manifest);
-    let stake_asset_id = if let Some(config_path) = config_path {
-        let config = load_peer_config(config_path)?;
+    let stake_asset_id = if let Some(config) = config {
         resolve_npos_bootstrap_stake_asset_id(manifest, &config.nexus.staking.stake_asset_id)
-            .map_err(|err| {
-                eyre!(
-                    "failed to resolve nexus.staking.stake_asset_id from {}: {err}",
-                    config_path.display(),
-                )
-            })?
+            .map_err(|err| eyre!("failed to resolve nexus.staking.stake_asset_id: {err}"))?
     } else if public_profile.is_some() {
         let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
         resolve_asset_definition_alias(manifest, &public_xor_alias)?.ok_or_else(|| {
@@ -435,6 +429,27 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
             config_path.display()
         )
     })
+}
+
+fn ensure_peer_config_matches_manifest(
+    config: &actual::Root,
+    manifest: &RawGenesisTransaction,
+) -> Result<(), color_eyre::eyre::Error> {
+    if config.common.chain != *manifest.chain_id() {
+        return Err(eyre!(
+            "peer config chain `{}` does not match genesis manifest chain `{}`",
+            config.common.chain,
+            manifest.chain_id()
+        ));
+    }
+    let configured_discriminant = *config.common.chain_discriminant.value();
+    if configured_discriminant != manifest.chain_discriminant() {
+        return Err(eyre!(
+            "peer config chain discriminant {configured_discriminant} does not match genesis manifest chain discriminant {}",
+            manifest.chain_discriminant()
+        ));
+    }
+    Ok(())
 }
 
 fn build_signed_genesis(
@@ -849,21 +864,18 @@ fn install_staged_nexus_policies(
     Ok(())
 }
 
-fn should_auto_bootstrap_npos_validators(
-    config_path: Option<&Path>,
-) -> Result<bool, color_eyre::eyre::Error> {
-    let Some(config_path) = config_path else {
-        return Ok(true);
+fn should_auto_bootstrap_npos_validators(config: Option<&actual::Root>) -> bool {
+    let Some(config) = config else {
+        return true;
     };
 
-    let config = load_peer_config(config_path)?;
-    Ok(matches!(
+    matches!(
         config
             .nexus
             .staking
             .validator_mode(LaneId::SINGLE, &config.nexus.lane_catalog),
         actual::LaneValidatorMode::StakeElected
-    ))
+    )
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -902,6 +914,13 @@ impl<T: Write> RunArgs<T> for Args {
         // serialization on the manifest's network. Staged execution re-enters
         // this discriminant on its worker thread.
         let _chain_discriminant = staged_genesis_chain_discriminant(&genesis);
+        // Parse the peer configuration exactly once. Every policy projection
+        // below borrows this immutable snapshot, so replacing the source file
+        // concurrently cannot create a mixed genesis generation.
+        let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
+        if let Some(config) = peer_config.as_ref() {
+            ensure_peer_config_matches_manifest(config, &genesis)?;
+        }
         let manifest_consensus_mode = genesis.consensus_mode();
         require_v2_wire_protocol_only(&genesis)?;
         let consensus_mode = consensus_mode_override.unwrap_or(manifest_consensus_mode);
@@ -924,7 +943,7 @@ impl<T: Write> RunArgs<T> for Args {
             .unwrap_or_else(|| collect_topology_peers(&genesis));
         ensure_valid_genesis_committee(&final_topology)?;
         let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
-        let auto_bootstrap_npos = should_auto_bootstrap_npos_validators(self.config.as_deref())?;
+        let auto_bootstrap_npos = should_auto_bootstrap_npos_validators(peer_config.as_ref());
         let topology_peers = if uses_npos {
             final_topology
         } else {
@@ -944,7 +963,7 @@ impl<T: Write> RunArgs<T> for Args {
             }
         };
         let bootstrap_stake_asset_id = if needs_npos_bootstrap {
-            configured_npos_bootstrap_stake_asset_id(&genesis, self.config.as_deref())?
+            configured_npos_bootstrap_stake_asset_id(&genesis, peer_config.as_ref())?
         } else {
             default_npos_bootstrap_stake_asset_id()
         };
@@ -960,9 +979,8 @@ impl<T: Write> RunArgs<T> for Args {
             self.algorithm,
         )?;
         ensure_expected_public_key(&genesis_key_pair, self.expected_public_key.as_ref())?;
-        let da_proof_policies = resolve_da_proof_policies(self.config.as_deref())?;
-        let confidential_policy_hash = resolve_confidential_policy_hash(self.config.as_deref())?;
-        let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
+        let da_proof_policies = resolve_da_proof_policies(peer_config.as_ref());
+        let confidential_policy_hash = resolve_confidential_policy_hash(peer_config.as_ref());
         if let Some(config) = peer_config.as_ref()
             && config.genesis.public_key != *genesis_key_pair.public_key()
         {
@@ -1225,31 +1243,15 @@ fn ensure_valid_genesis_committee(topology: &[PeerId]) -> Result<(), color_eyre:
     Ok(())
 }
 
-fn resolve_da_proof_policies(
-    config_path: Option<&Path>,
-) -> Result<Option<DaProofPolicyBundle>, color_eyre::eyre::Error> {
-    let Some(config_path) = config_path else {
-        return Ok(None);
-    };
-
-    let config = load_peer_config(config_path)?;
-
-    Ok(Some(iroha_core::da::proof_policy_bundle(
-        &config.nexus.lane_config,
-    )))
+fn resolve_da_proof_policies(config: Option<&actual::Root>) -> Option<DaProofPolicyBundle> {
+    config.map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config))
 }
 
-fn resolve_confidential_policy_hash(
-    config_path: Option<&Path>,
-) -> Result<[u8; 32], color_eyre::eyre::Error> {
-    let Some(config_path) = config_path else {
-        return Ok(iroha_core::state::default_genesis_confidential_policy_hash());
-    };
-
-    let config = load_peer_config(config_path)?;
-    Ok(iroha_core::state::compute_genesis_confidential_policy_hash(
-        &config.zk,
-    ))
+fn resolve_confidential_policy_hash(config: Option<&actual::Root>) -> [u8; 32] {
+    config.map_or_else(
+        iroha_core::state::default_genesis_confidential_policy_hash,
+        |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
+    )
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
@@ -3286,6 +3288,40 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .and_then(|path| path.parent())
             .expect("workspace root")
             .join("defaults/nexus/config.toml")
+    }
+
+    #[test]
+    fn peer_config_chain_must_match_manifest() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifest = RawGenesisTransaction::from_path(root.join("defaults/genesis.json"))
+            .expect("parse genesis fixture");
+        let mut config = checked_in_config(&root.join("defaults/nexus/config.toml"));
+        ensure_peer_config_matches_manifest(&config, &manifest)
+            .expect("baseline config and manifest match");
+
+        config.common.chain = ChainId::from("concurrently-replaced-chain");
+        let error = ensure_peer_config_matches_manifest(&config, &manifest)
+            .expect_err("chain mismatch must fail before signing");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match genesis manifest chain")
+        );
+    }
+
+    #[test]
+    fn peer_config_discriminant_must_match_manifest() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifest = RawGenesisTransaction::from_path(root.join("defaults/genesis.json"))
+            .expect("parse genesis fixture");
+        let mut config = checked_in_config(&root.join("defaults/nexus/config.toml"));
+        *config.common.chain_discriminant.value_mut() = manifest
+            .chain_discriminant()
+            .checked_add(1)
+            .expect("fixture discriminant can increase");
+        let error = ensure_peer_config_matches_manifest(&config, &manifest)
+            .expect_err("discriminant mismatch must fail before signing");
+        assert!(error.to_string().contains("chain discriminant"));
     }
 
     #[test]
