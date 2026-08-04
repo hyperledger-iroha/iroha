@@ -1670,12 +1670,18 @@ fn timeout_is_durable_before_signing_and_view_change() {
             assert!(matches!(install.record(), WalRecord::InstallTimeout(_)));
             assert_eq!(reducer.current_tag().view(), 0);
             let entered = acknowledge(&mut reducer, &install);
-            assert!(
-                entered
-                    .effects()
-                    .iter()
-                    .any(|effect| matches!(effect, Effect::EnterView { .. }))
-            );
+            assert!(matches!(
+                entered.effects(),
+                [
+                    Effect::EnterView {
+                        tag,
+                        protected_lock: None,
+                        ..
+                    },
+                    Effect::Broadcast(ConsensusMessageV2::TimeoutCertificate(certificate)),
+                ] if tag.view() == 1
+                    && certificate.round() == Round::new(context.height(), 0)
+            ));
         }
     }
     assert_eq!(reducer.current_tag().view(), 1);
@@ -4146,12 +4152,21 @@ fn retained_high_without_lock_can_sign_a_successor_view_timeout() {
             &install.expect("the third Timeout vote forms a TC"),
         );
         assert_eq!(formed_timeout.current_tag().view(), 2);
-        assert!(
-            entered
-                .effects()
-                .iter()
-                .any(|effect| matches!(effect, Effect::EnterView { .. }))
-        );
+        let effects = entered.effects();
+        assert!(matches!(
+            effects.first(),
+            Some(Effect::EnterView { tag, .. }) if tag.view() == 2
+        ));
+        assert!(matches!(
+            effects.last(),
+            Some(Effect::Broadcast(ConsensusMessageV2::TimeoutCertificate(certificate)))
+                if certificate.round() == successor_round
+        ));
+        if carried_high {
+            assert!(matches!(effects.get(1), Some(Effect::FetchBody { .. })));
+        } else {
+            assert_eq!(effects.len(), 2);
+        }
     }
 
     let timeout_entry = only_persist(

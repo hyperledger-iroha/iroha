@@ -4623,9 +4623,6 @@ impl Reducer {
                 let message = ConsensusMessageV2::TimeoutCertificate(certificate.clone());
                 self.remember_control(message.clone());
                 let mut install_effects = Vec::new();
-                if broadcast {
-                    install_effects.push(Effect::Broadcast(message));
-                }
                 self.generation = next_generation;
                 self.candidate = None;
                 self.candidate_signed = None;
@@ -4722,6 +4719,14 @@ impl Reducer {
                 });
                 if let Some(locked) = self.durable.locked().cloned() {
                     install_effects.push(self.ensure_body_fetch(&locked));
+                }
+                // The executor installs the new reducer incarnation before
+                // dispatching any other effect from this macro-step. Keep a
+                // protected body's Fetch immediately behind EnterView, then
+                // publish a locally formed TC as the first ordinary control
+                // effect. Remote TC installation has no one-shot broadcast.
+                if broadcast {
+                    install_effects.push(Effect::Broadcast(message));
                 }
                 install_effects
             }
