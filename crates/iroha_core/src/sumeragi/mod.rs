@@ -1230,7 +1230,8 @@ enum FairV2IngressLeaderWireStatus {
     ///
     /// The exact retry retains this record's token, but the record does not
     /// enter the global selector until that packet passes current capacity
-    /// checks and the durable gate marks it Ingress.
+    /// checks and the durable gate marks it Ingress. A later WAL-durable view
+    /// or Decision cut instead retires it without waiting for that retry.
     Dormant,
     Ingress,
     Runtime,
@@ -1768,6 +1769,12 @@ fn fair_v2_ingress_admit_leader_wire(
         .as_ref()
         .cloned()
         .ok_or(FairV2IngressLeaderWireAdmissionError::Exhausted)?;
+    if gate
+        .identity_is_obsolete(&identity)
+        .map_err(|_| FairV2IngressLeaderWireAdmissionError::Exhausted)?
+    {
+        return Err(FairV2IngressLeaderWireAdmissionError::Rejected);
+    }
     let durable_exact = gate
         .lookup_exact(&identity, &slot)
         .map_err(|_| FairV2IngressLeaderWireAdmissionError::Exhausted)?;
@@ -4864,6 +4871,49 @@ impl FairV2Ingress {
         state.leader_wire_context = Some((context_id, height));
         self.debug_assert_consistent(&state);
         Ok(())
+    }
+
+    /// Apply a live safety-WAL recovery cut to carrierless leader-wire owners.
+    ///
+    /// Production ingress holds this mirror lock while the durable gate
+    /// publishes first. Only restart-restored Dormant records can disappear;
+    /// Ingress and Runtime records retain their physical/consumer ownership
+    /// until their ordinary terminal path completes.
+    pub(crate) fn advance_leader_wire_recovery_cut(
+        &self,
+        next: serviced_candidate_store::LeaderWireRecoveryAuthority,
+    ) -> Result<usize, String> {
+        let mut state = self.state.lock();
+        if !state.requires_leader_wire_lifecycle_gate {
+            return Ok(0);
+        }
+        let gate = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                "leader-wire recovery cut crossed an unbound lifecycle gate".to_owned()
+            })?;
+        let retiring = state
+            .leader_wire_lifecycles
+            .iter()
+            .filter_map(|(slot, record)| {
+                (record.status == FairV2IngressLeaderWireStatus::Dormant
+                    && next.obsoletes(&record.token))
+                .then(|| slot.clone())
+            })
+            .collect::<BTreeSet<_>>();
+
+        gate.advance_recovery_cut(next, &retiring)?;
+        for slot in &retiring {
+            let removed = state
+                .leader_wire_lifecycles
+                .remove(slot)
+                .expect("durably retired dormant leader-wire slot remains mirrored");
+            debug_assert_eq!(removed.status, FairV2IngressLeaderWireStatus::Dormant);
+        }
+        self.debug_assert_consistent(&state);
+        Ok(retiring.len())
     }
 
     /// Detach a closed height's durable productive-wire owner.

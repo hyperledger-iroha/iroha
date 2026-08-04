@@ -2639,6 +2639,11 @@ AsyncCertifiedResponseClaimRecords ==
 AsyncNextCertifiedResponseClaimOrdinal(node) ==
   asyncControlServiceState.certifiedResponseNextOrdinal[node]
 
+RetainedCertifiedFenceEscapePhases == {"Fresh", "Charged", "Spent"}
+
+RetainedCertifiedFenceEscapePhase(node) ==
+  asyncControlServiceState.certifiedFenceEscapePhase[node]
+
 AsyncCandidateServiceMarkers ==
   asyncControlServiceState.candidateServiceMarkers
 
@@ -3322,6 +3327,7 @@ AsyncControlServiceStateTypeInvariant ==
   /\ DOMAIN asyncControlServiceState =
        {"nextOrdinal", "slots",
         "certifiedResponseNextOrdinal", "certifiedResponseClaims",
+        "certifiedFenceEscapePhase",
         "candidateServiceNextOrdinal", "candidateServiceMarkers",
         "candidateTerminalTombstones",
         "producerContinuations",
@@ -3337,6 +3343,8 @@ AsyncControlServiceStateTypeInvariant ==
        \in [ValidatorIds -> (Nat \ {0})]
   /\ asyncControlServiceState.certifiedResponseNextOrdinal
        \in [ValidatorIds -> (Nat \ {0})]
+  /\ asyncControlServiceState.certifiedFenceEscapePhase
+       \in [ValidatorIds -> RetainedCertifiedFenceEscapePhases]
   /\ asyncControlServiceState.candidateServiceNextOrdinal
        \in [ValidatorIds -> (Nat \ {0})]
   /\ asyncControlServiceState.leaderWireIngressNextOrdinal
@@ -3380,6 +3388,9 @@ AsyncControlServiceStateTypeInvariant ==
   /\ AsyncCandidateProducerContinuationLifecycleCoverageInvariant
   /\ Cardinality(AsyncCertifiedResponseClaimRecords)
        <= Cardinality(ValidatorIds)
+  /\ \A node \in ValidatorIds:
+       CertifiedResponseClaimRecordsAt(node) = {}
+         => RetainedCertifiedFenceEscapePhase(node) = "Fresh"
   /\ Cardinality(AsyncCandidateServiceTombstones)
        <= AsyncCandidateServiceRecordCapacity
   /\ Cardinality(AsyncCandidateProducerContinuations)
@@ -4697,22 +4708,150 @@ AsyncCompletionLoad(node) ==
   AsyncOutstandingWorkCount(node) + QueuedCompletionCount(node)
     + DeferredCompletionCount(node)
 
+AsyncQueuedClassCount(node, commandClass) ==
+  Cardinality(
+    {index \in 1..AsyncQueueDepth(node):
+       asyncCommandQueues[node][index].class = commandClass})
+
+AsyncQueuedNoncompletionCount(node) ==
+  AsyncQueuedClassCount(node, "Normal")
+    + AsyncQueuedClassCount(node, "Progress")
+
+(*
+Only an authenticated TC, direct CommitQC, or CommitCertificateResponse
+carrying a CommitQC may spend the signer-fence escape reservation.  Every
+eligible occurrence must already belong to the sent/authenticated history of
+a validator source; evidence kind alone never creates capacity credit.
+*)
+AsyncCertifiedFenceEscapeKinds ==
+  {"TimeoutCertificate", "CommitQC", "CommitCertificateResponse"}
+
+AsyncCertifiedFenceEscapeItem(item) ==
+  /\ item \in AsyncNetworkItems
+  /\ item.kind \in AsyncCertifiedFenceEscapeKinds
+  /\ item \in asyncSentItems
+  /\ item.source \in ValidatorIds
+  /\ CASE item.kind = "TimeoutCertificate" -> TRUE
+       [] item.kind = "CommitQC" -> item.envelope.qc.phase = "Commit"
+       [] item.kind = "CommitCertificateResponse" ->
+            item.envelope.qc.phase = "Commit"
+       [] OTHER -> FALSE
+
+AsyncAuthenticatedCertifiedFenceEscapeAuthorities ==
+  {AsyncRouteNeutralCandidateEvidence(item):
+     item \in {sent \in asyncSentItems:
+       AsyncCertifiedFenceEscapeItem(sent)}}
+
+AsyncQueuedCandidateIsCertifiedFenceEscape(candidate) ==
+  /\ candidate.class = "Progress"
+  /\ candidate.kind \in {"DeliverTC", "DeliverQC"}
+  /\ candidate.evidence \in AsyncNetworkItems
+  /\ AsyncCertifiedFenceEscapeItem(candidate.evidence)
+  /\ candidate.causalOrigin.payload.authority =
+       AsyncRouteNeutralCandidateEvidence(candidate.evidence)
+  /\ CASE candidate.kind = "DeliverTC" ->
+            /\ candidate.evidence.kind = "TimeoutCertificate"
+            /\ candidate.causalOrigin.phase = "DeliverTC"
+       [] candidate.kind = "DeliverQC" ->
+            /\ candidate.evidence.kind
+                 \in {"CommitQC", "CommitCertificateResponse"}
+            /\ candidate.causalOrigin.phase = "DeliverQC"
+       [] OTHER -> FALSE
+
+THEOREM AsyncInternalCertificateSuccessorsCannotRetainFenceCredit ==
+  \A candidate \in AsyncCandidateSet:
+    candidate.kind \in {"BeginDecision", "BeginInstallTC"}
+      => ~AsyncQueuedCandidateIsCertifiedFenceEscape(candidate)
+BY DEF AsyncQueuedCandidateIsCertifiedFenceEscape
+
+AsyncQueuedCertifiedFenceEscapeCount(node) ==
+  Cardinality(
+    {index \in 1..AsyncQueueDepth(node):
+       AsyncQueuedCandidateIsCertifiedFenceEscape(
+         asyncCommandQueues[node][index])})
+
+\* Exactly one deeply authenticated TC/direct CommitQC root can be charged to
+\* the physical slot outside the ordinary class geometry. Additional
+\* certificates remain Progress owners and consume ordinary capacity.
+AsyncCertifiedFenceCredit(node) ==
+  IF AsyncQueuedCertifiedFenceEscapeCount(node) = 0 THEN 0 ELSE 1
+
+AsyncAdmissionCertifiedFenceCredit(node, incomingCertified) ==
+  IF incomingCertified \/ AsyncCertifiedFenceCredit(node) = 1 THEN 1 ELSE 0
+
+CanEnqueueWithCertifiedFenceCredit(node, commandClass, incomingCertified) ==
+  LET credit ==
+        AsyncAdmissionCertifiedFenceCredit(node, incomingCertified)
+      normalAfter ==
+        AsyncQueuedClassCount(node, "Normal")
+          + IF commandClass = "Normal" THEN 1 ELSE 0
+      noncompletionAfter ==
+        AsyncQueuedNoncompletionCount(node)
+          + IF commandClass = "Completion" THEN 0 ELSE 1
+  IN /\ commandClass \in AsyncCommandClasses
+     /\ AsyncQueueDepth(node) < AsyncQueueCapacity
+     /\ AsyncQueueDepth(node) + 1
+          <= AsyncOrdinaryCompletionLimit + credit
+     /\ normalAfter <= AsyncNormalLimit
+     /\ noncompletionAfter <= AsyncProgressLimit + credit
+
+\* Every ordinary class uses the exact production geometry.  In particular,
+\* an earlier Completion does not consume a Normal or Progress reservation,
+\* and an earlier authenticated certificate keeps its single physical credit
+\* while later ordinary completions consume only ordinary capacity.
 CanEnqueueClass(node, commandClass) ==
-  CASE commandClass = "Normal" ->
-         AsyncQueueDepth(node) < AsyncNormalLimit
-    [] commandClass = "Progress" ->
-         AsyncQueueDepth(node) < AsyncProgressLimit
-    [] commandClass = "Completion" ->
-         AsyncQueueDepth(node) < AsyncOrdinaryCompletionLimit
+  CanEnqueueWithCertifiedFenceCredit(node, commandClass, FALSE)
 
 CanEnqueueCertifiedResponse(node) ==
-  AsyncQueueDepth(node) < AsyncQueueCapacity
+  CanEnqueueClass(node, "Completion")
 
 \* The final physical FIFO slot is not part of any ordinary class limit.
-\* Only one deeply authenticated certificate root may consume it; popping
-\* that root immediately restores the ordinary bounded prefix.
+\* One deeply authenticated certificate root receives the single credit;
+\* further certificates consume the ordinary Progress allocation.
 CanEnqueueCertifiedFenceEscape(node) ==
-  AsyncQueueDepth(node) < AsyncQueueCapacity
+  CanEnqueueWithCertifiedFenceCredit(node, "Progress", TRUE)
+
+(***************************************************************************
+An admitted certified-body response is a linear Completion owner.  While that
+owner is retained, only the Fresh phase may admit one new direct authenticated
+TC, CommitQC, or CommitCertificateResponse carrying a CommitQC root. Admission
+charges the episode in the same global transition. Charged and Spent reject
+every later fresh certified ingress, even when that later root would fit inside
+ordinary Progress capacity; roots which were already queued when the claim
+arrived remain independently owned and bounded by the physical FIFO.
+***************************************************************************)
+RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape(node) ==
+  \/ CertifiedResponseClaimRecordsAt(node) = {}
+  \/ RetainedCertifiedFenceEscapePhase(node) = "Fresh"
+
+AsyncQueueDepthAfter(node) == Len(asyncCommandQueues'[node])
+
+AsyncQueuedClassCountAfter(node, commandClass) ==
+  Cardinality(
+    {index \in 1..AsyncQueueDepthAfter(node):
+       asyncCommandQueues'[node][index].class = commandClass})
+
+AsyncQueuedNoncompletionCountAfter(node) ==
+  AsyncQueuedClassCountAfter(node, "Normal")
+    + AsyncQueuedClassCountAfter(node, "Progress")
+
+AsyncQueuedCertifiedFenceEscapeCountAfter(node) ==
+  Cardinality(
+    {index \in 1..AsyncQueueDepthAfter(node):
+       AsyncQueuedCandidateIsCertifiedFenceEscape(
+         asyncCommandQueues'[node][index])})
+
+AsyncCertifiedFenceCreditAfter(node) ==
+  IF AsyncQueuedCertifiedFenceEscapeCountAfter(node) = 0 THEN 0 ELSE 1
+
+CanEnqueueCertifiedResponseAfter(node) ==
+  LET credit == AsyncCertifiedFenceCreditAfter(node)
+  IN /\ AsyncQueueDepthAfter(node) < AsyncQueueCapacity
+     /\ AsyncQueueDepthAfter(node) + 1
+          <= AsyncOrdinaryCompletionLimit + credit
+     /\ AsyncQueuedClassCountAfter(node, "Normal") <= AsyncNormalLimit
+     /\ AsyncQueuedNoncompletionCountAfter(node)
+          <= AsyncProgressLimit + credit
 
 SequenceSet(sequence) == {sequence[index]: index \in 1..Len(sequence)}
 
@@ -6582,24 +6721,31 @@ AsyncCandidateProducerContinuationEnqueueConsumesSelectedReplayReservation(
      /\ asyncRunnerBudget[node] > 0
 
 AsyncCandidateIsDirectCertifiedFenceEscape(candidate) ==
-  /\ candidate.class = "Progress"
-  /\ candidate.evidence \in AsyncNetworkItems
+  /\ AsyncQueuedCandidateIsCertifiedFenceEscape(candidate)
   /\ AsyncCertifiedFenceEscapeItem(candidate.evidence)
-  /\ candidate.causalOrigin.phase \in {"DeliverTC", "DeliverQC"}
 
 AsyncCandidateHasCertifiedFenceRoot(candidate) ==
-  /\ candidate.class \in {"Progress", "Completion"}
-  /\ candidate.causalOrigin.phase \in {"DeliverTC", "DeliverQC"}
-  /\ candidate.causalOrigin.payload.item.kind
-       \in {"TimeoutCertificate", "CommitQC"}
+  LET authority == candidate.causalOrigin.payload.authority
+  IN /\ candidate.class \in {"Progress", "Completion"}
+     /\ authority \in AsyncAuthenticatedCertifiedFenceEscapeAuthorities
+     /\ CASE candidate.causalOrigin.phase = "DeliverTC" ->
+              authority.payload.kind = "TimeoutCertificate"
+          [] candidate.causalOrigin.phase = "DeliverQC" ->
+              authority.payload.kind
+                \in {"CommitQC", "CommitCertificateResponse"}
+          [] OTHER -> FALSE
 
 EnqueueCandidate(candidate) ==
   LET node == candidate.node
   IN /\ ~AsyncCandidateServiceCoalesced(candidate)
      /\ \/ /\ AsyncCandidateIsDirectCertifiedFenceEscape(candidate)
               /\ CanEnqueueCertifiedFenceEscape(node)
-        \/ AsyncCandidateProducerContinuationOrdinaryEnqueuePreservesReplayPrefix(
-              candidate)
+              /\ RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape(
+                   node)
+        \/ /\ AsyncCandidateProducerContinuationOrdinaryEnqueuePreservesReplayPrefix(
+                 candidate)
+              /\ ~AsyncCandidateIsDirectCertifiedFenceEscape(candidate)
+              /\ CanEnqueueClass(node, candidate.class)
         \/ AsyncCandidateProducerContinuationEnqueueConsumesSelectedReplayReservation(
              candidate)
      /\ asyncCommandQueues' =
@@ -6982,6 +7128,10 @@ CertifiedResponseClaimRecordsForFamily(requestHash) ==
 
 CertifiedResponseClaimRecordsAt(recipient) ==
   {record \in AsyncCertifiedResponseClaimRecords:
+     record.recipient = recipient}
+
+CertifiedResponseClaimRecordsAtIn(state, recipient) ==
+  {record \in state.certifiedResponseClaims:
      record.recipient = recipient}
 
 CertifiedResponseClaimSelectedRecord(recipient) ==
@@ -7431,21 +7581,6 @@ IngressHasCoalescingOwnerVia(item, authenticatedSource) ==
 
 IngressHasCoalescingOwner(item) ==
   IngressHasCoalescingOwnerVia(item, item.source)
-
-(*
-Only authenticated TC, direct CommitQC, and CommitCertificateResponse carrying
-CommitQC may spend the signer-fence escape reservation.  PrepareQC and raw
-TimeoutVote deliberately remain ordinary Progress.  This is a transport and
-capacity classifier only; reducer admission still verifies the complete
-certificate before it can change protocol state.
-*)
-AsyncCertifiedFenceEscapeKinds ==
-  {"TimeoutCertificate", "CommitQC", "CommitCertificateResponse"}
-
-AsyncCertifiedFenceEscapeItem(item) ==
-  /\ item.kind \in AsyncCertifiedFenceEscapeKinds
-  /\ IngressItemHasAuthenticatedHistory(item)
-  /\ IngressResourceSource(item) \in ValidatorIds
 
 AsyncCertifiedFenceEscapeContext(item) ==
   CASE item.kind = "TimeoutCertificate" -> item.envelope.tc.context
@@ -10247,6 +10382,13 @@ AsyncLeaderWireAdmissionAuthenticated(item) ==
      THEN CertifiedResponseAuthorized(item)
      ELSE TRUE
 
+AsyncLeaderWireRecoveryCutObsoletesItem(item) ==
+  /\ item.kind \in AsyncLeaderWireKinds
+  /\ item.envelope.recipient \in ValidatorIds
+  /\ DeliveryHeight(item) = context.height
+  /\ \/ DeliveryView(item) < nodeView[item.envelope.recipient]
+     \/ NodeHasDecision(item.envelope.recipient)
+
 AsyncLeaderWireLifecycleExactActive(item) ==
   /\ AsyncLeaderWireLifecycleSlotOwned(item)
   /\ LET record == AsyncLeaderWireLifecycleRecordForItem(item)
@@ -10293,6 +10435,7 @@ AsyncLeaderWireAtomicAdmissionAllows(item) ==
   \/ ~AsyncLeaderWireLifecycleIdentityDerivable(item)
   \/ /\ AsyncLeaderWireCurrentContextItem(item)
      /\ AsyncLeaderWireAdmissionAuthenticated(item)
+     /\ ~AsyncLeaderWireRecoveryCutObsoletesItem(item)
      /\ ~IngressPacketPolicyRejected(item)
      /\ ~AsyncLeaderWireLifecycleExactActive(item)
      /\ AsyncLeaderWireLifecycleSlotCanAdmit(item)
@@ -11698,10 +11841,12 @@ the source consumes only one round-robin turn.  Keeping item admission
 separate from source selection prevents auxiliary I/O backpressure at a lane
 head from hiding later consensus/body progress from the same peer.
 
-One already-claimed certified response receives priority exactly when its
-downstream predicate admits it. Ordinary completions stop one slot below the
-physical runtime capacity, while only this authenticated response handoff may
-use the final slot. The priority therefore cannot be defeated by another
+One already-claimed certified body response receives priority exactly when
+its downstream Completion predicate admits it.  That body response does not
+itself earn the final physical credit: only a retained authenticated TC,
+direct CommitQC, or CommitCertificateResponse root does.  While such a root
+is retained, the body handoff consumes ordinary Completion capacity without
+losing that credit.  Its priority therefore cannot be defeated by another
 completion source after a runtime service turn. A blocked claim receives no
 priority and therefore cannot head-of-line block unrelated traffic.
 
@@ -13337,9 +13482,10 @@ command capacity, while Completion debt permits the exact producer retirement
 needed to free an outstanding-work slot.
 
 An authenticated certified-response retry does not fence local admission.
-Ordinary producer completions cannot consume its dedicated final runtime slot,
-so the existing finite local-turn budget can drain normally before the runner
-returns to prioritized ingress.
+The finite local-turn budget accounts for ordinary producer completions before
+the runner returns to ingress. A response is prioritized only while its exact
+Completion predicate remains drainable; it does not own the separate physical
+credit reserved for a retained authenticated TC or CommitQC.
 ***************************************************************************)
 PreferredLocalSource(node) ==
   IF asyncCausalAdmissionOwed[node] = TRUE
@@ -16687,6 +16833,13 @@ AsyncLeaderWireLifecycleStaleOrDecision(record) ==
   \/ /\ record.status = "Ingress"
      /\ AsyncCandidateStageRetired(record.item)
 
+AsyncLeaderWireLifecycleRecoveryCutObsolete(record) ==
+  /\ AsyncLeaderWireLifecycleDormant(record)
+  /\ record.context = context
+  /\ record.height = height
+  /\ \/ record.view < nodeView[record.recipient]
+     \/ NodeHasDecision(record.recipient)
+
 AsyncLeaderWireLifecycleConsumerTerminal(record) ==
   /\ record.status = "Runtime"
   /\ \/ AsyncLeaderWireLifecycleDirectChunkReceipt(record)
@@ -16703,6 +16856,7 @@ AsyncLeaderWireLifecycleCanTerminal(record) ==
         \/ AsyncLeaderWireLifecycleConsumerTerminal(record)
   \/ /\ record.status = "VolatileTerminal"
      /\ AsyncLeaderWireLifecycleStableTerminalEvidence(record)
+  \/ AsyncLeaderWireLifecycleRecoveryCutObsolete(record)
 
 AsyncLeaderWireLifecycleRetirementReady(slot) ==
   /\ AsyncLeaderWireLifecycleRecordsForSlot(slot) # {}
@@ -16718,15 +16872,17 @@ RetireLeaderWireLifecycleSlot(slot) ==
            CHOOSE owned \in
              AsyncLeaderWireLifecycleRecordsForSlot(slot): TRUE
      IN /\ asyncLeaderWireLifecycles' =
-             {IF owned.slot = slot
-              THEN [owned EXCEPT
-                      !.status =
-                        IF AsyncLeaderWireLifecycleStableTerminalEvidence(
-                             owned)
-                        THEN "Terminal"
-                        ELSE "VolatileTerminal"]
-              ELSE owned:
-                owned \in asyncLeaderWireLifecycles}
+             IF AsyncLeaderWireLifecycleRecoveryCutObsolete(record)
+             THEN asyncLeaderWireLifecycles \ {record}
+             ELSE {IF owned.slot = slot
+                   THEN [owned EXCEPT
+                           !.status =
+                             IF AsyncLeaderWireLifecycleStableTerminalEvidence(
+                                  owned)
+                             THEN "Terminal"
+                             ELSE "VolatileTerminal"]
+                   ELSE owned:
+                     owned \in asyncLeaderWireLifecycles}
   /\ UNCHANGED
        <<gst, vars, AsyncSchedulerExceptCausalAndControlService,
          asyncCausalQueues, AsyncRecoveryVars>>
@@ -16748,13 +16904,31 @@ BY Isa
 
 THEOREM RetireLeaderWireLifecycleRetainsTerminalTombstone ==
   \A slot \in AsyncLeaderWireLifecycleSlotSet:
-    RetireLeaderWireLifecycleSlot(slot)
+    /\ RetireLeaderWireLifecycleSlot(slot)
+    /\ LET record ==
+             CHOOSE owned \in
+               AsyncLeaderWireLifecycleRecordsForSlot(slot): TRUE
+       IN ~AsyncLeaderWireLifecycleRecoveryCutObsolete(record)
       => \E record \in asyncLeaderWireLifecycles':
            /\ record.slot = slot
            /\ record.status \in {"VolatileTerminal", "Terminal"}
 BY Isa
    DEF RetireLeaderWireLifecycleSlot,
-       AsyncLeaderWireLifecycleRecordsForSlot
+       AsyncLeaderWireLifecycleRecordsForSlot,
+       AsyncLeaderWireLifecycleRecoveryCutObsolete
+
+THEOREM RetireLeaderWireLifecycleRecoveryCutPrunesOnlyDormant ==
+  \A slot \in AsyncLeaderWireLifecycleSlotSet:
+    /\ RetireLeaderWireLifecycleSlot(slot)
+    /\ LET record ==
+             CHOOSE owned \in
+               AsyncLeaderWireLifecycleRecordsForSlot(slot): TRUE
+       IN AsyncLeaderWireLifecycleRecoveryCutObsolete(record)
+      => AsyncLeaderWireLifecycleRecordsForSlot(slot)' = {}
+BY Isa
+   DEF RetireLeaderWireLifecycleSlot,
+       AsyncLeaderWireLifecycleRecordsForSlot,
+       AsyncLeaderWireLifecycleRecoveryCutObsolete
 
 AsyncFaultStep ==
   \/ \E packet \in asyncTransport: PreGstLosePacket(packet)
@@ -17072,6 +17246,37 @@ volatile proposal/vote/QC state can be reconstructed.  Strict certified view
 advance and durable Decision reclaim either bounded record class only after
 the corresponding old-stage admission path is permanently disabled;
 successor-height initialization resets the complete table.
+
+A restart-restored stage-7 BodyAvailable continuation which becomes terminal
+before service is represented here only after its producer record has left
+the durable set.  The production refinement persists that exact removal before
+releasing its volatile Completion carrier; a failed persistence attempt is a
+stuttering step which restores the process, durable, and dormant aliases.  An
+absent record therefore remains absent across this same-height reset instead
+of being reconstructed from a carrier which has already been coalesced.
+
+The same refinement covers a whole Busy-deferred retirement batch.  Every
+producer address is joined to one still-present Busy carrier; the durable
+producer image is published before any deferred queue owner is removed, and a
+failed publication restores the complete pre-step image.  A terminal restored
+FetchBody follows this cut even if no BodyAvailable token was ever reserved.
+Restart may remove an older Reserved producer only after WAL replay, retaining
+the exact protected-lock body-pipeline record; a live EnterView still requires
+the ordinary explicit producer handoff.  This model conservatively keeps a
+terminal high-water record where production may persistently prune the
+restart-only Reserved alias.
+
+BodyAvailable coalescence has one crash-recoverable root: if exactly one side
+has persistent producer backing that side survives, while two independent
+persistent roots reject before mutation.  The set-valued handoff abstraction
+does not distinguish the volatile twin from that sole durable root, so this is
+a production-refinement precondition rather than a second TLA owner.
+
+Leader-wire restart-dormant records use the live durable view/Decision cut
+below.  An obsolete identity cannot be admitted.  Fair retirement removes only
+an obsolete Dormant record; the separate lifecycle and scheduler ordinal
+high-waters remain unchanged.  The atomic action abstracts gate-first
+persistence followed by mirror pruning, while a failed gate write stutters.
 ***************************************************************************)
 AsyncControlServiceResetNodesThisStep ==
   IF PreGstResponsiveRestart \/ PreGstResponsiveReplay
@@ -17170,6 +17375,7 @@ AsyncControlServiceStateAfterReset(state, resetNodes) ==
    certifiedResponseNextOrdinal |->
      state.certifiedResponseNextOrdinal,
    certifiedResponseClaims |-> state.certifiedResponseClaims,
+   certifiedFenceEscapePhase |-> state.certifiedFenceEscapePhase,
    candidateServiceNextOrdinal |->
      state.candidateServiceNextOrdinal,
    candidateServiceMarkers |->
@@ -17264,6 +17470,7 @@ AsyncControlServiceStateAfterAdmission(state, item) ==
       certifiedResponseNextOrdinal |->
         state.certifiedResponseNextOrdinal,
       certifiedResponseClaims |-> state.certifiedResponseClaims,
+      certifiedFenceEscapePhase |-> state.certifiedFenceEscapePhase,
       candidateServiceNextOrdinal |->
         state.candidateServiceNextOrdinal,
       candidateServiceMarkers |->
@@ -17302,6 +17509,7 @@ AsyncControlServiceStateAfterService(state, item) ==
    certifiedResponseNextOrdinal |->
      state.certifiedResponseNextOrdinal,
    certifiedResponseClaims |-> state.certifiedResponseClaims,
+   certifiedFenceEscapePhase |-> state.certifiedFenceEscapePhase,
    candidateServiceNextOrdinal |->
      state.candidateServiceNextOrdinal,
    candidateServiceMarkers |->
@@ -17331,12 +17539,18 @@ AsyncControlServiceStateAfterService(state, item) ==
      state.retransmitLifecyclePhysicalCut]
 
 AsyncCertifiedResponseClaimStateAfterRetirement(state) ==
-  [state EXCEPT
-     !.certifiedResponseClaims =
-       CertifiedResponseClaimRecordsFor(
-         state.certifiedResponseClaims,
-         asyncActiveRequests',
-         asyncCertifiedResponseClaim')]
+  LET retained ==
+        CertifiedResponseClaimRecordsFor(
+          state.certifiedResponseClaims,
+          asyncActiveRequests',
+          asyncCertifiedResponseClaim')
+  IN [state EXCEPT
+        !.certifiedResponseClaims = retained,
+        !.certifiedFenceEscapePhase =
+          [node \in ValidatorIds |->
+             IF {record \in retained: record.recipient = node} = {}
+             THEN "Fresh"
+             ELSE state.certifiedFenceEscapePhase[node]]]
 
 (***************************************************************************
 The claim and leader-wire lifecycle are installed by the same hidden-ingress
@@ -17478,7 +17692,37 @@ AsyncCertifiedResponseClaimStateAfterAdmission(state, item) ==
               episodeSchedulerCeiling, physicalCut,
               targetCausalOrigin, targetLeaderWireOwnerIdentity,
               frozenCandidateOrigins, frozenServeSources,
-              frozenContinuationSources, frozenLeaderWireIdentities)}]
+              frozenContinuationSources, frozenLeaderWireIdentities)},
+        !.certifiedFenceEscapePhase[recipient] =
+          IF AsyncCertifiedFenceCredit(recipient) = 1
+          THEN "Charged"
+          ELSE "Fresh"]
+
+(***************************************************************************
+Reconcile the retained-response latch against the post-action runtime FIFO.
+Fresh charges as soon as one exact direct certificate root is present.
+Charged becomes Spent only after that credit disappears while the claimed
+Completion is still capacity blocked.  Spent is absorbing for the lifetime of
+the claim, even if an already-owned replay root later rematerializes.  Claim
+retirement alone returns the node to the absent/default Fresh state.
+***************************************************************************)
+RetainedCertifiedFenceEscapePhaseAfter(state, node) ==
+  IF CertifiedResponseClaimRecordsAtIn(state, node) = {}
+  THEN "Fresh"
+  ELSE CASE /\ state.certifiedFenceEscapePhase[node] = "Fresh"
+             /\ AsyncCertifiedFenceCreditAfter(node) = 1
+            -> "Charged"
+       [] /\ state.certifiedFenceEscapePhase[node] = "Charged"
+             /\ AsyncCertifiedFenceCreditAfter(node) = 0
+             /\ ~CanEnqueueCertifiedResponseAfter(node)
+            -> "Spent"
+       [] OTHER -> state.certifiedFenceEscapePhase[node]
+
+AsyncCertifiedFenceEscapeStateAfterRuntime(state) ==
+  [state EXCEPT
+     !.certifiedFenceEscapePhase =
+       [node \in ValidatorIds |->
+          RetainedCertifiedFenceEscapePhaseAfter(state, node)]]
 
 (***************************************************************************
 FIFO or Busy-deferred execution retires the exact candidate only after its
@@ -20473,9 +20717,11 @@ AsyncControlServiceSlotTransition ==
       timeoutState ==
         AsyncCandidateLifecycleStateAfterTimeoutOwnership(
           serveIngressState, lifecycleState)
-      finalState ==
+      lifecycleFinalState ==
         AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission(
           timeoutState)
+      finalState ==
+        AsyncCertifiedFenceEscapeStateAfterRuntime(lifecycleFinalState)
   IN /\ AsyncFreshLeaderWireLifecycleAdmissionsAreSingularThisStep
      /\ AsyncFreshLeaderWireLifecycleAdmissionOrdinalMatchesIn(
           compactedState)
@@ -20510,6 +20756,28 @@ AsyncControlServiceSlotTransition ==
      /\ Cardinality(finalState.producerContinuations)
           <= AsyncCandidateProducerContinuationCapacity
      /\ asyncControlServiceState' = finalState
+
+THEOREM LeaderWireRecoveryCutRetainsOrdinalHighwaters ==
+  \A slot \in AsyncLeaderWireLifecycleSlotSet:
+    LET record ==
+          CHOOSE owned \in
+            AsyncLeaderWireLifecycleRecordsForSlot(slot): TRUE
+    IN /\ RetireLeaderWireLifecycleSlot(slot)
+       /\ AsyncLeaderWireLifecycleRecoveryCutObsolete(record)
+       /\ AsyncControlServiceSlotTransition
+       => \A node \in ValidatorIds:
+            /\ AsyncNextLeaderWireIngressOrdinal(node)' =
+                 AsyncNextLeaderWireIngressOrdinal(node)
+            /\ AsyncNextCandidateLifecycleOrdinal(node)' =
+                 AsyncNextCandidateLifecycleOrdinal(node)
+BY IsaT(240)
+   DEF RetireLeaderWireLifecycleSlot,
+       AsyncLeaderWireLifecycleRecoveryCutObsolete,
+       AsyncControlServiceSlotTransition,
+       AsyncFreshLeaderWireLifecycleAdmissionsForNodeThisStep,
+       AsyncCandidateLifecycleStateAfterLeaderWireAdmission,
+       AsyncNextLeaderWireIngressOrdinal,
+       AsyncNextCandidateLifecycleOrdinal
 
 THEOREM OrdinaryIngressCarrierRetirementCompactionDoesNotIncreaseEvidence ==
   \A state, node:
@@ -24251,6 +24519,8 @@ AsyncTransportInit ==
         certifiedResponseNextOrdinal |->
           [node \in ValidatorIds |-> 1],
         certifiedResponseClaims |-> {},
+        certifiedFenceEscapePhase |->
+          [node \in ValidatorIds |-> "Fresh"],
         candidateServiceNextOrdinal |->
           [node \in ValidatorIds |-> 1],
         candidateServiceMarkers |-> {},
@@ -26852,14 +27122,37 @@ AsyncFairActionsRefineAsyncNext ==
        AsyncFairActionAt(initialContext) => AsyncNext
 
 AsyncCompletionReserveInvariant ==
+  /\ AsyncOrdinaryCompletionLimit - AsyncProgressLimit
+       = AsyncCompletionReserve
+  /\ \A node \in ValidatorIds:
+       LET credit == AsyncCertifiedFenceCredit(node)
+           ordinaryOccupied == AsyncQueueDepth(node) - credit
+           ordinaryNoncompletion ==
+             AsyncQueuedNoncompletionCount(node) - credit
+       IN /\ credit \in {0, 1}
+          /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
+          /\ ordinaryOccupied <= AsyncOrdinaryCompletionLimit
+          /\ AsyncQueuedClassCount(node, "Normal") <= AsyncNormalLimit
+          /\ ordinaryNoncompletion <= AsyncProgressLimit
+          /\ (AsyncQueuedClassCount(node, "Normal") >= AsyncNormalLimit
+                => ~CanEnqueueClass(node, "Normal"))
+          /\ (ordinaryNoncompletion >= AsyncProgressLimit
+                => ~CanEnqueueClass(node, "Progress"))
+          /\ (ordinaryOccupied >= AsyncOrdinaryCompletionLimit
+                => ~CanEnqueueClass(node, "Completion"))
+
+AsyncCertifiedFenceEscapeEpisodeInvariant ==
   \A node \in ValidatorIds:
-    /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
-    /\ (AsyncQueueDepth(node) >= AsyncNormalLimit
-          => ~CanEnqueueClass(node, "Normal"))
-    /\ (AsyncQueueDepth(node) >= AsyncProgressLimit
-          => ~CanEnqueueClass(node, "Progress"))
-    /\ (AsyncQueueDepth(node) >= AsyncOrdinaryCompletionLimit
-          => ~CanEnqueueClass(node, "Completion"))
+    /\ RetainedCertifiedFenceEscapePhase(node)
+         \in RetainedCertifiedFenceEscapePhases
+    /\ (CertifiedResponseClaimRecordsAt(node) = {}
+          => RetainedCertifiedFenceEscapePhase(node) = "Fresh")
+    /\ (RetainedCertifiedFenceEscapePhase(node) \in {"Charged", "Spent"}
+          => ~RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape(node))
+    /\ (/\ CertifiedResponseClaimRecordsAt(node) # {}
+         /\ RetainedCertifiedFenceEscapePhase(node) = "Fresh"
+          => AsyncQueuedCertifiedFenceEscapeCount(node) = 0)
+    /\ AsyncQueuedCertifiedFenceEscapeCount(node) <= AsyncQueueCapacity
 
 AsyncIoReservationInvariant ==
   /\ AsyncIoWorkCapacity <= AsyncCompletionReserve

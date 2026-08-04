@@ -3802,11 +3802,12 @@ choice no longer create a refinement residual.
 
 After admission, an exact claimed response reserves the runtime Completion
 command directly.  It neither allocates a second effect-work owner nor passes
-through a synthetic local-producer queue. Ordinary completions cannot consume
-the final slot dedicated to `reserve_certified_body_available`; only a
-physically full runtime may return retryable backpressure. That finite
-serialized queue debt is independent of archive roster membership and relay
-route and is the only response-specific state residual retained here.
+through a synthetic local-producer queue. The reservation obeys the exact
+ordinary Completion geometry; only a retained authenticated TC, direct
+CommitQC, or CommitCertificateResponse owns the separate final physical
+credit. Retryable serialized queue debt is independent of archive roster
+membership and relay route and is the only response-specific state residual
+retained here.
 ***************************************************************************)
 
 ProtectedExactCertifiedResponseOwned(item) ==

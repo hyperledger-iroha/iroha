@@ -151,3 +151,138 @@
         }
     }
 
+    #[test]
+    fn durable_view_cut_retires_carrierless_leader_wire_without_exact_retry() {
+        for cut in [
+            RestoredLeaderWireCut::Reserved,
+            RestoredLeaderWireCut::Ingress,
+            RestoredLeaderWireCut::Runtime,
+            RestoredLeaderWireCut::Volatile,
+        ] {
+            let fixture = restored_leader_wire_fixture(cut);
+            let next_view = fixture
+                .token
+                .identity
+                .view
+                .checked_add(1)
+                .expect("fixture view has a successor");
+            let mut newer = fixture.message.clone();
+            let BlockMessage::V2(envelope) = &mut newer else {
+                unreachable!("leader-wire restart fixture is a v2 envelope");
+            };
+            let wire::ConsensusMessageV2Payload::Proposal(proposal) = &mut envelope.payload else {
+                unreachable!("leader-wire restart fixture carries Proposal");
+            };
+            proposal.round.view = next_view;
+
+            assert!(matches!(
+                fixture.ingress.try_push(InboundBlockMessage::new(
+                    newer.clone(),
+                    Some(fixture.validator.clone()),
+                )),
+                Err(super::FairV2IngressPushError::Full(_))
+            ));
+            let next = super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                fixture.token.identity.context_id,
+                fixture.token.identity.height,
+                [0xA7; 32],
+                next_view,
+                false,
+            );
+            assert_eq!(
+                fixture
+                    .ingress
+                    .advance_leader_wire_recovery_cut(next)
+                    .expect("publish the live certified-view cut"),
+                1,
+                "{cut:?}"
+            );
+            assert!(
+                fixture
+                    .ingress
+                    .state
+                    .lock()
+                    .leader_wire_lifecycles
+                    .is_empty(),
+                "{cut:?}"
+            );
+            let restore = fixture.gate.restore().expect("inspect durable live cut");
+            assert!(restore.records().is_empty(), "{cut:?}");
+            assert_eq!(restore.last_admission_ordinal(), 7, "{cut:?}");
+            assert_eq!(restore.scheduler_ordinal_high_watermark(), 41, "{cut:?}");
+
+            assert!(matches!(
+                fixture.ingress.try_push(InboundBlockMessage::new(
+                    fixture.message,
+                    Some(fixture.validator.clone()),
+                )),
+                Err(super::FairV2IngressPushError::Rejected(_))
+            ));
+            assert!(matches!(
+                fixture.ingress.try_push(InboundBlockMessage::new(
+                    newer,
+                    Some(fixture.validator),
+                )),
+                Ok(super::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let state = fixture.ingress.state.lock();
+            let replacement = state
+                .leader_wire_lifecycles
+                .values()
+                .next()
+                .expect("current-view wire owns the released slot");
+            assert_eq!(replacement.token.identity.view, next_view, "{cut:?}");
+            assert!(replacement.token.admission_ordinal > 7, "{cut:?}");
+            assert!(replacement.token.scheduler_ordinal > 41, "{cut:?}");
+        }
+    }
+
+    #[test]
+    fn durable_decision_cut_retires_and_closes_carrierless_leader_wire_height() {
+        let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Runtime);
+        let next = super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            fixture.token.identity.context_id,
+            fixture.token.identity.height,
+            [0xA7; 32],
+            fixture.token.identity.view,
+            true,
+        );
+        assert_eq!(
+            fixture
+                .ingress
+                .advance_leader_wire_recovery_cut(next)
+                .expect("publish the durable Decision cut"),
+            1
+        );
+
+        let mut later = fixture.message.clone();
+        let BlockMessage::V2(envelope) = &mut later else {
+            unreachable!("leader-wire restart fixture is a v2 envelope");
+        };
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &mut envelope.payload else {
+            unreachable!("leader-wire restart fixture carries Proposal");
+        };
+        proposal.round.view = proposal
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture view has a successor");
+        for message in [fixture.message, later] {
+            assert!(matches!(
+                fixture.ingress.try_push(InboundBlockMessage::new(
+                    message,
+                    Some(fixture.validator.clone()),
+                )),
+                Err(super::FairV2IngressPushError::Rejected(_))
+            ));
+        }
+        assert!(fixture.ingress.state.lock().open);
+        assert!(
+            fixture
+                .ingress
+                .state
+                .lock()
+                .leader_wire_lifecycles
+                .is_empty()
+        );
+    }

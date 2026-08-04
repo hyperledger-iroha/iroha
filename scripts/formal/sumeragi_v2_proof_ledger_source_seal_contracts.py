@@ -326,15 +326,60 @@ _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
 }
 
 # The retained exact Fetch lifecycle must not duplicate service work while its
-# immutable owner is already installed, and completion must publish the
-# reserved runtime successor before retiring any local owner.  Bind both full
-# methods in addition to the focused ordering checks below.
+# immutable owner is already installed. Completion must publish the reserved
+# runtime successor before retiring local ownership; protected-view transfer
+# must move an unpublished token with its Fetch consumer; every terminal Fetch
+# path must retire either that token or its exact restart-restored stage-7
+# parent before releasing P/Q ownership. The checker separately binds the
+# persist-first deferred batch, restart-only producer frontier, persistent-root
+# rebind, and live leader-wire recovery cut by ordered source contracts. Bind
+# the complete production methods and adversarial regressions in addition to
+# focused order and coordinate checks.
 _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
     "begin_fetch": (
-        "e9a2a7ee26765b3160f0a4b8062aa0d5b67f2ab639cf3ea9f359062328fb7650"
+        "9d50ba3ff1b4227c8e0ce7a8444796eb1b50c6c1a23b8c5f5669991652f7f4e0"
+    ),
+    "reserve_body_available_with_owner": (
+        "e720fe33878affa2fc49d22d23c55d163b2f01ecd4d845104fc7b72544b88779"
+    ),
+    "rebind_unpublished_body_available": (
+        "00bbe44f9d02199bee50f805425df0760caffc257598003f55aaa35ddb47d46c"
+    ),
+    "retire_unpublished_body_available": (
+        "c692816b54ef0184f6453614a2c8272168ac445e5e1f397ab27a6b508354c6fd"
+    ),
+    "effect_runtime_rebind_unpublished_body_available": (
+        "e126b97f8f5a75b0868f6334ada164ec16e2d35b924e6940daa91f5b5fe3550e"
+    ),
+    "effect_runtime_retire_unpublished_body_available": (
+        "3ed15174c27d497028b91f264a25ec2c1294c35e228298ebc5caa51f74332df5"
+    ),
+    "commit_pending_fetch_retirement": (
+        "294abee0df04fbef2a13698769e7b9def5202abea2c35b92140baf75a44d2a01"
+    ),
+    "install_view": (
+        "27598c65a38ebe1921d51003a18203315d01e85133b755eed26b29e2251c7850"
     ),
     "commit_fetch_completion": (
         "ee63eedba56be13b1af788f81f9f69dc380a834bc0a8d0b36e1de3910f041f92"
+    ),
+    "retain_retransmit_effect_ownership_for_test": (
+        "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
+    ),
+    "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
+        "a97f5cab5c218297c5df0dbc3c9aa803c9a0284b50fc7c8ad960c2314e56b861"
+    ),
+    "ready_body_backpressure_retains_exact_ingress_until_capacity_retry": (
+        "320015eab09976a0e9f6e823b77f366df19ddca3968aff99627fded06595d085"
+    ),
+    "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
+        "361886bd2c3217c8ba621e15c51bbf80971812557fcd78c16c808fb024b696f1"
+    ),
+    "tc_retires_unprotected_retryable_body_token_before_the_next_fetch": (
+        "7ccd83a8975e7fa6c970e517cbdd546468fa19ca876b0deefe34a14f3db76638"
+    ),
+    "durable_sign_preemption_retires_a_retryable_body_token": (
+        "4eff93945c51ac3473a2817a29dfe493a6606b3b2919ba33ff957ee121b325c1"
     ),
 }
 
@@ -1382,7 +1427,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e",
+    "run_inner": "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544",
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -1579,7 +1624,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e",
+    "run_inner": "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544",
     "advance_executor": "ce2f1975fd47aac0b33326547595f05779ab0a920e5996499bf450330c457f93",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
@@ -1904,7 +1949,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e"
+        "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
     ),
     "drain_v2_ingress": (
         "272a78c4508606ba867590b62f91abe66df76dd08cdaf69874d54adc43727e96"
@@ -1946,6 +1991,212 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"
     ),
+}
+
+# Exact token seals for the serialized runtime's disjoint C/P/K/+1 queue
+# geometry.  The retained certificate is classified from the immutable queued
+# command, so arrival order cannot consume an ordinary Completion or Progress
+# reservation and several distinct certificates still share one physical
+# credit.
+_PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256 = {
+    "RuntimeQueueConfig::validate": (
+        "f2bfef98a26b8817ca45fcc55c5669d215ae0768f8f09425baea4bec1024b52f"
+    ),
+    "RuntimeQueueConfig::normal_limit": (
+        "fb3d747ef54e8a0432a6ff94407135ef68f16fc94773609f3975a93ab043dfa4"
+    ),
+    "RuntimeQueueConfig::progress_limit": (
+        "5e87c00d381779d2e6a9af03a4497f1fc6f5eba07cf802de46d14f24e78bf72c"
+    ),
+    "RuntimeQueueConfig::ordinary_total_limit": (
+        "1180f68279ceb396f9d3bf49d2bc3c79e138bb1d7ce2f64aba17f0f75562c27f"
+    ),
+    "BoundedIngress::certified_fence_escape_credit": (
+        "94d47c1be045f5eb4f4b7840550b242df8471480033cdfc839d2614467c96ff0"
+    ),
+    "BoundedIngress::check_capacity_change_inner": (
+        "b32cae42a3a389680b1d3566c21012b9db3aa19729dcb83d0c6a0e127a10cc0c"
+    ),
+    "BoundedIngress::remaining_capacity": (
+        "533205971ebce432b614faaa4fdcdb8c86285ef7aeef75314eab78c12cd59f93"
+    ),
+    "wire_payload_is_certified_fence_escape": (
+        "01d6853abc2e1b0e5f2a84197ce271fff2c4b71ba7467f64e0d7c85b3da8237a"
+    ),
+    "SerializedV2Runtime::has_certified_fence_escape_credit": (
+        "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
+    ),
+    "test::certified_commit_uses_physical_slot_reserved_from_completions": (
+        "fe5d361fd09f716cca60ceecab8f4c3acfb1ec01080d16b9851af71277f15e53"
+    ),
+    "test::certified_commit_arriving_first_preserves_every_ordinary_reserve": (
+        "5c1aa2de8dfce58415d400d2d4db69988d63fc43d57090ca31f96202625acadd"
+    ),
+    "test::distinct_certificates_share_exactly_one_physical_credit": (
+        "b8a97dace4bd30ba1cac54a69d12e89640ce9b3cbc6b9c15368a7d17c6728630"
+    ),
+    "test::invalid_configuration_is_rejected": (
+        "6ac0e66e597904f6a3b682eeed89bcb2c185b6ce2a402618071fc0490a645d49"
+    ),
+    "test::queue_configuration_excludes_one_certified_credit_from_ordinary_limits": (
+        "e7ddac2312bc5e327d444eb3e24b022d332032d5534a46c56b09857fb50dd3ea"
+    ),
+    "test::prepare_qc_cannot_spend_the_certified_physical_credit": (
+        "aa348cc05ab9331f2b738eeae41cbd4dc74946fb759ab8e3ed1c41c347e9b376"
+    ),
+    "test::retiring_the_sole_certificate_does_not_fake_completion_headroom": (
+        "51a5d55dad394a320c0606a2e57981e8235d2ee5f4cf994693fc0624dcaa87d6"
+    ),
+    "test::unpublished_body_replacement_cannot_overbook_the_certified_slot": (
+        "072ea1652e9a443d701aaad32437f5b135df3563d10205a2e4ebc8dca77104a5"
+    ),
+}
+
+# Exact source seals for the retained certified-body response's one-shot
+# pacemaker escape.  The carrier phase is process-local and deliberately not
+# serialized: Fresh may admit one direct authenticated root, Charged records
+# an already-owned root, and Spent is absorbing until this carrier retires.
+_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
+    "effects::RetainedCertifiedBodyResponse": (
+        "a02346d6e21ac701d7019d6eb235e23d4bdf9551ab01da5123680c9602df0512"
+    ),
+    "effects::accept_certified_body_response_with_ingress_ownership": (
+        "d05e901df51cb12ad89eaeb87a38771d24874288e933604253dad046198216d1"
+    ),
+    "effects::retained_response_may_admit_certified_fence_escape": (
+        "f29a3e106087c871ba0f5f684b4bd47974b783d81085c7751da2c9d314e6c635"
+    ),
+    "effects::reconcile_retained_response_certified_fence_escape_phase": (
+        "4fcb519c7dfd10f164301a0f2342f8be3a771ce9cd6937d8f49f461334762f42"
+    ),
+    "runtime::has_certified_fence_escape_credit": (
+        "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
+    ),
+    "runner::run_inner": (
+        "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
+    ),
+    "test::retained_response_certificate_escape_is_charged_only_once": (
+        "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
+    ),
+}
+
+# Comment-normalized TLA+ seals for the production-corresponding latch,
+# direct-certificate classifier, runner case split, and strictly descending
+# retained-response rank.  File qualification prevents an identically named
+# helper in another shard from satisfying the contract.
+_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_OPERATOR_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncCertifiedFenceEscapeKinds": (
+            "786d33483ab9bf86aaa0136d745ff96c8328d8d9e36350ec747f1b382966c7ca"
+        ),
+        "AsyncCertifiedFenceEscapeItem": (
+            "bd98c586610ed4fb438fefa1ec50c77d35e7cb79e9761aa648bddbf08893ffad"
+        ),
+        "AsyncAuthenticatedCertifiedFenceEscapeAuthorities": (
+            "7a26804157995e484ebf8f7915a7cde93edf5a14b3a3a94bae59e5a805bdedb5"
+        ),
+        "AsyncQueuedCandidateIsCertifiedFenceEscape": (
+            "5d63ceac0c420a599ff962b17a038a2366deef93f8835fe1d9b9d756a0fbf26b"
+        ),
+        "AsyncCandidateHasCertifiedFenceRoot": (
+            "a3f22434b15e088720a58cf37b7afa9c9b5d90451878440b64eec1646eb23037"
+        ),
+        "RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape": (
+            "6f0f721bafbac4ec2aec426010344a5baa9ca4af56b4a13ce6bc3b26151164d9"
+        ),
+        "AsyncCertifiedResponseClaimStateAfterRetirement": (
+            "a7aff8755d881b501f36057d9afca78185d642821f1cfdeaae7a4c50f7254048"
+        ),
+        "AsyncCertifiedResponseClaimStateAfterAdmission": (
+            "8717fca0467d129da9478a981f060b7648d8a62449d91b19546a9b7192c98d60"
+        ),
+        "RetainedCertifiedFenceEscapePhaseAfter": (
+            "c1dd6b64617c5eee7b4e801985323cd3e43f647a548f8a95fb70c2b08c403508"
+        ),
+        "AsyncCertifiedFenceEscapeStateAfterRuntime": (
+            "f7f3c06acfd57dc457b8abc7487a0e4e1bc9d7d350c7323460a2ab8f900a78bc"
+        ),
+        "EnqueueCandidate": (
+            "8d58a005cea2550753196f96cacc3ed54e62bf2eb1a3e4195215d3b8062754f9"
+        ),
+        "SerializedCertifiedPacemakerStep": (
+            "c1d1fdaf28b0451f5daebde2f068fab93debcdaa77cde0b97c8b69e1cc9b8813"
+        ),
+        "RunNodeWork": (
+            "551f97e97f2ecb6ba67053464f480e2fe1cd6d59290a2b1fed261182e2fd1aab"
+        ),
+        "AsyncControlServiceStateTypeInvariant": (
+            "db13faef3cc8f08ecbbfebb6227bb4847fcbdf0262a0de66f841b66fe78e0577"
+        ),
+        "AsyncControlServiceSlotTransition": (
+            "31d5e5b7a2ecfacc11da4ac09c3c2f54858e7f256096283de3e3f541cd50bfd8"
+        ),
+        "AsyncTransportInit": (
+            "979da4a2d4de28cb42373c1824d5952431d10a78793800a8194e03228ac8eb06"
+        ),
+        "AsyncCompletionReserveInvariant": (
+            "b7756857d8b495cb29494dc89dd3ee626f5999418ec3e37c01dc1ee1216a58c1"
+        ),
+        "AsyncCertifiedFenceEscapeEpisodeInvariant": (
+            "f1a0278402350d50b71621bb4db20ca3b5b785c9243fa5024295983c366351fc"
+        ),
+    },
+    "SumeragiV2AsyncTemporalRankProofs.tla": {
+        "CertifiedResponseClaimDirectPacemakerWorkTokens": (
+            "25b7e46a7d3e7a5d43d7eeff22e5bcb62b818c65f777a5181eacdcb88668fd0f"
+        ),
+        "CertifiedResponseClaimCausalPacemakerWorkTokens": (
+            "1dffc9f727616ff82bca3caf18a6619a304c91c762fa7eb857945dc77ea201e7"
+        ),
+        "CertifiedResponseClaimPacemakerWorkDebt": (
+            "c2215cbc829f79413da4eda26729f6c024d2af7f304ec2ea5754eb14acb39b2b"
+        ),
+        "CertifiedResponseClaimFreshEscapePotential": (
+            "2e58407806507852a2cb2baa1f2c40c27991c04f73cdfa8f200ef43839ba496b"
+        ),
+        "CertifiedResponseClaimPacemakerDebtBound": (
+            "426bfa46b5f8a8421bfa0832d5343f3b2725ef86d38fd794f7d67faf2f884c8b"
+        ),
+        "CertifiedResponseClaimCapacityDebt": (
+            "d9ad22b46691768a71fe0014fc65eb72aafebc37dc620ab556e78e313480a789"
+        ),
+        "CertifiedResponseClaimAuxRank": (
+            "8e2c0484e46949f9dc137b134b621f17d280ef487e581cee7a392422be76a820"
+        ),
+        "CertifiedResponseClaimAuxCarrier": (
+            "31495b77a98cbe265801912add8b51eeff6f99e371598b3cb9e44d65f4a4b731"
+        ),
+        "CertifiedResponseClaimAuxOrdering": (
+            "1d50cd09000834fdc169eff83eb20d88b4e4a79d2d9caa643e7b97bc02e22a90"
+        ),
+    },
+}
+
+_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_THEOREM_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncInternalCertificateSuccessorsCannotRetainFenceCredit": (
+            "eb6f36a361852fda4e1bf31b4e45efdb28ced19a05d0a0f4dd61a9f3f4264bd7"
+        ),
+    },
+    "SumeragiV2AsyncInstallRunnerProofs.tla": {
+        "SerializedCertifiedPacemakerPreservesClaimIngressOwnership": (
+            "8943a6e12fe98c7a816a0f8229964c2304b0e48a208ad672264ee75329f29890"
+        ),
+        "SerializedCertifiedPacemakerRefinesCoreBracketNext": (
+            "b7352d2bf625ed6732277874a52e357bd4188a37d475da900799cdbe231e34d8"
+        ),
+        "SerializedCertifiedPacemakerPreservesSchedulerType": (
+            "5dc5c0e9994a08bbaa623cea84e8f9f5f04a6f8a114962672095bb0ed784e45d"
+        ),
+        "RunNodeWorkConcreteActionCaseSplit": (
+            "35bd614265c192fb0d22201c20fde0ec55ffc461c449c932c94dfe8088875792"
+        ),
+    },
+    "SumeragiV2AsyncTemporalRankProofs.tla": {
+        "ClaimedResponseSerializedCertifiedPacemakerDecreasesAux": (
+            "4f38a2ed305c71bc8c80ad245dbb4626bf0954e094d4238259509c97abd2b42d"
+        ),
+    },
 }
 
 # Complete token seals for the process-local fair-ingress carrier and every
@@ -1994,7 +2245,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "6bc433297ce152cc25f8c67fe66d314f250806a7abf8408a11720cb0480165c8"
     ),
     "effects::accept_certified_body_response_with_ingress_ownership": (
-        "0f42039eb636c26adf431576ffb70a9cc59885f1bd19355c2a221d2fdbf59322"
+        "d05e901df51cb12ad89eaeb87a38771d24874288e933604253dad046198216d1"
     ),
     "effects::classify_payload_chunk_lifecycle": (
         "e6cdcf1439d8ef97a2912811be1ac65a0feb417b168a5480b9a3d9ec57a02333"
@@ -2505,13 +2756,13 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "749f33ce31fcfe4ecf84e2264c181b909d30043bb759a90cbf6e5ebb1a40d0e0"
     ),
     "fair_v2_ingress_required_capacity": (
-        "838df8ad9c809753541a1ee4f75390a763fd4f3362231407626e80102acad249"
+        "eec628b52b06d4e8d2238cc1d05f3b18a53347e186c438723fc4861d442db550"
     ),
     "fair_v2_ingress_current_protected_slots": (
-        "277b32d5a3f4564a998edee5a0267204553f659134fce846de04353bd0ba34d4"
+        "58767f7d72045788225efb6019570df5e4f34d0aa4520a414d225f0ea1449549"
     ),
     "fair_v2_ingress_lane_protected_slots": (
-        "da25270d56a0bd3011ad224033c9b4a5c7a42ca4e86e66f1eb6ca1018415b9ea"
+        "9ded1cd333e6cdb7415aced353a72caca4965fd74c705d11d3916faf251e4af8"
     ),
     "fair_v2_ingress_required_byte_capacity": (
         "f3b4cfc1017778a7d7ba68b1e4c3a24c2f00f5f20252d3375eded1e986bd0799"
@@ -2528,11 +2779,14 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
     "fair_v2_ingress_required_quorum_certificate_bytes": (
         "0335a87586cee9c0d8bf68ba87581f873ccbfdce5c316b1e033ccf0019801629"
     ),
+    "fair_v2_ingress_required_certified_fence_escape_bytes": (
+        "1706b7bac95b09fd83b5f1b111364c47639ec7c74b0ae156c80127277f89838e"
+    ),
     "fair_v2_ingress_required_proposal_bytes": (
         "f87150d121741f99778f8108a82cc95a0811afe51edae3cf06ee8e955337985b"
     ),
     "fair_v2_ingress_network_message_bytes_from_block_message": (
-        "c92a1c58b6296fd3afb040497b3f971ec509ffa2b5408f7c0cb48c5ec0a5b979"
+        "3e9310afc887443851e090698197623e01be8165583d6643b92223119e412573"
     ),
     "fair_v2_ingress_network_message_bytes": (
         "5e605df8dc71ee5961cf2c40b3dc8c6108c1c745662a5249d533b1dc8c9fd6eb"
@@ -2581,21 +2835,26 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "b8d9a480d1cd0e582576891f2af20370ef35f5af4dcdc6c9fe24eafc6e30f3c1"
+        "303393eaa7ab5d1fe034cc7ca90a692fa7e316ed1f870dc5c5c2b50594d6ac49"
     ),
     "configure_roster_for_context": (
-        "13d8e7a240e22e620a6627a6f34c5be856eb22cb9e2f8a38bd2b3e3f95b21334"
+        "d9f224713b9f28a0689baf7b8f9416cec8583931917927eb69bb3f0d06631cfe"
     ),
     "configure_roster_with_byte_requirements": (
-        "193a8e4586cc6ee7689c9cc15e45474c129a217e91be760559027fd1939f9d02"
+        "dd118c20b0f64df0f6c0ff317320c4704bc8376d68c085b493ac763621b59cf9"
     ),
     "open": (
-        "d19623cdc7ad56922f91c7a9c0d2513199ecafa4e6ad26ea2717073d561b41eb"
+        "0a55b773a082a1d72592558a4941355d16d9c2231f9b08d25b778d25749ebcc1"
     ),
     "try_push_at": (
-        "5dc0c2bc91dfedf3972f1d7f13b45c0d8ce923d6e1ba25ea139b77f82285857b"
+        "30ae6c2db810338e07a3dc33562d38ecb45ca07df2ecc5780f1baff01b7d4f70"
     ),
     "try_recv_if_at_checked": (
-        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
+        "0cd1c170181644d1e59bd1da4f543cb74b0f7449c953426aeb2def19f172e670"
+    ),
+}
+_PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
+    "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (
+        "21be2f06d20172b6b2ee4fe324f92723895ad5a4fceb50ce84d50234812881c4"
     ),
 }

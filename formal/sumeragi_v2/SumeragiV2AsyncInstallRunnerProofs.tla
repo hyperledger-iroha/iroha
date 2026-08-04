@@ -2197,6 +2197,19 @@ BY SerializedRuntimeLeavesIngress,
    SerializedRuntimeOnlyRetiresCertifiedResponseClaim,
    CertifiedResponseClaimIngressOwnershipIsDownwardClosed
 
+THEOREM SerializedCertifiedPacemakerPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ SerializedCertifiedPacemakerStep(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY ExecuteCommandLeavesIngress,
+   ExecuteCommandOnlyRetiresCertifiedResponseClaim,
+   CertifiedResponseClaimIngressOwnershipIsDownwardClosed, IsaT(600)
+   DEF SerializedCertifiedPacemakerStep,
+       CertifiedPacemakerRootStep, CertifiedPacemakerCausalStep,
+       DirectTimeoutStep, DiscardCommand, LeaveCausalQueues,
+       AsyncAuxVars, vars
+
 THEOREM SerializedRuntimePreservesIngressType ==
   \A node \in ValidatorIds:
     /\ AsyncIngressTypeInvariant
@@ -5407,6 +5420,51 @@ PROOF
          DEF ReplayRunNodeCandidateProducerContinuation
   <1> QED BY <1>1
 
+THEOREM SerializedCertifiedPacemakerRefinesCoreBracketNext ==
+  TypeInvariant =>
+    \A node \in ValidatorIds:
+      SerializedCertifiedPacemakerStep(node) => [Next]_vars
+BY DirectTimeoutStepRefinesCoreBracketNext,
+   ExecuteCommandRefinesCoreBracketNext,
+   CoreStutterRefinesBracketNext, IsaT(900)
+   DEF SerializedCertifiedPacemakerStep,
+       CertifiedPacemakerRootStep, CertifiedPacemakerCausalStep,
+       CertifiedPacemakerRootIndices, CertifiedPacemakerRootIndex,
+       CertifiedPacemakerCausalIndices, CertifiedPacemakerCausalIndex,
+       CommandDispatchable, DiscardCommand, LeaveCausalQueues
+
+THEOREM SerializedCertifiedPacemakerPreservesSchedulerType ==
+  \A node \in ValidatorIds:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ RunNodeWork(node)
+    /\ SerializedCertifiedPacemakerStep(node)
+    => AsyncSchedulerTypeInvariant'
+BY FreshCommandSuccessorsFormSequence,
+   ExecutedFreshCommandSuccessorsTypedAndOwned,
+   ExecuteCommandLeavesIngress,
+   ExecuteCommandOnlyRetiresCertifiedResponseClaim,
+   FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType,
+   RunnerServiceFramePreservesClockType,
+   FunctionalUpdatePreservesType, SequenceWithoutIndexFacts,
+   TypedOwnedSequenceWithoutIndexFacts,
+   IsaT(1800)
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
+       AsyncTransportTypeInvariant, AsyncIngressTypeInvariant,
+       SerializedCertifiedPacemakerStep,
+       CertifiedPacemakerRootStep, CertifiedPacemakerCausalStep,
+       CertifiedPacemakerRootIndices, CertifiedPacemakerRootIndex,
+       CertifiedPacemakerCausalIndices, CertifiedPacemakerCausalIndex,
+       DirectTimeoutStep, AppendCausalSuccessors,
+       DiscardCommand, LeaveCausalQueues,
+       RunNodeWork, RunnerServiceFrame,
+       AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
+       AsyncConfiguration, vars
+
 THEOREM RunNodeWorkConcreteActionCaseSplit ==
   \A node:
     RunNodeWork(node)
@@ -5415,6 +5473,7 @@ THEOREM RunNodeWorkConcreteActionCaseSplit ==
          \/ LocalAdmissionStep(node)
          \/ IngressDrainStep(node)
          \/ SerializedRunnerRuntimeStep(node)
+         \/ SerializedCertifiedPacemakerStep(node)
          \/ SerializedLocalPrecedesServeIngressStep(node)
          \/ AsyncServeIngressTargetOnlyTurn(node)
 BY Isa
@@ -5445,12 +5504,15 @@ PROOF
       <3>3. CASE SerializedRunnerRuntimeStep(node)
         BY <1>1, <2>1, <3>3,
            SerializedRunnerRuntimeRefinesCoreBracketNext
+      <3>3p. CASE SerializedCertifiedPacemakerStep(node)
+        BY <1>1, <2>1, <3>3p,
+           SerializedCertifiedPacemakerRefinesCoreBracketNext
       <3>4. CASE AsyncServeIngressTargetOnlyTurn(node)
         BY <3>4, AsyncServeIngressTargetOnlyRefinesCoreBracketNext
       <3>5. CASE SerializedLocalPrecedesServeIngressStep(node)
         BY <3>5,
            SerializedLocalPrecedesServeIngressRefinesCoreBracketNext
-      <3> QED BY <2>1, <3>1r, <3>1p, <3>1, <3>2, <3>3, <3>4,
+      <3> QED BY <2>1, <3>1r, <3>1p, <3>1, <3>2, <3>3, <3>3p, <3>4,
                     <3>5,
            RunNodeWorkConcreteActionCaseSplit
     <2> QED BY <2>1
@@ -5511,13 +5573,16 @@ PROOF
       BY <1>1, <2>2, IngressAdmissionRunnerPreservesSchedulerType
     <2>3. CASE SerializedRunnerRuntimeStep(node)
       BY <1>1, <2>3, SerializedRuntimePreservesSchedulerType
+    <2>3p. CASE SerializedCertifiedPacemakerStep(node)
+      BY <1>1, <2>3p,
+         SerializedCertifiedPacemakerPreservesSchedulerType
     <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
       BY <1>1, <2>4,
          AsyncServeIngressTargetOnlyPreservesSchedulerType
     <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>5,
          SerializedLocalPrecedesServeIngressPreservesSchedulerType
-    <2> QED BY <1>1, <2>1r, <2>1p, <2>1, <2>2, <2>3, <2>4,
+    <2> QED BY <1>1, <2>1r, <2>1p, <2>1, <2>2, <2>3, <2>3p, <2>4,
                   <2>5,
          RunNodeWorkConcreteActionCaseSplit
   <1> QED BY <1>1
@@ -5679,13 +5744,16 @@ PROOF
     <2>3. CASE SerializedRunnerRuntimeStep(node)
       BY <1>1, <2>3,
          SerializedRuntimePreservesClaimIngressOwnership
+    <2>3p. CASE SerializedCertifiedPacemakerStep(node)
+      BY <1>1, <2>3p,
+         SerializedCertifiedPacemakerPreservesClaimIngressOwnership
     <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
       BY <1>1, <2>4,
          AsyncServeIngressTargetOnlyPreservesClaimIngressOwnership
     <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>5,
          SerializedLocalPrecedesServeIngressPreservesClaimIngressOwnership
-    <2> QED BY <1>1, <2>1r, <2>1p, <2>1, <2>2, <2>3, <2>4,
+    <2> QED BY <1>1, <2>1r, <2>1p, <2>1, <2>2, <2>3, <2>3p, <2>4,
                   <2>5,
          RunNodeWorkConcreteActionCaseSplit
   <1> QED BY <1>1

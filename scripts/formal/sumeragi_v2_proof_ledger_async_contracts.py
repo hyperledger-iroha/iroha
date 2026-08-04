@@ -184,11 +184,11 @@ ASYNC_LIVENESS_SHARD_MAX_THEOREMS = 150
 # additional line or theorem still fails instead of silently raising the
 # limit for every release shard.
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_LINES = {
-    "SumeragiV2AsyncInstallRunnerProofs": 5_775,
+    "SumeragiV2AsyncInstallRunnerProofs": 5_862,
     "SumeragiV2AsyncProgressOwnershipProofs": 5_662,
 }
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS = {
-    "SumeragiV2AsyncInstallRunnerProofs": 156,
+    "SumeragiV2AsyncInstallRunnerProofs": 159,
 }
 ASYNC_LIVENESS_THEOREM_MAX_LINES = 600
 ASYNC_LIVENESS_THEOREM_MAX_STEPS = 256
@@ -206,6 +206,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateProducerContinuationsInjectIntoLifecycleStageOwners",
     "AsyncControlServiceTableCardinalityIsSlotBounded",
     "RetainedServeAttemptCannotReserveOrAdvanceExactLifecycle",
+    "AsyncInternalCertificateSuccessorsCannotRetainFenceCredit",
     "CommandSuccessorsRetainCausalOrigin",
     "AsyncCandidateProducerSemanticHandoffUsesInheritedLifecycle",
     "AsyncCandidateProducerContinuationActiveLogicalOrdinalIsUnique",
@@ -664,6 +665,7 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "SumeragiV2Revision4CertifiedFenceReservation.tla",
     "revision4_certified_fence_reservation_fixed.cfg",
     "revision4_certified_fence_reservation_blocked_bug.cfg",
+    "revision4_certified_fence_reservation_arrival_order_bug.cfg",
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla",
     "SumeragiV2RestartTerminalDurabilityMutation.tla",
     "SumeragiV2ExactIngressTicketPriorityMutation.tla",
@@ -1067,7 +1069,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "b44ac5545d981f4bf87aaab328f7fa42b5948bc406a39e51b032a2d80f771ba4"
+        "6108fc4b0979db1c89a7741c8b4a29bd1024614cbcdc401de310c0b6dc27aaa5"
     ),
 }
 PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS = (
@@ -1162,7 +1164,7 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "ddb06b1b1659b8e9b18a0c59e01293f99ac945df1f06dbd32bc217bc611cee12"
+        "6108fc4b0979db1c89a7741c8b4a29bd1024614cbcdc401de310c0b6dc27aaa5"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
         "7bbc3620ad8bb0dc7bc3e3288e01c254563d54fce7b271bd05e393d938b924c0"
@@ -1625,6 +1627,18 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
     "79df8c9846f4e5059d81fdadc5e8898a2063993a8c12aa6418c85e5e44b7df1d"
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
+    "SumeragiV2Revision4CertifiedFenceReservation.tla": (
+        "bcbd50bb32221a14d1c0a2f3a60d86ebb5287aa57a40b7959df1a637e4936719"
+    ),
+    "revision4_certified_fence_reservation_fixed.cfg": (
+        "c68d79877e268f761bbe2d173ab6e8cd672cb5aa8d7b713c631f959f1ef8d3c4"
+    ),
+    "revision4_certified_fence_reservation_blocked_bug.cfg": (
+        "8e204663a764ca03afdee20dad96060bda28d16d372ce8c8dd5eb7e61034944e"
+    ),
+    "revision4_certified_fence_reservation_arrival_order_bug.cfg": (
+        "0f1408e6ecee28eae2765394cef118755a0a4e3ba94017fb250b28477a573657"
+    ),
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla": (
         "d5083b4dcd0e1fbd3b55a22b98a7ea41b6b20b646a717fc36beb41fae7788ab5"
     ),
@@ -2079,7 +2093,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "d842c8552094eff841e3c9c159399d680a50edbd63ff2c1b96ad6a3330a8f644"
     ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "3f3738a6351e7f7fe78ac3f6a4a4e738f8b6fd2b098d7466674197c783783d25"
+        "d7447324a25d8a877bb3e1caf4e6d72d1af074af776fdfb278d1fe1d05d1e88b"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (

@@ -3144,7 +3144,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="run_inner",
                         item_token_sha256=(
-                            "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e"
+                            "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
                         ),
                         projection="terminal_application,",
                         required_expression="""

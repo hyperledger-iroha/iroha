@@ -1369,6 +1369,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             lifecycle_ordinals,
             Arc::clone(&output_guard),
             Arc::clone(&block_rx),
+            leader_wire_recovery_authority,
             exact_output_service_owner,
         )
         .map_err(V2RunnerError::Service)?;
@@ -1641,29 +1642,37 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     }
                 };
                 if response_backpressured {
-                    // Transport capacity is not pacemaker authority. Give one
-                    // authenticated certificate a chance to enter the typed
-                    // Progress lane, then give one timeout/Progress root a
-                    // turn before retrying the exact response. Ordinary work
-                    // remains parked exactly.
-                    drain_v2_ingress(
-                        &block_rx,
-                        &mut executor,
-                        &mut services,
-                        &mut lane_work,
-                        output_guard.as_ref(),
-                        kura.as_ref(),
-                        &common_config.key_pair,
-                        block_sync_server
-                            .as_mut()
-                            .expect("block-sync server initialized before ingress"),
-                        &mut block_sync,
-                        &mut block_sync_request,
-                        &mut npos_vrf,
-                        V2IngressDrainMode::CertifiedFenceEscape,
-                        1,
-                    )?;
+                    // Transport capacity is not pacemaker authority. This
+                    // retained response owns one bounded opportunity to admit
+                    // a new authenticated certificate into the typed Progress
+                    // lane. Once charged, later retries service the finite
+                    // retained certificate prefix but cannot replenish it
+                    // from fresh ingress and recreate the same capacity cycle.
+                    if executor.retained_response_may_admit_certified_fence_escape() {
+                        drain_v2_ingress(
+                            &block_rx,
+                            &mut executor,
+                            &mut services,
+                            &mut lane_work,
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &common_config.key_pair,
+                            block_sync_server
+                                .as_mut()
+                                .expect("block-sync server initialized before ingress"),
+                            &mut block_sync,
+                            &mut block_sync_request,
+                            &mut npos_vrf,
+                            V2IngressDrainMode::CertifiedFenceEscape,
+                            1,
+                        )?;
+                        executor.reconcile_retained_response_certified_fence_escape_phase();
+                    }
+                    // Give one already-owned timeout/Progress root a turn
+                    // before retrying the exact response. Ordinary work stays
+                    // parked behind the retained physical carrier.
                     advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;
+                    executor.reconcile_retained_response_certified_fence_escape_phase();
                 }
                 committed_lane_status_publisher.publish_if_changed(&lane_work);
                 let _ = wake_rx.recv_timeout(IDLE_POLL);

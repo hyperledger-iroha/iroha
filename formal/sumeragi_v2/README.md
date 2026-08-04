@@ -680,12 +680,16 @@ or quorum-authenticated QC evidence; a signed Vote cannot create that binding.
 Unbound Votes remain recoverable input rather than local fail-stop evidence.
 Body-availability rebind requires the installed destination tag, preflights the
 source and destination ownership sets, and either moves one exact source or
-coalesces it into one exact destination. An uninstalled destination is a
-recoverable caller-contract rejection with no mutation. Conflicting or
-duplicate ownership fails closed, and every pipeline or Decision retirement
-invariant is checked transactionally before mutation. Conflicting certificate
-evidence received through body-recovery request/response transport is rejected
-nonfatally and leaves retry ownership available.
+coalesces it into one exact destination. Coalescence preserves the sole
+persistent producer: a persistent source replaces and retags across an
+ordinary destination, an already-persistent destination is validated and
+retained before an ordinary volatile source is removed, and two independent
+persistent roots fail closed before either side changes. An uninstalled destination is a recoverable caller-contract
+rejection with no mutation. Conflicting or duplicate ownership fails closed,
+and every pipeline or Decision retirement invariant is checked transactionally
+before mutation. Conflicting certificate evidence received through
+body-recovery request/response transport is rejected nonfatally and leaves
+retry ownership available.
 
 The timeout service budget charges at most three class-aware dispatches for
 each of the `AsyncQueueCapacity` same-class positions of a protected admitted
@@ -1434,14 +1438,60 @@ persistence macro-step of five effects within the reducer's eight-effect bound,
 service at most one Busy-deferred adapter macro-step per serialized runtime
 turn, and require the Completion, Progress, and Normal deferred queues all to
 be empty before terminal readiness. A production-default capacity regression
-saturates the 256 certified-request owners, 640 Normal ingress slots, and the
+saturates the 256 certified-request owners, 639 Normal ingress slots, and the
 128-slot reserved Progress increment while retaining the 256-slot Completion
-reserve; an exact authenticated `CertifiedBodyResponse` with a still-live
+reserve and one separately charged certified-fence slot; an exact authenticated
+`CertifiedBodyResponse` with a still-live
 matching logical request registration retires its old request owner. The
+certified slot is a single retained credit, not a one-certificate limit:
+additional distinct TCs, CommitQCs, or CommitQC-carrying recovery responses
+consume ordinary Progress capacity while all retained certificates share that
+one credit. While an authenticated
+certified-body response remains retained, its escape episode is explicitly
+`Fresh`, `Charged`, or `Spent`: the Fresh potential admits at most one new
+direct TC, CommitQC, or `CommitCertificateResponse` carrying a CommitQC root;
+Charged and Spent reject every further fresh root, and only claim retirement
+resets the latch.
+The claimed-response rank counts
+the exact frozen direct roots plus the strictly decreasing trusted causal tail,
+so pacemaker priority cannot be replenished indefinitely.
+Certificate-first and certificate-last arrival orders preserve the same
+ordinary reserves. The
+standalone revision-4 kernel also charges an unpublished `BodyAvailable` token
+as an ordinary Completion owner and replaces its conflicting proposal owner in
+one atomic transition, preserving physical occupancy throughout the swap. The
+production source-fidelity gate additionally requires any restart-restored
+stage-7 producer to be exact-matched by lifecycle key, first-admission ordinal,
+and stage, then removed from process, durable, and dormant state and persisted
+before unpublished or whole-pipeline retirement can release the volatile
+runtime owner. Busy-deferred producer release uses the same persist-first
+batch boundary and restores the complete queue and producer-map image on
+failure. A terminal restored Fetch retires that exact stage-7 parent even when
+it never reserved a `BodyAvailable` token: its fresh physical Fetch owner
+proves the effect binding, while the adapter resolves the old producer from
+exact durable round/subject coordinates and, when present, the complete
+manifest identity. A manifest-less lookup must be unique. Destination-owned rebind instead
+classifies both persistent roots before mutation and retains the sole one;
+two independent roots are rejected. Persistence failure rolls every affected
+alias back, and the paired second-restart regression excludes resurrection
+after unpublished, materialized, and pre-reservation Fetch retirement. On
+startup, replayed Reserved producers below the durable view are persistently
+pruned before runtime capacity is installed, except for the exact protected
+lock body pipeline; the corresponding cut is deliberately not applied to a
+live EnterView owner. The
 executor then retries the same retained FIFO occurrence, atomically acquiring
 pending-work and certified-request ownership without a partial owner. A new
 Fetch removes that head; an existing ordinary Fetch retains it as the exact
 completion barrier after upgrading certified authority.
+
+The productive leader-wire source-fidelity boundary is now live as well as a
+restart rule. Certified EnterView and durable Decision monotonically advance a
+process-local authority. The persistent gate proves the exact obsolete
+Dormant set, removes it while retaining both ordinal high-watermarks, and
+publishes before the fair-ingress mirror is pruned. Failure rolls the gate back
+and leaves the mirror unchanged; Ingress and Runtime carriers are outside this
+cut, and below-cut admission is rejected rather than reported as capacity
+exhaustion.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence

@@ -13872,6 +13872,7 @@ pub(crate) struct ProductionV2Services {
     fatal_reason: Option<String>,
     output_guard: Arc<ConsensusOutputGuard>,
     leader_wire_ingress: Arc<FairV2Ingress>,
+    leader_wire_recovery_authority: super::serviced_candidate_store::LeaderWireRecoveryAuthority,
     clean_teardown: bool,
 }
 
@@ -13951,6 +13952,8 @@ impl ProductionV2Services {
         lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
         output_guard: Arc<ConsensusOutputGuard>,
         leader_wire_ingress: Arc<FairV2Ingress>,
+        leader_wire_recovery_authority:
+            super::serviced_candidate_store::LeaderWireRecoveryAuthority,
         exact_output_handoff_owner: DurableExactOutputServiceOwner,
     ) -> Result<Self, String> {
         let construction_guard = Arc::clone(&output_guard);
@@ -14083,6 +14086,7 @@ impl ProductionV2Services {
             fatal_reason: None,
             output_guard,
             leader_wire_ingress,
+            leader_wire_recovery_authority,
             // The enclosing construction operation owns abnormal-exit
             // activation until its permit is released. This avoids a nested
             // activation deadlock if `service` unwinds before construction is
@@ -17782,6 +17786,12 @@ impl V2EffectServices for ProductionV2Services {
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
     ) -> Result<(), Self::Error> {
+        if decided_subject.is_some() {
+            let next = self.leader_wire_recovery_authority.with_durable_decision();
+            self.leader_wire_ingress
+                .advance_leader_wire_recovery_cut(next)?;
+            self.leader_wire_recovery_authority = next;
+        }
         self.io()?
             .finish_decision_serve_reconciliation(decided_subject)
     }
@@ -18358,6 +18368,12 @@ impl V2EffectServices for ProductionV2Services {
                 "Sumeragi v2 service rejected non-monotonic certified view ownership".to_owned(),
             );
         }
+        let next_recovery_authority = self
+            .leader_wire_recovery_authority
+            .advance_view(tag.view())?;
+        self.leader_wire_ingress
+            .advance_leader_wire_recovery_cut(next_recovery_authority)?;
+        self.leader_wire_recovery_authority = next_recovery_authority;
         // The old view's active Sign command may still complete after its
         // executor owner is cancelled. Prune first and publish the new owner
         // second; completion handling classifies the old work ID before it is
@@ -19388,6 +19404,25 @@ pub(super) mod tests {
             Ok(false)
         }
 
+        fn rebind_unpublished_body_available(
+            &mut self,
+            _previous: EventTag,
+            _rebound: EventTag,
+            _round: wire::ConsensusRound,
+            _subject: wire::BlockSubject,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        fn retire_unpublished_body_available(
+            &mut self,
+            _tag: EventTag,
+            _round: wire::ConsensusRound,
+            _subject: wire::BlockSubject,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
         fn retire_body_available(
             &mut self,
             _tag: EventTag,
@@ -19498,6 +19533,10 @@ pub(super) mod tests {
 
         fn remaining_completion_capacity(&self) -> usize {
             self.capacity.saturating_sub(self.queued)
+        }
+
+        fn has_certified_fence_escape_credit(&self) -> bool {
+            false
         }
 
         fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
@@ -19618,6 +19657,14 @@ pub(super) mod tests {
         };
         context.validate().expect("valid context");
         let active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
+        let leader_wire_recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                context.id(),
+                context.height,
+                [0xF4; 32],
+                active_tag.view(),
+                false,
+            );
         let local_peer = context.roster[0].validator.clone();
         let frozen_semantic_targets = context
             .roster
@@ -19664,6 +19711,7 @@ pub(super) mod tests {
             fatal_reason: None,
             output_guard: ConsensusOutputGuard::isolated(),
             leader_wire_ingress: Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0)),
+            leader_wire_recovery_authority,
             clean_teardown: true,
         };
         (service, keys)
@@ -33197,6 +33245,7 @@ pub(super) mod tests {
             )
             .expect("bind productive-orphan lifecycle gate");
         ingress.open().expect("open productive-orphan ingress");
+        service.leader_wire_recovery_authority = recovery_authority;
         service.leader_wire_ingress = Arc::clone(&ingress);
         ingress
     }
@@ -34441,6 +34490,75 @@ pub(super) mod tests {
         assert_eq!(service.active_tag, rebound);
         assert!(service.outbound_chunks.is_empty());
         assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn entered_view_advances_live_leader_wire_recovery_cut() {
+        let (mut service, keys) = fixture_with_block_payload();
+        let gate_directory = TempDir::new().expect("temporary live view-cut gate");
+        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+        let initial = service.active_tag;
+        let next = EventTag::new(
+            initial.height(),
+            initial.view() + 1,
+            Generation::new(initial.generation().get() + 1),
+        );
+        service
+            .entered_view(next, timeout_certificate_at_view(&service, initial.view()))
+            .expect("install the certified successor and its live recovery cut");
+
+        let (_, _, stale_proposal, _, stale_sender) =
+            productive_chunk_at_view(&service, &keys, initial.view());
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(stale_proposal),
+                )),
+                Some(stale_sender),
+            )),
+            Err(super::super::FairV2IngressPushError::Rejected(_))
+        ));
+
+        let (_, _, current_proposal, _, current_sender) =
+            productive_chunk_at_view(&service, &keys, next.view());
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(current_proposal),
+                )),
+                Some(current_sender),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+    }
+
+    #[test]
+    fn durable_decision_advances_live_leader_wire_recovery_cut() {
+        let (mut service, keys) = fixture_with_block_payload();
+        let gate_directory = TempDir::new().expect("temporary live Decision-cut gate");
+        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+        let _command_rx = attach_locked_candidate_io(&mut service, 4);
+        let decided_subject = locked_candidate_subject(b"live leader-wire Decision cut");
+        service
+            .begin_decision_serve_reconciliation()
+            .expect("fence Serve before Decision publication");
+        service
+            .finish_decision_serve_reconciliation(Some(decided_subject))
+            .expect("publish Decision and close live leader-wire admission");
+
+        for view in [service.active_tag.view(), service.active_tag.view() + 1] {
+            let (_, _, proposal, _, sender) = productive_chunk_at_view(&service, &keys, view);
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::new(
+                    BlockMessage::V2(wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::Proposal(proposal),
+                    )),
+                    Some(sender),
+                )),
+                Err(super::super::FairV2IngressPushError::Rejected(_))
+            ));
+        }
+        detach_locked_candidate_io(&mut service);
     }
 
     #[test]

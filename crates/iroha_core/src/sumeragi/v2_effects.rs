@@ -1006,6 +1006,20 @@ impl BodyFetchTask {
         self.certified_request.as_ref()
     }
 
+    fn adapter_effect(&self) -> AdapterEffect {
+        AdapterEffect::FetchBody {
+            tag: self.tag,
+            round: self.round,
+            subject: self.subject,
+            manifest: self.manifest.clone(),
+            certified_sources: self.sources.clone(),
+            certificate: self
+                .certified_request
+                .as_ref()
+                .map(|request| request.certificate.clone()),
+        }
+    }
+
     /// Immutable actor-global lifecycle ordinal retained through reconstruction.
     pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
         self.ownership.owner().lifecycle_ordinal()
@@ -1820,6 +1834,21 @@ struct RetainedCertifiedBodyResponse {
     response: wire::CertifiedBodyResponse,
     authenticated_responder: PeerId,
     ingress_ownership: FairV2IngressOwnershipEvidence,
+    certified_fence_escape_phase: RetainedCertifiedFenceEscapePhase,
+}
+
+/// One-shot certificate admission owned by a retained body-response episode.
+///
+/// `Fresh` may admit one new TC/CommitQC into the final physical slot.
+/// `Charged` means that credit is already represented by runtime ownership,
+/// and `Spent` prevents a later certificate from replenishing the same escape
+/// after the credited root drains. The phase disappears with the retained
+/// response, so a later independent response starts a new bounded episode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RetainedCertifiedFenceEscapePhase {
+    Fresh,
+    Charged,
+    Spent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2258,6 +2287,9 @@ struct CertifiedFetchRetirementPlan {
 
 #[derive(Clone, Debug)]
 struct PendingFetchRetirementPlan {
+    /// Exact service/request owner being retired. Commit also asks runtime to
+    /// remove any unpublished BodyAvailable token at these same immutable
+    /// coordinates before either executor index is released.
     pending: PendingFetch,
     certified: Option<CertifiedFetchRetirementPlan>,
 }
@@ -2627,6 +2659,40 @@ pub(crate) trait EffectRuntime {
         rebound: EventTag,
         manifest: &wire::PayloadManifest,
     ) -> Result<bool, String>;
+    /// Rebind the sole unpublished body completion for an exact protected
+    /// pipeline, if one exists, without requiring the fetch task to carry its
+    /// response-derived manifest.
+    ///
+    /// `false` means the fetch has not reserved a completion yet. A matching
+    /// reservation must retain its physical admission and lifecycle owner.
+    fn rebind_unpublished_body_available(
+        &mut self,
+        previous: EventTag,
+        rebound: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Result<bool, String>;
+    /// Retire the sole unpublished body completion owned by an exact fetch
+    /// pipeline, if one exists.
+    ///
+    /// `false` means the fetch never reached completion reservation. Any
+    /// matching token must be removed with its physical capacity and restart
+    /// backing before the fetch owner itself is retired.
+    fn retire_unpublished_body_available(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Result<bool, String>;
+    /// Retire a restart-dormant stage-7 fetch parent which became terminal
+    /// before it could reserve a body-completion token.
+    fn retire_restored_body_fetch_parent(
+        &mut self,
+        _effect: &AdapterEffect,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
     /// Retire one queued exact-body completion whose reducer pipeline was superseded.
     ///
     /// Returns `true` only when the runtime removed that exact completion owner.
@@ -2774,6 +2840,7 @@ pub(crate) trait EffectRuntime {
     ) -> Result<(), String>;
     fn queued_commands(&self) -> usize;
     fn remaining_completion_capacity(&self) -> usize;
+    fn has_certified_fence_escape_credit(&self) -> bool;
     fn queue_snapshot(&self, now: Instant) -> RuntimeQueueSnapshot;
     fn watchdog_threshold(&self) -> Duration;
 }
@@ -2953,6 +3020,37 @@ impl EffectRuntime for SerializedV2Runtime {
     ) -> Result<bool, String> {
         SerializedV2Runtime::rebind_body_available(self, previous, rebound, manifest)
             .map_err(|error| error.to_string())
+    }
+
+    fn rebind_unpublished_body_available(
+        &mut self,
+        previous: EventTag,
+        rebound: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Result<bool, String> {
+        SerializedV2Runtime::rebind_unpublished_body_available(
+            self, previous, rebound, round, subject,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn retire_unpublished_body_available(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Result<bool, String> {
+        SerializedV2Runtime::retire_unpublished_body_available(self, tag, round, subject)
+            .map_err(|error| error.to_string())
+    }
+
+    fn retire_restored_body_fetch_parent(
+        &mut self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<bool, String> {
+        SerializedV2Runtime::retire_restored_body_fetch_parent(self, effect, ownership)
     }
 
     fn retire_body_available(
@@ -3165,6 +3263,10 @@ impl EffectRuntime for SerializedV2Runtime {
 
     fn remaining_completion_capacity(&self) -> usize {
         SerializedV2Runtime::remaining_completion_capacity(self)
+    }
+
+    fn has_certified_fence_escape_credit(&self) -> bool {
+        SerializedV2Runtime::has_certified_fence_escape_credit(self)
     }
 
     fn queue_snapshot(&self, now: Instant) -> RuntimeQueueSnapshot {
@@ -4251,7 +4353,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
 
         for plan in fetches {
-            self.commit_pending_fetch_retirement(plan);
+            self.commit_pending_fetch_retirement(plan)?;
         }
         for id in signatures {
             self.pending_signatures.remove(&id);
@@ -6752,13 +6854,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         };
         let key = (pending.task.round, pending.task.subject);
-        let certified_retirement = pending
-            .request_hash
-            .map(|request_hash| {
-                self.plan_certified_fetch_retirement(work_id, request_hash)
-                    .map_err(|error| self.fail_closed_transport(error, services))
-            })
-            .transpose()?;
+        let retirement = self
+            .plan_pending_fetch_retirement(&pending)
+            .map_err(|error| self.fail_closed_transport(error, services))?;
         let Some(owner) = self.body_pipeline_owners.get(&key).copied() else {
             return Err(self.fail_closed_transport(
                 "noncanonical reconstruction lost its reducer pipeline owner",
@@ -6774,11 +6872,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = services.complete_body_reconstruction_fetch(&pending.task) {
             return Err(self.fail_closed_transport(error, services));
         }
-        self.pending_fetches.remove(&work_id);
+        self.commit_pending_fetch_retirement(retirement)
+            .map_err(|error| self.fail_closed_transport(error, services))?;
         self.body_pipeline_owners.remove(&key);
-        if let Some(retirement) = certified_retirement {
-            self.commit_certified_fetch_retirement(retirement);
-        }
         Ok(CompletionDisposition::Rejected)
     }
 
@@ -6819,6 +6915,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 response: response.clone(),
                 authenticated_responder: authenticated_responder.clone(),
                 ingress_ownership: ingress_ownership.clone(),
+                certified_fence_escape_phase: if self.runtime.has_certified_fence_escape_credit() {
+                    RetainedCertifiedFenceEscapePhase::Charged
+                } else {
+                    RetainedCertifiedFenceEscapePhase::Fresh
+                },
             };
             let result = self.accept_certified_body_response_inner(
                 response,
@@ -6844,6 +6945,42 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// handoff.
     pub(crate) const fn has_retained_certified_body_response(&self) -> bool {
         self.retained_certified_body_response.is_some()
+    }
+
+    /// Whether this retained response still owns its one opportunity to admit
+    /// a new certified fence escape ahead of the next retry.
+    pub(crate) fn retained_response_may_admit_certified_fence_escape(&mut self) -> bool {
+        self.reconcile_retained_response_certified_fence_escape_phase();
+        self.retained_certified_body_response
+            .as_ref()
+            .is_some_and(|carrier| {
+                carrier.certified_fence_escape_phase == RetainedCertifiedFenceEscapePhase::Fresh
+            })
+    }
+
+    /// Reconcile the episode latch with exact runtime ownership after an
+    /// ingress or pacemaker turn.
+    ///
+    /// A newly visible certified credit charges the fresh opportunity. Once
+    /// the last credited root disappears while Completion admission remains
+    /// closed, the opportunity is permanently spent for this response. A
+    /// runtime retry may make old certificate ownership visible again, but it
+    /// cannot reset `Spent` and therefore cannot authorize fresh ingress.
+    pub(crate) fn reconcile_retained_response_certified_fence_escape_phase(&mut self) {
+        let Some(carrier) = self.retained_certified_body_response.as_mut() else {
+            return;
+        };
+        let has_credit = self.runtime.has_certified_fence_escape_credit();
+        let completion_blocked = self.runtime.remaining_completion_capacity() == 0;
+        carrier.certified_fence_escape_phase = match carrier.certified_fence_escape_phase {
+            RetainedCertifiedFenceEscapePhase::Fresh if has_credit => {
+                RetainedCertifiedFenceEscapePhase::Charged
+            }
+            RetainedCertifiedFenceEscapePhase::Charged if !has_credit && completion_blocked => {
+                RetainedCertifiedFenceEscapePhase::Spent
+            }
+            phase => phase,
+        };
     }
 
     /// Actor-global position of the retained receiver carrier.
@@ -8552,13 +8689,31 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         })
     }
 
-    fn commit_pending_fetch_retirement(&mut self, plan: PendingFetchRetirementPlan) {
+    fn commit_pending_fetch_retirement(
+        &mut self,
+        plan: PendingFetchRetirementPlan,
+    ) -> Result<(), EffectExecutorError> {
+        let retired_completion = self
+            .runtime
+            .retire_unpublished_body_available(
+                plan.pending.task.tag,
+                plan.pending.task.round,
+                plan.pending.task.subject,
+            )
+            .map_err(EffectExecutorError::Runtime)?;
+        if !retired_completion {
+            let effect = plan.pending.task.adapter_effect();
+            self.runtime
+                .retire_restored_body_fetch_parent(&effect, plan.pending.task.ownership())
+                .map_err(EffectExecutorError::Runtime)?;
+        }
         let work_id = plan.pending.task.id();
         let removed = self.pending_fetches.remove(&work_id);
         debug_assert_eq!(removed.as_ref(), Some(&plan.pending));
         if let Some(certified) = plan.certified {
             self.commit_certified_fetch_retirement(certified);
         }
+        Ok(())
     }
 
     fn preflight_certified_fetch_indexes(&self) -> Result<(), EffectExecutorError> {
@@ -10031,7 +10186,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.body_pipeline_owners.remove(&decision_body);
         }
         for plan in fetches {
-            self.commit_pending_fetch_retirement(plan);
+            self.commit_pending_fetch_retirement(plan)?;
         }
         let retired_store_bytes = stores.iter().try_fold(0u64, |total, (_, bytes)| {
             let bytes = u64::try_from(*bytes).map_err(|_| {
@@ -10499,6 +10654,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     rebound,
                     owner,
                 } => {
+                    // A typed Retryable certified-response handoff retains an
+                    // unpublished BodyAvailable token in runtime ingress. The
+                    // protected FetchBody task and that token are one logical
+                    // pipeline: move both to the installed incarnation before
+                    // publishing the local task mutation. Backpressure before
+                    // reservation legitimately leaves no token to move.
+                    self.runtime
+                        .rebind_unpublished_body_available(
+                            pending.task.tag,
+                            tag,
+                            pending.task.round,
+                            pending.task.subject,
+                        )
+                        .map_err(EffectExecutorError::Runtime)?;
                     let work_id = pending.task.id();
                     let current = self
                         .pending_fetches
@@ -10510,7 +10679,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         .insert((pending.task.round, pending.task.subject), owner);
                 }
                 StaleFetchTransitionPlan::Retire(retirement) => {
-                    self.commit_pending_fetch_retirement(retirement);
+                    self.commit_pending_fetch_retirement(retirement)?;
                 }
             }
         }
@@ -10796,7 +10965,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services
             .cancel_body_fetch(&pending.task)
             .map_err(service_error)?;
-        self.commit_pending_fetch_retirement(retirement);
+        self.commit_pending_fetch_retirement(retirement)?;
         let removed_owner = self.body_pipeline_owners.remove(&key);
         debug_assert_eq!(removed_owner, Some(expected_owner));
         iroha_logger::debug!(
@@ -11300,6 +11469,7 @@ mod tests {
         locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
         fail_enqueue: bool,
         fail_enqueue_hits: usize,
+        certified_fence_escape_credit: bool,
         panic_step: bool,
         scheduler_ownership_ready: bool,
         omit_scheduler_ownership: bool,
@@ -11642,8 +11812,13 @@ mod tests {
                 _ => return Err(EnqueueError::DuplicateCompletionOwnership),
             }
             if let Some(existing) = &self.reserved_body_available {
-                let expected = BodyAvailableReservation::reserved(tag, manifest.clone());
-                if existing == &expected {
+                // A protecting EnterView retags the physical reservation
+                // without replacing its immutable lifecycle root.  Rebuild-
+                // and-compare would mint a test-only root at the rebound tag
+                // and misclassify that exact retry as duplicate ownership.
+                // Match the public token coordinates instead and return the
+                // incumbent token byte-for-byte, as production ingress does.
+                if existing.tag() == tag && existing.manifest() == &manifest {
                     return Ok(existing.clone());
                 }
                 return Err(EnqueueError::DuplicateCompletionOwnership);
@@ -11699,10 +11874,69 @@ mod tests {
                     rebound_count = rebound_count.saturating_add(1);
                 }
             }
+            if let Some(reservation) = &mut self.reserved_body_available
+                && reservation.rebind_consumer_if_exact(previous, rebound, manifest)
+            {
+                rebound_count = rebound_count.saturating_add(1);
+            }
             if rebound_count > 1 {
                 return Err("duplicate queued body-available completions".to_owned());
             }
             Ok(rebound_count == 1)
+        }
+
+        fn rebind_unpublished_body_available(
+            &mut self,
+            previous: EventTag,
+            rebound: EventTag,
+            round: wire::ConsensusRound,
+            subject: wire::BlockSubject,
+        ) -> Result<bool, String> {
+            let Some(manifest) = self
+                .reserved_body_available
+                .as_ref()
+                .filter(|reservation| {
+                    reservation.tag() == previous
+                        && reservation.manifest().round == round
+                        && reservation.manifest().subject == subject
+                })
+                .map(|reservation| reservation.manifest().clone())
+            else {
+                return Ok(false);
+            };
+            if self.completions.iter().any(|completion| {
+                matches!(
+                    completion,
+                    RuntimeCompletion::BodyAvailable(tag, queued)
+                        if *tag == rebound && queued == &manifest
+                )
+            }) {
+                return Err(
+                    "unpublished body completion already has a destination owner".to_owned(),
+                );
+            }
+            self.rebind_body_available(previous, rebound, &manifest)
+        }
+
+        fn retire_unpublished_body_available(
+            &mut self,
+            tag: EventTag,
+            round: wire::ConsensusRound,
+            subject: wire::BlockSubject,
+        ) -> Result<bool, String> {
+            let Some(manifest) = self
+                .reserved_body_available
+                .as_ref()
+                .filter(|reservation| {
+                    reservation.tag() == tag
+                        && reservation.manifest().round == round
+                        && reservation.manifest().subject == subject
+                })
+                .map(|reservation| reservation.manifest().clone())
+            else {
+                return Ok(false);
+            };
+            self.retire_body_available(tag, &manifest)
         }
 
         fn retire_body_available(
@@ -11718,7 +11952,17 @@ mod tests {
                         if *queued_tag == tag && queued_manifest == manifest
                 )
             });
-            let retired = before.saturating_sub(self.completions.len());
+            let mut retired = before.saturating_sub(self.completions.len());
+            if self
+                .reserved_body_available
+                .as_ref()
+                .is_some_and(|reservation| {
+                    reservation.tag() == tag && reservation.manifest() == manifest
+                })
+            {
+                self.reserved_body_available = None;
+                retired = retired.saturating_add(1);
+            }
             if retired > 1 {
                 return Err("duplicate queued body-available completions".to_owned());
             }
@@ -11785,6 +12029,21 @@ mod tests {
                 };
                 !remove
             });
+            if self
+                .reserved_body_available
+                .as_ref()
+                .is_some_and(|reservation| {
+                    reservation.tag() == tag
+                        && reservation.manifest().round == round
+                        && reservation.manifest().subject == subject
+                })
+            {
+                if retired.body_available() {
+                    return Err("duplicate body-available completion owners".to_owned());
+                }
+                self.reserved_body_available = None;
+                retired.record_body_available();
+            }
             Ok(retired)
         }
 
@@ -11987,6 +12246,10 @@ mod tests {
                     .len()
                     .saturating_add(usize::from(self.reserved_body_available.is_some())),
             )
+        }
+
+        fn has_certified_fence_escape_credit(&self) -> bool {
+            self.certified_fence_escape_credit
         }
 
         fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
@@ -12437,11 +12700,11 @@ mod tests {
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1_048_576,
+                    chunk_size_bytes: 262_144,
                     data_shards: 1,
                     parity_shards: 1,
                     max_payload_size_bytes: 1_048_576,
-                    max_chunk_count: 2,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0x33; 32],
             };
@@ -12581,11 +12844,11 @@ mod tests {
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1_048_576,
+                    chunk_size_bytes: 262_144,
                     data_shards: 1,
                     parity_shards: 1,
                     max_payload_size_bytes: 1_048_576,
-                    max_chunk_count: 2,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0x62; 32],
             };
@@ -13198,13 +13461,20 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         let directory = TempDir::new().expect("temporary response leader-wire directory");
-        let ingress = crate::sumeragi::FairV2Ingress::new(
-            8,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-            4 * 1024 * 1024,
-            4 * 1024 * 1024,
-        );
+        let ingress =
+            crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                64,
+                128 * 1024 * 1024,
+                16 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                4 * 1024 * 1024,
+                4 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            );
         ingress
             .configure_roster_for_context(
                 roster.clone(),
@@ -14450,19 +14720,22 @@ mod tests {
         let certificate_a =
             fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
         let sources_a = fixture.certified_sources(&certificate_a);
+        let fetch_a_effects = vec![AdapterEffect::FetchBody {
+            tag: tag(0),
+            round: fixture.round,
+            subject: fixture.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: sources_a,
+            certificate: Some(certificate_a),
+        }];
         fixture
             .executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: fixture.round,
-                    subject: fixture.subject,
-                    manifest: Some(fixture.manifest.clone()),
-                    certified_sources: sources_a,
-                    certificate: Some(certificate_a),
-                }],
-                &mut services,
-            )
+            .runtime
+            .retain_retransmit_effect_ownership_for_test(&fetch_a_effects)
+            .expect("bind production retransmit ownership for Fetch A");
+        fixture
+            .executor
+            .consume_effects(fetch_a_effects, &mut services)
             .expect("A acquires the sole certified-request slot");
         let task_a = services.fetch_tasks[0].clone();
         let request_hash_a = HashOf::new(
@@ -14510,10 +14783,16 @@ mod tests {
             certificate: Some(certificate_b),
         };
         let next_work_id_before_b = fixture.executor.next_work_id;
+        let fetch_b_effects = vec![fetch_b];
+        fixture
+            .executor
+            .runtime
+            .retain_retransmit_effect_ownership_for_test(&fetch_b_effects)
+            .expect("bind production retransmit ownership for Fetch B");
         assert_eq!(
             fixture
                 .executor
-                .consume_effects(vec![fetch_b], &mut services)
+                .consume_effects(fetch_b_effects, &mut services)
                 .expect("certified-request pressure retains independent Fetch B"),
             0
         );
@@ -14641,12 +14920,12 @@ mod tests {
         };
 
         let initial_queues = fixture.executor.status().runtime_queues;
-        assert_eq!(initial_queues.normal.capacity, 640);
-        assert_eq!(initial_queues.progress.capacity, 768);
-        assert_eq!(initial_queues.completion.capacity, 1_024);
+        assert_eq!(initial_queues.normal.capacity, 639);
+        assert_eq!(initial_queues.progress.capacity, 767);
+        assert_eq!(initial_queues.completion.capacity, 1_023);
         assert_eq!(
             fixture.executor.runtime.remaining_completion_capacity(),
-            1_024
+            1_023
         );
 
         let request_capacity = fixture.executor.config.max_certified_requests;
@@ -14679,20 +14958,23 @@ mod tests {
                 commitment,
             );
             let certified_sources = fixture.certified_sources(&certificate);
+            let effects = vec![AdapterEffect::FetchBody {
+                tag: EventTag::new(fixture.context.height, view, generation),
+                round: request_round,
+                subject: fixture.subject,
+                manifest: Some(manifest),
+                certified_sources,
+                certificate: Some(certificate),
+            }];
+            fixture
+                .executor
+                .runtime
+                .retain_retransmit_effect_ownership_for_test(&effects)
+                .expect("bind production retransmit lifecycle ownership");
             assert_eq!(
                 fixture
                     .executor
-                    .consume_effects(
-                        vec![AdapterEffect::FetchBody {
-                            tag: EventTag::new(fixture.context.height, view, generation),
-                            round: request_round,
-                            subject: fixture.subject,
-                            manifest: Some(manifest),
-                            certified_sources,
-                            certificate: Some(certificate),
-                        }],
-                        &mut services,
-                    )
+                    .consume_effects(effects, &mut services)
                     .expect("fill production certified-request ownership"),
                 1
             );
@@ -14822,10 +15104,16 @@ mod tests {
         let pipeline_owners_before_b = fixture.executor.body_pipeline_owners.clone();
         let certified_work_before_b = fixture.executor.certified_work.clone();
         let outstanding_requests_before_b = fixture.executor.outstanding_requests.hashes();
+        let fetch_b_effects = vec![fetch_b];
+        fixture
+            .executor
+            .runtime
+            .retain_retransmit_effect_ownership_for_test(&fetch_b_effects)
+            .expect("bind deferred production retransmit lifecycle ownership");
         assert_eq!(
             fixture
                 .executor
-                .consume_effects(vec![fetch_b], &mut services)
+                .consume_effects(fetch_b_effects, &mut services)
                 .expect("defer Fetch B at production certified-request capacity"),
             0
         );
@@ -15134,6 +15422,63 @@ mod tests {
         assert_eq!(executor.pending_fetches.len(), 0);
         assert_eq!(executor.pending_signatures.len(), 1);
         assert!(executor.retained_effect_batch.is_none());
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn durable_sign_preemption_retires_a_retryable_body_token() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
+        let mut services = fixture.services();
+        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    certified_sources: certified_sources(&fixture, &prepare),
+                    certificate: Some(prepare),
+                }],
+                &mut services,
+            )
+            .expect("fill pending-work capacity with one certified fetch");
+        let task = services.fetch_tasks[0].clone();
+        let response = signed_certified_response(
+            &fixture,
+            &task,
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            0,
+        );
+        services.retry_certified_fetch_once = true;
+        assert_eq!(
+            executor.accept_certified_body_response(
+                response,
+                &fixture.context.roster[0].validator,
+                &mut services,
+            ),
+            Err(EffectTransportError::Backpressure),
+        );
+        assert!(
+            executor
+                .body_ownership_projection()
+                .runtime_body_reservation
+                .is_some(),
+            "typed Retryable owns the unpublished Completion token",
+        );
+
+        executor
+            .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+            .expect("durable signing preempts the retryable fetch and its token");
+        assert_eq!(services.cancelled_fetches, vec![task.id()]);
+        assert!(executor.pending_fetches.is_empty());
+        assert!(executor.certified_work.is_empty());
+        assert!(executor.outstanding_requests.is_empty());
+        assert!(executor.runtime.reserved_body_available.is_none());
+        assert!(executor.runtime.completions.is_empty());
+        assert_eq!(executor.pending_signatures.len(), 1);
         assert!(!executor.status().fail_closed);
     }
 
@@ -18700,7 +19045,7 @@ mod tests {
                     subject: fixture.manifest.subject,
                     manifest: Some(fixture.manifest.clone()),
                     certified_sources: sources,
-                    certificate: Some(prepare),
+                    certificate: Some(prepare.clone()),
                 }],
                 &mut services,
             )
@@ -20784,6 +21129,91 @@ mod tests {
                 .body_ownership_projection()
                 .runtime_body_reservation
                 .is_none()
+        );
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn retained_response_certificate_escape_is_charged_only_once() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    certified_sources: certified_sources(&fixture, &prepare),
+                    certificate: Some(prepare),
+                }],
+                &mut services,
+            )
+            .expect("hybrid fetch");
+        let task = services.fetch_tasks[0].clone();
+        let response = signed_certified_response(
+            &fixture,
+            &task,
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            0,
+        );
+        let responder = fixture.context.roster[0].validator.clone();
+        let (_directory, _ingress, _gate, ingress_ownership) =
+            certified_response_runtime_ingress_ownership(&fixture, &response, responder.clone());
+        services.retry_certified_fetch_once = true;
+        assert_eq!(
+            executor.accept_certified_body_response_with_ingress_ownership(
+                response,
+                &responder,
+                &ingress_ownership,
+                &mut services,
+            ),
+            Err(EffectTransportError::Backpressure)
+        );
+        assert!(executor.retained_response_may_admit_certified_fence_escape());
+
+        executor.runtime.certified_fence_escape_credit = true;
+        executor.reconcile_retained_response_certified_fence_escape_phase();
+        assert_eq!(
+            executor
+                .retained_certified_body_response
+                .as_ref()
+                .map(|carrier| carrier.certified_fence_escape_phase),
+            Some(RetainedCertifiedFenceEscapePhase::Charged)
+        );
+        assert!(!executor.retained_response_may_admit_certified_fence_escape());
+
+        while executor.runtime.remaining_completion_capacity() > 0 {
+            executor
+                .runtime
+                .completions
+                .push(RuntimeCompletion::Signature(tag(0), vec![0xA5]));
+        }
+        executor.runtime.certified_fence_escape_credit = false;
+        executor.reconcile_retained_response_certified_fence_escape_phase();
+        assert_eq!(
+            executor
+                .retained_certified_body_response
+                .as_ref()
+                .map(|carrier| carrier.certified_fence_escape_phase),
+            Some(RetainedCertifiedFenceEscapePhase::Spent)
+        );
+
+        executor.runtime.certified_fence_escape_credit = true;
+        executor.reconcile_retained_response_certified_fence_escape_phase();
+        assert!(
+            !executor.retained_response_may_admit_certified_fence_escape(),
+            "a later visible certificate cannot replenish this response's spent ingress escape"
+        );
+        assert_eq!(
+            executor
+                .retained_certified_body_response
+                .as_ref()
+                .map(|carrier| carrier.certified_fence_escape_phase),
+            Some(RetainedCertifiedFenceEscapePhase::Spent)
         );
         assert!(!executor.status().fail_closed);
     }
@@ -22950,7 +23380,7 @@ mod tests {
                     subject: fixture.manifest.subject,
                     manifest: Some(fixture.manifest.clone()),
                     certified_sources: sources,
-                    certificate: Some(prepare),
+                    certificate: Some(prepare.clone()),
                 }],
                 &mut services,
             )
@@ -23013,12 +23443,19 @@ mod tests {
             "capacity rejection precedes response-occurrence acquisition"
         );
         assert!(services.leader_wire_terminals.is_empty());
-        assert!(
-            leader_wire_gate
-                .earliest_ingress_scheduler_ordinal()
-                .expect("read live response gate")
-                .is_some(),
-            "capacity backpressure must not tombstone the runtime owner"
+        let live_response_restore = leader_wire_gate.restore().expect("read live response gate");
+        assert_eq!(live_response_restore.records().len(), 1);
+        assert_eq!(
+            live_response_restore.records()[0].status(),
+            super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Runtime,
+            "capacity backpressure must retain the runtime owner"
+        );
+        assert_eq!(
+            live_response_restore.records()[0].runtime_owner(),
+            ingress_ownership
+                .leader_wire_runtime_receipt()
+                .map(|receipt| receipt.owner()),
+            "capacity backpressure must retain the exact runtime identity"
         );
         assert!(matches!(
             leader_wire_ingress.try_push(InboundBlockMessage::new(
@@ -23060,12 +23497,63 @@ mod tests {
         assert_eq!(retained_runtime_token.manifest(), &fixture.manifest);
         assert!(services.completed_certified_fetches.is_empty());
         assert!(services.leader_wire_terminals.is_empty());
-        assert!(
-            leader_wire_gate
-                .earliest_ingress_scheduler_ordinal()
-                .expect("read typed-retry response gate")
-                .is_some(),
+        let typed_retry_restore = leader_wire_gate
+            .restore()
+            .expect("read typed-retry response gate");
+        assert_eq!(typed_retry_restore.records().len(), 1);
+        assert_eq!(
+            typed_retry_restore.records()[0].status(),
+            super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Runtime,
             "typed retry cannot tombstone the retained leader-wire ticket",
+        );
+        assert_eq!(
+            typed_retry_restore.records()[0].runtime_owner(),
+            ingress_ownership
+                .leader_wire_runtime_receipt()
+                .map(|receipt| receipt.owner()),
+            "typed retry must preserve the exact runtime identity",
+        );
+        assert!(!executor.status().fail_closed);
+
+        let mut timeout = timeout_at_view(&fixture, 0);
+        timeout.groups[0].highest_prepare_qc = Some(prepare);
+        executor.runtime.round_tag = Some(tag(1));
+        executor
+            .consume_effects(
+                vec![AdapterEffect::EnterView {
+                    tag: tag(1),
+                    certificate: timeout,
+                    protected_body: Some((fixture.manifest.round, fixture.manifest.subject)),
+                }],
+                &mut services,
+            )
+            .expect("the protecting TC rebinds the retained response pipeline");
+        assert_eq!(executor.pending_fetches.len(), 1);
+        assert!(
+            executor
+                .pending_fetches
+                .values()
+                .all(|pending| pending.task.tag == tag(1))
+        );
+        let rebound_runtime_token = executor
+            .body_ownership_projection()
+            .runtime_body_reservation
+            .expect("EnterView preserves the unpublished runtime token");
+        assert_eq!(rebound_runtime_token.tag(), tag(1));
+        assert_eq!(rebound_runtime_token.manifest(), &fixture.manifest);
+        assert_eq!(
+            rebound_runtime_token.owns_new_slot(),
+            retained_runtime_token.owns_new_slot(),
+            "view rebinding cannot replace the physical reservation",
+        );
+        assert!(executor.runtime.completions.is_empty());
+        assert!(executor.has_retained_certified_body_response());
+        assert_eq!(
+            executor
+                .retained_certified_body_response_scheduler_ordinal()
+                .expect("read rebound response ordinal"),
+            Some(retained_scheduler_ordinal),
+            "EnterView cannot remint the retained leader-wire ticket",
         );
         assert!(!executor.status().fail_closed);
 
@@ -23086,6 +23574,15 @@ mod tests {
         leader_wire_ingress
             .mark_leader_wire_volatile_terminal(runtime)
             .expect("production terminal hook retires the response runtime owner");
+        let terminal_restore = leader_wire_gate
+            .restore()
+            .expect("read terminal response gate");
+        assert_eq!(terminal_restore.records().len(), 1);
+        assert_eq!(
+            terminal_restore.records()[0].status(),
+            super::super::serviced_candidate_store::LeaderWireLifecycleStatus::VolatileTerminal,
+            "only the explicit terminal hook may tombstone the runtime owner",
+        );
         assert_eq!(
             leader_wire_gate
                 .earliest_ingress_scheduler_ordinal()
@@ -23106,7 +23603,140 @@ mod tests {
         assert!(executor.pending_fetches.is_empty());
         assert!(executor.certified_work.is_empty());
         assert!(executor.outstanding_requests.is_empty());
+        assert!(matches!(
+            executor.runtime.completions.as_slice(),
+            [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
+                if *completion_tag == tag(1) && manifest == &fixture.manifest
+        ));
         assert_eq!(services.completed_certified_fetches, vec![fetch_task.id()]);
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let prepare_a = fixture.qc(wire::GlobalPhase::Prepare);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    certified_sources: certified_sources(&fixture, &prepare_a),
+                    certificate: Some(prepare_a),
+                }],
+                &mut services,
+            )
+            .expect("begin the fetch later superseded by a different lock");
+        let task_a = services.fetch_tasks[0].clone();
+        let response_a = signed_certified_response(
+            &fixture,
+            &task_a,
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            0,
+        );
+        let responder = fixture.context.roster[0].validator.clone();
+        let (_directory, _ingress, _gate, ingress_ownership) =
+            certified_response_runtime_ingress_ownership(&fixture, &response_a, responder.clone());
+        services.retry_certified_fetch_once = true;
+        assert_eq!(
+            executor.accept_certified_body_response_with_ingress_ownership(
+                response_a,
+                &responder,
+                &ingress_ownership,
+                &mut services,
+            ),
+            Err(EffectTransportError::Backpressure),
+        );
+        assert!(executor.has_retained_certified_body_response());
+        assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
+        assert_eq!(
+            executor
+                .body_ownership_projection()
+                .runtime_body_reservation
+                .as_ref()
+                .map(BodyAvailableReservation::tag),
+            Some(tag(0)),
+        );
+
+        let timeout = timeout_at_view(&fixture, 0);
+        executor.runtime.round_tag = Some(tag(1));
+        executor
+            .consume_effects(
+                vec![AdapterEffect::EnterView {
+                    tag: tag(1),
+                    certificate: timeout,
+                    protected_body: None,
+                }],
+                &mut services,
+            )
+            .expect("the TC retires the unprotected stale fetch and its token");
+        assert!(executor.pending_fetches.is_empty());
+        assert!(executor.certified_work.is_empty());
+        assert!(executor.outstanding_requests.is_empty());
+        assert_eq!(services.cancelled_fetches, vec![task_a.id()]);
+        assert!(
+            executor
+                .body_ownership_projection()
+                .runtime_body_reservation
+                .is_none(),
+            "retiring the fetch must release its unpublished Completion owner",
+        );
+        assert!(executor.runtime.completions.is_empty());
+
+        assert!(matches!(
+            executor.retry_retained_certified_body_response(&mut services),
+            Err(EffectTransportError::Authentication(
+                V2TransportError::UnsolicitedResponse(_)
+            ))
+        ));
+        assert!(!executor.has_retained_certified_body_response());
+
+        let (subject_b, body_b) = distinct_body(&fixture);
+        let manifest_b = canonical_payload_manifest(
+            &fixture.context,
+            round(&fixture.context, 1),
+            subject_b,
+            &body_b,
+        );
+        let mut prepare_b = fixture.qc(wire::GlobalPhase::Prepare);
+        prepare_b.round = manifest_b.round;
+        prepare_b.proposal_round = manifest_b.round;
+        prepare_b.subject = manifest_b.subject;
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(1),
+                    round: manifest_b.round,
+                    subject: manifest_b.subject,
+                    manifest: Some(manifest_b.clone()),
+                    certified_sources: certified_sources(&fixture, &prepare_b),
+                    certificate: Some(prepare_b),
+                }],
+                &mut services,
+            )
+            .expect("the installed protected body acquires the released pipeline");
+        let task_b = services
+            .fetch_tasks
+            .last()
+            .expect("replacement fetch")
+            .clone();
+        assert_eq!(
+            executor
+                .complete_body_reconstruction(&task_b, manifest_b.clone(), body_b, &mut services,)
+                .expect("the next body publishes after stale-token retirement"),
+            CompletionDisposition::Accepted,
+        );
+        assert!(matches!(
+            executor.runtime.completions.as_slice(),
+            [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
+                if *completion_tag == tag(1) && manifest == &manifest_b
+        ));
+        assert!(!executor.status().fail_closed);
     }
 
     #[test]
@@ -24264,11 +24894,11 @@ mod tests {
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1_048_576,
+                chunk_size_bytes: 262_144,
                 data_shards: 1,
                 parity_shards: 1,
                 max_payload_size_bytes: 1_048_576,
-                max_chunk_count: 2,
+                max_chunk_count: 8,
             },
             leader_seed: [0x44; 32],
         };

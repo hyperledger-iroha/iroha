@@ -1629,10 +1629,41 @@ the reducer's eight-effect bound, services at most one Busy-deferred adapter
 macro-step per serialized runtime turn, and forbids terminal readiness while
 any Completion, Progress, or Normal deferred queue remains nonempty. The
 production-default saturation regression fills all 256 certified-request
-owners, 640 Normal ingress slots, and the 128-slot reserved Progress increment
-while preserving the 256-slot Completion reserve, then proves that an exact
+owners, 639 Normal ingress slots, and the 128-slot reserved Progress increment
+while preserving the 256-slot Completion reserve and one separately charged
+certified-fence slot, then proves that an exact
 authenticated `CertifiedBodyResponse` with a still-live matching logical
-request registration can retire the old request; the executor then retries the
+request registration can retire the old request. The fence slot is one
+retained physical credit rather than a limit of one
+certificate. Multiple distinct authenticated TCs, CommitQCs, or
+CommitQC-carrying recovery responses share that credit; every certificate
+after the first consumes ordinary Progress capacity, and the ordinary
+reservation is independent of whether the first certificate arrives before
+or after ordinary work. While an authenticated certified-body
+response remains retained, its escape episode is explicitly `Fresh`,
+`Charged`, or `Spent`: Fresh admits at most one new direct TC, CommitQC, or
+`CommitCertificateResponse` carrying a CommitQC root; Charged and Spent reject
+every further fresh root, and only claim retirement resets the latch.
+The claimed-response rank counts the exact frozen direct
+roots and their strictly decreasing trusted causal tail, so pacemaker priority
+cannot be replenished indefinitely. The standalone revision-4 kernel charges
+an unpublished `BodyAvailable` token as an ordinary Completion owner and
+atomically replaces its conflicting proposal owner without changing physical
+occupancy. Production refinement additionally persists a complete Busy-
+deferred producer-release batch before removing queue owners, reconciles
+obsolete Reserved producers only after restart WAL replay while preserving the
+exact protected body pipeline, and retires a restored stage-7 Fetch parent even
+when no Completion token was reserved. The fresh post-restart Fetch owner proves
+only its exact effect; the adapter resolves the old parent by durable
+round/subject coordinates plus exact manifest identity when supplied, and
+requires a unique match when the manifest is absent. Body rebind preserves the sole
+persistent producer and rejects two persistent roots before mutation. The
+generic productive-wire cut is monotone at certified EnterView and durable
+Decision: the durable gate prunes exactly obsolete Dormant records before the
+fair-ingress mirror, preserves ordinal high-waters, rolls back on store failure,
+and rejects below-cut admission. These are source-bound production-refinement
+contracts; the existing deductive asynchronous proof does not by itself prove
+their Rust persistence ordering. The executor then retries the
 same retained FIFO occurrence and acquires pending-work and request ownership
 atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The

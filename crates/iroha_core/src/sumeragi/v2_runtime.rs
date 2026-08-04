@@ -245,7 +245,9 @@ fn round_timeout_for_view(base_timeout: Duration, view: u64) -> Duration {
 /// messages (PrepareQCs, CommitQCs, TCs, and authenticated Timeout votes) may
 /// additionally use the progress reserve. Trusted asynchronous completions may
 /// use every ordinary slot, while one final physical slot is reserved solely
-/// for an authenticated TC or CommitQC. This prevents completion or retrying
+/// for an authenticated TC, CommitQC, or CommitCertificateResponse. Retained
+/// certificates share that one credit; each certificate after the first
+/// consumes ordinary Progress capacity. This prevents completion or retrying
 /// Prepare traffic from excluding the certificate which retires its fence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeQueueConfig {
@@ -294,10 +296,6 @@ impl RuntimeQueueConfig {
     const fn ordinary_total_limit(self) -> usize {
         self.capacity - 1
     }
-
-    const fn certified_progress_limit(self) -> usize {
-        self.progress_limit() + 1
-    }
 }
 
 impl Default for RuntimeQueueConfig {
@@ -325,7 +323,7 @@ impl fmt::Display for RuntimeConfigError {
                 "Sumeragi v2 round timeout must have a non-zero one-fifth retransmit interval",
             ),
             Self::InvalidQueueAllocation => formatter.write_str(
-                "Sumeragi v2 runtime queue must reserve non-zero normal, progress, and completion capacity",
+                "Sumeragi v2 runtime queue must reserve non-zero normal, progress, completion, and certified-fence capacity",
             ),
             Self::InvalidLifecycleOwnership => formatter.write_str(
                 "Sumeragi v2 runtime could not establish exact startup lifecycle ownership",
@@ -1088,12 +1086,30 @@ fn runtime_ingress_ownership_projection_hash(
     iroha_crypto::Hash::new(projection)
 }
 
+mod exact_runtime_command_identity_sealed {
+    pub trait Sealed {}
+}
+
 /// Derive the exact identity of a command rather than accepting an asserted
 /// identity from the scheduler's caller.
-pub(crate) trait ExactRuntimeCommandIdentity {
+///
+/// The trait is sealed in this module so another production command type
+/// cannot assert eligibility for the certified credit without extending this
+/// audited classifier beside the exact command representation.
+pub(crate) trait ExactRuntimeCommandIdentity:
+    exact_runtime_command_identity_sealed::Sealed
+{
     /// Project every command field which can distinguish reducer behavior.
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity;
+
+    /// Return whether this exact command is an authenticated certificate which
+    /// may be charged to the runtime's final physical fence-escape slot.
+    fn is_certified_fence_escape(&self) -> bool {
+        false
+    }
 }
+
+impl exact_runtime_command_identity_sealed::Sealed for AuthenticatedConsensusMessage {}
 
 impl ExactRuntimeCommandIdentity for AuthenticatedConsensusMessage {
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
@@ -1104,6 +1120,10 @@ impl ExactRuntimeCommandIdentity for AuthenticatedConsensusMessage {
             canonical_bytes: Arc::from(canonical_bytes),
             canonical_hash,
         }
+    }
+
+    fn is_certified_fence_escape(&self) -> bool {
+        wire_payload_is_certified_fence_escape(self.payload())
     }
 }
 
@@ -1680,6 +1700,14 @@ impl RuntimeCandidateSemanticStatement {
                 .is_none_or(|_| self.subject.is_some())
     }
 
+    fn binds_exact_body_manifest(self, manifest: &wire::PayloadManifest) -> bool {
+        self.validate_exact()
+            && self.context_id == manifest.round.context_id
+            && self.round == manifest.round
+            && self.proposal_round == manifest.round
+            && self.subject == Some(manifest.subject)
+    }
+
     /// Classify the only authority refinement allowed within an immutable
     /// body owner. A local/ordinary body starts without quorum authority, and
     /// a Prepare-certified body can later acquire the exact durable CommitQC.
@@ -2172,6 +2200,18 @@ impl RuntimeEffectOwnership {
         self.binding
             .as_ref()
             .and_then(|binding| binding.candidate_statement)
+    }
+
+    fn binds_exact_fetch_body_manifest(&self, manifest: &wire::PayloadManifest) -> bool {
+        let Some(binding) = self.binding.as_ref() else {
+            return false;
+        };
+        self.validate_bound_exact()
+            && binding.effect_kind == RUNTIME_EFFECT_KIND_FETCH_BODY
+            && binding.candidate_kind == RUNTIME_CANDIDATE_KIND_FETCH_BODY
+            && binding
+                .candidate_statement
+                .is_some_and(|statement| statement.binds_exact_body_manifest(manifest))
     }
 
     /// Immutable owner carried into an asynchronous task or completion.
@@ -4330,6 +4370,10 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
     fn validate_cached_admission_identity(&self) -> bool {
         self.identity_deep_validated
             && self.identity.validate_exact()
+            && (!self.command.is_certified_fence_escape()
+                || (self.class == CommandClass::Progress
+                    && self.identity.kind == RuntimeCommandKind::Authenticated
+                    && self.ingress_ownership.is_some()))
             && self.candidate_semantic_statement.is_none_or(|statement| {
                 statement.validate_exact() && statement.round.height == self.tag.height()
             })
@@ -4503,13 +4547,12 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         &mut self,
         command: TaggedCommand<C>,
     ) -> Result<(), EnqueueError> {
-        self.enqueue_classified_command_with_capacity(command, false)
+        self.enqueue_classified_command_with_capacity(command)
     }
 
     fn enqueue_classified_command_with_capacity(
         &mut self,
         mut command: TaggedCommand<C>,
-        certified_fence_escape: bool,
     ) -> Result<(), EnqueueError> {
         if !command.validate_admission_identity() {
             return Err(EnqueueError::FailClosed);
@@ -4519,6 +4562,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         let dormant_replacement = self.dormant_local_fifo_replacement(&command)?;
         self.validate_preassigned_lifecycle_owner(&command, &[])?;
+        let certified_fence_escape = command.command.is_certified_fence_escape();
         self.check_capacity_change_inner(
             command.class,
             usize::from(dormant_replacement.is_some()),
@@ -4900,14 +4944,20 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             // coalesce with its physical owner or terminal tombstone.
             return Err(EnqueueError::FailClosed);
         }
-        if producer_stage != RuntimeDormantLocalFifoReservation::TIMEOUT_ELAPSED_STAGE {
-            // Transport-conditional and pre-store body stages cannot own a
+        if !matches!(
+            producer_stage,
+            RuntimeDormantLocalFifoReservation::TIMEOUT_ELAPSED_STAGE
+                | RuntimeDormantLocalFifoReservation::BODY_AVAILABLE_STAGE
+        ) {
+            // Other transport-conditional stages cannot own a
             // restart-dormant continuation at all.
             return Err(EnqueueError::FailClosed);
         }
-        // Non-Local restored producer classes retain their separate transport
-        // ownership and therefore have no latent FIFO charge. Timeout is the
-        // sole locally reconstructible non-FIFO producer stage.
+        // These restored producer classes have no latent FIFO charge. Timeout
+        // is reconstructed from its durable clock owner. BodyAvailable's
+        // pre-store bytes are reacquired through a new exact FetchBody effect,
+        // which transfers the persisted logical lifecycle into one fresh
+        // Completion position rather than aliasing dormant capacity.
         Ok(None)
     }
 
@@ -5006,6 +5056,14 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .ok_or(EnqueueError::FailClosed)
     }
 
+    fn certified_fence_escape_credit(&self) -> usize {
+        usize::from(
+            self.commands
+                .iter()
+                .any(|queued| queued.command.is_certified_fence_escape()),
+        )
+    }
+
     /// Count dormant FIFO owners which are not already represented by the
     /// exact unpublished body token. The aliased backing record remains in the
     /// set for retry identity, but cannot consume a second capacity slot.
@@ -5045,7 +5103,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         additions: usize,
         certified_fence_escape: bool,
     ) -> Result<(), EnqueueError> {
-        if certified_fence_escape && class != CommandClass::Progress {
+        if certified_fence_escape
+            && (class != CommandClass::Progress || additions != 1 || dormant_replacements != 0)
+        {
             return Err(EnqueueError::FailClosed);
         }
         if dormant_replacements != 0 && class != CommandClass::Completion {
@@ -5056,12 +5116,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .checked_sub(dormant_replacements)
             .and_then(|occupied| occupied.checked_add(additions))
             .ok_or(EnqueueError::FailClosed)?;
-        let physical_limit = if certified_fence_escape {
-            self.config.capacity
-        } else {
-            self.config.ordinary_total_limit()
-        };
-        if occupied_after > physical_limit {
+        if occupied_after > self.config.capacity {
             return Err(EnqueueError::Full);
         }
 
@@ -5071,16 +5126,29 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         // common physical bound.  Counting total occupancy against each lower
         // class limit made the same multiset admissible or inadmissible solely
         // according to enqueue order.
-        let normal_before = self
-            .commands
-            .iter()
-            .filter(|queued| queued.class == CommandClass::Normal)
-            .count();
-        let progress_before = self
-            .commands
-            .iter()
-            .filter(|queued| queued.class == CommandClass::Progress)
-            .count();
+        let (normal_before, progress_before, retained_certified) = self.commands.iter().try_fold(
+            (0usize, 0usize, false),
+            |(normal, progress, certified), queued| {
+                let normal = normal
+                    .checked_add(usize::from(queued.class == CommandClass::Normal))
+                    .ok_or(EnqueueError::FailClosed)?;
+                let progress = progress
+                    .checked_add(usize::from(queued.class == CommandClass::Progress))
+                    .ok_or(EnqueueError::FailClosed)?;
+                Ok::<_, EnqueueError>((
+                    normal,
+                    progress,
+                    certified || queued.command.is_certified_fence_escape(),
+                ))
+            },
+        )?;
+        let certified_credit = usize::from(retained_certified || certified_fence_escape);
+        let ordinary_occupied_after = occupied_after
+            .checked_sub(certified_credit)
+            .ok_or(EnqueueError::FailClosed)?;
+        if ordinary_occupied_after > self.config.ordinary_total_limit() {
+            return Err(EnqueueError::Full);
+        }
         let normal_after = normal_before
             .checked_add(usize::from(class == CommandClass::Normal) * additions)
             .ok_or(EnqueueError::FailClosed)?;
@@ -5090,12 +5158,12 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let noncompletion_after = normal_after
             .checked_add(progress_after)
             .ok_or(EnqueueError::FailClosed)?;
-        let progress_limit = if certified_fence_escape {
-            self.config.certified_progress_limit()
-        } else {
-            self.config.progress_limit()
-        };
-        if normal_after > self.config.normal_limit() || noncompletion_after > progress_limit {
+        let ordinary_noncompletion_after = noncompletion_after
+            .checked_sub(certified_credit)
+            .ok_or(EnqueueError::FailClosed)?;
+        if normal_after > self.config.normal_limit()
+            || ordinary_noncompletion_after > self.config.progress_limit()
+        {
             return Err(EnqueueError::ReservedCapacity);
         }
         Ok(())
@@ -5841,10 +5909,13 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     }
 
     fn remaining_capacity(&self) -> usize {
-        self.config.ordinary_total_limit().saturating_sub(
-            self.occupied_with_dormant_reservations()
-                .unwrap_or(usize::MAX),
-        )
+        let ordinary_occupied = self
+            .occupied_with_dormant_reservations()
+            .unwrap_or(usize::MAX)
+            .saturating_sub(self.certified_fence_escape_credit());
+        self.config
+            .ordinary_total_limit()
+            .saturating_sub(ordinary_occupied)
     }
 
     fn lane_snapshot(&self, class: CommandClass, now: Instant) -> RuntimeQueueLaneSnapshot {
@@ -5859,8 +5930,14 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         let capacity = match class {
             CommandClass::Normal => self.config.normal_limit(),
-            CommandClass::Progress => self.config.progress_limit(),
-            CommandClass::Completion => self.config.ordinary_total_limit(),
+            CommandClass::Progress => self
+                .config
+                .progress_limit()
+                .saturating_add(self.certified_fence_escape_credit()),
+            CommandClass::Completion => self
+                .config
+                .ordinary_total_limit()
+                .saturating_add(self.certified_fence_escape_credit()),
         };
         RuntimeQueueLaneSnapshot {
             depth,
@@ -5876,7 +5953,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
 pub(crate) struct RuntimeQueueLaneSnapshot {
     /// Commands currently owned by the lane.
     pub(crate) depth: usize,
-    /// Maximum total occupancy at which this class may still be admitted.
+    /// Configured class boundary used for diagnostics. Cross-class occupancy
+    /// can reduce immediate headroom; Progress and Completion include the one
+    /// retained certified credit while it exists.
     pub(crate) capacity: usize,
     /// Age of the oldest command in this class.
     pub(crate) oldest_age: Option<Duration>,
@@ -5919,6 +5998,42 @@ pub(crate) struct BodyAvailableReservation {
     /// token. It remains installed until materialization so an ordinary abort
     /// cannot orphan or recreate the old producer stage.
     dormant_replacement: Option<RuntimeDormantLocalFifoReservation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RestoredProducerRetirement {
+    causal_lifecycle_key: iroha_crypto::Hash,
+    admission_ordinal: u128,
+    producer_stage: u8,
+}
+
+impl RestoredProducerRetirement {
+    fn from_body_owner(
+        causal_origin: &RuntimeCandidateCausalOrigin,
+        lifecycle_ordinal: Option<u128>,
+        producer_stage: Option<u8>,
+    ) -> Result<Option<Self>, EnqueueError> {
+        let Some(producer_stage) = producer_stage else {
+            return Ok(None);
+        };
+        let admission_ordinal = lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
+        let causal_lifecycle_key = causal_origin
+            .restored_producer_lifecycle_key
+            .ok_or(EnqueueError::FailClosed)?;
+        if producer_stage != RuntimeDormantLocalFifoReservation::BODY_AVAILABLE_STAGE
+            || admission_ordinal == 0
+            || !causal_origin.validate_exact()
+            || causal_origin.root_lifecycle_ordinal != Some(admission_ordinal)
+            || causal_origin.lifecycle_key != causal_lifecycle_key
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        Ok(Some(Self {
+            causal_lifecycle_key,
+            admission_ordinal,
+            producer_stage,
+        }))
+    }
 }
 
 impl BodyAvailableReservation {
@@ -6019,6 +6134,21 @@ impl BodyAvailableReservation {
     /// Whether this token reserved a new bounded ingress slot.
     pub(crate) const fn owns_new_slot(&self) -> bool {
         self.owns_new_slot
+    }
+
+    /// Retag this exact unpublished token while preserving every physical and
+    /// logical ownership field.
+    pub(crate) fn rebind_consumer_if_exact(
+        &mut self,
+        previous: EventTag,
+        rebound: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> bool {
+        if self.tag != previous || self.manifest != *manifest {
+            return false;
+        }
+        self.tag = rebound;
+        true
     }
 
     fn lifecycle_owner(&self) -> Option<RuntimeLifecycleOwner> {
@@ -6391,6 +6521,8 @@ fn append_validated_receipt_identity(identity: &mut Vec<u8>, receipt: &Validated
     append_runtime_identity_field(identity, &receipt.execution_commitment().encode());
 }
 
+impl exact_runtime_command_identity_sealed::Sealed for AdapterCommand {}
+
 impl ExactRuntimeCommandIdentity for AdapterCommand {
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
         let (kind, canonical_bytes) = match self {
@@ -6466,6 +6598,10 @@ impl ExactRuntimeCommandIdentity for AdapterCommand {
             canonical_bytes: Arc::from(canonical_bytes),
             canonical_hash,
         }
+    }
+
+    fn is_certified_fence_escape(&self) -> bool {
+        matches!(self, Self::Authenticated(message) if message.is_certified_fence_escape())
     }
 }
 
@@ -6732,7 +6868,10 @@ impl BoundedIngress<AdapterCommand> {
                 Err(RuntimeIngressMergeError::IndependentOccurrence) => {}
             }
         }
-        self.enqueue_classified_command_with_capacity(tagged, certified_fence_escape)?;
+        if tagged.command.is_certified_fence_escape() != certified_fence_escape {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.enqueue_classified_command_with_capacity(tagged)?;
         Ok(tag)
     }
 
@@ -6892,7 +7031,12 @@ impl BoundedIngress<AdapterCommand> {
             .checked_add(dormant_reservations_after)
             .and_then(|occupied| occupied.checked_add(1))
             .ok_or(EnqueueError::FailClosed)?;
-        if occupied_after_commit > self.config.ordinary_total_limit() {
+        let physical_limit = self
+            .config
+            .ordinary_total_limit()
+            .checked_add(self.certified_fence_escape_credit())
+            .ok_or(EnqueueError::FailClosed)?;
+        if occupied_after_commit > physical_limit {
             return Err(EnqueueError::Full);
         }
         let queue_len_before =
@@ -6971,6 +7115,13 @@ impl BoundedIngress<AdapterCommand> {
 
                 // Infallible reservation commit while the source remains
                 // locked; a rejected owner or gate cannot burn an ordinal.
+                // Capacity above was computed after retiring proposals which
+                // conflict with this canonical body, so publish that
+                // retirement atomically with the replacement token. Leaving
+                // those commands live until materialization would transiently
+                // own more physical slots than the calculation admitted and
+                // could exclude the certified fence escape.
+                ingress.discard_proposals_conflicting_with(reservation.manifest());
                 ingress.reserved_body_available = Some(reservation.clone());
                 Ok(reservation)
             },
@@ -7103,7 +7254,6 @@ impl BoundedIngress<AdapterCommand> {
                 debug_assert!(removed);
             }
             self.reserved_body_available = None;
-            self.discard_proposals_conflicting_with(reservation.manifest());
             self.commands.push_back(command);
             Ok(())
         })
@@ -7148,10 +7298,8 @@ impl BoundedIngress<AdapterCommand> {
             }
         }
         if let Some(reservation) = &mut self.reserved_body_available
-            && reservation.tag == previous
-            && reservation.manifest == *manifest
+            && reservation.rebind_consumer_if_exact(previous, rebound, manifest)
         {
-            reservation.tag = rebound;
             rebound_count = rebound_count.saturating_add(1);
         }
         rebound_count
@@ -7188,6 +7336,46 @@ impl BoundedIngress<AdapterCommand> {
             retired = retired.saturating_add(1);
         }
         retired
+    }
+
+    fn restored_body_available_retirement(
+        &self,
+        tag: EventTag,
+        matches_manifest: impl Fn(&wire::PayloadManifest) -> bool,
+    ) -> Result<Option<RestoredProducerRetirement>, EnqueueError> {
+        let mut owners = Vec::new();
+        if let Some(reservation) = self
+            .reserved_body_available
+            .as_ref()
+            .filter(|reservation| reservation.tag == tag && matches_manifest(&reservation.manifest))
+        {
+            owners.push(RestoredProducerRetirement::from_body_owner(
+                reservation
+                    .causal_origin
+                    .as_ref()
+                    .ok_or(EnqueueError::FailClosed)?,
+                reservation.lifecycle_ordinal,
+                reservation.restored_producer_stage,
+            )?);
+        }
+        for queued in self.commands.iter().filter(|queued| queued.tag == tag) {
+            let AdapterCommand::BodyAvailable { manifest } = &queued.command else {
+                continue;
+            };
+            if !matches_manifest(manifest) {
+                continue;
+            }
+            owners.push(RestoredProducerRetirement::from_body_owner(
+                &queued.causal_origin,
+                queued.lifecycle_ordinal,
+                queued.restored_producer_stage,
+            )?);
+        }
+        match owners.as_slice() {
+            [] => Ok(None),
+            [owner] => Ok(*owner),
+            _ => Err(EnqueueError::DuplicateCompletionOwnership),
+        }
     }
 
     fn retire_body_pipeline_completions(
@@ -7481,6 +7669,7 @@ pub(crate) struct RuntimeDormantLocalFifoReservation {
 
 impl RuntimeDormantLocalFifoReservation {
     const TIMEOUT_ELAPSED_STAGE: u8 = 6;
+    const BODY_AVAILABLE_STAGE: u8 = 7;
 
     const fn is_known_stage(producer_stage: u8) -> bool {
         producer_stage <= 10
@@ -8822,6 +9011,16 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err("Sumeragi v2 effect lifecycle ownership was invalid".to_owned());
         }
         Ok(ownership)
+    }
+
+    /// Bind an externally constructed historical-lock retransmit batch to the
+    /// same exact fresh lifecycle ownership used by the production timer.
+    #[cfg(test)]
+    pub(crate) fn retain_retransmit_effect_ownership_for_test(
+        &mut self,
+        effects: &[D::Effect],
+    ) -> Result<(), EnqueueError> {
+        self.retain_effect_ownership(RuntimeEffectSource::Retransmit, None, None, effects)
     }
 
     /// Publish the receiver-local physical admission high-watermark before a
@@ -11832,11 +12031,19 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// Slots into which trusted asynchronous completions can be admitted now.
     ///
     /// Completion producers must consult this bound before removing work from
-    /// their own bounded queues. It excludes the one physical slot reserved
-    /// for an authenticated TC or CommitQC, so local callbacks cannot pin the
-    /// certificate which retires their own fence.
+    /// their own bounded queues. When no certified root is queued it excludes
+    /// the one physical slot reserved for an authenticated TC or CommitQC.
+    /// Once such a root arrives, that exact root is charged to the reserved
+    /// slot and every ordinary Completion position remains available
+    /// regardless of enqueue order.
     pub(crate) fn remaining_completion_capacity(&self) -> usize {
         self.ingress.remaining_capacity()
+    }
+
+    /// Whether the runtime currently charges one exact authenticated
+    /// certificate to the physical fence-escape slot.
+    pub(crate) fn has_certified_fence_escape_credit(&self) -> bool {
+        self.ingress.certified_fence_escape_credit() == 1
     }
 
     /// Return whether removing this network head can be coupled to immediate
@@ -11951,7 +12158,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     }
 
     #[cfg(test)]
-    fn observe_effects_with_test_ownership(
+    pub(crate) fn observe_effects_with_test_ownership(
         &mut self,
         now: Instant,
         effects: &[D::Effect],
@@ -12116,6 +12323,89 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 | EnqueueError::Full),
             ) => {
                 Err(error.to_string())
+            }
+        }
+    }
+
+    /// Return whether the exact body owner is the process carrier for a
+    /// persistent adapter producer reservation.
+    ///
+    /// Runtime ingress represents a restart-restored stage-7 parent directly;
+    /// a Busy-deferred owner represents it through the adapter reservation
+    /// attached to that exact admission ordinal. The two representations may
+    /// never coexist for one serialized owner.
+    fn body_available_has_persistent_producer(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<bool, String> {
+        let ingress = match self
+            .ingress
+            .restored_body_available_retirement(tag, |queued| queued == manifest)
+        {
+            Ok(retirement) => retirement.is_some(),
+            Err(error) => {
+                self.latch_fail_closed(
+                    "body completion carried corrupt restored producer metadata",
+                );
+                return Err(error.to_string());
+            }
+        };
+        let deferred = match self
+            .driver
+            .deferred_body_available_has_persistent_producer(tag, manifest)
+        {
+            Ok(persistent) => persistent,
+            Err(error) => {
+                let error = error.to_string();
+                self.latch_fail_closed(
+                    "body completion lost its exact deferred producer reservation",
+                );
+                return Err(format!(
+                    "Sumeragi v2 deferred body producer validation failed: {error}"
+                ));
+            }
+        };
+        if ingress && deferred {
+            self.latch_fail_closed("one body completion retained two persistent producer carriers");
+            return Err(
+                "Sumeragi v2 body completion has duplicate persistent producer ownership"
+                    .to_owned(),
+            );
+        }
+        Ok(ingress || deferred)
+    }
+
+    fn retire_restored_body_producer(
+        &mut self,
+        retirement: Option<RestoredProducerRetirement>,
+    ) -> Result<(), String> {
+        let Some(retirement) = retirement else {
+            return Ok(());
+        };
+        match self.driver.retire_restored_producer_continuation(
+            retirement.causal_lifecycle_key,
+            retirement.admission_ordinal,
+            retirement.producer_stage,
+        ) {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                self.latch_fail_closed(
+                    "restored body completion retirement lost its durable producer owner",
+                );
+                Err(
+                    "Sumeragi v2 restored body completion has no exact durable producer owner"
+                        .to_owned(),
+                )
+            }
+            Err(error) => {
+                let error = error.to_string();
+                self.latch_fail_closed(
+                    "restored body completion retirement could not persist producer release",
+                );
+                Err(format!(
+                    "Sumeragi v2 restored body producer retirement failed: {error}"
+                ))
             }
         }
     }
@@ -12765,6 +13055,17 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.commit_body_available(reservation)
     }
 
+    /// Install an ordinary volatile body owner without consulting adapter
+    /// restart metadata, for crash-cut coalescence tests only.
+    #[cfg(test)]
+    pub(crate) fn enqueue_volatile_body_available_for_test(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+    ) -> Result<(), EnqueueError> {
+        self.ingress.enqueue_canonical_body_available(tag, manifest)
+    }
+
     /// Reserve exact runtime ownership for a reconstructed body completion.
     ///
     /// Capacity and conflicting queued proposals are evaluated without
@@ -12855,29 +13156,82 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
             manifest: manifest.clone(),
         };
-        let already_owned = self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?;
-        if already_owned {
-            if self.ingress.reserved_body_available.is_none() {
-                return BodyAvailableReservation::coalesced_with_owner(tag, manifest, ownership);
-            }
-            let result = self.ingress.reserve_canonical_body_available_internal(
-                tag,
-                manifest,
-                Some(ownership.owner()),
-                ownership.candidate_semantic_statement(),
-                None,
-            );
-            if matches!(
-                result,
-                Err(EnqueueError::FailClosed | EnqueueError::DuplicateCompletionOwnership)
-            ) {
-                self.latch_fail_closed("owned body-available reservation validation failed");
-            }
-            return result;
-        }
         let command = AdapterCommand::BodyAvailable {
             manifest: manifest.clone(),
         };
+        if self.ingress.reserved_body_available.is_some() {
+            // An unpublished reservation is already the sole physical
+            // Completion owner.  In particular, `EnterView` may have moved
+            // that token to a later consumer tag while retaining its original
+            // lifecycle owner.  Reclaim the exact token before consulting the
+            // reducer's current admission projection: the view transition may
+            // legitimately change that projection, but it cannot remint or
+            // replace the already charged slot.
+            if !self.body_pipeline_completion_is_owned(tag, &evidence)? {
+                self.latch_fail_closed(
+                    "owned body-available retry differed from its unpublished exact owner",
+                );
+                return Err(EnqueueError::DuplicateCompletionOwnership);
+            }
+            let existing = self
+                .ingress
+                .reserved_body_available
+                .as_ref()
+                .expect("unpublished body owner remains serialized")
+                .clone();
+            let exact_retry = (|| -> Result<bool, EnqueueError> {
+                let physical_admission_ordinal =
+                    existing.admission_ordinal.ok_or(EnqueueError::FailClosed)?;
+                let lifecycle_ordinal =
+                    existing.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
+                let retained_owner = existing.lifecycle_owner().ok_or(EnqueueError::FailClosed)?;
+                let restored = existing.restored_producer_stage.is_some();
+                Ok(existing.tag == tag
+                    && existing.manifest == manifest
+                    && existing.owns_new_slot
+                    && existing.candidate_semantic_statement
+                        == ownership.candidate_semantic_statement()
+                    && existing
+                        .restored_producer_stage
+                        .is_none_or(RuntimeDormantLocalFifoReservation::is_known_stage)
+                    && (!restored || ownership.binds_exact_fetch_body_manifest(&manifest))
+                    && (&retained_owner == ownership.owner() || restored)
+                    && self
+                        .ingress
+                        .lifecycle_ordinals
+                        .recognizes_minted(physical_admission_ordinal)
+                        .map_err(|_| EnqueueError::FailClosed)?
+                    && self
+                        .ingress
+                        .lifecycle_ordinals
+                        .recognizes_minted(lifecycle_ordinal)
+                        .map_err(|_| EnqueueError::FailClosed)?
+                    && existing
+                        .dormant_replacement
+                        .as_ref()
+                        .is_none_or(|replacement| {
+                            self.ingress
+                                .dormant_local_fifo_reservations
+                                .contains(replacement)
+                        }))
+            })();
+            match exact_retry {
+                Ok(true) => return Ok(existing),
+                Ok(false) => self.latch_fail_closed(
+                    "owned body-available retry changed its unpublished exact owner",
+                ),
+                Err(error) => {
+                    self.latch_fail_closed(
+                        "owned body-available retry lost its unpublished exact owner",
+                    );
+                    return Err(error);
+                }
+            }
+            return Err(EnqueueError::DuplicateCompletionOwnership);
+        }
+        if self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)? {
+            return BodyAvailableReservation::coalesced_with_owner(tag, manifest, ownership);
+        }
         let preflight =
             self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
         if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {
@@ -12902,10 +13256,25 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             )),
             RuntimeCommandAdmissionPreflight::Coalesce
             | RuntimeCommandAdmissionPreflight::CoalesceOwned { .. } => {
-                unreachable!("handled above")
+                self.latch_fail_closed(
+                    "unpublished body-available owner disagreed with adapter preflight",
+                );
+                return Err(EnqueueError::FailClosed);
             }
             RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
         };
+        let candidate_statement = ownership.candidate_semantic_statement();
+        // A crash can replace the volatile physical FetchBody carrier with a
+        // later certified or differently routed fetch. Its lifecycle owner is
+        // therefore allowed to differ from the persisted stage-7 successor.
+        // The exact Fetch kind and frozen body coordinates authorize that
+        // bridge; the completion itself continues under the restored owner.
+        if restored_owner.is_some() && !ownership.binds_exact_fetch_body_manifest(&manifest) {
+            self.latch_fail_closed(
+                "restored body-available retry changed its frozen candidate coordinates",
+            );
+            return Err(EnqueueError::FailClosed);
+        }
         let owner = restored_owner
             .as_ref()
             .map_or_else(|| ownership.owner(), |(owner, _)| owner);
@@ -12913,7 +13282,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             tag,
             manifest,
             Some(owner),
-            ownership.candidate_semantic_statement(),
+            candidate_statement,
             restored_owner
                 .as_ref()
                 .map(|(_, producer_stage)| *producer_stage),
@@ -12955,10 +13324,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// The completion can be waiting either in runtime ingress or in the adapter's Busy-deferred
     /// completion lane. `rebound` must be the runtime's installed incarnation,
     /// and source and destination slots are both checked before either queue is
-    /// mutated. A single exact destination owner coalesces the transfer by
-    /// retiring the unique source; conflicting evidence or duplicate ownership
-    /// at either tag fails closed without mutation. Success leaves exactly one
-    /// full-evidence owner at `rebound`.
+    /// mutated. When one exact destination already exists, the sole persistent
+    /// producer carrier survives and the ordinary volatile twin retires; a
+    /// persistent source is then retagged to `rebound`. Conflicting evidence,
+    /// duplicate ownership, or two independent persistent roots fail closed
+    /// before mutation. Success leaves exactly one full-evidence owner at
+    /// `rebound`.
     pub(crate) fn rebind_body_available(
         &mut self,
         previous: EventTag,
@@ -12986,13 +13357,77 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
 
         let transferred = if destination_owned {
-            let ingress = self
-                .ingress
-                .retire_canonical_body_available(previous, manifest);
-            let deferred = self
-                .driver
-                .retire_deferred_body_available(previous, manifest);
-            ingress.saturating_add(deferred)
+            let source_persistent =
+                self.body_available_has_persistent_producer(previous, manifest)?;
+            let destination_persistent =
+                self.body_available_has_persistent_producer(rebound, manifest)?;
+            if source_persistent && destination_persistent {
+                self.latch_fail_closed(
+                    "body completion coalescence found two independent persistent producers",
+                );
+                return Err(
+                    "Sumeragi v2 body completion has two persistent producer roots".to_owned(),
+                );
+            }
+
+            if source_persistent {
+                // Keep the sole crash-recoverable producer. Retiring the
+                // ordinary destination first is crash-safe: until the final
+                // in-memory retag, the durable source remains recoverable at
+                // its previous certified coordinates.
+                if !self.retire_body_available(rebound, manifest)? {
+                    self.latch_fail_closed(
+                        "body completion coalescence lost its volatile destination owner",
+                    );
+                    return Err(
+                        "Sumeragi v2 body completion destination disappeared during coalescence"
+                            .to_owned(),
+                    );
+                }
+                let ingress = self
+                    .ingress
+                    .rebind_canonical_body_available(previous, rebound, manifest);
+                let deferred = self
+                    .driver
+                    .rebind_deferred_body_available(previous, rebound, manifest);
+                ingress.saturating_add(deferred)
+            } else {
+                // The destination is at least as crash-recoverable as the
+                // source. Persist any deferred or restored source release
+                // before removing its volatile queue occurrence.
+                let deferred = match self
+                    .driver
+                    .retire_deferred_body_available(previous, manifest)
+                {
+                    Ok(retired) => retired,
+                    Err(error) => {
+                        let error = error.to_string();
+                        self.latch_fail_closed(
+                            "body completion rebind could not persist deferred producer release",
+                        );
+                        return Err(format!(
+                            "Sumeragi v2 deferred body producer retirement failed: {error}"
+                        ));
+                    }
+                };
+                let restored = match self
+                    .ingress
+                    .restored_body_available_retirement(previous, |queued| queued == manifest)
+                {
+                    Ok(restored) => restored,
+                    Err(error) => {
+                        self.latch_fail_closed(
+                            "body completion rebind found corrupt restored producer metadata",
+                        );
+                        return Err(error.to_string());
+                    }
+                };
+                self.retire_restored_body_producer(restored)?;
+                let ingress = self
+                    .ingress
+                    .retire_canonical_body_available(previous, manifest);
+                ingress.saturating_add(deferred)
+            }
         } else {
             let ingress = self
                 .ingress
@@ -13032,6 +13467,150 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         Ok(true)
     }
 
+    /// Transfer the sole unpublished exact-body completion owned by a
+    /// protected fetch to its certified successor incarnation.
+    ///
+    /// A certified response supplies the canonical manifest only after the
+    /// fetch task has been created, so the task can legitimately carry no
+    /// manifest of its own. Match the runtime-owned token by its immutable
+    /// consensus coordinates, then delegate the exact evidence and duplicate
+    /// checks to [`Self::rebind_body_available`]. The delegated transfer edits
+    /// only the tag and therefore preserves the physical admission ordinal,
+    /// lifecycle owner, and any restart-dormant backing.
+    pub(crate) fn rebind_unpublished_body_available(
+        &mut self,
+        previous: EventTag,
+        rebound: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Result<bool, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        if !rebound.strictly_advances(previous) {
+            return Err(
+                "Sumeragi v2 unpublished body completion rebind did not advance its incarnation"
+                    .to_owned(),
+            );
+        }
+        if rebound != self.round_tag {
+            return Err(
+                "Sumeragi v2 unpublished body completion target is not the installed runtime incarnation"
+                    .to_owned(),
+            );
+        }
+        let Some(manifest) = self
+            .ingress
+            .reserved_body_available
+            .as_ref()
+            .filter(|reservation| {
+                reservation.tag == previous
+                    && reservation.manifest.round == round
+                    && reservation.manifest.subject == subject
+            })
+            .map(|reservation| reservation.manifest.clone())
+        else {
+            return Ok(false);
+        };
+        if self.body_available_is_uniquely_owned(rebound, &manifest)? {
+            self.latch_fail_closed(
+                "unpublished body completion rebind found a second destination owner",
+            );
+            return Err(
+                "Sumeragi v2 unpublished body completion already has a distinct destination owner"
+                    .to_owned(),
+            );
+        }
+        self.rebind_body_available(previous, rebound, &manifest)
+    }
+
+    /// Retire the sole unpublished exact-body completion for a fetch which no
+    /// longer belongs to the installed safety frontier.
+    ///
+    /// Match by the fetch's immutable consensus coordinates, recover the full
+    /// manifest from the runtime-owned token, and use the exact retirement
+    /// path so duplicate owners fail closed before capacity or dormant restart
+    /// backing changes.
+    pub(crate) fn retire_unpublished_body_available(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Result<bool, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        let Some(manifest) = self
+            .ingress
+            .reserved_body_available
+            .as_ref()
+            .filter(|reservation| {
+                reservation.tag == tag
+                    && reservation.manifest.round == round
+                    && reservation.manifest.subject == subject
+            })
+            .map(|reservation| reservation.manifest.clone())
+        else {
+            return Ok(false);
+        };
+        self.retire_body_available(tag, &manifest)
+    }
+
+    /// Retire the restart-dormant stage-7 parent of an exact body fetch which
+    /// became terminal before reserving any `BodyAvailable` token.
+    ///
+    /// The effect binding proves the fetch coordinates. Because restart gives
+    /// the reconstructed fetch a fresh physical lifecycle, the adapter—not
+    /// that volatile owner—resolves those coordinates against its sole
+    /// persisted dormant stage-7 producer. Ordinary same-process fetches have
+    /// no such record and are an explicit no-op.
+    pub(crate) fn retire_restored_body_fetch_parent(
+        &mut self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<bool, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        let AdapterEffect::FetchBody {
+            round,
+            subject,
+            manifest,
+            ..
+        } = effect
+        else {
+            self.latch_fail_closed(
+                "restored body-fetch retirement changed its exact effect binding",
+            );
+            return Err(
+                "Sumeragi v2 restored body-fetch retirement has invalid ownership".to_owned(),
+            );
+        };
+        if !ownership.exactly_binds_adapter_effect(effect) {
+            self.latch_fail_closed(
+                "restored body-fetch retirement changed its exact effect binding",
+            );
+            return Err(
+                "Sumeragi v2 restored body-fetch retirement has invalid ownership".to_owned(),
+            );
+        }
+        match self
+            .driver
+            .retire_restored_body_fetch_parent(*round, *subject, manifest.as_ref())
+        {
+            Ok(retired) => Ok(retired),
+            Err(error) => {
+                let error = error.to_string();
+                self.latch_fail_closed(
+                    "restored body-fetch retirement could not persist its producer release",
+                );
+                Err(format!(
+                    "Sumeragi v2 restored body-fetch producer retirement failed: {error}"
+                ))
+            }
+        }
+    }
+
     /// Retire one superseded exact-body completion from its serialized owner.
     ///
     /// The completion may still be waiting in runtime ingress or may already
@@ -13049,8 +13628,32 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if !self.body_available_is_uniquely_owned(tag, manifest)? {
             return Ok(false);
         }
+        let restored = match self
+            .ingress
+            .restored_body_available_retirement(tag, |queued| queued == manifest)
+        {
+            Ok(restored) => restored,
+            Err(error) => {
+                self.latch_fail_closed(
+                    "body completion retirement found corrupt restored producer metadata",
+                );
+                return Err(error.to_string());
+            }
+        };
+        let deferred = match self.driver.retire_deferred_body_available(tag, manifest) {
+            Ok(retired) => retired,
+            Err(error) => {
+                let error = error.to_string();
+                self.latch_fail_closed(
+                    "body completion retirement could not persist deferred producer release",
+                );
+                return Err(format!(
+                    "Sumeragi v2 deferred body producer retirement failed: {error}"
+                ));
+            }
+        };
+        self.retire_restored_body_producer(restored)?;
         let ingress = self.ingress.retire_canonical_body_available(tag, manifest);
-        let deferred = self.driver.retire_deferred_body_available(tag, manifest);
         let total = ingress.saturating_add(deferred);
         if total != 1 {
             self.latch_fail_closed("body completion retirement changed its owner count");
@@ -13103,12 +13706,38 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 return Err(error);
             }
         };
+        let restored = match self
+            .ingress
+            .restored_body_available_retirement(tag, |manifest| {
+                manifest.round == round && manifest.subject == subject
+            }) {
+            Ok(restored) => restored,
+            Err(error) => {
+                self.latch_fail_closed(
+                    "body pipeline retirement found corrupt restored producer metadata",
+                );
+                return Err(error.to_string());
+            }
+        };
+        let deferred = match self
+            .driver
+            .retire_deferred_body_pipeline_completions(tag, round, subject)
+        {
+            Ok(retired) => retired,
+            Err(error) => {
+                let error = error.to_string();
+                self.latch_fail_closed(
+                    "body pipeline retirement could not persist deferred producer release",
+                );
+                return Err(format!(
+                    "Sumeragi v2 deferred body producer retirement failed: {error}"
+                ));
+            }
+        };
+        self.retire_restored_body_producer(restored)?;
         let ingress = self
             .ingress
             .retire_body_pipeline_completions(tag, round, subject);
-        let deferred = self
-            .driver
-            .retire_deferred_body_pipeline_completions(tag, round, subject);
         let retired = ingress.merge(deferred);
         let remaining = self
             .ingress
@@ -13186,13 +13815,21 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                     .to_owned(),
             );
         }
-        self.ingress.retire_proposal_work_after_decision(
+        if let Err(error) = self.driver.retire_deferred_proposal_work_after_decision(
             decision_tag,
             decision_round,
             decision_subject,
             decision_commitment,
-        );
-        self.driver.retire_deferred_proposal_work_after_decision(
+        ) {
+            let error = error.to_string();
+            self.latch_fail_closed(
+                "decided proposal retirement could not persist deferred producer release",
+            );
+            return Err(format!(
+                "Sumeragi v2 deferred proposal producer retirement failed: {error}"
+            ));
+        }
+        self.ingress.retire_proposal_work_after_decision(
             decision_tag,
             decision_round,
             decision_subject,
@@ -13256,12 +13893,24 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if self.fail_closed {
             return Err("Sumeragi v2 runtime is fail-closed".to_owned());
         }
+        let deferred = match self
+            .driver
+            .retire_deferred_unsafe_proposals_for_lock(locked_round, locked_subject)
+        {
+            Ok(retired) => retired,
+            Err(error) => {
+                let error = error.to_string();
+                self.latch_fail_closed(
+                    "unsafe proposal retirement could not persist deferred producer release",
+                );
+                return Err(format!(
+                    "Sumeragi v2 deferred proposal producer retirement failed: {error}"
+                ));
+            }
+        };
         let ingress = self
             .ingress
             .retire_unsafe_proposals_for_lock(locked_round, locked_subject);
-        let deferred = self
-            .driver
-            .retire_deferred_unsafe_proposals_for_lock(locked_round, locked_subject);
         if self
             .reconcile_deferred_runtime_ownership_after_retirement()
             .is_err()
@@ -13723,6 +14372,8 @@ mod tests {
             }
         }
     }
+
+    impl exact_runtime_command_identity_sealed::Sealed for FakeCommand {}
 
     impl ExactRuntimeCommandIdentity for FakeCommand {
         fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
@@ -14917,6 +15568,126 @@ mod tests {
     }
 
     #[test]
+    fn candidate_statement_binds_manifest_by_exact_consensus_coordinates() {
+        let (context, _keys) = authenticated_runtime_context();
+        let manifest = runtime_manifest(&context, 0x78);
+        let statement = RuntimeCandidateSemanticStatement::new(
+            manifest.round,
+            manifest.round,
+            Some(manifest.subject),
+            Some(wire::GlobalPhase::Commit),
+            Some(wire::ExecutionCommitment::without_topups(
+                Hash::new(b"manifest parent state"),
+                Hash::new(b"manifest post state"),
+                Hash::new(b"manifest writes"),
+                Hash::new(b"manifest executed block"),
+            )),
+        );
+        assert!(statement.binds_exact_body_manifest(&manifest));
+
+        let certified_round = wire::ConsensusRound {
+            view: manifest.round.view + 3,
+            ..manifest.round
+        };
+        let mut later_statement = statement;
+        later_statement.round = certified_round;
+        assert!(!later_statement.binds_exact_body_manifest(&manifest));
+
+        let mut changed_round = manifest.clone();
+        changed_round.round.view += 1;
+        assert!(!statement.binds_exact_body_manifest(&changed_round));
+
+        let mut changed_subject = manifest.clone();
+        changed_subject.subject.payload_hash = Hash::new(b"foreign manifest payload");
+        assert!(!statement.binds_exact_body_manifest(&changed_subject));
+
+        let mut changed_context = manifest.clone();
+        changed_context.round.context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(
+            Hash::new(b"foreign manifest context"),
+        ));
+        assert!(!statement.binds_exact_body_manifest(&changed_context));
+
+        let later_tag = EventTag::new(context.height, certified_round.view, Generation::new(5));
+        let later_fetch = AdapterEffect::FetchBody {
+            tag: later_tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(wire::QuorumCertificate {
+                round: certified_round,
+                proposal_round: manifest.round,
+                phase: wire::GlobalPhase::Commit,
+                subject: manifest.subject,
+                execution_commitment: later_statement
+                    .execution_commitment
+                    .expect("certified statement has an execution commitment"),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x78; 96],
+            }),
+        };
+        let later_fetch_ownership = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&later_fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(later_tag, 7_801)],
+        )
+        .expect("candidate binding preserves the later certificate round")
+        .pop()
+        .expect("one later-round FetchBody owner");
+        assert!(
+            !later_fetch_ownership.binds_exact_fetch_body_manifest(&manifest),
+            "a Fetch certificate outside the manifest round is not a valid production bridge"
+        );
+
+        let tag = EventTag::new(context.height, manifest.round.view, Generation::new(5));
+        let fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(wire::QuorumCertificate {
+                round: manifest.round,
+                proposal_round: manifest.round,
+                phase: wire::GlobalPhase::Commit,
+                subject: manifest.subject,
+                execution_commitment: statement
+                    .execution_commitment
+                    .expect("certified statement has an execution commitment"),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x79; 96],
+            }),
+        };
+        let fetch_ownership = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 7_802)],
+        )
+        .expect("certified FetchBody receives an exact production binding")
+        .pop()
+        .expect("one certified FetchBody owner");
+        assert!(fetch_ownership.binds_exact_fetch_body_manifest(&manifest));
+        assert!(!fetch_ownership.binds_exact_fetch_body_manifest(&changed_round));
+        assert!(!fetch_ownership.binds_exact_fetch_body_manifest(&changed_subject));
+
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let store_ownership = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&store),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 7_803)],
+        )
+        .expect("StoreBody receives an exact production binding")
+        .pop()
+        .expect("one StoreBody owner");
+        assert!(store_ownership.candidate_semantic_statement().is_some());
+        assert!(
+            !store_ownership.binds_exact_fetch_body_manifest(&manifest),
+            "matching body coordinates cannot substitute a non-Fetch candidate"
+        );
+    }
+
+    #[test]
     fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
         let (context, keys) = authenticated_runtime_context();
         let commit = signed_runtime_quorum_certificate(&context, &keys, 0x77);
@@ -15118,24 +15889,71 @@ mod tests {
             authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
         let initial = runtime.round_tag();
         let manifest = runtime_manifest(&context, 0x8B);
-        let reservation = runtime
-            .reserve_body_available(initial, manifest.clone())
-            .expect("reserve an unpublished body completion");
-        let source_after_reserve = runtime
+        let lifecycle_ordinal = runtime
             .ingress
-            .lifecycle_ordinals
-            .next_ordinal_for_test()
-            .expect("inspect ordinal source after reservation");
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint the test Fetch lifecycle from the runtime source");
+        let fetch_effect = AdapterEffect::FetchBody {
+            tag: initial,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let fetch_ownership = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&fetch_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                initial,
+                lifecycle_ordinal,
+            )],
+        )
+        .expect("bind the exact Fetch candidate")
+        .pop()
+        .expect("one Fetch effect owns one lifecycle");
+        assert!(fetch_ownership.binds_exact_fetch_body_manifest(&manifest));
+        let reservation = runtime
+            .reserve_body_available_with_owner(initial, manifest.clone(), &fetch_ownership)
+            .expect("reserve an unpublished body completion under its Fetch owner");
         let rebound = EventTag::new(
             initial.height(),
             initial.view() + 1,
             Generation::new(initial.generation().get() + 1),
         );
         observe_enter_view_for_test(&mut runtime, initial, rebound, &manifest);
+        let source_before_rebind = runtime
+            .ingress
+            .lifecycle_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect ordinal source before exact token rebind");
 
+        let foreign_subject = runtime_manifest(&context, 0x8C).subject;
+        assert!(
+            !runtime
+                .rebind_unpublished_body_available(
+                    initial,
+                    rebound,
+                    manifest.round,
+                    foreign_subject,
+                )
+                .expect("foreign coordinates cannot select the reserved token")
+        );
+        assert_eq!(
+            runtime
+                .ingress
+                .reserved_body_available
+                .as_ref()
+                .map(BodyAvailableReservation::tag),
+            Some(initial),
+        );
         assert!(
             runtime
-                .rebind_body_available(initial, rebound, &manifest)
+                .rebind_unpublished_body_available(
+                    initial,
+                    rebound,
+                    manifest.round,
+                    manifest.subject,
+                )
                 .expect("the unpublished token is a serialized body owner")
         );
         let mut rebound_reservation = reservation;
@@ -15144,9 +15962,31 @@ mod tests {
             runtime.ingress.reserved_body_available.as_ref(),
             Some(&rebound_reservation),
         );
+        assert_eq!(
+            runtime
+                .ingress
+                .lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect source after exact token rebind"),
+            source_before_rebind,
+            "rebind cannot remint the token",
+        );
         let retry = runtime
-            .reserve_body_available(rebound, manifest.clone())
-            .expect("rebound exact retry reclaims the immutable root token");
+            .reserve_body_available_with_owner(
+                rebound,
+                manifest.clone(),
+                &fetch_ownership
+                    .rebind_same_adapter_effect(&AdapterEffect::FetchBody {
+                        tag: rebound,
+                        round: manifest.round,
+                        subject: manifest.subject,
+                        manifest: Some(manifest.clone()),
+                        certified_sources: Vec::new(),
+                        certificate: None,
+                    })
+                    .expect("rebind the exact Fetch consumer"),
+            )
+            .expect("rebound exact owned retry reclaims the immutable root token");
         assert_eq!(retry, rebound_reservation);
         assert_eq!(
             runtime
@@ -15154,13 +15994,13 @@ mod tests {
                 .lifecycle_ordinals
                 .next_ordinal_for_test()
                 .expect("inspect source after rebound retry"),
-            source_after_reserve,
-            "rebind and retry cannot remint the token",
+            source_before_rebind,
+            "retry cannot remint the rebound token",
         );
 
         assert!(
             runtime
-                .retire_body_available(rebound, &manifest)
+                .retire_unpublished_body_available(rebound, manifest.round, manifest.subject,)
                 .expect("terminal supersession retires the exact unpublished owner")
         );
         assert!(runtime.ingress.reserved_body_available.is_none());
@@ -15247,9 +16087,8 @@ mod tests {
 
     /// Attach the same private local/causal runtime wrapper that production
     /// dispatch installs around one exact adapter-owned Busy occurrence.
-    fn bind_local_deferred_lifecycle_for_test(
+    fn mint_local_lifecycle_owner_for_test(
         runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
-        deferred_admission_ordinal: u128,
         semantic_identity: &[u8],
     ) -> RuntimeLifecycleOwner {
         let lifecycle_ordinal = runtime
@@ -15263,8 +16102,15 @@ mod tests {
             RuntimeFreshRootKind::StartupRecovery,
             semantic_identity,
         );
-        let owner = RuntimeLifecycleOwner::new(origin, lifecycle_ordinal)
-            .expect("bind the local deferred lifecycle ordinal");
+        RuntimeLifecycleOwner::new(origin, lifecycle_ordinal)
+            .expect("bind the local deferred lifecycle ordinal")
+    }
+
+    fn bind_deferred_lifecycle_owner_for_test(
+        runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+        deferred_admission_ordinal: u128,
+        owner: RuntimeLifecycleOwner,
+    ) -> RuntimeLifecycleOwner {
         let physical_cut = runtime.ingress_physical_cut;
         let runtime_seal = runtime
             .driver
@@ -15294,6 +16140,69 @@ mod tests {
             "the fixture cannot replace an existing runtime wrapper"
         );
         owner
+    }
+
+    fn bind_local_deferred_lifecycle_for_test(
+        runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+        deferred_admission_ordinal: u128,
+        semantic_identity: &[u8],
+    ) -> RuntimeLifecycleOwner {
+        let owner = mint_local_lifecycle_owner_for_test(runtime, semantic_identity);
+        bind_deferred_lifecycle_owner_for_test(runtime, deferred_admission_ordinal, owner)
+    }
+
+    /// Inject one real Busy-deferred completion with both its persistent
+    /// adapter reservation and its matching serialized-runtime wrapper.
+    fn defer_persistent_body_available_for_test(
+        runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+        semantic_identity: &[u8],
+    ) -> (u128, RuntimeLifecycleOwner) {
+        let owner = mint_local_lifecycle_owner_for_test(runtime, semantic_identity);
+        defer_persistent_body_available_with_owner_for_test(runtime, tag, manifest, owner)
+    }
+
+    fn defer_persistent_body_available_with_owner_for_test(
+        runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+        owner: RuntimeLifecycleOwner,
+    ) -> (u128, RuntimeLifecycleOwner) {
+        let before = runtime.driver.all_deferred_admission_ordinals();
+        runtime
+            .driver
+            .bind_selected_producer_lifecycle(
+                owner.causal_origin().lifecycle_key.clone(),
+                owner.lifecycle_ordinal(),
+            )
+            .expect("bind persistent body producer lifecycle");
+        let outcome = runtime
+            .driver
+            .body_available(tag, manifest.clone())
+            .expect("stage persistent body completion behind the Busy fence");
+        runtime.driver.clear_selected_producer_lifecycle();
+        assert!(
+            outcome.into_effects().is_empty(),
+            "the persistent fixture requires a real Busy-deferred occurrence"
+        );
+        let ordinals = runtime
+            .driver
+            .all_deferred_admission_ordinals()
+            .difference(&before)
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(ordinals.len(), 1);
+        let deferred_admission_ordinal = ordinals[0];
+        let owner =
+            bind_deferred_lifecycle_owner_for_test(runtime, deferred_admission_ordinal, owner);
+        assert!(
+            runtime
+                .driver
+                .deferred_body_available_has_persistent_producer(tag, manifest)
+                .expect("validate the exact persistent Busy producer")
+        );
+        (deferred_admission_ordinal, owner)
     }
 
     fn fair_network_ownership(
@@ -20596,7 +21505,7 @@ mod tests {
         let mut runtime = runtime(
             FakeDriver::new(initial),
             start,
-            RuntimeQueueConfig::new(8, 2, 2),
+            RuntimeQueueConfig::new(9, 2, 2),
         );
         for id in 0..4 {
             enqueue_fake(
@@ -20910,6 +21819,88 @@ mod tests {
             source_after_reserve,
             "conflicting evidence cannot burn a fresh physical ordinal",
         );
+    }
+
+    #[test]
+    fn restored_pre_store_body_available_spends_one_fresh_completion_slot() {
+        let directory = TempDir::new().expect("temporary restored body directory");
+        let (_runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let owner_tag = tag(0);
+        let manifest = runtime_manifest(&context, 0xB3);
+        let lifecycle_key = Hash::new(b"restored pre-store body lifecycle");
+        let body_command = AdapterCommand::BodyAvailable {
+            manifest: manifest.clone(),
+        };
+        let owner = RuntimeCandidateCausalOrigin::restore_producer_lifecycle(
+            owner_tag,
+            CommandClass::Completion,
+            &body_command,
+            None,
+            lifecycle_key,
+            1,
+        )
+        .expect("restore exact stage-7 producer lifecycle");
+        let source = RuntimeLifecycleOrdinalSource::after_high_watermark(1);
+        let mut ingress = BoundedIngress::with_lifecycle_ordinals(
+            RuntimeQueueConfig::new(4, 1, 1),
+            source.clone(),
+        );
+
+        assert!(ingress.dormant_local_fifo_reservations.is_empty());
+        assert_eq!(ingress.remaining_capacity(), 3);
+        let reservation = ingress
+            .reserve_canonical_body_available_internal(
+                owner_tag,
+                manifest.clone(),
+                Some(&owner),
+                None,
+                Some(RuntimeDormantLocalFifoReservation::BODY_AVAILABLE_STAGE),
+            )
+            .expect("restored pre-store body spends a fresh physical slot");
+        assert_eq!(reservation.lifecycle_ordinal, Some(1));
+        assert_eq!(reservation.admission_ordinal, Some(2));
+        assert_eq!(reservation.dormant_replacement, None);
+        assert_eq!(ingress.len(), 0);
+        assert_eq!(ingress.remaining_capacity(), 2);
+        let source_after_reserve = source
+            .next_ordinal_for_test()
+            .expect("inspect source after pre-store body reservation");
+
+        ingress.abort_canonical_body_available(reservation.clone());
+        let retry = ingress
+            .reserve_canonical_body_available_internal(
+                owner_tag,
+                manifest,
+                Some(&owner),
+                None,
+                Some(RuntimeDormantLocalFifoReservation::BODY_AVAILABLE_STAGE),
+            )
+            .expect("exact stage-7 retry reuses the unpublished token");
+        assert_eq!(retry, reservation);
+        assert_eq!(ingress.len(), 0);
+        assert_eq!(ingress.remaining_capacity(), 2);
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("inspect source after exact stage-7 retry"),
+            source_after_reserve,
+            "an exact retry cannot mint a second physical admission"
+        );
+
+        ingress
+            .commit_canonical_body_available(retry)
+            .expect("stage-7 body materializes under its old logical lifecycle");
+        assert!(ingress.reserved_body_available.is_none());
+        assert!(ingress.dormant_local_fifo_reservations.is_empty());
+        assert_eq!(ingress.len(), 1);
+        assert_eq!(ingress.commands[0].admission_ordinal, Some(2));
+        assert_eq!(ingress.commands[0].lifecycle_ordinal, Some(1));
+        assert_eq!(
+            ingress.commands[0].restored_producer_stage,
+            Some(RuntimeDormantLocalFifoReservation::BODY_AVAILABLE_STAGE)
+        );
+        assert_eq!(ingress.remaining_capacity(), 2);
     }
 
     #[test]
@@ -22399,10 +23390,10 @@ mod tests {
             payload_hash: Hash::new(b"coalesced-capacity-payload"),
         };
         let payload = |signature| {
-            wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+            wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                 round,
                 proposal_round: round,
-                phase: wire::GlobalPhase::Commit,
+                phase: wire::GlobalPhase::Prepare,
                 subject,
                 execution_commitment: wire::ExecutionCommitment::without_topups(
                     Hash::new(b"capacity parent state"),
@@ -22410,8 +23401,8 @@ mod tests {
                     Hash::new(b"capacity ordinary writes"),
                     Hash::new(b"capacity executed block wire"),
                 ),
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![signature],
+                signer: 0,
+                signature: vec![signature],
             })
         };
         let authenticated = |signature| {
@@ -22437,7 +23428,7 @@ mod tests {
         });
         assert!(matches!(
             classify_reducer_network_ingress(false, &queued_wire.payload),
-            Ok(CommandClass::Progress)
+            Ok(CommandClass::Normal)
         ));
         assert!(matches!(
             classify_reducer_network_ingress(false, &transport),
@@ -22451,7 +23442,7 @@ mod tests {
             classify_reducer_network_ingress(true, &transport),
             Err(NetworkIngressError::FailClosed)
         ));
-        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(4, 1, 1));
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(5, 1, 1));
 
         assert_eq!(
             ingress
@@ -22504,7 +23495,7 @@ mod tests {
             .expect("progress reserve remains independent");
         ingress
             .enqueue_authenticated(tag(3), CommandClass::Completion, authenticated(4))
-            .expect("completion reserve fills the final slot");
+            .expect("completion reserve fills the final ordinary slot");
         assert_eq!(ingress.len(), 4);
         assert_eq!(
             ingress.check_capacity(CommandClass::Completion),
@@ -22534,7 +23525,7 @@ mod tests {
         assert_eq!(
             ingress
                 .enqueue_authenticated(tag(10), CommandClass::Normal, authenticated(1))
-                .expect("the exact envelope coalesces even when every slot is owned"),
+                .expect("the exact envelope coalesces when every ordinary slot is owned"),
             tag(0)
         );
         assert_eq!(ingress.next_class, cursor_before);
@@ -22920,26 +23911,10 @@ mod tests {
             source_tag.view() + 1,
             Generation::new(source_tag.generation().get() + 1),
         );
-        let active_before_body = runtime.driver.all_deferred_admission_ordinals();
-        assert!(
-            runtime
-                .driver
-                .body_available(source_tag, manifest.clone())
-                .expect("stage exact completion behind the signer fence")
-                .into_effects()
-                .is_empty()
-        );
-        let body_ordinals = runtime
-            .driver
-            .all_deferred_admission_ordinals()
-            .difference(&active_before_body)
-            .copied()
-            .collect::<Vec<_>>();
-        assert_eq!(body_ordinals.len(), 1);
-        let body_ordinal = body_ordinals[0];
-        let body_owner = bind_local_deferred_lifecycle_for_test(
+        let (body_ordinal, body_owner) = defer_persistent_body_available_for_test(
             &mut runtime,
-            body_ordinal,
+            source_tag,
+            &manifest,
             b"body-available-retirement-owner",
         );
         let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
@@ -22967,6 +23942,13 @@ mod tests {
             (1, 1),
             "the destination must be owned by the real Busy-deferred lane"
         );
+        assert!(
+            runtime
+                .driver
+                .deferred_body_available_has_persistent_producer(rebound, &manifest)
+                .expect("validate the rebound durable producer"),
+            "the destination must retain the sole persistent producer root"
+        );
         stage_completion_for_queue_test(
             &mut runtime,
             source_tag,
@@ -22988,7 +23970,7 @@ mod tests {
                 .driver
                 .deferred_body_pipeline_completion_ownership(rebound, &evidence),
             (1, 1),
-            "coalescing retains exactly one destination owner"
+            "ordinary-source coalescing retains exactly one persistent destination owner"
         );
         assert_eq!(
             runtime
@@ -23126,6 +24108,138 @@ mod tests {
                 .expect("the retained FIFO destination remains uniquely retireable")
         );
         assert_eq!(retirement_runtime.queued_commands(), 0);
+    }
+
+    #[test]
+    fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
+        let directory = TempDir::new().expect("temporary persistent-root conflict directory");
+        let (mut runtime, context, _keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before opening a signer fence");
+        let deadline = now + runtime.round_timeout();
+        let RuntimeStep::Advanced(timeout_effects) = runtime
+            .step(deadline)
+            .expect("open a runtime-owned TimeoutVote signer fence")
+        else {
+            panic!("timeout dispatch unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("timeout dispatch retains exact scheduler ownership");
+        assert!(matches!(
+            timeout_effects.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+        let timeout_ownership = runtime
+            .take_effect_ownership(timeout_effects.len())
+            .expect("TimeoutVote Sign retains its lifecycle owner");
+        let [timeout_ownership] = timeout_ownership.as_slice() else {
+            panic!("TimeoutVote Sign has one exact owner")
+        };
+        runtime
+            .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
+            .expect("publish the pending TimeoutVote signer owner");
+
+        let source_tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x90);
+        let (source_ordinal, source_owner) = defer_persistent_body_available_for_test(
+            &mut runtime,
+            source_tag,
+            &manifest,
+            b"persistent-body-source",
+        );
+        let rebound = EventTag::new(
+            source_tag.height(),
+            source_tag.view() + 1,
+            Generation::new(source_tag.generation().get() + 1),
+        );
+        observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
+        let (destination_ordinal, destination_owner) =
+            defer_persistent_body_available_with_owner_for_test(
+                &mut runtime,
+                rebound,
+                &manifest,
+                source_owner.clone(),
+            );
+        assert_ne!(source_ordinal, destination_ordinal);
+        assert_eq!(source_owner, destination_owner);
+
+        let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
+            manifest: manifest.clone(),
+        };
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_body_pipeline_completion_ownership(source_tag, &evidence),
+            (1, 1)
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_body_pipeline_completion_ownership(rebound, &evidence),
+            (1, 1)
+        );
+        let adapter_ordinals_before = runtime.driver.all_deferred_admission_ordinals();
+        let wrapper_ordinals_before = runtime
+            .deferred_lifecycle_ownership
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            runtime
+                .rebind_body_available(source_tag, rebound, &manifest)
+                .expect_err("two persistent roots must fail before either owner is retired"),
+            "Sumeragi v2 body completion has two persistent producer roots"
+        );
+        assert!(runtime.fail_closed);
+        assert_eq!(
+            runtime.driver.all_deferred_admission_ordinals(),
+            adapter_ordinals_before,
+            "persistent-root preflight cannot mutate either adapter occurrence"
+        );
+        assert_eq!(
+            runtime
+                .deferred_lifecycle_ownership
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            wrapper_ordinals_before,
+            "persistent-root preflight cannot retire either runtime wrapper"
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_body_pipeline_completion_ownership(source_tag, &evidence),
+            (1, 1)
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_body_pipeline_completion_ownership(rebound, &evidence),
+            (1, 1)
+        );
+        assert!(
+            runtime
+                .driver
+                .deferred_body_available_has_persistent_producer(source_tag, &manifest)
+                .expect("source persistent root remains exact")
+        );
+        assert!(
+            runtime
+                .driver
+                .deferred_body_available_has_persistent_producer(rebound, &manifest)
+                .expect("destination persistent root remains exact")
+        );
     }
 
     #[test]
@@ -24273,16 +25387,7 @@ mod tests {
             dormant_lifecycle_ordinal,
         )
         .expect("restore the exact dormant body owner");
-        let dormant = RuntimeDormantLocalFifoReservation::completion(
-            dormant_lifecycle_key,
-            dormant_lifecycle_ordinal,
-            8,
-        );
         let capacity_before_dormant = runtime.remaining_completion_capacity();
-        runtime
-            .ingress
-            .install_dormant_local_fifo_reservations(vec![dormant])
-            .expect("install one dormant body-pipeline slot");
         let dormant_reservation = runtime
             .ingress
             .reserve_canonical_body_available_internal(
@@ -24290,13 +25395,13 @@ mod tests {
                 dormant_manifest.clone(),
                 Some(&dormant_owner),
                 None,
-                Some(8),
+                None,
             )
-            .expect("reserve an unpublished token backed by the dormant slot");
+            .expect("reserve an unpublished token for one exact lifecycle owner");
         assert_eq!(
             runtime.remaining_completion_capacity(),
             capacity_before_dormant - 1,
-            "the token aliases rather than duplicates its dormant capacity charge",
+            "the exact completion spends one physical position",
         );
         assert_eq!(
             runtime.ingress.body_pipeline_completion_counts(
@@ -24322,16 +25427,10 @@ mod tests {
             runtime.ingress.reserved_body_available.as_ref(),
             Some(&dormant_reservation),
         );
-        assert!(
-            runtime
-                .ingress
-                .dormant_local_fifo_reservations
-                .contains(&dormant)
-        );
         assert_eq!(
             runtime.remaining_completion_capacity(),
             capacity_before_dormant - 1,
-            "mismatched bulk retirement preserves the aliased capacity charge",
+            "mismatched bulk retirement preserves the exact capacity charge",
         );
         assert_eq!(
             runtime
@@ -24344,12 +25443,6 @@ mod tests {
             body_available_only,
         );
         assert!(runtime.ingress.reserved_body_available.is_none());
-        assert!(
-            !runtime
-                .ingress
-                .dormant_local_fifo_reservations
-                .contains(&dormant)
-        );
         assert_eq!(
             runtime.remaining_completion_capacity(),
             capacity_before_dormant,
@@ -25919,7 +27012,7 @@ mod tests {
     fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
         let directory = TempDir::new().expect("temporary runtime ingress directory");
         let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(5, 1, 1));
         let original = signed_runtime_proposal(&context, &keys, 1);
         let second = signed_runtime_proposal(&context, &keys, 2);
         let third = signed_runtime_proposal(&context, &keys, 3);
@@ -25993,7 +27086,7 @@ mod tests {
         assert_eq!(
             runtime
                 .enqueue_network(original.clone())
-                .expect("exact authenticated duplicate coalesces at full capacity"),
+                .expect("exact authenticated duplicate coalesces at full ordinary capacity"),
             owner_tag
         );
         assert_eq!(runtime.queued_commands(), 4);
@@ -26062,6 +27155,273 @@ mod tests {
             runtime.ingress.check_capacity(CommandClass::Completion),
             Err(EnqueueError::Full)
         ));
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn certified_commit_arriving_first_preserves_every_ordinary_reserve() {
+        let directory = TempDir::new().expect("temporary certified-order directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
+        let owner_tag = runtime.round_tag();
+
+        let commit =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0xD0),
+            ));
+        runtime
+            .enqueue_network(commit)
+            .expect("the early CommitQC is charged to the certified slot");
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            7,
+            "charging the CommitQC to its own slot leaves every ordinary position free"
+        );
+
+        for marker in 0xD1..=0xD5 {
+            let prepare =
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    signed_runtime_quorum_certificate_for_phase(
+                        &context,
+                        &keys,
+                        marker,
+                        wire::GlobalPhase::Prepare,
+                    ),
+                ));
+            runtime
+                .enqueue_network(prepare)
+                .expect("ordinary Progress capacity is independent of certificate arrival order");
+        }
+        assert_eq!(runtime.remaining_completion_capacity(), 2);
+
+        let manifest = runtime_manifest(&context, 0xD6);
+        let body_reservation = runtime
+            .ingress
+            .reserve_canonical_body_available(owner_tag, manifest)
+            .expect("BodyAvailable can reserve the first completion slot after an early CommitQC");
+        assert_eq!(runtime.queued_commands(), 6);
+        assert_eq!(runtime.remaining_completion_capacity(), 1);
+        runtime
+            .ingress
+            .commit_canonical_body_available(body_reservation)
+            .expect("the reserved BodyAvailable materializes without another capacity charge");
+        stage_completion_for_queue_test(
+            &mut runtime,
+            owner_tag,
+            AdapterCommand::SignatureCompleted(vec![4]),
+        );
+        assert_eq!(runtime.queued_commands(), 8);
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
+        assert!(matches!(
+            runtime.ingress.check_capacity(CommandClass::Completion),
+            Err(EnqueueError::Full)
+        ));
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn prepare_qc_cannot_spend_the_certified_physical_credit() {
+        let directory = TempDir::new().expect("temporary certified-classifier directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let certificate = |marker, phase| {
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate_for_phase(&context, &keys, marker, phase),
+            ))
+        };
+
+        for marker in [0xB0, 0xB1] {
+            runtime
+                .enqueue_network(certificate(marker, wire::GlobalPhase::Prepare))
+                .expect("the two ordinary Progress positions accept PrepareQCs");
+        }
+        assert!(matches!(
+            runtime.enqueue_network(certificate(0xB2, wire::GlobalPhase::Prepare)),
+            Err(NetworkIngressError::Backpressure(
+                EnqueueError::ReservedCapacity
+            ))
+        ));
+
+        runtime
+            .enqueue_network(certificate(0xB3, wire::GlobalPhase::Commit))
+            .expect("only the CommitQC receives the certified physical credit");
+        assert_eq!(runtime.queued_commands(), 3);
+        assert_eq!(runtime.remaining_completion_capacity(), 1);
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn distinct_certificates_share_exactly_one_physical_credit() {
+        let directory = TempDir::new().expect("temporary certified-credit directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let commit = |marker| {
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, marker),
+            ))
+        };
+
+        for marker in 0xC0..=0xC2 {
+            runtime
+                .enqueue_network(commit(marker))
+                .expect("one certified root uses the extra slot and the others use Progress");
+        }
+        assert_eq!(runtime.queued_commands(), 3);
+        assert_eq!(runtime.remaining_completion_capacity(), 1);
+        assert!(
+            !runtime.can_admit_network_message(&commit(0xC3)),
+            "a fourth certificate cannot receive a second physical credit"
+        );
+        assert!(matches!(
+            runtime.enqueue_network(commit(0xC3)),
+            Err(NetworkIngressError::Backpressure(
+                EnqueueError::ReservedCapacity
+            ))
+        ));
+
+        stage_completion_for_queue_test(
+            &mut runtime,
+            owner_tag,
+            AdapterCommand::SignatureCompleted(vec![0xC4]),
+        );
+        assert_eq!(runtime.queued_commands(), 4);
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn retiring_the_sole_certificate_does_not_fake_completion_headroom() {
+        let directory = TempDir::new().expect("temporary certified-retirement directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let certificate = |marker, phase| {
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate_for_phase(&context, &keys, marker, phase),
+            ))
+        };
+
+        runtime
+            .enqueue_network(certificate(0xA0, wire::GlobalPhase::Commit))
+            .expect("the CommitQC owns the single certified credit");
+        for marker in [0xA1, 0xA2] {
+            runtime
+                .enqueue_network(certificate(marker, wire::GlobalPhase::Prepare))
+                .expect("ordinary Progress fills its exact class allocation");
+        }
+        stage_completion_for_queue_test(
+            &mut runtime,
+            owner_tag,
+            AdapterCommand::SignatureCompleted(vec![0xA3]),
+        );
+        assert_eq!(runtime.queued_commands(), 4);
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
+
+        let (retired, _) = runtime
+            .ingress
+            .pop_pacemaker_progress_with_ownership(|command| command.is_certified_fence_escape())
+            .expect("the certified priority seam remains exact")
+            .expect("the retained CommitQC is selectable");
+        assert!(retired.command.is_certified_fence_escape());
+        assert_eq!(runtime.queued_commands(), 3);
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            0,
+            "retiring the sole certificate removes its credit as well as its physical owner"
+        );
+        assert!(matches!(
+            runtime.ingress.check_capacity(CommandClass::Completion),
+            Err(EnqueueError::Full)
+        ));
+
+        runtime
+            .ingress
+            .pop_next()
+            .expect("one ordinary FIFO service turn opens completion admission");
+        assert_eq!(runtime.remaining_completion_capacity(), 1);
+        assert!(
+            runtime
+                .ingress
+                .check_capacity(CommandClass::Completion)
+                .is_ok()
+        );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn unpublished_body_replacement_cannot_overbook_the_certified_slot() {
+        let directory = TempDir::new().expect("temporary body-replacement directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let proposal = signed_runtime_proposal(&context, &keys, 0x94);
+        let mut canonical = match &proposal.payload {
+            wire::ConsensusMessageV2Payload::Proposal(proposal) => proposal.manifest.clone(),
+            _ => unreachable!("runtime proposal fixture has Proposal payload"),
+        };
+        canonical.chunk_hashes = vec![Hash::new(b"canonical replacement chunk"); 2];
+        canonical.chunk_root = Hash::new(b"canonical replacement root");
+
+        runtime
+            .enqueue_network(proposal)
+            .expect("the conflicting proposal occupies Normal capacity");
+        runtime
+            .enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    signed_runtime_quorum_certificate_for_phase(
+                        &context,
+                        &keys,
+                        0x95,
+                        wire::GlobalPhase::Prepare,
+                    ),
+                ),
+            ))
+            .expect("ordinary Progress occupies its class allocation");
+        stage_completion_for_queue_test(
+            &mut runtime,
+            owner_tag,
+            AdapterCommand::SignatureCompleted(vec![0x96]),
+        );
+        assert_eq!(runtime.queued_commands(), 3);
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
+
+        let reservation = runtime
+            .ingress
+            .reserve_canonical_body_available(owner_tag, canonical)
+            .expect("the unpublished body atomically replaces its conflicting proposal");
+        assert_eq!(
+            runtime.queued_commands(),
+            2,
+            "the conflicting proposal must retire before the reservation becomes live"
+        );
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
+        runtime
+            .ingress
+            .abort_canonical_body_available(reservation.clone());
+
+        runtime
+            .enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                    signed_runtime_timeout_certificate(&context, &keys),
+                ),
+            ))
+            .expect("the retained unpublished body cannot exclude the certified escape");
+        assert_eq!(runtime.queued_commands(), 3);
+        assert_eq!(
+            runtime
+                .ingress
+                .occupied_with_dormant_reservations()
+                .expect("bounded live ownership remains countable"),
+            4
+        );
+
+        runtime
+            .ingress
+            .commit_canonical_body_available(reservation)
+            .expect("the exact token materializes without changing total ownership");
+        assert_eq!(runtime.queued_commands(), 4);
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
         assert!(!runtime.fail_closed);
     }
 
@@ -26138,9 +27498,11 @@ mod tests {
         runtime
             .enqueue_network(prepare(0xE3))
             .expect("fill the second ordinary Progress slot");
-        runtime
-            .enqueue_network(prepare(0xE4))
-            .expect("fill the final ordinary Progress slot");
+        stage_completion_for_queue_test(
+            &mut runtime,
+            owner_tag,
+            AdapterCommand::SignatureCompleted(vec![0xE4]),
+        );
         assert_eq!(runtime.queued_commands(), 3);
         assert_eq!(runtime.remaining_completion_capacity(), 0);
 
@@ -26302,7 +27664,7 @@ mod tests {
         let mut runtime = runtime(
             FakeDriver::new(initial),
             start,
-            RuntimeQueueConfig::new(6, 2, 1),
+            RuntimeQueueConfig::new(7, 2, 1),
         );
         for value in 0..3 {
             enqueue_fake(
@@ -26574,7 +27936,7 @@ mod tests {
             FakeDriver::new(initial),
             start,
             Duration::from_secs(10),
-            RuntimeQueueConfig::new(5, 1, 1),
+            RuntimeQueueConfig::new(6, 1, 1),
             Vec::new(),
             lifecycle_ordinals.clone(),
         )
@@ -26684,8 +28046,7 @@ mod tests {
         };
         let mut prepare_certificate = certificate.clone();
         prepare_certificate.phase = wire::GlobalPhase::Prepare;
-        let prepare_qc =
-            wire::ConsensusMessageV2Payload::QuorumCertificate(prepare_certificate);
+        let prepare_qc = wire::ConsensusMessageV2Payload::QuorumCertificate(prepare_certificate);
         let commit_qc = wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone());
         let timeout_vote = wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
             round,
@@ -26693,12 +28054,11 @@ mod tests {
             signer: 0,
             signature: vec![1],
         });
-        let timeout_certificate = wire::ConsensusMessageV2Payload::TimeoutCertificate(
-            wire::TimeoutCertificate {
+        let timeout_certificate =
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
                 round,
                 groups: Vec::new(),
-            },
-        );
+            });
         let commit_response = wire::ConsensusMessageV2Payload::CommitCertificateResponse(
             wire::CommitCertificateResponse {
                 request_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime commit request")),
@@ -27064,6 +28424,21 @@ mod tests {
         assert_eq!(
             invalid_queue,
             Err(RuntimeConfigError::InvalidQueueAllocation)
+        );
+    }
+
+    #[test]
+    fn queue_configuration_excludes_one_certified_credit_from_ordinary_limits() {
+        let config = RuntimeQueueConfig::new(8, 2, 2)
+            .validate()
+            .expect("C=8, P=2, K=2 leaves a distinct certified credit");
+
+        assert_eq!(config.normal_limit(), 3);
+        assert_eq!(config.progress_limit(), 5);
+        assert_eq!(config.ordinary_total_limit(), 7);
+        assert_eq!(
+            config.normal_limit() + config.progress_reserve + config.completion_reserve + 1,
+            config.capacity
         );
     }
 }

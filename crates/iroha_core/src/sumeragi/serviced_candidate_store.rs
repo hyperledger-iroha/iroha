@@ -161,6 +161,12 @@ impl ServicedCandidateKey {
         self.source_view
     }
 
+    /// Optional exact subject or highest-certificate target carried by the
+    /// semantic occurrence.
+    pub(crate) const fn target(self) -> Option<[u8; 32]> {
+        self.target
+    }
+
     /// Height context which prevents a terminal identity from crossing forks.
     pub(crate) const fn context_id(self) -> wire::HeightContextId {
         self.context_id
@@ -712,8 +718,40 @@ impl LeaderWireRecoveryAuthority {
         self.context_id == context_id && self.height == height && self.owner == owner
     }
 
-    fn obsoletes(self, token: &FairV2IngressLeaderWireToken) -> bool {
+    /// Advance this WAL-derived authority to a certified durable view.
+    pub(super) fn advance_view(self, durable_view: wire::View) -> Result<Self, String> {
+        if durable_view < self.durable_view {
+            return Err("leader-wire recovery authority regressed its durable view".to_owned());
+        }
+        Ok(Self {
+            durable_view,
+            ..self
+        })
+    }
+
+    /// Refine this WAL-derived authority after Decision is durable.
+    pub(super) const fn with_durable_decision(self) -> Self {
+        Self {
+            decision_durable: true,
+            ..self
+        }
+    }
+
+    fn monotonically_extends(self, previous: Self) -> bool {
+        self.context_id == previous.context_id
+            && self.height == previous.height
+            && self.owner == previous.owner
+            && self.durable_view >= previous.durable_view
+            && (!previous.decision_durable || self.decision_durable)
+    }
+
+    /// Return whether this durable cut permanently rejects one lifecycle token.
+    pub(super) fn obsoletes(self, token: &FairV2IngressLeaderWireToken) -> bool {
         self.decision_durable || token.identity.view < self.durable_view
+    }
+
+    fn obsoletes_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
+        self.decision_durable || identity.view < self.durable_view
     }
 }
 
@@ -742,6 +780,9 @@ struct PersistedLeaderWireLifecycles {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LeaderWireLifecycleState {
+    /// Current process-local safety-WAL cut. The snapshot never serializes it;
+    /// replay mints a fresh authority before this store is opened.
+    recovery_authority: LeaderWireRecoveryAuthority,
     last_admission_ordinal: u64,
     scheduler_ordinal_high_watermark: u128,
     records: BTreeMap<FairV2IngressLeaderWireSlot, PersistedLeaderWireLifecycleRecord>,
@@ -750,7 +791,8 @@ struct LeaderWireLifecycleState {
     /// This set is deliberately process-local. Its members retain their
     /// immutable durable tokens, but they do not own a scheduler barrier until
     /// the exact packet passes current ingress capacity checks and
-    /// `admit_ingress` atomically reactivates the slot.
+    /// `admit_ingress` atomically reactivates the slot. A newer live safety-WAL
+    /// cut can retire them first without requiring requester retransmission.
     replay_dormant: BTreeSet<FairV2IngressLeaderWireSlot>,
 }
 
@@ -1453,6 +1495,7 @@ impl LeaderWireLifecycleStoreGate {
             max_chunk_count,
             max_frame_bytes,
             state: Mutex::new(LeaderWireLifecycleState {
+                recovery_authority,
                 last_admission_ordinal: 0,
                 scheduler_ordinal_high_watermark: 0,
                 records: BTreeMap::new(),
@@ -1557,6 +1600,75 @@ impl LeaderWireLifecycleStoreGate {
         }))
     }
 
+    /// Return whether the latest live safety-WAL cut rejects this identity.
+    pub(crate) fn identity_is_obsolete(
+        &self,
+        identity: &FairV2IngressLeaderWireIdentity,
+    ) -> Result<bool, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
+        Ok(state.recovery_authority.obsoletes_identity(identity))
+    }
+
+    /// Apply a live, WAL-authorized recovery cut and retire its exact dormant set.
+    ///
+    /// Fair ingress supplies the complete mirrored dormant set while holding
+    /// its own lock. Requiring exact equality makes durable publication and
+    /// the volatile mirror one transaction: neither side can silently drop a
+    /// carrier-owning Ingress/Runtime record or disagree about which dormant
+    /// slots disappeared. Ordinal high-watermarks deliberately survive.
+    pub(crate) fn advance_recovery_cut(
+        &self,
+        next: LeaderWireRecoveryAuthority,
+        expected_dormant_slots: &BTreeSet<FairV2IngressLeaderWireSlot>,
+    ) -> Result<(), String> {
+        if !next.matches_geometry(self.context_id, self.height, self.owner) {
+            return Err("leader-wire recovery cut changed immutable geometry".to_owned());
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
+        if !next.monotonically_extends(state.recovery_authority) {
+            return Err("leader-wire recovery cut is not monotone".to_owned());
+        }
+        let retiring = state
+            .records
+            .iter()
+            .filter_map(|(slot, record)| {
+                (record.status == LeaderWireLifecycleStatus::Dormant
+                    && next.obsoletes(&record.token))
+                .then(|| slot.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        if retiring != *expected_dormant_slots || !retiring.is_subset(&state.replay_dormant) {
+            return Err(
+                "leader-wire recovery cut disagreed with dormant ingress ownership".to_owned(),
+            );
+        }
+
+        let previous = state.clone();
+        state.recovery_authority = next;
+        for slot in &retiring {
+            let removed = state
+                .records
+                .remove(slot)
+                .expect("preflighted dormant leader-wire slot remains indexed");
+            debug_assert_eq!(removed.status, LeaderWireLifecycleStatus::Dormant);
+            let was_dormant = state.replay_dormant.remove(slot);
+            debug_assert!(was_dormant);
+        }
+        if !retiring.is_empty()
+            && let Err(error) = self.persist_locked(&state)
+        {
+            *state = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Atomically persist an Ingress owner before fair ingress returns Accepted.
     ///
     /// An exact Dormant retry receives the incumbent token, preserving both
@@ -1579,6 +1691,11 @@ impl LeaderWireLifecycleStoreGate {
             .state
             .lock()
             .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
+        if state.recovery_authority.obsoletes(&token) {
+            return Err(
+                "leader-wire admission is obsolete under the durable recovery cut".to_owned(),
+            );
+        }
         let incumbent = state.records.get(&token.slot).cloned();
         if let Some(incumbent) = incumbent.as_ref() {
             if incumbent.token.identity == token.identity {
@@ -2153,6 +2270,7 @@ impl LeaderWireLifecycleStoreGate {
             .state
             .lock()
             .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
+        state.recovery_authority = recovery_authority;
         state.last_admission_ordinal = decoded.last_admission_ordinal;
         state.scheduler_ordinal_high_watermark = decoded.scheduler_ordinal_high_watermark;
         state.records = records;
@@ -3967,6 +4085,254 @@ mod tests {
     }
 
     #[test]
+    fn leader_wire_live_recovery_cut_retires_only_dormant_records_and_is_monotone() {
+        for (label, next_view, decision_durable) in
+            [("advanced-view", 3, false), ("decision", 2, true)]
+        {
+            let directory = TempDir::new().expect("temporary directory");
+            let context = context();
+            let wal = directory
+                .path()
+                .join(format!("leader-wire-live-{label}.wal"));
+            let roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<BTreeSet<_>>();
+            let max_chunks = 2;
+            let capacity = LeaderWireLifecycleStoreGate::derived_capacity(roster.len(), max_chunks)
+                .expect("derived gate capacity");
+            let initial_authority = leader_wire_recovery_authority(&context);
+            let (gate, _) = LeaderWireLifecycleStoreGate::open(
+                &wal,
+                context.id(),
+                context.height,
+                OWNER_A,
+                roster.clone(),
+                capacity,
+                max_chunks,
+                initial_authority,
+                &[],
+                &[],
+            )
+            .expect("open leader-wire gate");
+            let token = leader_wire_token(&context, 2, 11, 73, 2);
+            gate.reserve(token.clone()).expect("reserve restart owner");
+            drop(gate);
+
+            let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+                &wal,
+                context.id(),
+                context.height,
+                OWNER_A,
+                roster,
+                capacity,
+                max_chunks,
+                initial_authority,
+                &[],
+                &[],
+            )
+            .expect("reopen restart owner as dormant");
+            assert_eq!(restore.records().len(), 1, "{label}");
+            assert_eq!(
+                restore.records()[0].status(),
+                LeaderWireLifecycleStatus::Dormant,
+                "{label}"
+            );
+
+            let next =
+                leader_wire_recovery_authority_at(&context, OWNER_A, next_view, decision_durable);
+            let expected = BTreeSet::from([token.slot.clone()]);
+            assert!(
+                gate.advance_recovery_cut(
+                    leader_wire_recovery_authority_at(
+                        &context,
+                        OWNER_B,
+                        next_view,
+                        decision_durable,
+                    ),
+                    &expected,
+                )
+                .is_err(),
+                "{label} cannot cross immutable owner geometry"
+            );
+            gate.advance_recovery_cut(next, &expected)
+                .expect("advance the live recovery cut");
+            gate.advance_recovery_cut(next, &BTreeSet::new())
+                .expect("repeating the exact recovery cut is idempotent");
+
+            let restored = gate.restore().expect("inspect retired dormant owner");
+            assert!(restored.records().is_empty(), "{label}");
+            assert_eq!(restored.last_admission_ordinal(), 11, "{label}");
+            assert_eq!(restored.scheduler_ordinal_high_watermark(), 73, "{label}");
+            assert!(
+                gate.identity_is_obsolete(&token.identity)
+                    .expect("inspect live recovery cut"),
+                "{label} rejects the retired identity without an exact retry"
+            );
+
+            let regressed = leader_wire_recovery_authority_at(
+                &context,
+                OWNER_A,
+                next_view.saturating_sub(1),
+                false,
+            );
+            assert!(
+                gate.advance_recovery_cut(regressed, &BTreeSet::new())
+                    .is_err(),
+                "{label} cannot regress durable view/Decision authority"
+            );
+
+            let fresh = leader_wire_token(&context, 3, 12, 74, 3);
+            if decision_durable {
+                assert!(
+                    gate.reserve(fresh).is_err(),
+                    "Decision rejects every later admission at the closed height"
+                );
+            } else {
+                gate.reserve(fresh)
+                    .expect("the cut admits a current-view replacement");
+            }
+        }
+
+        for retained_status in [
+            LeaderWireLifecycleStatus::Ingress,
+            LeaderWireLifecycleStatus::Runtime,
+        ] {
+            let directory = TempDir::new().expect("temporary active-owner directory");
+            let context = context();
+            let wal = directory
+                .path()
+                .join(format!("leader-wire-live-retains-{retained_status:?}.wal"));
+            let roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<BTreeSet<_>>();
+            let max_chunks = 1;
+            let capacity = LeaderWireLifecycleStoreGate::derived_capacity(roster.len(), max_chunks)
+                .expect("derived gate capacity");
+            let (gate, _) = LeaderWireLifecycleStoreGate::open(
+                &wal,
+                context.id(),
+                context.height,
+                OWNER_A,
+                roster,
+                capacity,
+                max_chunks,
+                leader_wire_recovery_authority(&context),
+                &[],
+                &[],
+            )
+            .expect("open active-owner gate");
+            let token = leader_wire_token(&context, 2, 11, 73, 2);
+            gate.admit_ingress(token.clone())
+                .expect("publish active ingress owner");
+            if retained_status == LeaderWireLifecycleStatus::Runtime {
+                let runtime_owner =
+                    LeaderWireRuntimeOwner::new(token.identity_hash(), 73).expect("runtime owner");
+                gate.mark_runtime(&token, runtime_owner)
+                    .expect("publish active runtime owner");
+            }
+
+            gate.advance_recovery_cut(
+                leader_wire_recovery_authority_at(&context, OWNER_A, 3, false),
+                &BTreeSet::new(),
+            )
+            .expect("advance while an active owner remains live");
+            let restore = gate.restore().expect("inspect retained active owner");
+            assert_eq!(restore.records().len(), 1, "{retained_status:?}");
+            assert_eq!(
+                restore.records()[0].status(),
+                retained_status,
+                "the live cut may reclaim only Dormant records"
+            );
+            assert_eq!(restore.records()[0].token(), &token);
+            assert_eq!(restore.last_admission_ordinal(), 11);
+            assert_eq!(restore.scheduler_ordinal_high_watermark(), 73);
+            assert!(
+                gate.identity_is_obsolete(&token.identity)
+                    .expect("inspect advanced recovery authority"),
+                "active retention must not roll the recovery authority back"
+            );
+        }
+
+        {
+            let directory = TempDir::new().expect("temporary recovery-cut rollback directory");
+            let context = context();
+            let wal = directory.path().join("leader-wire-live-cut-rollback.wal");
+            let roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<BTreeSet<_>>();
+            let max_chunks = 1;
+            let capacity = LeaderWireLifecycleStoreGate::derived_capacity(roster.len(), max_chunks)
+                .expect("derived gate capacity");
+            let initial_authority = leader_wire_recovery_authority(&context);
+            let (gate, _) = LeaderWireLifecycleStoreGate::open(
+                &wal,
+                context.id(),
+                context.height,
+                OWNER_A,
+                roster.clone(),
+                capacity,
+                max_chunks,
+                initial_authority,
+                &[],
+                &[],
+            )
+            .expect("open rollback gate");
+            let token = leader_wire_token(&context, 2, 11, 73, 2);
+            gate.admit_ingress(token.clone())
+                .expect("publish owner before restart");
+            drop(gate);
+            let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+                &wal,
+                context.id(),
+                context.height,
+                OWNER_A,
+                roster,
+                capacity,
+                max_chunks,
+                initial_authority,
+                &[],
+                &[],
+            )
+            .expect("reopen rollback owner as dormant");
+            assert_eq!(
+                restore.records()[0].status(),
+                LeaderWireLifecycleStatus::Dormant
+            );
+            std::fs::remove_file(&gate.path).expect("remove published snapshot");
+            std::fs::create_dir(&gate.path).expect("block recovery-cut publication");
+            assert!(
+                gate.advance_recovery_cut(
+                    leader_wire_recovery_authority_at(&context, OWNER_A, 3, false),
+                    &BTreeSet::from([token.slot.clone()]),
+                )
+                .is_err(),
+                "a failed atomic publication must reject the live cut"
+            );
+            let restored = gate.restore().expect("inspect recovery-cut rollback");
+            assert_eq!(restored.records().len(), 1);
+            assert_eq!(restored.records()[0].token(), &token);
+            assert_eq!(
+                restored.records()[0].status(),
+                LeaderWireLifecycleStatus::Dormant
+            );
+            assert_eq!(restored.last_admission_ordinal(), 11);
+            assert_eq!(restored.scheduler_ordinal_high_watermark(), 73);
+            assert!(
+                !gate
+                    .identity_is_obsolete(&token.identity)
+                    .expect("inspect rolled-back recovery authority"),
+                "failed persistence must restore both the owner and recovery authority"
+            );
+        }
+    }
+
+    #[test]
     fn leader_wire_gate_rejects_foreign_recovery_authority() {
         let directory = TempDir::new().expect("temporary directory");
         let context = context();
@@ -4203,6 +4569,76 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
+        }
+
+        {
+            let directory = TempDir::new().expect("temporary directory");
+            let context = context();
+            let wal = directory.path().join("leader-wire-live-recovery-cut.wal");
+            let roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<BTreeSet<_>>();
+            let max_chunks = 1;
+            let capacity = LeaderWireLifecycleStoreGate::derived_capacity(roster.len(), max_chunks)
+                .expect("derived gate capacity");
+            let initial_authority = leader_wire_recovery_authority(&context);
+            let (gate, _) = LeaderWireLifecycleStoreGate::open(
+                &wal,
+                context.id(),
+                context.height,
+                OWNER_A,
+                roster.clone(),
+                capacity,
+                max_chunks,
+                initial_authority,
+                &[],
+                &[],
+            )
+            .expect("open gate");
+            let token = leader_wire_token(&context, 2, 13, 97, 3);
+            gate.admit_ingress(token.clone())
+                .expect("persist owner before recovery-cut rollback");
+            drop(gate);
+            let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+                &wal,
+                context.id(),
+                context.height,
+                OWNER_A,
+                roster,
+                capacity,
+                max_chunks,
+                initial_authority,
+                &[],
+                &[],
+            )
+            .expect("reopen owner as dormant");
+            assert_eq!(
+                restore.records()[0].status(),
+                LeaderWireLifecycleStatus::Dormant
+            );
+            replace_snapshot_with_directory(&gate);
+            assert!(
+                gate.advance_recovery_cut(
+                    leader_wire_recovery_authority_at(&context, OWNER_A, 3, false),
+                    &BTreeSet::from([token.slot.clone()]),
+                )
+                .is_err()
+            );
+            let restored = gate.restore().expect("recovery-cut memory rollback");
+            assert_eq!(restored.records().len(), 1);
+            assert_eq!(restored.records()[0].token(), &token);
+            assert_eq!(
+                restored.records()[0].status(),
+                LeaderWireLifecycleStatus::Dormant
+            );
+            assert!(
+                !gate
+                    .identity_is_obsolete(&token.identity)
+                    .expect("recovery authority rollback"),
+                "failed persistence must roll the process-local cut back too"
+            );
         }
     }
 

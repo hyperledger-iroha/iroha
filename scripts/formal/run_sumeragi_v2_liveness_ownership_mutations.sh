@@ -252,6 +252,7 @@ for case_spec in "${fixed_cases[@]}"; do
 done
 
 mutation_cases=(
+  "revision4-certified-fence-arrival-order|SumeragiV2Revision4CertifiedFenceReservation.tla|revision4_certified_fence_reservation_arrival_order_bug.cfg|CertifiedFirstProgressCorridor"
   "local-ingress-scheduler-mutable-next|SumeragiV2LocalIngressSchedulerReservationMutation.tla|local_ingress_scheduler_reservation_mutable_next_bug.cfg|LaterLocalWorkCannotRewriteAcceptedOrdinal"
   "restart-volatile-terminal-suppression|SumeragiV2RestartTerminalDurabilityMutation.tla|restart_terminal_durability_blanket_terminal_bug.cfg|VolatileTerminalReopensExactWireIdentity"
   "exact-ingress-runtime-first|SumeragiV2ExactIngressTicketPriorityMutation.tla|exact_ingress_ticket_runtime_first_bug.cfg|ProvisionalTargetPrecedesRuntimeWork"

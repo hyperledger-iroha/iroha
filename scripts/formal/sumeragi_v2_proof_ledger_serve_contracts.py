@@ -1324,7 +1324,7 @@ _SERVICED_CANDIDATE_PRODUCTION_STRUCT_SHA256 = {
 }
 _SERVICED_CANDIDATE_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e"
+        "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
     ),
 }
 _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256 = {
@@ -1595,8 +1595,8 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "install_dormant_local_fifo_reservations": (
         "42c699bccbd2f051c8300cc714dab9b3f32c0268a37d95226f0ecb466dabc2b2"
     ),
-    "dormant_local_fifo_replacement": (
-        "349d197fc00128460c723ecb4cc4fc7b3253390d9847b61dac38e7157fb9af61"
+    "dormant_local_fifo_replacement_inner": (
+        "018584c25ed2c434bdeed8f66773cba47dee3fe637167a57f8b44e62032f92c4"
     ),
     "occupied_with_dormant_reservations": (
         "2a57306de4cfb2074082a0f67c34ffe9cb3d99ce2021c31256272d268a1bbe0e"
@@ -1646,7 +1646,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e"
+        "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
     ),
 }
 _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
