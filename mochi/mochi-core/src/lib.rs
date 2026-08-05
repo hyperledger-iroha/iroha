@@ -48,8 +48,8 @@ pub use state::{
 };
 pub use supervisor::{
     BinaryPaths, BinaryVersionInfo, CompatibilityReport, KagamiVerifyReport, PeerHandle, PeerState,
-    Result as SupervisorResult, Supervisor, SupervisorBuilder, SupervisorError,
-    SupervisorSessionInfo,
+    Result as SupervisorResult, SelectedPeerStoragePaths, Supervisor, SupervisorBuilder,
+    SupervisorError, SupervisorSessionInfo, resolve_selected_peer_storage_paths,
 };
 pub use torii::{
     BlockDecodeStage, BlockStream, BlockStreamDecodeError, BlockStreamEvent, BlockSummary,

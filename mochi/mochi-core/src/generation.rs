@@ -1,8 +1,9 @@
 //! Crash-safe publication of immutable Mochi configuration generations.
 
 use std::{
+    ffi::OsStr,
     fs::{self, File, OpenOptions},
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -21,6 +22,8 @@ pub(crate) const CURRENT_GENERATION_FILE: &str = "current-generation";
 const GENERATION_LOCK_FILE: &str = ".generation.lock";
 const GENERATION_INVENTORY_FILE: &str = "generation.json";
 const GENERATION_SCHEMA: u64 = 1;
+const GENERATION_POINTER_TEMP_PREFIX: &str = ".current-generation.";
+const GENERATION_POINTER_TEMP_SUFFIX: &str = ".tmp";
 
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +32,7 @@ pub(crate) enum PublicationFaultPoint {
     AfterInventory,
     AfterTreeSync,
     AfterGenerationsSync,
+    AfterRuntimeStorageSync,
     AfterPointerWrite,
     AfterPointerSync,
     AfterPointerRename,
@@ -55,18 +59,72 @@ pub(crate) struct VerifiedGeneration {
 }
 
 /// Exclusive, unpublished generation transaction.
+#[derive(Debug)]
 pub(crate) struct GenerationTransaction {
     root: PathBuf,
     generation_root: PathBuf,
     id: String,
+    expected_base_generation: Option<String>,
     runtime_storage_roots: Vec<PathBuf>,
+    pointer_temporary: PathBuf,
+    pointer_temporary_file: Option<File>,
     _lock: File,
     committed: bool,
 }
 
+/// A committed publication that retains the exclusive generation lock.
+///
+/// Callers must keep this guard alive until their in-memory state, selected
+/// pointer checks, and peer lifecycle have all reconciled with the commit.
+#[derive(Debug)]
+pub(crate) struct PublishedGeneration {
+    transaction: GenerationTransaction,
+    durability_error: Option<std::io::Error>,
+}
+
+/// Failed pre-commit publication that retains the exclusive generation lock.
+#[derive(Debug)]
+pub(crate) struct FailedGenerationPublication {
+    _transaction: GenerationTransaction,
+    error: Option<SupervisorError>,
+}
+
+impl FailedGenerationPublication {
+    pub(crate) fn take_error(&mut self) -> SupervisorError {
+        self.error
+            .take()
+            .expect("failed publication error can only be taken once")
+    }
+}
+
+impl PublishedGeneration {
+    pub(crate) fn id(&self) -> &str {
+        self.transaction.id()
+    }
+
+    pub(crate) fn take_uncertainty(&mut self) -> Option<SupervisorError> {
+        self.durability_error
+            .take()
+            .map(|source| SupervisorError::PublicationUncertain {
+                generation_id: self.transaction.id.clone(),
+                source,
+            })
+    }
+}
+
 impl GenerationTransaction {
-    /// Acquire the network generation lock and allocate an invisible candidate.
+    #[cfg(test)]
     pub(crate) fn begin(root: &Path) -> Result<Self> {
+        let expected_base_generation = current_generation_id(root)?;
+        Self::begin_replacing(root, expected_base_generation)
+    }
+
+    /// Acquire the network generation lock and allocate an invisible candidate
+    /// bound to the caller's expected base selection.
+    pub(crate) fn begin_replacing(
+        root: &Path,
+        expected_base_generation: Option<String>,
+    ) -> Result<Self> {
         fs::create_dir_all(root)?;
         reject_symlink(root, "network root")?;
         let root = fs::canonicalize(root)?;
@@ -93,6 +151,7 @@ impl GenerationTransaction {
         validate_contained_directory(&root, &generations, "generations directory")?;
         #[cfg(unix)]
         fs::set_permissions(&generations, fs::Permissions::from_mode(0o700))?;
+        recover_abandoned_generation_transactions(&root, &generations)?;
 
         for _ in 0..32 {
             let mut entropy = [0_u8; 16];
@@ -103,6 +162,29 @@ impl GenerationTransaction {
             })?;
             let id = encode_lower_hex(&entropy);
             let generation_root = generations.join(&id);
+            match fs::symlink_metadata(&generation_root) {
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+
+            // The private pointer temporary doubles as the durable ownership
+            // marker for every path created by this transaction. Persist it
+            // before allocating the candidate directory, so a later writer can
+            // distinguish crash residue from intentionally retained history.
+            let pointer_temporary = generation_pointer_temporary_path(&root, &id);
+            let mut marker_options = OpenOptions::new();
+            marker_options.read(true).write(true).create_new(true);
+            #[cfg(unix)]
+            marker_options.mode(0o600);
+            let pointer_temporary_file = match marker_options.open(&pointer_temporary) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            };
+            pointer_temporary_file.sync_all()?;
+            sync_directory(&root)?;
+
             match fs::create_dir(&generation_root) {
                 Ok(()) => {
                     #[cfg(unix)]
@@ -111,13 +193,23 @@ impl GenerationTransaction {
                         root: root.clone(),
                         generation_root,
                         id,
+                        expected_base_generation,
                         runtime_storage_roots: Vec::new(),
+                        pointer_temporary,
+                        pointer_temporary_file: Some(pointer_temporary_file),
                         _lock: lock,
                         committed: false,
                     });
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    drop(pointer_temporary_file);
+                    fs::remove_file(&pointer_temporary)?;
+                    sync_directory(&root)?;
+                    if error.kind() == std::io::ErrorKind::AlreadyExists {
+                        continue;
+                    }
+                    return Err(error.into());
+                }
             }
         }
         Err(SupervisorError::Config(
@@ -167,15 +259,39 @@ impl GenerationTransaction {
     }
 
     /// Seal the inventory, sync the candidate, and atomically publish it.
-    pub(crate) fn publish(self, context: GenerationInventoryContext<'_>) -> Result<String> {
-        self.publish_inner(context, None)
+    pub(crate) fn publish(
+        self,
+        context: GenerationInventoryContext<'_>,
+    ) -> Result<PublishedGeneration> {
+        match self.publish_retaining_failure(context) {
+            Ok(publication) => Ok(publication),
+            Err(mut failure) => Err(failure.take_error()),
+        }
     }
 
     pub(crate) fn publish_with_fault(
         self,
         context: GenerationInventoryContext<'_>,
         fault: PublicationFaultPoint,
-    ) -> Result<String> {
+    ) -> Result<PublishedGeneration> {
+        match self.publish_with_fault_retaining_failure(context, fault) {
+            Ok(publication) => Ok(publication),
+            Err(mut failure) => Err(failure.take_error()),
+        }
+    }
+
+    pub(crate) fn publish_retaining_failure(
+        self,
+        context: GenerationInventoryContext<'_>,
+    ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
+        self.publish_inner(context, None)
+    }
+
+    pub(crate) fn publish_with_fault_retaining_failure(
+        self,
+        context: GenerationInventoryContext<'_>,
+        fault: PublicationFaultPoint,
+    ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
         self.publish_inner(context, Some(fault))
     }
 
@@ -183,7 +299,24 @@ impl GenerationTransaction {
         mut self,
         context: GenerationInventoryContext<'_>,
         #[cfg_attr(not(test), allow(unused_variables))] fault: Option<PublicationFaultPoint>,
-    ) -> Result<String> {
+    ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
+        match self.try_publish_inner(context, fault) {
+            Ok(durability_error) => Ok(PublishedGeneration {
+                transaction: self,
+                durability_error,
+            }),
+            Err(error) => Err(FailedGenerationPublication {
+                _transaction: self,
+                error: Some(error),
+            }),
+        }
+    }
+
+    fn try_publish_inner(
+        &mut self,
+        context: GenerationInventoryContext<'_>,
+        #[cfg_attr(not(test), allow(unused_variables))] fault: Option<PublicationFaultPoint>,
+    ) -> Result<Option<std::io::Error>> {
         #[cfg(test)]
         inject_fault(fault, PublicationFaultPoint::BeforeInventory)?;
         self.write_inventory(&context)?;
@@ -199,57 +332,101 @@ impl GenerationTransaction {
         )?;
         #[cfg(test)]
         inject_fault(fault, PublicationFaultPoint::AfterGenerationsSync)?;
+        self.sync_runtime_storage_roots()?;
+        // Persist the `generations/` and `peers/` root entries before the
+        // pointer can select either hierarchy. The post-rename sync below is
+        // then responsible only for committing the pointer replacement.
+        sync_directory(&self.root)?;
+        #[cfg(test)]
+        inject_fault(fault, PublicationFaultPoint::AfterRuntimeStorageSync)?;
+
+        // The transaction has held the exclusive generation lock since its
+        // candidate was allocated. Compare the selected base immediately
+        // before creating the replacement pointer so a stale Supervisor can
+        // never roll the sandbox back to paths derived from a retired base.
+        let actual_base_generation = current_generation_id(&self.root)?;
+        if actual_base_generation != self.expected_base_generation {
+            return Err(SupervisorError::GenerationSelectionChanged {
+                expected: self.expected_base_generation.clone(),
+                actual: actual_base_generation,
+            });
+        }
 
         let pointer = self.root.join(CURRENT_GENERATION_FILE);
         reject_symlink(&pointer, "current generation pointer")?;
-        let temporary = self
-            .root
-            .join(format!(".current-generation.{}.tmp", self.id));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = options.open(&temporary)?;
+        let mut file = self.pointer_temporary_file.take().ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "generation transaction lost its durable pointer temporary".to_owned(),
+            )
+        })?;
+        validate_generation_pointer_temporary_file(&self.pointer_temporary, &file)?;
+        if file.metadata()?.len() != 0 {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "generation pointer temporary `{}` changed before publication",
+                self.pointer_temporary.display()
+            )));
+        }
         file.write_all(self.id.as_bytes())?;
         file.write_all(b"\n")?;
         #[cfg(test)]
         if fault == Some(PublicationFaultPoint::AfterPointerWrite) {
-            drop(file);
-            let _ = fs::remove_file(&temporary);
             return Err(injected_fault(PublicationFaultPoint::AfterPointerWrite));
         }
         file.sync_all()?;
+        validate_generation_pointer_temporary_file(&self.pointer_temporary, &file)?;
+        if file.metadata()?.len() != (self.id.len() + 1) as u64 {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "generation pointer temporary `{}` has the wrong length",
+                self.pointer_temporary.display()
+            )));
+        }
         drop(file);
+        validate_generation_pointer_temporary(&self.pointer_temporary, &self.id)?;
         #[cfg(test)]
         if fault == Some(PublicationFaultPoint::AfterPointerSync) {
-            let _ = fs::remove_file(&temporary);
             return Err(injected_fault(PublicationFaultPoint::AfterPointerSync));
         }
         let verified = verify_selected_generation(&self.root, &self.id)?;
         ensure_inventory_context(&verified, context)?;
 
-        if let Err(error) = fs::rename(&temporary, &pointer) {
-            let _ = fs::remove_file(&temporary);
+        if let Err(error) = fs::rename(&self.pointer_temporary, &pointer) {
             return Err(error.into());
         }
         // The atomic pointer replacement is the commit point. Never remove a
         // generation after this point, even if directory durability is unknown.
         self.committed = true;
-        if fault == Some(PublicationFaultPoint::AfterPointerRename) {
-            return Err(SupervisorError::PublicationUncertain {
-                generation_id: self.id.clone(),
-                source: std::io::Error::other(
-                    "injected generation publication fault after pointer rename",
-                ),
-            });
+        let durability_error = if fault == Some(PublicationFaultPoint::AfterPointerRename) {
+            Some(std::io::Error::other(
+                "injected generation publication fault after pointer rename",
+            ))
+        } else {
+            sync_directory(&self.root).err()
+        };
+        Ok(durability_error)
+    }
+
+    fn sync_runtime_storage_roots(&self) -> Result<()> {
+        for storage in &self.runtime_storage_roots {
+            if !candidate_runtime_storage_is_safe(&self.root, &self.id, storage) {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "candidate runtime storage `{}` escaped its managed generation",
+                    storage.display()
+                )));
+            }
+            sync_tree(storage)?;
+            let storage_generations = storage
+                .parent()
+                .expect("candidate runtime storage always has a managed parent");
+            sync_directory(storage_generations)?;
+            let peer = storage_generations
+                .parent()
+                .expect("storage-generations always has a peer parent");
+            sync_directory(peer)?;
         }
-        if let Err(source) = sync_directory(&self.root) {
-            return Err(SupervisorError::PublicationUncertain {
-                generation_id: self.id.clone(),
-                source,
-            });
+        if !self.runtime_storage_roots.is_empty() {
+            sync_directory(&self.root.join("peers"))?;
         }
-        Ok(self.id.clone())
+        Ok(())
     }
 
     fn write_inventory(&self, context: &GenerationInventoryContext<'_>) -> Result<()> {
@@ -338,26 +515,270 @@ impl Drop for GenerationTransaction {
         if self.committed || !is_generation_id(&self.id) {
             return;
         }
-        for storage in self.runtime_storage_roots.iter().rev() {
-            if candidate_runtime_storage_is_safe(&self.root, &self.id, storage) {
-                let _ = fs::remove_dir_all(storage);
-            }
+        drop(self.pointer_temporary_file.take());
+        let generations = self.root.join(GENERATIONS_DIRECTORY);
+        let _ = reclaim_abandoned_generation_transaction(
+            &self.root,
+            &generations,
+            &self.id,
+            &self.pointer_temporary,
+        );
+    }
+}
+
+fn generation_pointer_temporary_path(root: &Path, id: &str) -> PathBuf {
+    root.join(format!(
+        "{GENERATION_POINTER_TEMP_PREFIX}{id}{GENERATION_POINTER_TEMP_SUFFIX}"
+    ))
+}
+
+fn generation_pointer_temporary_id(name: &OsStr) -> Result<Option<String>> {
+    let Some(name) = name.to_str() else {
+        return Ok(None);
+    };
+    let Some(remainder) = name.strip_prefix(GENERATION_POINTER_TEMP_PREFIX) else {
+        return Ok(None);
+    };
+    let Some(id) = remainder.strip_suffix(GENERATION_POINTER_TEMP_SUFFIX) else {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "malformed generation pointer temporary `{name}`"
+        )));
+    };
+    if !is_generation_id(id) {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "generation pointer temporary `{name}` has an invalid generation id"
+        )));
+    }
+    Ok(Some(id.to_owned()))
+}
+
+/// Reclaim only transactions carrying Mochi's durable ownership marker.
+///
+/// The caller holds the exclusive generation lock. Unmarked generation and
+/// storage paths are deliberately ignored because they may be intentionally
+/// retained publication history, even when that history has since been
+/// damaged and no longer passes strict verification.
+fn recover_abandoned_generation_transactions(root: &Path, generations: &Path) -> Result<()> {
+    let mut markers = fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()?;
+    markers.sort_by_key(fs::DirEntry::file_name);
+    for marker in markers {
+        let Some(id) = generation_pointer_temporary_id(&marker.file_name())? else {
+            continue;
+        };
+        reclaim_abandoned_generation_transaction(root, generations, &id, &marker.path())?;
+    }
+    Ok(())
+}
+
+fn reclaim_abandoned_generation_transaction(
+    root: &Path,
+    generations: &Path,
+    id: &str,
+    marker: &Path,
+) -> Result<()> {
+    if marker != generation_pointer_temporary_path(root, id) {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "generation pointer temporary `{}` is outside its managed path",
+            marker.display()
+        )));
+    }
+    validate_generation_pointer_temporary(marker, id)?;
+
+    // A recovered selected pointer is authoritative even if its generation is
+    // damaged. It may represent a rename that committed immediately before a
+    // crash; remove only the redundant marker in that case.
+    if current_generation_id(root)?.as_deref() == Some(id) {
+        fs::remove_file(marker)?;
+        sync_directory(root)?;
+        return Ok(());
+    }
+
+    let runtime_storage = abandoned_runtime_storage_paths(root, id)?;
+    let generation_root = abandoned_generation_path(generations, id)?;
+
+    // Keep the marker until every associated deletion is durable. If a sync
+    // fails, the next exclusive writer can safely resume from the same id.
+    for storage in runtime_storage {
+        let storage_generations = storage
+            .parent()
+            .expect("validated runtime storage always has a parent");
+        fs::remove_dir_all(&storage)?;
+        sync_directory(storage_generations)?;
+    }
+    if let Some(generation_root) = generation_root {
+        fs::remove_dir_all(generation_root)?;
+        sync_directory(generations)?;
+    }
+    fs::remove_file(marker)?;
+    sync_directory(root)?;
+    Ok(())
+}
+
+fn validate_generation_pointer_temporary(path: &Path, id: &str) -> Result<()> {
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_file() {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "generation pointer temporary `{}` must be a regular file",
+            path.display()
+        )));
+    }
+    let mut file = OpenOptions::new().read(true).open(path)?;
+    validate_generation_pointer_temporary_file(path, &file)?;
+    let expected = format!("{id}\n");
+    if file.metadata()?.len() > expected.len() as u64 {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "generation pointer temporary `{}` has malformed contents",
+            path.display()
+        )));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    if !expected.as_bytes().starts_with(&bytes) {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "generation pointer temporary `{}` has malformed contents",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_generation_pointer_temporary_file(path: &Path, file: &File) -> Result<()> {
+    let opened = file.metadata()?;
+    let named = fs::symlink_metadata(path)?;
+    if !opened.is_file() || !named.is_file() || named.file_type().is_symlink() {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "generation pointer temporary `{}` must be a regular file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        if opened.dev() != named.dev() || opened.ino() != named.ino() || opened.nlink() != 1 {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "generation pointer temporary `{}` changed while it was opened",
+                path.display()
+            )));
         }
-        if self.generation_root == self.root.join(GENERATIONS_DIRECTORY).join(self.id.as_str())
-            && fs::symlink_metadata(&self.generation_root)
-                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-            && validate_contained_directory(
-                &self.root,
-                self.generation_root
-                    .parent()
-                    .expect("candidate generation always has a parent"),
-                "generations directory",
-            )
-            .is_ok()
-        {
-            let _ = fs::remove_dir_all(&self.generation_root);
+        if opened.permissions().mode() & 0o077 != 0 {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "generation pointer temporary `{}` must be owner-only",
+                path.display()
+            )));
         }
     }
+    Ok(())
+}
+
+fn abandoned_generation_path(generations: &Path, id: &str) -> Result<Option<PathBuf>> {
+    let path = generations.join(id);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(SupervisorError::GenerationValidation(format!(
+                "abandoned generation `{}` must be a non-symlink directory",
+                path.display()
+            )))
+        }
+        Ok(_) => {
+            validate_contained_directory(generations, &path, "abandoned generation")?;
+            Ok(Some(path))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn abandoned_runtime_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>> {
+    let peers = root.join("peers");
+    match fs::symlink_metadata(&peers) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "runtime peers directory `{}` must be a non-symlink directory",
+                peers.display()
+            )));
+        }
+        Ok(_) => validate_contained_directory(root, &peers, "runtime peers directory")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    }
+
+    let mut aliases = fs::read_dir(&peers)?.collect::<std::io::Result<Vec<_>>>()?;
+    aliases.sort_by_key(fs::DirEntry::file_name);
+    let mut storage_roots = Vec::new();
+    for alias in aliases {
+        let peer = alias.path();
+        let metadata = fs::symlink_metadata(&peer)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "runtime peer entry `{}` must be a non-symlink directory",
+                peer.display()
+            )));
+        }
+        validate_contained_directory(&peers, &peer, "runtime peer directory")?;
+
+        let storage_generations = peer.join("storage-generations");
+        match fs::symlink_metadata(&storage_generations) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "runtime storage-generations `{}` must be a non-symlink directory",
+                    storage_generations.display()
+                )));
+            }
+            Ok(_) => validate_contained_directory(
+                &peer,
+                &storage_generations,
+                "runtime storage-generations directory",
+            )?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        }
+
+        let storage = storage_generations.join(id);
+        match fs::symlink_metadata(&storage) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "abandoned runtime storage `{}` must be a non-symlink directory",
+                    storage.display()
+                )));
+            }
+            Ok(_) => {
+                if !candidate_runtime_storage_is_safe(root, id, &storage) {
+                    return Err(SupervisorError::GenerationValidation(format!(
+                        "abandoned runtime storage `{}` escaped its managed generation",
+                        storage.display()
+                    )));
+                }
+                storage_roots.push(storage);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(storage_roots)
+}
+
+/// Acquire a nonblocking shared lease on the selected-generation pointer.
+///
+/// Exclusive generation publishers use the same lock, so retaining the
+/// returned file prevents an API writer from retiring paths resolved under
+/// this lease.
+pub(crate) fn try_lock_generation_selection(root: &Path) -> Result<File> {
+    reject_symlink(root, "network root")?;
+    let root = fs::canonicalize(root)?;
+    let lock_path = root.join(GENERATION_LOCK_FILE);
+    reject_symlink(&lock_path, "generation lock")?;
+
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    let lock = options.open(&lock_path)?;
+    validate_lock_file(&lock_path, &lock)?;
+    lock.try_lock_shared().map_err(|error| match error {
+        fs::TryLockError::WouldBlock => SupervisorError::GenerationLocked {
+            path: lock_path.clone(),
+        },
+        fs::TryLockError::Error(error) => SupervisorError::Io(error),
+    })?;
+    validate_lock_file(&lock_path, &lock)?;
+    Ok(lock)
 }
 
 /// Read the exact currently published generation identifier.
@@ -780,19 +1201,31 @@ fn generation_file_hashes(root: &Path, excluded: Option<&Path>) -> Result<Vec<(S
     Ok(output)
 }
 
-fn sync_tree(path: &Path) -> std::io::Result<()> {
+fn sync_tree(path: &Path) -> Result<()> {
     let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
     entries.sort_by_key(fs::DirEntry::file_name);
     for entry in entries {
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "candidate publication tree contains symbolic link `{}`",
+                path.display()
+            )));
+        }
         if metadata.is_dir() {
             sync_tree(&path)?;
         } else if metadata.is_file() {
             File::open(&path)?.sync_all()?;
+        } else {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "candidate publication tree contains non-regular entry `{}`",
+                path.display()
+            )));
         }
     }
-    sync_directory(path)
+    sync_directory(path)?;
+    Ok(())
 }
 
 fn sync_directory(path: &Path) -> std::io::Result<()> {
@@ -912,14 +1345,48 @@ mod tests {
     fn publish_complete_generation(root: &Path, chain_id: &str) -> String {
         let transaction = GenerationTransaction::begin(root).expect("begin fixture generation");
         let (key_pair, expected_hash) = write_complete_candidate(transaction.root(), chain_id, 7);
-        transaction
+        let publication = transaction
             .publish(GenerationInventoryContext {
                 chain_id,
                 chain_discriminant: 7,
                 genesis_public_key: key_pair.public_key(),
                 expected_hash,
             })
-            .expect("publish fixture generation")
+            .expect("publish fixture generation");
+        durable_generation_id(publication)
+    }
+
+    fn durable_generation_id(mut publication: PublishedGeneration) -> String {
+        let id = publication.id().to_owned();
+        assert!(
+            publication.take_uncertainty().is_none(),
+            "fixture publication must be durable"
+        );
+        drop(publication);
+        id
+    }
+
+    fn write_crash_marker(root: &Path, id: &str, bytes: &[u8]) -> PathBuf {
+        let marker = generation_pointer_temporary_path(root, id);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&marker).expect("create crash marker");
+        file.write_all(bytes).expect("write crash marker");
+        file.sync_all().expect("sync crash marker");
+        sync_directory(root).expect("sync crash marker parent");
+        marker
+    }
+
+    fn create_runtime_storage_fixture(root: &Path, alias: &str, id: &str) -> PathBuf {
+        let storage = root
+            .join("peers")
+            .join(alias)
+            .join("storage-generations")
+            .join(id);
+        fs::create_dir_all(&storage).expect("create runtime storage fixture");
+        storage
     }
 
     #[test]
@@ -932,6 +1399,162 @@ mod tests {
         assert!(matches!(error, SupervisorError::GenerationLocked { .. }));
         drop(first);
         GenerationTransaction::begin(temp.path()).expect("lock released after drop");
+    }
+
+    #[test]
+    fn exclusive_begin_reclaims_marked_crash_residue_and_preserves_history() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let historical = publish_complete_generation(temp.path(), "recovery-history");
+        let selected = publish_complete_generation(temp.path(), "recovery-selected");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let historical_root = root.join(GENERATIONS_DIRECTORY).join(&historical);
+        let historical_storage = create_runtime_storage_fixture(&root, "peer0", &historical);
+        fs::write(historical_storage.join("sentinel"), b"retained history")
+            .expect("write historical storage sentinel");
+
+        let mut abandoned = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+            .expect("begin candidate that will simulate a crash");
+        let abandoned_root = abandoned.root().to_path_buf();
+        let abandoned_storage0 = abandoned
+            .create_runtime_storage("peer0")
+            .expect("create first abandoned runtime storage");
+        let abandoned_storage1 = abandoned
+            .create_runtime_storage("peer1")
+            .expect("create second abandoned runtime storage");
+        fs::write(abandoned_storage0.join("state"), b"candidate")
+            .expect("write abandoned runtime state");
+        let (key_pair, expected_hash) =
+            write_complete_candidate(&abandoned_root, "recovery-abandoned", 23);
+        abandoned
+            .write_inventory(&GenerationInventoryContext {
+                chain_id: "recovery-abandoned",
+                chain_discriminant: 23,
+                genesis_public_key: key_pair.public_key(),
+                expected_hash,
+            })
+            .expect("seal abandoned generation inventory");
+        sync_tree(&abandoned_root).expect("sync abandoned generation tree");
+        sync_directory(abandoned_root.parent().expect("generations parent"))
+            .expect("sync abandoned generation parent");
+        abandoned
+            .sync_runtime_storage_roots()
+            .expect("sync abandoned runtime storage");
+        sync_directory(&root).expect("sync abandoned runtime parents");
+        let marker = abandoned.pointer_temporary.clone();
+        assert_eq!(fs::read(&marker).expect("read early crash marker"), b"");
+        // Simulate process exit without running transaction cleanup while still
+        // allowing this test process to release the advisory lock.
+        abandoned.committed = true;
+        drop(abandoned);
+
+        let next = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+            .expect("recover residue and begin next generation");
+        assert!(!marker.exists());
+        assert!(!abandoned_root.exists());
+        assert!(!abandoned_storage0.exists());
+        assert!(!abandoned_storage1.exists());
+        assert!(historical_root.is_dir());
+        assert_eq!(
+            fs::read(historical_storage.join("sentinel")).expect("read retained historical state"),
+            b"retained history"
+        );
+        assert_eq!(
+            current_generation_id(&root).expect("read preserved selection"),
+            Some(selected)
+        );
+        drop(next);
+    }
+
+    #[test]
+    fn recovery_never_infers_abandonment_from_an_unmarked_directory_name() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let selected = publish_complete_generation(temp.path(), "unmarked-selected");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let unmarked_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let unmarked_root = root.join(GENERATIONS_DIRECTORY).join(unmarked_id);
+        fs::create_dir(&unmarked_root).expect("create unmarked generation");
+        fs::write(unmarked_root.join("damaged-history"), b"retain")
+            .expect("write unmarked history");
+        let unmarked_storage = create_runtime_storage_fixture(&root, "peer0", unmarked_id);
+        fs::write(unmarked_storage.join("sentinel"), b"retain").expect("write unmarked storage");
+
+        let next = GenerationTransaction::begin_replacing(&root, Some(selected))
+            .expect("begin without collecting unmarked history");
+        assert!(unmarked_root.is_dir());
+        assert_eq!(
+            fs::read(unmarked_storage.join("sentinel")).expect("read unmarked storage"),
+            b"retain"
+        );
+        drop(next);
+    }
+
+    #[test]
+    fn selected_generation_wins_over_a_recovered_marker() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let selected = publish_complete_generation(temp.path(), "marked-selected");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let selected_root = root.join(GENERATIONS_DIRECTORY).join(&selected);
+        let selected_storage = create_runtime_storage_fixture(&root, "peer0", &selected);
+        fs::write(selected_storage.join("sentinel"), b"selected")
+            .expect("write selected storage sentinel");
+        let marker = write_crash_marker(&root, &selected, format!("{selected}\n").as_bytes());
+
+        let next = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+            .expect("discard redundant selected marker");
+        assert!(!marker.exists());
+        assert!(selected_root.is_dir());
+        assert_eq!(
+            fs::read(selected_storage.join("sentinel")).expect("read selected storage"),
+            b"selected"
+        );
+        assert_eq!(
+            current_generation_id(&root).expect("read selected pointer"),
+            Some(selected)
+        );
+        drop(next);
+    }
+
+    #[test]
+    fn recovery_runs_only_after_the_exclusive_lock_is_acquired() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let selected = publish_complete_generation(temp.path(), "recovery-lock");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let abandoned_id = "cccccccccccccccccccccccccccccccc";
+        let abandoned_root = root.join(GENERATIONS_DIRECTORY).join(abandoned_id);
+        fs::create_dir(&abandoned_root).expect("create abandoned generation");
+        let marker = write_crash_marker(&root, abandoned_id, b"");
+        let lease = try_lock_generation_selection(&root).expect("acquire shared selection lease");
+
+        let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+            .expect_err("shared lease must prevent recovery writer");
+        assert!(matches!(error, SupervisorError::GenerationLocked { .. }));
+        assert!(marker.is_file());
+        assert!(abandoned_root.is_dir());
+
+        drop(lease);
+        let next = GenerationTransaction::begin_replacing(&root, Some(selected))
+            .expect("exclusive writer recovers after lease release");
+        assert!(!marker.exists());
+        assert!(!abandoned_root.exists());
+        drop(next);
+    }
+
+    #[test]
+    fn recovery_fails_closed_on_a_malformed_reserved_marker_name() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let selected = publish_complete_generation(temp.path(), "malformed-marker");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let malformed = root.join(".current-generation.not-a-generation.tmp");
+        fs::write(&malformed, b"").expect("write malformed reserved marker");
+
+        let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+            .expect_err("malformed reserved marker must fail closed");
+        assert!(error.to_string().contains("invalid generation id"));
+        assert!(malformed.is_file());
+        assert_eq!(
+            current_generation_id(&root).expect("read preserved selection"),
+            Some(selected)
+        );
     }
 
     #[test]
@@ -964,6 +1587,7 @@ mod tests {
             PublicationFaultPoint::AfterInventory,
             PublicationFaultPoint::AfterTreeSync,
             PublicationFaultPoint::AfterGenerationsSync,
+            PublicationFaultPoint::AfterRuntimeStorageSync,
             PublicationFaultPoint::AfterPointerWrite,
             PublicationFaultPoint::AfterPointerSync,
         ] {
@@ -978,8 +1602,14 @@ mod tests {
             fs::create_dir_all(storage.parent().expect("storage parent"))
                 .expect("create stable storage");
             fs::write(&storage, b"prior usable state").expect("write stable storage");
-            let transaction = GenerationTransaction::begin(temp.path()).expect("begin candidate");
+            let mut transaction =
+                GenerationTransaction::begin(temp.path()).expect("begin candidate");
             let candidate_root = transaction.root().to_path_buf();
+            let candidate_storage = transaction
+                .create_runtime_storage("peer0")
+                .expect("create candidate runtime storage");
+            fs::write(candidate_storage.join("candidate-state"), b"unpublished")
+                .expect("write candidate runtime state");
             let (key_pair, expected_hash) =
                 write_complete_candidate(&candidate_root, "precommit-new", 8);
             let error = transaction
@@ -1002,6 +1632,10 @@ mod tests {
             assert!(
                 !candidate_root.exists(),
                 "fault at {point:?} must clean unpublished candidate"
+            );
+            assert!(
+                !candidate_storage.exists(),
+                "fault at {point:?} must clean unpublished runtime storage"
             );
             let verified = verify_selected_generation(temp.path(), &old)
                 .expect("prior generation remains valid");
@@ -1027,7 +1661,7 @@ mod tests {
         let candidate_id = transaction.id().to_owned();
         let (key_pair, expected_hash) =
             write_complete_candidate(transaction.root(), "postcommit-new", 10);
-        let error = transaction
+        let mut publication = transaction
             .publish_with_fault(
                 GenerationInventoryContext {
                     chain_id: "postcommit-new",
@@ -1037,11 +1671,21 @@ mod tests {
                 },
                 PublicationFaultPoint::AfterPointerRename,
             )
-            .expect_err("post-rename fault must report uncertain durability");
+            .expect("post-rename fault occurs after the pointer commit");
+        let error = publication
+            .take_uncertainty()
+            .expect("post-rename fault must report uncertain durability");
         assert!(matches!(
             error,
             SupervisorError::PublicationUncertain { ref generation_id, .. }
                 if generation_id == &candidate_id
+        ));
+        let contention = GenerationTransaction::begin(temp.path())
+            .err()
+            .expect("uncertain committed guard must retain the generation lock");
+        assert!(matches!(
+            contention,
+            SupervisorError::GenerationLocked { .. }
         ));
         assert_ne!(candidate_id, old);
         assert_eq!(
@@ -1050,6 +1694,252 @@ mod tests {
         );
         verify_selected_generation(temp.path(), &candidate_id)
             .expect("committed candidate must survive transaction drop");
+        drop(publication);
+        GenerationTransaction::begin(temp.path())
+            .expect("dropping the committed guard releases the generation lock");
+    }
+
+    #[test]
+    fn committed_publication_guard_serializes_reconciliation() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let transaction = GenerationTransaction::begin(temp.path()).expect("begin candidate");
+        let candidate_id = transaction.id().to_owned();
+        let (key_pair, expected_hash) =
+            write_complete_candidate(transaction.root(), "guarded-commit", 15);
+        let mut publication = transaction
+            .publish(GenerationInventoryContext {
+                chain_id: "guarded-commit",
+                chain_discriminant: 15,
+                genesis_public_key: key_pair.public_key(),
+                expected_hash,
+            })
+            .expect("publish guarded generation");
+        assert_eq!(publication.id(), candidate_id);
+        assert!(publication.take_uncertainty().is_none());
+        let contention = GenerationTransaction::begin(temp.path())
+            .err()
+            .expect("committed guard must retain the generation lock");
+        assert!(matches!(
+            contention,
+            SupervisorError::GenerationLocked { .. }
+        ));
+
+        drop(publication);
+        GenerationTransaction::begin(temp.path())
+            .expect("dropping the committed guard releases the generation lock");
+    }
+
+    #[test]
+    fn stale_expected_base_cannot_replace_newer_selection() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let old = publish_complete_generation(temp.path(), "cas-old");
+        let next = publish_complete_generation(temp.path(), "cas-current");
+        let selected =
+            verify_selected_generation(temp.path(), &next).expect("newer selection validates");
+        let selected_config =
+            fs::read(selected.root.join("peers/peer0/config.toml")).expect("read selected config");
+
+        let stale = GenerationTransaction::begin_replacing(temp.path(), Some(old.clone()))
+            .expect("begin stale candidate");
+        let stale_root = stale.root().to_path_buf();
+        let (key_pair, expected_hash) = write_complete_candidate(&stale_root, "cas-stale", 16);
+        let error = stale
+            .publish(GenerationInventoryContext {
+                chain_id: "cas-stale",
+                chain_discriminant: 16,
+                genesis_public_key: key_pair.public_key(),
+                expected_hash,
+            })
+            .expect_err("stale expected base must fail before pointer replacement");
+        assert!(matches!(
+            error,
+            SupervisorError::GenerationSelectionChanged {
+                expected: Some(ref expected),
+                actual: Some(ref actual),
+            } if expected == &old && actual == &next
+        ));
+        assert_eq!(
+            current_generation_id(temp.path()).expect("read preserved selection"),
+            Some(next.clone())
+        );
+        let preserved =
+            verify_selected_generation(temp.path(), &next).expect("newer selection remains valid");
+        assert_eq!(
+            fs::read(preserved.root.join("peers/peer0/config.toml"))
+                .expect("read preserved selected config"),
+            selected_config
+        );
+        assert!(!stale_root.exists());
+    }
+
+    #[test]
+    fn publication_keeps_synced_runtime_storage_outside_immutable_generation() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let mut transaction = GenerationTransaction::begin(temp.path()).expect("begin candidate");
+        let generation_root = transaction.root().to_path_buf();
+        let generation_id = transaction.id().to_owned();
+        let storage = transaction
+            .create_runtime_storage("peer0")
+            .expect("create runtime storage");
+        fs::write(storage.join("candidate-state"), b"durable candidate state")
+            .expect("write candidate state");
+        let (key_pair, expected_hash) =
+            write_complete_candidate(&generation_root, "runtime-storage-sync", 11);
+
+        let published = durable_generation_id(
+            transaction
+                .publish(GenerationInventoryContext {
+                    chain_id: "runtime-storage-sync",
+                    chain_discriminant: 11,
+                    genesis_public_key: key_pair.public_key(),
+                    expected_hash,
+                })
+                .expect("publish generation with runtime storage"),
+        );
+
+        assert_eq!(published, generation_id);
+        assert_eq!(
+            storage,
+            temp.path()
+                .canonicalize()
+                .expect("canonical network root")
+                .join("peers/peer0/storage-generations")
+                .join(&generation_id)
+        );
+        assert!(!storage.starts_with(&generation_root));
+        assert_eq!(
+            fs::read(storage.join("candidate-state")).expect("read retained candidate state"),
+            b"durable candidate state"
+        );
+        assert_eq!(
+            current_generation_id(temp.path()).expect("read selected generation"),
+            Some(generation_id)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_rejects_replaced_runtime_storage_before_pointer_commit() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temporary root");
+        let outside = tempfile::tempdir().expect("outside storage root");
+        let mut transaction = GenerationTransaction::begin(temp.path()).expect("begin candidate");
+        let generation_root = transaction.root().to_path_buf();
+        let storage = transaction
+            .create_runtime_storage("peer0")
+            .expect("create runtime storage");
+        fs::remove_dir(&storage).expect("remove empty managed storage");
+        symlink(outside.path(), &storage).expect("replace storage with symlink");
+        let (key_pair, expected_hash) =
+            write_complete_candidate(&generation_root, "runtime-storage-symlink", 12);
+
+        let error = transaction
+            .publish(GenerationInventoryContext {
+                chain_id: "runtime-storage-symlink",
+                chain_discriminant: 12,
+                genesis_public_key: key_pair.public_key(),
+                expected_hash,
+            })
+            .expect_err("replaced runtime storage must fail before pointer commit");
+        assert!(error.to_string().contains("candidate runtime storage"));
+        assert_eq!(
+            current_generation_id(temp.path()).expect("read absent pointer"),
+            None
+        );
+        assert!(
+            fs::read_dir(outside.path())
+                .expect("read outside storage")
+                .next()
+                .is_none(),
+            "publication must not traverse a replaced runtime-storage symlink"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_rejects_interior_runtime_storage_symlink_before_pointer_commit() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temporary root");
+        let old = publish_complete_generation(temp.path(), "interior-symlink-old");
+        let outside = tempfile::tempdir().expect("outside snapshot root");
+        let outside_sentinel = outside.path().join("sentinel");
+        fs::write(&outside_sentinel, b"outside-state").expect("write outside sentinel");
+        let mut transaction = GenerationTransaction::begin(temp.path()).expect("begin candidate");
+        let generation_root = transaction.root().to_path_buf();
+        let candidate_storage = transaction
+            .create_runtime_storage("peer0")
+            .expect("create runtime storage");
+        symlink(outside.path(), candidate_storage.join("snapshot"))
+            .expect("create interior storage symlink");
+        let (key_pair, expected_hash) =
+            write_complete_candidate(&generation_root, "interior-symlink-new", 13);
+
+        let error = transaction
+            .publish(GenerationInventoryContext {
+                chain_id: "interior-symlink-new",
+                chain_discriminant: 13,
+                genesis_public_key: key_pair.public_key(),
+                expected_hash,
+            })
+            .expect_err("interior runtime-storage symlink must fail before pointer commit");
+        assert!(matches!(&error, SupervisorError::GenerationValidation(_)));
+        assert!(error.to_string().contains("symbolic link"));
+        assert_eq!(
+            current_generation_id(temp.path()).expect("read preserved pointer"),
+            Some(old)
+        );
+        assert_eq!(
+            fs::read(&outside_sentinel).expect("read outside sentinel"),
+            b"outside-state",
+            "publication must not mutate the interior symlink target"
+        );
+        assert_eq!(
+            fs::read_dir(outside.path())
+                .expect("read outside snapshot root")
+                .count(),
+            1,
+            "publication must not create entries through the interior symlink"
+        );
+        assert!(!generation_root.exists());
+        assert!(!candidate_storage.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_rejects_special_runtime_storage_entry_before_pointer_commit() {
+        use std::os::unix::net::UnixListener;
+
+        let temp = tempfile::tempdir_in("/tmp").expect("short temporary root");
+        let old = publish_complete_generation(temp.path(), "special-entry-old");
+        let mut transaction = GenerationTransaction::begin(temp.path()).expect("begin candidate");
+        let generation_root = transaction.root().to_path_buf();
+        let candidate_storage = transaction
+            .create_runtime_storage("peer0")
+            .expect("create runtime storage");
+        let socket = UnixListener::bind(candidate_storage.join("runtime.sock"))
+            .expect("create special runtime-storage entry");
+        let (key_pair, expected_hash) =
+            write_complete_candidate(&generation_root, "special-entry-new", 14);
+
+        let error = transaction
+            .publish(GenerationInventoryContext {
+                chain_id: "special-entry-new",
+                chain_discriminant: 14,
+                genesis_public_key: key_pair.public_key(),
+                expected_hash,
+            })
+            .expect_err("special runtime-storage entry must fail before pointer commit");
+        assert!(matches!(&error, SupervisorError::GenerationValidation(_)));
+        assert!(error.to_string().contains("non-regular entry"));
+        assert_eq!(
+            current_generation_id(temp.path()).expect("read preserved pointer"),
+            Some(old)
+        );
+        drop(socket);
+        assert!(!generation_root.exists());
+        assert!(!candidate_storage.exists());
     }
 
     #[test]
@@ -1059,14 +1949,16 @@ mod tests {
         let candidate_root = transaction.root().to_path_buf();
         let (key_pair, expected_hash) =
             write_complete_candidate(&candidate_root, "selection-test", 9);
-        let id = transaction
-            .publish(GenerationInventoryContext {
-                chain_id: "selection-test",
-                chain_discriminant: 9,
-                genesis_public_key: key_pair.public_key(),
-                expected_hash,
-            })
-            .expect("publish generation");
+        let id = durable_generation_id(
+            transaction
+                .publish(GenerationInventoryContext {
+                    chain_id: "selection-test",
+                    chain_discriminant: 9,
+                    genesis_public_key: key_pair.public_key(),
+                    expected_hash,
+                })
+                .expect("publish generation"),
+        );
         verify_selected_generation(temp.path(), &id).expect("sealed generation verifies");
 
         fs::write(
@@ -1142,6 +2034,196 @@ mod tests {
                 "unexpected inventory validation error: {error}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_rejects_symlinked_pointer_marker_without_following_it() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temporary root");
+        let selected = publish_complete_generation(temp.path(), "symlink-marker");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let abandoned_id = "dddddddddddddddddddddddddddddddd";
+        let abandoned_root = root.join(GENERATIONS_DIRECTORY).join(abandoned_id);
+        fs::create_dir(&abandoned_root).expect("create abandoned generation");
+        let outside = tempfile::NamedTempFile::new().expect("outside marker target");
+        fs::write(outside.path(), b"outside sentinel").expect("write outside sentinel");
+        let marker = generation_pointer_temporary_path(&root, abandoned_id);
+        symlink(outside.path(), &marker).expect("symlink pointer marker");
+
+        let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+            .expect_err("symlinked marker must fail closed");
+        assert!(error.to_string().contains("must be a regular file"));
+        assert_eq!(
+            fs::read(outside.path()).expect("read outside marker target"),
+            b"outside sentinel"
+        );
+        assert!(abandoned_root.is_dir());
+        assert!(
+            fs::symlink_metadata(marker)
+                .expect("marker metadata")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            current_generation_id(&root).expect("read preserved selection"),
+            Some(selected)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_rejects_special_pointer_marker_without_opening_it() {
+        use std::os::unix::net::UnixListener;
+
+        let temp = tempfile::tempdir_in("/tmp").expect("short temporary root");
+        let selected = publish_complete_generation(temp.path(), "special-marker");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let abandoned_id = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        let abandoned_root = root.join(GENERATIONS_DIRECTORY).join(abandoned_id);
+        fs::create_dir(&abandoned_root).expect("create abandoned generation");
+        let marker = generation_pointer_temporary_path(&root, abandoned_id);
+        let listener = UnixListener::bind(&marker).expect("bind special marker entry");
+
+        let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+            .expect_err("special marker must fail closed");
+        assert!(error.to_string().contains("must be a regular file"));
+        assert!(abandoned_root.is_dir());
+        assert!(marker.exists());
+        assert_eq!(
+            current_generation_id(&root).expect("read preserved selection"),
+            Some(selected)
+        );
+        drop(listener);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_rejects_insecure_or_hardlinked_pointer_markers() {
+        for hardlinked in [false, true] {
+            let temp = tempfile::tempdir().expect("temporary root");
+            let selected = publish_complete_generation(temp.path(), "marker-identity");
+            let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+            let abandoned_id = if hardlinked {
+                "11111111111111111111111111111111"
+            } else {
+                "22222222222222222222222222222222"
+            };
+            let abandoned_root = root.join(GENERATIONS_DIRECTORY).join(abandoned_id);
+            fs::create_dir(&abandoned_root).expect("create abandoned generation");
+            let marker = write_crash_marker(&root, abandoned_id, b"");
+            let expected_message = if hardlinked {
+                fs::hard_link(&marker, root.join("marker-hardlink"))
+                    .expect("hardlink pointer marker");
+                "changed while it was opened"
+            } else {
+                fs::set_permissions(&marker, fs::Permissions::from_mode(0o644))
+                    .expect("make pointer marker insecure");
+                "must be owner-only"
+            };
+
+            let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+                .expect_err("unsafe marker identity must fail closed");
+            assert!(
+                error.to_string().contains(expected_message),
+                "unexpected marker validation error: {error}"
+            );
+            assert!(marker.is_file());
+            assert!(abandoned_root.is_dir());
+            assert_eq!(
+                current_generation_id(&root).expect("read preserved selection"),
+                Some(selected)
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_rejects_malformed_pointer_marker_contents() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let selected = publish_complete_generation(temp.path(), "marker-contents");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let abandoned_id = "33333333333333333333333333333333";
+        let abandoned_root = root.join(GENERATIONS_DIRECTORY).join(abandoned_id);
+        fs::create_dir(&abandoned_root).expect("create abandoned generation");
+        let marker = write_crash_marker(&root, abandoned_id, b"not-a-prefix");
+
+        let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+            .expect_err("malformed marker contents must fail closed");
+        assert!(error.to_string().contains("malformed contents"));
+        assert!(marker.is_file());
+        assert!(abandoned_root.is_dir());
+        assert_eq!(
+            current_generation_id(&root).expect("read preserved selection"),
+            Some(selected)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_rejects_symlinked_runtime_root_before_deleting_any_candidate_state() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temporary root");
+        let selected = publish_complete_generation(temp.path(), "symlinked-runtime-recovery");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let abandoned_id = "ffffffffffffffffffffffffffffffff";
+        let abandoned_root = root.join(GENERATIONS_DIRECTORY).join(abandoned_id);
+        fs::create_dir(&abandoned_root).expect("create abandoned generation");
+        let storage_parent = root.join("peers/peer0/storage-generations");
+        fs::create_dir_all(&storage_parent).expect("create storage parent");
+        let outside = tempfile::tempdir().expect("outside runtime target");
+        fs::write(outside.path().join("sentinel"), b"outside").expect("write outside sentinel");
+        let storage = storage_parent.join(abandoned_id);
+        symlink(outside.path(), &storage).expect("symlink runtime storage");
+        let marker = write_crash_marker(&root, abandoned_id, b"");
+
+        let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
+            .expect_err("symlinked runtime storage must fail closed");
+        assert!(error.to_string().contains("non-symlink directory"));
+        assert!(marker.is_file());
+        assert!(abandoned_root.is_dir());
+        assert_eq!(
+            fs::read(outside.path().join("sentinel")).expect("read outside sentinel"),
+            b"outside"
+        );
+        assert_eq!(
+            current_generation_id(&root).expect("read preserved selection"),
+            Some(selected)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_unlinks_interior_symlinks_without_touching_their_targets() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temporary root");
+        let selected = publish_complete_generation(temp.path(), "interior-recovery-symlink");
+        let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
+        let abandoned_id = "0123456789abcdef0123456789abcdef";
+        let abandoned_root = root.join(GENERATIONS_DIRECTORY).join(abandoned_id);
+        fs::create_dir(&abandoned_root).expect("create abandoned generation");
+        let abandoned_storage = create_runtime_storage_fixture(&root, "peer0", abandoned_id);
+        let outside = tempfile::tempdir().expect("outside interior target");
+        fs::write(outside.path().join("sentinel"), b"outside").expect("write outside sentinel");
+        symlink(outside.path(), abandoned_root.join("artifact-link"))
+            .expect("symlink abandoned artifact");
+        symlink(outside.path(), abandoned_storage.join("state-link"))
+            .expect("symlink abandoned runtime state");
+        let marker = write_crash_marker(&root, abandoned_id, b"");
+
+        let next = GenerationTransaction::begin_replacing(&root, Some(selected))
+            .expect("remove managed trees without following interior symlinks");
+        assert!(!marker.exists());
+        assert!(!abandoned_root.exists());
+        assert!(!abandoned_storage.exists());
+        assert_eq!(
+            fs::read(outside.path().join("sentinel")).expect("read outside sentinel"),
+            b"outside"
+        );
+        drop(next);
     }
 
     #[cfg(unix)]

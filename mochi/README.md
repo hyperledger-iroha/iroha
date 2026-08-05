@@ -83,6 +83,25 @@ only the `local-dev` credential identifier and the `onboarding_signer_file` and
 `onboarding_token_file` paths so local applications can use the bundle without copying its raw
 secrets or digest into generated metadata.
 
+To qualify the transactional wipe path against real binaries, use the bounded one-shot rehearsal
+with a fresh data root:
+
+```sh
+rehearsal_root="$(mktemp -d)"
+cargo run -p mochi-ui --features gui --bin mochi -- \
+  sandbox rehearse-wipe-and-regenerate \
+  --data-root "$rehearsal_root" \
+  --profile four-peer-bft \
+  --build-binaries \
+  --enable-smoke
+```
+
+The command starts four real peers, proves committed genesis, readiness, and the local MCP surface,
+calls `Supervisor::wipe_and_regenerate` while that exact peer set is running, and repeats every
+proof against the new generation. It fails unless the selected generation changes and all four
+aliases return. On success it stops the peers and prints one bounded Norito JSON evidence record;
+the disposable data root remains available for audit.
+
 Generated local validator configs pin the runtime-critical local defaults Mochi depends on:
 `nexus.enabled = false` unless explicitly enabled and `confidential.enabled = true`. Consensus mode
 is carried by the signed genesis/height context, so Mochi does not emit the retired mutable

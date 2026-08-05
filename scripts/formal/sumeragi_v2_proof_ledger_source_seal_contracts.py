@@ -1080,7 +1080,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
     ),
     "retain_effect_batch_at_frontier": (
-        "b7fbdd5ae5da857c63f2a5adbea69698c4b1f76bca99649d1ff7cf7674eb7535"
+        "9f9d0352ea5921e9d081c0cc4775ed26676b0f213866870a681cf9d901d6aa98"
     ),
     "preflight_effect_batch_frontier": (
         "0000000000000000000000000000000000000000000000000000000000000000"

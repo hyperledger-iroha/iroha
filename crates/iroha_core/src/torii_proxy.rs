@@ -24,6 +24,8 @@ pub const QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2: u16 = 2;
 pub const QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2: u16 = 2;
 /// Current first-release QueuePlan admission-certificate layout.
 pub const QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2: u16 = 2;
+/// Schema version for peer-to-peer publication of a certified QueuePlan admission.
+pub const QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1: u16 = 1;
 
 const QUEUE_PLAN_ADMISSION_CHAIN_DOMAIN_V2: &[u8] = b"iroha:torii:queue-plan-admission-chain:v2\0";
 const QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2: &[u8] =
@@ -439,6 +441,18 @@ pub struct QueuePlanAdmissionCertificateV2 {
     pub binding: QueuePlanAdmissionBindingV2,
     /// Strictly increasing validator-index attestations.
     pub attestations: Vec<QueuePlanAdmissionAttestationV2>,
+}
+
+/// Canonical QueuePlan certificate disseminated from an ingress aggregator to validators.
+///
+/// The certificate stays as exact Norito bytes so every receiving validator can enforce the
+/// same bounded canonical-decoding boundary before publishing those bytes durably in Kura.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct QueuePlanAdmissionPublicationV1 {
+    /// Publication envelope schema version.
+    pub schema_version: u16,
+    /// Exact canonical [`QueuePlanAdmissionCertificateV2`] bytes.
+    pub certificate: Vec<u8>,
 }
 
 /// Strength required while validating a QueuePlan admission certificate.

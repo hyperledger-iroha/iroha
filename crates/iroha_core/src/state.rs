@@ -2771,11 +2771,15 @@ pub enum QueuePlanAdmissionRegistryMatch {
 
 /// Durable disposition of one authenticated pending QueuePlan certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PendingQueuePlanAdmissionDisposition {
+pub enum PendingQueuePlanAdmissionDisposition {
     /// The exact immutable marker is already present in canonical WSV.
     Exact,
     /// No marker exists and the complete certificate is eligible for the next carrier.
     EligibleAbsent,
+    /// The certificate is authentic but its bound canonical frontier has not arrived locally yet.
+    ///
+    /// Callers must retain the bounded durable certificate and reclassify it after catch-up.
+    Future,
     /// A different well-formed immutable marker already owns this source identity.
     DefinitiveConflict,
     /// The certificate is authentic but its history, lifecycle, or authority context is stale.
@@ -35947,19 +35951,21 @@ impl State {
         });
         let mut canonical = Vec::with_capacity(ordered.len());
         for (registry_key, registry_value, bytes) in ordered {
-            if let Some((previous_key, previous_value, _)) = canonical.last() {
+            if let Some((previous_key, _, _)) = canonical.last() {
                 if previous_key == &registry_key {
-                    if previous_value != &registry_value {
-                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "pending queue-plan admissions contain conflicting bindings for one source registry key"
-                                .to_owned(),
-                        ));
-                    }
-                    // Distinct authority response timing may produce multiple valid quorum
-                    // certificates for the same immutable binding.  Their signer subsets and
-                    // bytes can differ, but they are one semantic admission.  Sorting by the
-                    // complete tuple above makes the first certificate the deterministic
-                    // canonical representative on every peer.
+                    // One byte-identical ingress retry can acquire more than one fully valid
+                    // certificate before its entrypoint has a committed registry marker.  A
+                    // different authority frontier, enqueue timestamp, or signer subset changes
+                    // the binding/certificate bytes without changing the global source identity.
+                    // The WSV registry is the compare-and-set arbiter for that identity, so retain
+                    // exactly one representative here.  Sorting by registry value and complete
+                    // certificate bytes above makes the winner independent of arrival order for
+                    // any one leader's pending set.  Followers validate that chosen certificate;
+                    // they do not need an identical pending inventory.  Once its marker commits,
+                    // normal pending-certificate reconciliation classifies
+                    // every competing binding as a definitive conflict and retires its exact queue
+                    // claim.  Certificate validation and the one-key/one-value invariant of a
+                    // signed merge candidate remain unchanged.
                     continue;
                 }
             }
@@ -36546,7 +36552,12 @@ impl State {
                     Ok(validated) => validated,
                     Err(_) => return true,
                 };
-            if disposition != PendingQueuePlanAdmissionDisposition::EligibleAbsent {
+            if matches!(
+                disposition,
+                PendingQueuePlanAdmissionDisposition::Exact
+                    | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+                    | PendingQueuePlanAdmissionDisposition::Stale
+            ) {
                 return false;
             }
             admission
@@ -36859,7 +36870,7 @@ impl State {
     /// certificate is authenticated, a well-formed conflicting marker or a
     /// stale lifecycle/history binding is definitive and may be retired at an
     /// exact durable parent frontier.
-    pub(crate) fn classify_pending_queue_plan_admission(
+    pub fn classify_pending_queue_plan_admission(
         &self,
         bytes: &[u8],
         carrier_height: u64,
@@ -36891,47 +36902,46 @@ impl State {
                     .authority_height
                     > committed_height
                 {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "pending QueuePlan admission is ahead of the committed State frontier"
-                            .to_owned(),
-                    ));
-                }
-                let lifecycle = self.lane_consensus_lifecycle_snapshot();
-                let active_lanes = lifecycle
-                    .nexus
-                    .lane_catalog
-                    .lanes()
-                    .iter()
-                    .map(|lane| {
-                        Ok(MergeLaneBinding {
-                            lane_id: lane.id,
-                            dataspace_id: lane.dataspace_id,
-                            lane_config_hash: merge_lane_config_hash(lane),
-                            incarnation: *lifecycle
-                                .incarnations
-                                .get(&lane.id)
-                                .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
-                            activation_height: lifecycle
-                                .activation_heights
-                                .get(&lane.id)
-                                .and_then(|height| height.checked_add(1))
-                                .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
-                let encoded = vec![bytes.to_vec()];
-                if self
-                    .validate_merge_queue_plan_admissions(
-                        &encoded,
-                        &active_lanes,
-                        carrier_height,
-                        true,
-                    )
-                    .is_ok()
-                {
-                    PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                    PendingQueuePlanAdmissionDisposition::Future
                 } else {
-                    PendingQueuePlanAdmissionDisposition::Stale
+                    let lifecycle = self.lane_consensus_lifecycle_snapshot();
+                    let active_lanes = lifecycle
+                        .nexus
+                        .lane_catalog
+                        .lanes()
+                        .iter()
+                        .map(|lane| {
+                            Ok(MergeLaneBinding {
+                                lane_id: lane.id,
+                                dataspace_id: lane.dataspace_id,
+                                lane_config_hash: merge_lane_config_hash(lane),
+                                incarnation: *lifecycle.incarnations.get(&lane.id).ok_or(
+                                    MergeLedgerCommitError::UnknownLane { lane_id: lane.id },
+                                )?,
+                                activation_height: lifecycle
+                                    .activation_heights
+                                    .get(&lane.id)
+                                    .and_then(|height| height.checked_add(1))
+                                    .ok_or(MergeLedgerCommitError::UnknownLane {
+                                        lane_id: lane.id,
+                                    })?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
+                    let encoded = vec![bytes.to_vec()];
+                    if self
+                        .validate_merge_queue_plan_admissions(
+                            &encoded,
+                            &active_lanes,
+                            carrier_height,
+                            true,
+                        )
+                        .is_ok()
+                    {
+                        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                    } else {
+                        PendingQueuePlanAdmissionDisposition::Stale
+                    }
                 }
             }
         };

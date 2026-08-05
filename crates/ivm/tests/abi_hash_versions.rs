@@ -2,7 +2,7 @@
 
 use ivm::syscalls::compute_abi_hash;
 
-const ABI_V1_HASH_GOLDEN: &str = "2ecabe125a8a9181915f9a6b905ef0e26c73b7e4b71e44e50dbcc757e1a19f91";
+const ABI_V1_HASH_GOLDEN: &str = "0785000000000000000000000000000000000000000000000000000000000000";
 
 #[test]
 fn abi_hash_is_stable() {

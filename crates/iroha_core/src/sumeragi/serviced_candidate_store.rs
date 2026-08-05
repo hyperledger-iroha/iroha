@@ -22,7 +22,8 @@ use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
 use norito::codec::{Decode, DecodeAll, Encode};
 
 use super::{
-    FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken,
+    FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWireSlot,
+    FairV2IngressLeaderWireSourceClass, FairV2IngressLeaderWireToken,
     v2_body_store::DurableBodyReceipt,
     v2_core::{
         CanonicalIdentityProjection, IDENTITY_DOMAIN_PROCESS_LOCAL,
@@ -747,11 +748,17 @@ impl LeaderWireRecoveryAuthority {
 
     /// Return whether this durable cut permanently rejects one lifecycle token.
     pub(super) fn obsoletes(self, token: &FairV2IngressLeaderWireToken) -> bool {
-        self.decision_durable || token.identity.view < self.durable_view
+        // A certified view or Decision closes reducer-producing control, not
+        // transport completion. The selected block can still be missing when
+        // Decision becomes durable, so its exact chunk/body response must
+        // reach the downstream fetch, manifest, request, and subject checks.
+        token.source_class == FairV2IngressLeaderWireSourceClass::Control
+            && (self.decision_durable || token.identity.view < self.durable_view)
     }
 
     fn obsoletes_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
-        self.decision_durable || identity.view < self.durable_view
+        identity.phase.source_class() == FairV2IngressLeaderWireSourceClass::Control
+            && (self.decision_durable || identity.view < self.durable_view)
     }
 }
 
@@ -4109,6 +4116,90 @@ mod tests {
                     .reserve(newer)
                     .expect("a strictly newer view remains admissible");
             }
+        }
+    }
+
+    #[test]
+    fn leader_wire_recovery_cut_keeps_body_transport_admissible() {
+        for (label, durable_view, decision_durable, control_view) in
+            [("advanced-view", 3, false, 2), ("decision", 3, true, 4)]
+        {
+            let directory = TempDir::new().expect("temporary directory");
+            let context = context();
+            let wal = directory
+                .path()
+                .join(format!("leader-wire-body-{label}.wal"));
+            let roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<BTreeSet<_>>();
+            let max_chunks = 2;
+            let capacity = LeaderWireLifecycleStoreGate::derived_capacity(roster.len(), max_chunks)
+                .expect("derived gate capacity");
+            let (gate, _) = LeaderWireLifecycleStoreGate::open(
+                &wal,
+                context.id(),
+                context.height,
+                OWNER_A,
+                roster,
+                capacity,
+                max_chunks,
+                leader_wire_recovery_authority_at(
+                    &context,
+                    OWNER_A,
+                    durable_view,
+                    decision_durable,
+                ),
+                &[],
+                &[],
+            )
+            .expect("open leader-wire gate at the durable cut");
+
+            let control = leader_wire_token(&context, control_view, 1, 1, 0x91);
+            let origin = context.roster[0].validator.clone();
+            let chunk = leader_wire_slot_token(
+                &context,
+                &origin,
+                FairV2IngressLeaderWirePhase::Chunk,
+                Some(0),
+                2,
+                2,
+            );
+            let response = leader_wire_slot_token(
+                &context,
+                &origin,
+                FairV2IngressLeaderWirePhase::CertifiedResponse,
+                None,
+                3,
+                3,
+            );
+
+            assert!(
+                gate.identity_is_obsolete(&control.identity)
+                    .expect("inspect control identity"),
+                "{label} closes obsolete control"
+            );
+            assert!(
+                !gate
+                    .identity_is_obsolete(&chunk.identity)
+                    .expect("inspect chunk identity"),
+                "{label} keeps an exact body chunk eligible"
+            );
+            assert!(
+                !gate
+                    .identity_is_obsolete(&response.identity)
+                    .expect("inspect response identity"),
+                "{label} keeps an exact certified body response eligible"
+            );
+            assert!(
+                gate.reserve(control).is_err(),
+                "{label} rejects obsolete control admission"
+            );
+            gate.reserve(chunk)
+                .expect("the downstream fetch must decide whether the chunk is relevant");
+            gate.reserve(response)
+                .expect("the downstream request must authenticate the certified response");
         }
     }
 

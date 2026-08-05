@@ -7887,6 +7887,135 @@ impl SumeragiV2Adapter {
             .ok_or_else(|| "bounded producer lifecycle slots are exhausted".to_owned())
     }
 
+    /// Return whether an independently authenticated route selected a
+    /// semantic producer which is already owned by one live Busy-deferred
+    /// occurrence.
+    ///
+    /// Fair ingress deliberately gives distinct authenticated origins
+    /// independent outer lifecycle tokens. Two such tokens can both reach the
+    /// serialized FIFO before the first occurrence crosses into Busy storage;
+    /// a later pacemaker escape may therefore select the second token while
+    /// the first still owns the sole route-neutral producer continuation.
+    /// Treat that second occurrence as an in-flight duplicate only after
+    /// proving the original producer, deferred input, and runtime ownership
+    /// seal form one exact live chain. Restart-dormant or otherwise unowned
+    /// producer metadata must continue through the strict reservation path and
+    /// fail closed on an immutable-identity mismatch.
+    fn live_deferred_producer_alias(
+        &mut self,
+        candidate: (ServicedCandidateKey, wire::View, ServicedCandidatePolicy),
+        authenticated_ingress: bool,
+    ) -> Result<bool, AdapterError> {
+        if !authenticated_ingress {
+            return Ok(false);
+        }
+        let Some(selected) = self.selected_producer_lifecycle.clone() else {
+            return Ok(false);
+        };
+        let matches = self
+            .producer_continuations
+            .iter()
+            .filter(|(_, record)| record.identity().candidate() == candidate.0)
+            .map(|(address, record)| (*address, record.clone()))
+            .collect::<Vec<_>>();
+        let (address, record) = match matches.as_slice() {
+            [] => return Ok(false),
+            [entry] => entry.clone(),
+            _ => {
+                return Err(self.fail_serviced_candidate_store(
+                    "one logical producer candidate occupied multiple bounded addresses".to_owned(),
+                ));
+            }
+        };
+        let identity = record.identity();
+        let same_key = identity.causal_lifecycle_key() == selected.causal_lifecycle_key;
+        let same_ordinal = identity.admission_ordinal() == selected.admission_ordinal;
+        if same_key && same_ordinal {
+            return Ok(false);
+        }
+        if same_key || same_ordinal {
+            return Err(self.fail_serviced_candidate_store(
+                "live producer alias partially changed its immutable key or ordinal".to_owned(),
+            ));
+        }
+
+        let owners = self
+            .deferred_producer_continuations
+            .iter()
+            .filter(|(_, reservation)| reservation.address == address)
+            .map(|(ordinal, reservation)| (*ordinal, reservation.clone()))
+            .collect::<Vec<_>>();
+        let (deferred_ordinal, reservation) = match owners.as_slice() {
+            [] => return Ok(false),
+            [entry] => entry.clone(),
+            _ => {
+                return Err(self.fail_serviced_candidate_store(
+                    "one live producer continuation had multiple Busy owners".to_owned(),
+                ));
+            }
+        };
+        let inputs = self
+            .deferred_completions
+            .iter()
+            .chain(&self.deferred_progress_inputs)
+            .chain(&self.deferred_inputs)
+            .filter(|input| input.admission_ordinal == deferred_ordinal)
+            .cloned()
+            .collect::<Vec<_>>();
+        let input = match inputs.as_slice() {
+            [input] => input,
+            [] => {
+                return Err(self.fail_serviced_candidate_store(
+                    "live producer continuation lost its Busy occurrence".to_owned(),
+                ));
+            }
+            _ => {
+                return Err(self.fail_serviced_candidate_store(
+                    "one live producer continuation had multiple deferred occurrences".to_owned(),
+                ));
+            }
+        };
+        let input_candidate = self.serviced_candidate(
+            &input.event,
+            input.priority,
+            input.completion_evidence.as_ref(),
+            input.authenticated_wire_identity.as_deref(),
+        );
+        let runtime_binding = input.admission_capability.runtime_ownership.as_ref();
+        let exact_live_owner = reservation.address == address
+            && record.status() == ProducerContinuationStatus::Reserved
+            && record.source_class() == ProducerContinuationSourceClass::ConditionalTransport
+            && identity.address() == address
+            && self.durable_producer_continuations.get(&address) == Some(&record)
+            && !self
+                .restored_dormant_producer_continuations
+                .contains(&address)
+            && !self.pending_producer_handoffs.contains_key(&address)
+            && input_candidate == Some(candidate)
+            && input.retag_authenticated_ingress
+            && input.authenticated_wire_identity.is_some()
+            && input.admission_capability.origin.is_authenticated()
+            && Arc::ptr_eq(
+                &input.admission_capability.source_identity,
+                &self.deferred_admission_ordinals.identity,
+            )
+            && !input.admission_capability.adapter_service_is_claimed()
+            && !input.admission_capability.runtime_handoff_is_claimed()
+            && runtime_binding.is_some_and(|binding| {
+                binding.validate_exact()
+                    && binding.authenticated_ingress
+                    && binding.source_physical_ordinal.is_some()
+                    && binding.causal_lifecycle_key == identity.causal_lifecycle_key()
+                    && binding.initial_lifecycle_ordinal == identity.admission_ordinal()
+            });
+        if !exact_live_owner {
+            return Err(self.fail_serviced_candidate_store(
+                "live producer alias did not retain one exact authenticated Busy owner".to_owned(),
+            ));
+        }
+        Ok(true)
+    }
+
     /// Reserve the exact selected lifecycle-stage address before reducer
     /// service can retire its source.
     fn reserve_selected_producer_continuation(
@@ -8815,6 +8944,15 @@ impl SumeragiV2Adapter {
     }
 
     #[cfg(test)]
+    pub(crate) fn producer_continuation_counts_for_test(&self) -> (usize, usize, usize) {
+        (
+            self.producer_continuations.len(),
+            self.durable_producer_continuations.len(),
+            self.deferred_producer_continuations.len(),
+        )
+    }
+
+    #[cfg(test)]
     fn serviced_candidate_store_path_for_test(&self) -> &std::path::Path {
         self.serviced_candidate_store.path_for_test()
     }
@@ -8965,6 +9103,29 @@ impl SumeragiV2Adapter {
         } else {
             None
         };
+        let live_producer_alias = producer_candidate
+            .map(|candidate| {
+                self.live_deferred_producer_alias(candidate, retag_authenticated_ingress)
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if live_producer_alias {
+            if let Some(admission) = admission {
+                self.record_ingress_delivery(admission);
+            }
+            let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
+            self.record_disposition(disposition);
+            self.publish_status()?;
+            self.log_body_progress(&queued, disposition, 0);
+            return Ok(DeferPolicyOutcome {
+                outcome: AdapterOutcome {
+                    disposition,
+                    effects: Vec::new(),
+                    deferred_admission_ordinal: None,
+                    producer_handoff: None,
+                },
+            });
+        }
         let producer_reservation =
             self.reserve_selected_producer_continuation(producer_candidate)?;
         if let Err(error) =

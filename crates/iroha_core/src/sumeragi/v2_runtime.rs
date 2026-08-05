@@ -1798,6 +1798,19 @@ impl RuntimeCandidateSemanticStatement {
         }
     }
 
+    /// Compare two carriers for one physical StoreBody or ValidateBody stage.
+    ///
+    /// EventTag incarnation may advance independently, but the certified and
+    /// proposal rounds remain exact consensus coordinates. Only the ordinary,
+    /// Prepare, then Commit authority lattice may change beneath the physical
+    /// task owner.
+    fn body_stage_authority_relation_to(
+        self,
+        incoming: Self,
+    ) -> Option<RuntimeFetchAuthorityRelation> {
+        self.fetch_authority_relation_to(incoming)
+    }
+
     fn semantic_identity(self) -> Vec<u8> {
         let mut identity = Vec::new();
         identity.extend_from_slice(b"iroha:sumeragi:v2:tla-candidate-semantic:v2");
@@ -2898,6 +2911,121 @@ impl RuntimeEffectOwnership {
             )
             .map_err(|_| {
                 "Sumeragi v2 candidate retry could not retain its incumbent owner".to_owned()
+            })
+    }
+
+    /// Bind a later StoreBody or ValidateBody carrier to the one physical
+    /// asynchronous task already serving its exact body stage.
+    ///
+    /// Quorum authority is part of a candidate's route-neutral identity, so
+    /// an ordinary body pipeline and a later Prepare/Commit-certified pipeline
+    /// deliberately have different candidate identities. Persistence and
+    /// deterministic validation, however, are each physically unique for one
+    /// exact body. Once both bound carriers prove the same stage, body key, and
+    /// comparable authority lattice, the retry retains the incumbent task
+    /// owner. A weaker late carrier is therefore stale rather than an owner
+    /// downgrade, while a conflicting commitment remains fail-closed.
+    pub(crate) fn adopt_incumbent_body_stage_for_retry_or_authority(
+        &self,
+        incoming: &Self,
+        effect: &AdapterEffect,
+    ) -> Result<Self, String> {
+        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+            return Err(
+                "Sumeragi v2 body-stage carrier omitted an exact ownership binding".to_owned(),
+            );
+        }
+        let incumbent_binding = self
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let incoming_binding = incoming
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let (effect_kind, candidate_kind) = match effect {
+            AdapterEffect::StoreBody { .. } => (
+                RUNTIME_EFFECT_KIND_STORE_BODY,
+                RUNTIME_CANDIDATE_KIND_STORE_BODY,
+            ),
+            AdapterEffect::ValidateBody { .. } => (
+                RUNTIME_EFFECT_KIND_VALIDATE_BODY,
+                RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
+            ),
+            _ => {
+                return Err(
+                    "Sumeragi v2 body-stage adoption received a non-physical stage".to_owned(),
+                );
+            }
+        };
+        if incumbent_binding.effect_kind != effect_kind
+            || incoming_binding.effect_kind != effect_kind
+            || incumbent_binding.candidate_kind != candidate_kind
+            || incoming_binding.candidate_kind != candidate_kind
+        {
+            return Err("Sumeragi v2 body-stage carrier changed its physical stage".to_owned());
+        }
+        let incoming_effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+        );
+        if incoming_binding.effect_identity != incoming_effect_identity {
+            return Err(
+                "Sumeragi v2 body-stage carrier changed its exact incoming effect".to_owned(),
+            );
+        }
+        let incumbent_statement = incumbent_binding.candidate_statement.ok_or_else(|| {
+            "Sumeragi v2 incumbent body stage omitted its authority statement".to_owned()
+        })?;
+        let incoming_statement = incoming_binding.candidate_statement.ok_or_else(|| {
+            "Sumeragi v2 incoming body stage omitted its authority statement".to_owned()
+        })?;
+        incumbent_statement
+            .body_stage_authority_relation_to(incoming_statement)
+            .ok_or_else(|| {
+                "Sumeragi v2 body-stage carrier changed its body key or authority commitment"
+                    .to_owned()
+            })?;
+        let candidate =
+            production_adapter_effect_candidate_binding(effect, Some(&incumbent_statement))?
+                .ok_or_else(|| {
+                    "Sumeragi v2 body-stage retry rebound to a non-candidate effect".to_owned()
+                })?;
+        if candidate.kind != candidate_kind
+            || runtime_effect_candidate_semantic_hash(candidate.kind, &candidate.semantic_identity)
+                != incumbent_binding
+                    .candidate_semantic_identity
+                    .ok_or_else(|| {
+                        "Sumeragi v2 incumbent body stage omitted its candidate identity".to_owned()
+                    })?
+        {
+            return Err(
+                "Sumeragi v2 body-stage retry changed its incumbent semantic statement".to_owned(),
+            );
+        }
+        let ownership = match self.causality {
+            RuntimeEffectCausality::Inherit => {
+                RuntimeEffectOwnership::inherited(self.owner.clone())
+            }
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
+            }
+        };
+        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
+            .then(|| ownership.owner.clone());
+        ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                effect_kind,
+                &production_adapter_effect_semantic_identity(effect),
+                Some(&candidate),
+                incoming_binding.effect_position,
+                incoming_binding.effect_count,
+                incoming_binding.candidate_position,
+                incoming_binding.candidate_count,
+            )
+            .map_err(|_| {
+                "Sumeragi v2 body-stage retry could not retain its incumbent owner".to_owned()
             })
     }
 
@@ -12488,8 +12616,20 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             [] => Ok(false),
             [(incumbent, Some(statement))]
                 if incumbent.validate_exact()
-                    && Some(*statement) == ownership.candidate_semantic_statement() =>
+                    && ownership
+                        .candidate_semantic_statement()
+                        .is_some_and(|incoming| {
+                            statement
+                                .body_stage_authority_relation_to(incoming)
+                                .is_some()
+                        }) =>
             {
+                // The completion owns the one physical Store/Validate stage.
+                // An ordinary, Prepare, or Commit carrier may have a distinct
+                // candidate identity while remaining on that exact body's
+                // monotonic authority lattice. Keep the incumbent terminal;
+                // stale input must not downgrade it and an upgrade must not
+                // create a second callback.
                 Ok(true)
             }
             [_] => {
@@ -17424,6 +17564,190 @@ mod tests {
     }
 
     #[test]
+    fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_busy_producer() {
+        let directory = TempDir::new().expect("temporary producer-alias runtime directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate_for_phase(
+                    &context,
+                    &keys,
+                    0xD7,
+                    wire::GlobalPhase::Prepare,
+                ),
+            ));
+        let source_one = context.roster[1].validator.clone();
+        let source_two = context.roster[2].validator.clone();
+        let (_leader_wire_directory, leader_wire_ingress, ownerships) =
+            preowned_leader_wire_ownerships(
+                &context,
+                &[(message.clone(), source_one), (message.clone(), source_two)],
+                runtime.ingress.lifecycle_ordinals.clone(),
+            );
+        let [first_ownership, second_ownership]: [FairV2IngressOwnershipEvidence; 2] = ownerships
+            .try_into()
+            .expect("fixture creates two independently owned copies");
+        let first_receipt = first_ownership
+            .leader_wire_runtime_receipt()
+            .expect("first route owns its runtime receipt")
+            .clone();
+        let second_receipt = second_ownership
+            .leader_wire_runtime_receipt()
+            .expect("second route owns its runtime receipt")
+            .clone();
+        assert_ne!(first_receipt.token(), second_receipt.token());
+
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before opening the signing fence");
+        let timeout = runtime
+            .driver
+            .timeout_elapsed(runtime.round_tag())
+            .expect("open one local TimeoutVote signing fence");
+        assert!(matches!(
+            timeout.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), first_ownership)
+            .expect("enqueue the first origin-specific PrepareQC");
+        runtime
+            .enqueue_network_with_ingress_ownership(message, second_ownership)
+            .expect("enqueue the second origin before the first reaches Busy storage");
+        assert_eq!(runtime.queued_commands(), 2);
+
+        let first = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("first pacemaker selection remains valid")
+            .expect("first PrepareQC owns one pacemaker turn");
+        assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+        let first_scheduler = runtime
+            .take_last_scheduler_ownership()
+            .expect("first PrepareQC retains scheduler ownership");
+        assert_eq!(
+            first_scheduler.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+        assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
+        assert_eq!(
+            runtime.driver().producer_continuation_counts_for_test(),
+            (1, 1, 1),
+            "the Busy occurrence owns one process, durable, and deferred producer alias"
+        );
+        assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
+
+        let second = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("duplicate pacemaker selection must not fail closed")
+            .expect("the prequeued duplicate owns one bounded retirement turn");
+        assert!(matches!(second, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+        let second_scheduler = runtime
+            .take_last_scheduler_ownership()
+            .expect("duplicate retirement retains scheduler ownership");
+        assert_eq!(
+            second_scheduler.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
+        );
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+        assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
+        assert_eq!(
+            runtime.driver().producer_continuation_counts_for_test(),
+            (1, 1, 1),
+            "an alternate route cannot mint or release the canonical Busy producer"
+        );
+        assert_eq!(
+            runtime.leader_wire_runtime_receipts,
+            BTreeMap::from([(
+                first_receipt.owner().admission_ordinal(),
+                first_receipt.clone(),
+            )]),
+            "only the canonical Busy route remains active"
+        );
+        let second_terminals = runtime.take_leader_wire_runtime_terminals();
+        let [LeaderWireRuntimeTerminal::Volatile(retired_second)] = second_terminals.as_slice()
+        else {
+            panic!("the producer alias must retire only its outer route as volatile")
+        };
+        assert_eq!(retired_second, &second_receipt);
+        leader_wire_ingress
+            .mark_leader_wire_volatile_terminal(retired_second)
+            .expect("publish the alternate route's process-local terminal");
+        assert!(!runtime.fail_closed);
+
+        let timeout_certificate =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate(&context, &keys),
+            ));
+        runtime
+            .enqueue_network(timeout_certificate)
+            .expect("enqueue certified progress which opens the signing fence");
+        let certified = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("certified progress remains schedulable")
+            .expect("the TC owns one pacemaker turn");
+        let RuntimeStep::Advanced(certified_effects) = certified else {
+            panic!("certified progress unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("TC retains scheduler ownership");
+        runtime
+            .take_effect_ownership(certified_effects.len())
+            .expect("consume the TC effect ownership");
+        assert!(runtime.driver().deferred_work_is_serviceable());
+
+        let retired = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("canonical Busy owner remains schedulable")
+            .expect("canonical Busy owner receives its terminal turn");
+        let RuntimeStep::Advanced(retired_effects) = retired else {
+            panic!("canonical Busy owner unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("canonical Busy owner retains scheduler ownership");
+        runtime
+            .take_effect_ownership(retired_effects.len())
+            .expect("consume canonical Busy effects");
+        let first_terminals = runtime.take_leader_wire_runtime_terminals();
+        let [first_terminal] = first_terminals.as_slice() else {
+            panic!("canonical Busy route emits exactly one terminal")
+        };
+        let retired_first = match first_terminal {
+            LeaderWireRuntimeTerminal::Volatile(receipt) => {
+                leader_wire_ingress
+                    .mark_leader_wire_volatile_terminal(receipt)
+                    .expect("publish canonical volatile terminal");
+                receipt
+            }
+            LeaderWireRuntimeTerminal::Producer { runtime, terminal } => {
+                leader_wire_ingress
+                    .mark_leader_wire_producer_terminal(runtime, *terminal)
+                    .expect("publish canonical producer terminal");
+                runtime
+            }
+        };
+        assert_eq!(retired_first, &first_receipt);
+        assert!(runtime.leader_wire_runtime_receipts.is_empty());
+        assert!(runtime.deferred_ingress_ownership.is_empty());
+        assert!(runtime.deferred_lifecycle_ownership.is_empty());
+        assert_eq!(runtime.queued_commands(), 0);
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
     fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         let directory = TempDir::new().expect("temporary preowned-fence runtime directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
@@ -17484,6 +17808,26 @@ mod tests {
             .arm_live_clocks(start)
             .expect("arm runtime after preowning peer ingress");
         let deadline = start + runtime.round_timeout();
+        let periodic_at = deadline
+            .checked_sub(Duration::from_nanos(1))
+            .expect("round deadline has a prior instant");
+        let periodic_step = runtime
+            .step(periodic_at)
+            .expect("service the one bounded retransmit turn before Timeout");
+        let periodic_scheduling = runtime
+            .take_last_scheduler_ownership()
+            .expect("periodic turn retains exact scheduler ownership");
+        assert_eq!(
+            periodic_scheduling.selected,
+            RuntimeSelectedOwnerKind::PeriodicTimer
+        );
+        let RuntimeStep::Advanced(periodic_effects) = periodic_step else {
+            panic!("pre-timeout periodic turn unexpectedly idled")
+        };
+        runtime
+            .take_effect_ownership(periodic_effects.len())
+            .expect("consume pre-timeout periodic effect ownership");
+        assert!(runtime.deferred_lifecycle_ownership.is_empty());
         let timeout_step = runtime
             .step(deadline)
             .expect("absolute deadline opens TimeoutVote signing");
@@ -17576,16 +17920,26 @@ mod tests {
         assert!(matches!(
             runtime
                 .step_and_take_scheduler_ownership_for_test(deadline)
-                .expect("the later duplicate cannot cross the active signing fence"),
-            RuntimeStep::Idle
+                .expect("the later duplicate retires against the live Busy producer"),
+            RuntimeStep::Advanced(ref effects) if effects.is_empty()
         ));
-        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(runtime.queued_commands(), 0);
         assert_eq!(
             runtime.deferred_lifecycle_ownership[&deferred_ordinal], deferred_target,
-            "an idle fenced turn cannot replace the Busy ordinal, seal, or frozen cut"
+            "duplicate retirement cannot replace the Busy ordinal, seal, or frozen cut"
         );
-        assert_eq!(runtime.leader_wire_runtime_receipts.len(), 2);
-        assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
+        assert_eq!(
+            runtime.leader_wire_runtime_receipts,
+            BTreeMap::from([(first_token.scheduler_ordinal(), first_receipt.clone(),)]),
+            "only the canonical Busy route remains active"
+        );
+        let duplicate_terminals = runtime.take_leader_wire_runtime_terminals();
+        let [LeaderWireRuntimeTerminal::Volatile(duplicate_terminal)] =
+            duplicate_terminals.as_slice()
+        else {
+            panic!("the alternate route emits exactly one volatile terminal")
+        };
+        assert_eq!(duplicate_terminal, &second_receipt);
 
         let signature = Signature::new(keys[0].private_key(), &signature_preimage)
             .payload()
@@ -17828,45 +18182,6 @@ mod tests {
             } => receipt,
         };
         assert_eq!(first_terminal_receipt, &first_receipt);
-        assert_eq!(
-            runtime.leader_wire_runtime_receipts,
-            BTreeMap::from([(second_token.scheduler_ordinal(), second_receipt.clone(),)]),
-            "the first terminal cannot consume the later origin-specific receipt"
-        );
-
-        let second_step = runtime
-            .step(deadline)
-            .expect("the later duplicate runs only after the Busy owner terminalizes");
-        let second_scheduling = runtime
-            .take_last_scheduler_ownership()
-            .expect("the later duplicate retains its independent FIFO owner");
-        assert_eq!(second_scheduling.selected, RuntimeSelectedOwnerKind::Fifo);
-        let RuntimeSelectedCandidateOwnership::Exact(second_candidate) =
-            &second_scheduling.candidate
-        else {
-            panic!("the later duplicate must remain an independent FIFO lifecycle")
-        };
-        assert_eq!(
-            second_candidate.lifecycle_ordinal,
-            second_token.scheduler_ordinal()
-        );
-        let RuntimeStep::Advanced(second_effects) = second_step else {
-            panic!("the later aggregate unexpectedly idled after its predecessor terminalized")
-        };
-        runtime
-            .take_effect_ownership(second_effects.len())
-            .expect("consume later aggregate effect ownership");
-        let second_terminals = runtime.take_leader_wire_runtime_terminals();
-        let [second_terminal] = second_terminals.as_slice() else {
-            panic!("the later aggregate emits exactly its own terminal")
-        };
-        let second_terminal_receipt = match second_terminal {
-            LeaderWireRuntimeTerminal::Volatile(receipt)
-            | LeaderWireRuntimeTerminal::Producer {
-                runtime: receipt, ..
-            } => receipt,
-        };
-        assert_eq!(second_terminal_receipt, &second_receipt);
         assert!(runtime.leader_wire_runtime_receipts.is_empty());
         assert!(runtime.deferred_ingress_ownership.is_empty());
         assert!(runtime.deferred_lifecycle_ownership.is_empty());
@@ -24434,7 +24749,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_body_terminal_is_visible_to_exact_store_and_validate_retries() {
+    fn queued_body_terminal_is_visible_across_store_and_validate_authority_upgrades() {
         let directory = TempDir::new().expect("temporary body-terminal visibility directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
             &directory,
@@ -24491,6 +24806,38 @@ mod tests {
         let store_ownership = runtime
             .take_effect_ownership(store_effects.len())
             .expect("take exact StoreBody ownership");
+        let commit = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: manifest.subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"terminal upgrade parent state"),
+                Hash::new(b"terminal upgrade post state"),
+                Hash::new(b"terminal upgrade writes"),
+                Hash::new(b"terminal upgrade block"),
+            ),
+            signers: Vec::new(),
+            aggregate_signature: Vec::new(),
+        };
+        let certified_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(commit),
+        };
+        let certified_fetch_ownership = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&certified_fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 9_901)],
+        )
+        .expect("bind a distinct Commit-authorized Fetch owner")
+        .pop()
+        .expect("one Commit Fetch owner");
+        let certified_store_ownership = certified_fetch_ownership
+            .rebind_as_inherited_adapter_effect(&store_effect)
+            .expect("Commit Fetch authorizes the exact Store stage");
         let durable = DurableBodyReceipt::for_test(
             context.id(),
             manifest.round,
@@ -24506,25 +24853,15 @@ mod tests {
                 &store_ownership[0],
             )
             .expect("queue exact durable-store terminal");
-        let store_retry_ordinal = runtime
-            .ingress
-            .mint_non_fifo_lifecycle_ordinal()
-            .expect("mint a source-recognized StoreBody retry owner");
-        let store_retry = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&store_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(
-                tag,
-                store_retry_ordinal,
-            )],
-        )
-        .expect("bind exact StoreBody retry")
-        .pop()
-        .expect("one StoreBody retry has one owner");
-        assert_ne!(store_retry.owner(), store_ownership[0].owner());
+        assert_ne!(
+            certified_store_ownership.candidate_semantic_identity(),
+            store_ownership[0].candidate_semantic_identity(),
+            "Commit authority deliberately changes the route-neutral candidate identity"
+        );
         assert!(
             runtime
-                .body_pipeline_candidate_has_terminal(&store_effect, &store_retry)
-                .expect("query queued StoreBody terminal")
+                .body_pipeline_candidate_has_terminal(&store_effect, &certified_store_ownership)
+                .expect("Commit Store observes the ordinary queued terminal")
         );
         assert_eq!(runtime.queued_commands(), 1);
         assert!(!runtime.fail_closed);
@@ -24545,6 +24882,9 @@ mod tests {
         let validate_ownership = runtime
             .take_effect_ownership(validate_effects.len())
             .expect("take exact ValidateBody ownership");
+        let certified_validate_ownership = certified_store_ownership
+            .rebind_as_inherited_adapter_effect(&validate_effect)
+            .expect("Commit Store authorizes the exact Validate stage");
         runtime
             .enqueue_validation_succeeded_with_owner(
                 tag,
@@ -24554,25 +24894,18 @@ mod tests {
                 &validate_ownership[0],
             )
             .expect("queue exact validation terminal");
-        let validate_retry_ordinal = runtime
-            .ingress
-            .mint_non_fifo_lifecycle_ordinal()
-            .expect("mint a source-recognized ValidateBody retry owner");
-        let validate_retry = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&validate_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(
-                tag,
-                validate_retry_ordinal,
-            )],
-        )
-        .expect("bind exact ValidateBody retry")
-        .pop()
-        .expect("one ValidateBody retry has one owner");
-        assert_ne!(validate_retry.owner(), validate_ownership[0].owner());
+        assert_ne!(
+            certified_validate_ownership.candidate_semantic_identity(),
+            validate_ownership[0].candidate_semantic_identity(),
+            "Commit authority remains distinct through deterministic validation"
+        );
         assert!(
             runtime
-                .body_pipeline_candidate_has_terminal(&validate_effect, &validate_retry)
-                .expect("query queued ValidateBody terminal")
+                .body_pipeline_candidate_has_terminal(
+                    &validate_effect,
+                    &certified_validate_ownership,
+                )
+                .expect("Commit Validate observes the ordinary queued terminal")
         );
         assert_eq!(runtime.queued_commands(), 1);
         assert!(!runtime.fail_closed);

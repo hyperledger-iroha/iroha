@@ -2375,6 +2375,10 @@ enum ValidationCommitPlan {
     Attach {
         id: EffectWorkId,
         consumer: ValidationConsumer,
+        rebound_owner: Option<(
+            (wire::ConsensusRound, wire::BlockSubject),
+            BodyPipelineOwner,
+        )>,
     },
     Insert {
         work: WorkIdPlan,
@@ -4907,6 +4911,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         let entering_view = self.prepare_parked_effects_for_frontier(&effects, frontier)?;
+        let entering_protected_body = match effects.first() {
+            Some(AdapterEffect::EnterView { protected_body, .. }) => *protected_body,
+            _ => None,
+        };
         if effects.is_empty() {
             return Ok(());
         }
@@ -4944,7 +4952,19 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             RuntimeEffectOwnership,
         >::new();
         for pending in self.pending_fetches.values() {
-            let key = (pending.task.tag, pending.task.round, pending.task.subject);
+            // EnterView is dispatched before the rest of this macro-step and
+            // rebinds the exact protected fetch to its new consumer tag. Use
+            // that post-prefix tag while coalescing the following authority
+            // refinement, otherwise the same physical fetch is missed solely
+            // because its still-pending task carries the pre-EnterView tag.
+            let effective_tag = entering_view
+                .filter(|tag| {
+                    tag.strictly_advances(pending.task.tag)
+                        && entering_protected_body
+                            == Some((pending.task.round, pending.task.subject))
+                })
+                .unwrap_or(pending.task.tag);
+            let key = (effective_tag, pending.task.round, pending.task.subject);
             if let Some(existing) =
                 retained_fetch_lineages.insert(key, pending.task.ownership().clone())
                 && existing != *pending.task.ownership()
@@ -4971,6 +4991,57 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 {
                     return Err(EffectExecutorError::Contract(
                         "one parked body-fetch lineage had conflicting exact owners".to_owned(),
+                    ));
+                }
+            }
+        }
+        // StoreBody and ValidateBody are each one physical task per exact
+        // body, even when a later reducer carrier has acquired stronger
+        // Prepare/Commit authority. Their route-neutral candidate identity
+        // intentionally includes that authority, so keep a stage-separated
+        // physical lineage index beside the ordinary candidate index.
+        let mut retained_store_lineages =
+            BTreeMap::<(wire::ConsensusRound, wire::BlockSubject), RuntimeEffectOwnership>::new();
+        for pending in self.pending_stores.values() {
+            let key = (pending.task.manifest.round, pending.task.manifest.subject);
+            if let Some(existing) =
+                retained_store_lineages.insert(key, pending.task.ownership().clone())
+                && existing != *pending.task.ownership()
+            {
+                return Err(EffectExecutorError::Contract(
+                    "one body-store lineage had conflicting exact owners".to_owned(),
+                ));
+            }
+        }
+        let mut retained_validation_lineages =
+            BTreeMap::<(wire::ConsensusRound, wire::BlockSubject), RuntimeEffectOwnership>::new();
+        for pending in self.pending_validations.values() {
+            let key = (pending.task.round(), pending.task.subject());
+            if let Some(existing) =
+                retained_validation_lineages.insert(key, pending.task.ownership().clone())
+                && existing != *pending.task.ownership()
+            {
+                return Err(EffectExecutorError::Contract(
+                    "one body-validation lineage had conflicting exact owners".to_owned(),
+                ));
+            }
+        }
+        if let Some(batch) = &self.parked_effect_batch {
+            for owned in &batch.effects {
+                let (lineages, key) = match &owned.effect {
+                    AdapterEffect::StoreBody { round, subject, .. } => {
+                        (&mut retained_store_lineages, (*round, *subject))
+                    }
+                    AdapterEffect::ValidateBody { round, subject, .. } => {
+                        (&mut retained_validation_lineages, (*round, *subject))
+                    }
+                    _ => continue,
+                };
+                if let Some(existing) = lineages.insert(key, owned.ownership.clone())
+                    && existing != owned.ownership
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "one parked physical body stage had conflicting exact owners".to_owned(),
                     ));
                 }
             }
@@ -5030,6 +5101,26 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             let lineage_only_incumbent = exact_incumbent
                 .is_none()
                 .then_some(fetch_lineage_incumbent)
+                .flatten();
+            let body_stage_incumbent = match effect {
+                AdapterEffect::StoreBody { round, subject, .. } => {
+                    retained_store_lineages.get(&(*round, *subject)).cloned()
+                }
+                AdapterEffect::ValidateBody { round, subject, .. } => retained_validation_lineages
+                    .get(&(*round, *subject))
+                    .cloned(),
+                _ => None,
+            };
+            if let (Some(exact), Some(lineage)) = (&exact_incumbent, &body_stage_incumbent)
+                && exact != lineage
+            {
+                return Err(EffectExecutorError::Contract(
+                    "one physical body-stage candidate disagreed with its lineage owner".to_owned(),
+                ));
+            }
+            let body_stage_only_incumbent = exact_incumbent
+                .is_none()
+                .then_some(body_stage_incumbent)
                 .flatten();
             let candidate_owner_count_before =
                 candidate_semantic_identity.as_ref().map_or(0, |identity| {
@@ -5129,6 +5220,38 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 if let Some(identity) = candidate_semantic_identity {
                     retained_candidate_owners.insert(identity, evidence.clone());
                 }
+            }
+            if let Some(incumbent) = body_stage_only_incumbent {
+                let adopted = incumbent
+                    .adopt_incumbent_body_stage_for_retry_or_authority(evidence, effect)
+                    .map_err(EffectExecutorError::Contract)?;
+                admission = production_adapter_effect_candidate_admission_disposition(
+                    effect,
+                    1,
+                    candidate_owner_count_after,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let adopted_projection = production_adapter_effect_candidate_trace_projection(
+                    effect,
+                    &adopted,
+                    effect_position,
+                    effect_count,
+                    candidate.as_ref().map_or(0, |_| candidate_position),
+                    candidate_count,
+                    1,
+                    candidate_owner_count_after,
+                    true,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let _authorized_body_stage_refinement =
+                    check_production_effect_to_candidate_transition(adopted_projection)
+                        .ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "coalesced body-stage authority refinement failed its incumbent-owner refinement"
+                                    .to_owned(),
+                            )
+                        })?;
+                *evidence = adopted;
             }
             match (admission, candidate_semantic_identity) {
                 (RuntimeCandidateAdmissionDisposition::FirstAdmission, Some(identity)) => {
@@ -6239,14 +6362,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(self.close(error, services));
             }
             let admission = match &pending.consumer {
-                Some(ValidationConsumer::Reducer { tag, .. }) => self
+                Some(ValidationConsumer::Reducer { tag, ownership }) => self
                     .runtime
                     .enqueue_validation_succeeded_with_owner(
                         *tag,
                         round,
                         subject,
                         validated.clone(),
-                        pending.task.ownership(),
+                        ownership,
                     )
                     .map_err(runtime_enqueue_error),
                 Some(ValidationConsumer::LocalProposal { tag, manifest, .. }) => self
@@ -6281,14 +6404,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(self.close(error, services));
             }
             let admission = match &pending.consumer {
-                Some(ValidationConsumer::Reducer { tag, .. }) => self
+                Some(ValidationConsumer::Reducer { tag, ownership }) => self
                     .runtime
-                    .enqueue_validation_failed_with_owner(
-                        *tag,
-                        round,
-                        subject,
-                        pending.task.ownership(),
-                    )
+                    .enqueue_validation_failed_with_owner(*tag, round, subject, ownership)
                     .map_err(runtime_enqueue_error),
                 Some(ValidationConsumer::LocalProposal { .. }) | None => Ok(()),
             };
@@ -9174,6 +9292,77 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "ready-body release differs from its planned body-store admission".to_owned(),
             ));
         }
+        // A physical Store task is immutable, but its reducer consumer belongs
+        // to the currently installed runtime incarnation. A late certified
+        // carrier can legitimately reach this exact body after EnterView has
+        // advanced the reducer tag. Rebind the consumer and exact pipeline
+        // owner together only after proving that the incoming Store capability
+        // retains the task's lifecycle owner and strictly advances its tag.
+        // Local-proposal ownership never crosses this reducer-only corridor.
+        if purpose == StorePurpose::Reducer
+            && let Some((existing_id, existing)) = self
+                .pending_stores
+                .iter()
+                .find(|(_, pending)| {
+                    pending.task.manifest.round == manifest.round
+                        && pending.task.manifest.subject == manifest.subject
+                })
+                .map(|(id, pending)| (*id, pending.clone()))
+        {
+            let previous_tag = match &existing.consumer {
+                Some(StoreConsumer::Reducer { tag, .. }) => Some(*tag),
+                Some(StoreConsumer::LocalProposal { .. }) => None,
+                None => self.body_pipeline_owners.get(&key).map(|owner| owner.tag),
+            };
+            if previous_tag.is_some_and(|previous| tag.strictly_advances(previous)) {
+                if existing.task.manifest != manifest
+                    || existing.task.canonical_wire.as_ref() != canonical_wire.as_ref()
+                    || existing.task.ownership() != consumer.ownership()
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "body-store incarnation handoff changed exact work or its lifecycle owner"
+                            .to_owned(),
+                    ));
+                }
+                if ready_release.is_some() {
+                    return Err(EffectExecutorError::Contract(
+                        "ready-body transfer found an existing body-store owner".to_owned(),
+                    ));
+                }
+                let incoming_effect = AdapterEffect::StoreBody {
+                    tag,
+                    round: manifest.round,
+                    subject: manifest.subject,
+                };
+                if !consumer
+                    .ownership()
+                    .exactly_binds_adapter_effect(&incoming_effect)
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "body-store incarnation handoff omitted its exact Store capability"
+                            .to_owned(),
+                    ));
+                }
+                let previous_tag = previous_tag.expect("strict advancement has one source tag");
+                let rebound_owner = self.plan_body_pipeline_owner_rebind(
+                    key,
+                    previous_tag,
+                    tag,
+                    Some(HashOf::new(&manifest)),
+                )?;
+                if existing.consumer.is_some() {
+                    services
+                        .enqueue_body_store(existing.task.clone())
+                        .map_err(service_error)?;
+                }
+                self.pending_stores
+                    .get_mut(&existing_id)
+                    .expect("preflighted body store remains serialized")
+                    .consumer = Some(consumer);
+                self.body_pipeline_owners.insert(key, rebound_owner);
+                return Ok(());
+            }
+        }
         let current_owner_plan = self.plan_body_pipeline_owner(tag, &manifest)?;
         let owner_plan = match (purpose, supplied_owner_plan) {
             (StorePurpose::LocalProposal, Some(supplied)) => {
@@ -9393,23 +9582,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "validation task receipt differs from the durable body catalog".to_owned(),
             ));
         }
-        let planned_owner_matches = planned_owner.is_some_and(|plan| {
-            plan.key == key
-                && plan.owner.tag == consumer.tag()
-                && plan.owner.manifest_hash == Some(durable_receipt.manifest_hash())
-        });
-        if !self.validation_consumer_matches_owner(&consumer, &durable_receipt)
-            && !planned_owner_matches
-        {
-            return Err(EffectExecutorError::Contract(
-                "validation consumer does not own the exact durable body pipeline".to_owned(),
-            ));
-        }
-        if self.validated_bodies.contains_key(&key) && self.rejected_bodies.contains_key(&key) {
-            return Err(EffectExecutorError::Contract(
-                "one exact durable body has both validated and rejected outcomes".to_owned(),
-            ));
-        }
         let validation_effect = AdapterEffect::ValidateBody {
             tag: consumer.tag(),
             round,
@@ -9419,6 +9591,62 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .ownership()
             .rebind_as_inherited_adapter_effect(&validation_effect)
             .map_err(EffectExecutorError::Contract)?;
+        let planned_owner_matches = planned_owner.is_some_and(|plan| {
+            plan.key == key
+                && plan.owner.tag == consumer.tag()
+                && plan.owner.manifest_hash == Some(durable_receipt.manifest_hash())
+        });
+        let current_owner_matches =
+            self.validation_consumer_matches_owner(&consumer, &durable_receipt);
+        let existing_validation = self
+            .pending_validations
+            .iter()
+            .find(|(_, pending)| pending.task.round() == round && pending.task.subject() == subject)
+            .map(|(id, pending)| (*id, pending.clone()));
+        let mut rebound_owner = None;
+        if !current_owner_matches
+            && !planned_owner_matches
+            && let Some((_, existing)) = &existing_validation
+        {
+            let previous_tag = match (&existing.consumer, &consumer) {
+                (
+                    Some(ValidationConsumer::Reducer { tag, .. }),
+                    ValidationConsumer::Reducer { .. },
+                ) => Some(*tag),
+                (None, ValidationConsumer::Reducer { .. }) => {
+                    self.body_pipeline_owners.get(&key).map(|owner| owner.tag)
+                }
+                _ => None,
+            };
+            if existing.task.durable_receipt == durable_receipt
+                && existing.task.ownership() == &validation_ownership
+                && previous_tag.is_some_and(|previous| consumer.tag().strictly_advances(previous))
+                && consumer
+                    .ownership()
+                    .exactly_binds_adapter_effect(&validation_effect)
+            {
+                let previous_tag = previous_tag.expect("strict advancement has one source tag");
+                rebound_owner = Some((
+                    key,
+                    self.plan_body_pipeline_owner_rebind(
+                        key,
+                        previous_tag,
+                        consumer.tag(),
+                        Some(durable_receipt.manifest_hash()),
+                    )?,
+                ));
+            }
+        }
+        if !current_owner_matches && !planned_owner_matches && rebound_owner.is_none() {
+            return Err(EffectExecutorError::Contract(
+                "validation consumer does not own the exact durable body pipeline".to_owned(),
+            ));
+        }
+        if self.validated_bodies.contains_key(&key) && self.rejected_bodies.contains_key(&key) {
+            return Err(EffectExecutorError::Contract(
+                "one exact durable body has both validated and rejected outcomes".to_owned(),
+            ));
+        }
         if let Some(validated) = self.validated_bodies.get(&key).cloned() {
             if validated.durable() != &durable_receipt {
                 return Err(EffectExecutorError::BodyStore(
@@ -9472,12 +9700,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 commit: ValidationCommitPlan::None,
             });
         }
-        if let Some((existing_id, existing)) = self
-            .pending_validations
-            .iter()
-            .find(|(_, pending)| pending.task.round() == round && pending.task.subject() == subject)
-            .map(|(id, pending)| (*id, pending.clone()))
-        {
+        if let Some((existing_id, existing)) = existing_validation {
             if existing.task.durable_receipt != durable_receipt
                 || existing.task.ownership() != &validation_ownership
             {
@@ -9485,20 +9708,26 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "validation retry changed exact work or its lifecycle owner".to_owned(),
                 ));
             }
-            let commit = match &existing.consumer {
-                Some(attached) if attached == &consumer => ValidationCommitPlan::None,
-                Some(_) => {
+            let commit = match (&existing.consumer, rebound_owner) {
+                (_, Some(rebound_owner)) => ValidationCommitPlan::Attach {
+                    id: existing_id,
+                    consumer,
+                    rebound_owner: Some(rebound_owner),
+                },
+                (Some(attached), None) if attached == &consumer => ValidationCommitPlan::None,
+                (Some(_), None) => {
                     return Err(EffectExecutorError::Contract(
                         "one immutable validation task has conflicting consumers".to_owned(),
                     ));
                 }
-                None if matches!(&consumer, ValidationConsumer::Reducer { .. }) => {
+                (None, None) if matches!(&consumer, ValidationConsumer::Reducer { .. }) => {
                     ValidationCommitPlan::Attach {
                         id: existing_id,
                         consumer,
+                        rebound_owner: None,
                     }
                 }
-                None => {
+                (None, None) => {
                     return Err(EffectExecutorError::Contract(
                         "detached validation may only be adopted by the reducer pipeline"
                             .to_owned(),
@@ -9622,11 +9851,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn commit_validation_start(&mut self, plan: ValidationStartPlan) {
         match plan.commit {
             ValidationCommitPlan::None => {}
-            ValidationCommitPlan::Attach { id, consumer } => {
+            ValidationCommitPlan::Attach {
+                id,
+                consumer,
+                rebound_owner,
+            } => {
                 self.pending_validations
                     .get_mut(&id)
                     .expect("preflighted pending validation remains serialized")
                     .consumer = Some(consumer);
+                if let Some((key, owner)) = rebound_owner {
+                    self.body_pipeline_owners.insert(key, owner);
+                }
             }
             ValidationCommitPlan::Insert { work, pending } => {
                 self.commit_work_id(work);
@@ -9649,7 +9885,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return false;
         }
         match consumer {
-            ValidationConsumer::Reducer { .. } => true,
+            ValidationConsumer::Reducer { tag, ownership } => ownership
+                .exactly_binds_adapter_effect(&AdapterEffect::ValidateBody {
+                    tag: *tag,
+                    round: key.0,
+                    subject: key.1,
+                }),
             ValidationConsumer::LocalProposal { manifest, .. } => {
                 manifest.round == key.0
                     && manifest.subject == key.1
@@ -15944,6 +16185,502 @@ mod tests {
             assert!(executor.retained_effect_batch.is_none());
             assert!(!executor.status().fail_closed);
         }
+    }
+
+    #[test]
+    fn authority_transition_reuses_one_physical_store_and_validation_task() {
+        let fixture = Fixture::new();
+        let stage_tag = EventTag::new(fixture.context.height, 8, Generation::new(8));
+        let store = AdapterEffect::StoreBody {
+            tag: stage_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+        };
+        let validate = AdapterEffect::ValidateBody {
+            tag: stage_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+        };
+        let ordinary_fetch = AdapterEffect::FetchBody {
+            tag: stage_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let decision = fixture.qc(wire::GlobalPhase::Commit);
+        let decision_fetch = AdapterEffect::FetchBody {
+            tag: stage_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(decision.clone()),
+        };
+        let stage_owners = |fetch: &AdapterEffect, ordinal| {
+            let fetch = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(fetch),
+                vec![RuntimeEffectOwnership::fresh_for_test(stage_tag, ordinal)],
+            )
+            .expect("bind production-shaped Fetch ownership")
+            .pop()
+            .expect("one Fetch owner");
+            let store = fetch
+                .rebind_as_inherited_adapter_effect(&store)
+                .expect("Fetch authorizes the exact Store stage");
+            let validate = store
+                .rebind_as_inherited_adapter_effect(&validate)
+                .expect("Store authorizes the exact Validate stage");
+            (store, validate)
+        };
+        let (ordinary_store, ordinary_validate) = stage_owners(&ordinary_fetch, 7_001);
+        let (decision_store, decision_validate) = stage_owners(&decision_fetch, 7_002);
+        assert_ne!(ordinary_store.owner(), decision_store.owner());
+        assert_ne!(
+            ordinary_store.candidate_semantic_identity(),
+            decision_store.candidate_semantic_identity(),
+            "Decision authority is deliberately distinct from the proposal lineage"
+        );
+
+        let mut store_executor = fixture.executor(EffectQueueConfig::default());
+        store_executor.runtime.round_tag = Some(stage_tag);
+        store_executor.reconciled_tag = Some(stage_tag);
+        let mut store_services = fixture.services();
+        store_executor
+            .bind_body_pipeline_owner(stage_tag, &fixture.manifest)
+            .expect("bind one exact body pipeline");
+        store_executor
+            .begin_store(
+                stage_tag,
+                fixture.manifest.clone(),
+                Arc::<[u8]>::from(fixture.body.clone()),
+                StorePurpose::Reducer,
+                ordinary_store.clone(),
+                &mut store_services,
+            )
+            .expect("start ordinary physical Store task");
+        let store_id = store_services.store_tasks[0].id();
+        let next_work_id = store_executor.next_work_id;
+        store_executor
+            .retain_effect_batch(vec![store.clone()], vec![decision_store])
+            .expect("Decision Store adopts the ordinary task owner");
+        assert_eq!(
+            store_executor
+                .drain_retained_effect_batch(&mut store_services, false)
+                .expect("redispatch the one incumbent Store task"),
+            1
+        );
+        assert_eq!(store_executor.next_work_id, next_work_id);
+        assert_eq!(store_executor.pending_stores.len(), 1);
+        assert!(
+            store_services
+                .store_tasks
+                .iter()
+                .all(|task| { task.id() == store_id && task.ownership() == &ordinary_store }),
+            "authority upgrade must reuse the exact Store work ID and owner"
+        );
+
+        let durable = DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            HashOf::new(&fixture.manifest),
+        );
+        let body_key = (fixture.manifest.round, fixture.manifest.subject);
+        let mut validation_executor = fixture.executor(EffectQueueConfig::default());
+        validation_executor.runtime.round_tag = Some(stage_tag);
+        validation_executor.reconciled_tag = Some(stage_tag);
+        let mut validation_services = fixture.services();
+        validation_executor
+            .recovered_bodies
+            .insert(body_key, (fixture.manifest.clone(), durable.clone()));
+        validation_executor
+            .durable_bodies
+            .insert(body_key, durable.clone());
+        validation_executor
+            .bind_body_pipeline_owner(stage_tag, &fixture.manifest)
+            .expect("bind validation to the exact durable body pipeline");
+        validation_executor
+            .begin_validation(
+                fixture.manifest.round,
+                fixture.manifest.subject,
+                durable,
+                ValidationConsumer::Reducer {
+                    tag: stage_tag,
+                    ownership: ordinary_validate.clone(),
+                },
+                &mut validation_services,
+            )
+            .expect("start ordinary physical validation task");
+        let validation_id = validation_services.validation_tasks[0].id();
+        let incumbent_validation = validation_executor.pending_validations[&validation_id]
+            .task
+            .ownership()
+            .clone();
+        let next_work_id = validation_executor.next_work_id;
+        validation_executor
+            .retain_effect_batch(vec![validate.clone()], vec![decision_validate.clone()])
+            .expect("Decision Validate adopts the in-flight ordinary task owner");
+        assert_eq!(
+            validation_executor
+                .drain_retained_effect_batch(&mut validation_services, false)
+                .expect("redispatch the one incumbent validation task"),
+            1
+        );
+        assert_eq!(validation_executor.next_work_id, next_work_id);
+        assert_eq!(validation_executor.pending_validations.len(), 1);
+        assert!(
+            validation_services.validation_tasks.iter().all(|task| {
+                task.id() == validation_id && task.ownership() == &incumbent_validation
+            }),
+            "authority upgrade must reuse the exact validation work ID and owner"
+        );
+        assert!(!validation_executor.status().fail_closed);
+
+        let mut parked_executor = fixture.executor(EffectQueueConfig::default());
+        parked_executor.runtime.round_tag = Some(stage_tag);
+        parked_executor.reconciled_tag = Some(stage_tag);
+        parked_executor.parked_effect_batch = Some(RetainedEffectBatch {
+            effects: VecDeque::from([OwnedAdapterEffect {
+                effect: validate.clone(),
+                ownership: ordinary_validate.clone(),
+            }]),
+            oldest_at: Instant::now(),
+        });
+        parked_executor
+            .retain_effect_batch(vec![validate.clone()], vec![decision_validate.clone()])
+            .expect("Decision Validate adopts the parked ordinary stage owner");
+        assert!(parked_executor.parked_effect_batch.is_none());
+        let retained = parked_executor
+            .retained_effect_batch
+            .as_ref()
+            .expect("one adopted Validate remains dispatchable");
+        assert_eq!(retained.effects.len(), 1);
+        assert_eq!(retained.effects[0].ownership, ordinary_validate);
+
+        let mut conflicting_decision = decision;
+        conflicting_decision.execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"conflicting stage parent state"),
+            Hash::new(b"conflicting stage post state"),
+            Hash::new(b"conflicting stage writes"),
+            Hash::new(b"conflicting stage block"),
+        );
+        let conflicting_fetch = AdapterEffect::FetchBody {
+            tag: stage_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(conflicting_decision),
+        };
+        let (_, conflicting_validate) = stage_owners(&conflicting_fetch, 7_003);
+        assert!(
+            decision_validate
+                .adopt_incumbent_body_stage_for_retry_or_authority(
+                    &conflicting_validate,
+                    &validate,
+                )
+                .is_err(),
+            "one physical validation cannot coalesce conflicting execution commitments"
+        );
+        assert!(
+            ordinary_store
+                .adopt_incumbent_body_stage_for_retry_or_authority(&decision_validate, &validate,)
+                .is_err(),
+            "Store and Validate remain separate physical stages"
+        );
+    }
+
+    #[test]
+    fn authority_transition_after_enter_view_rebinds_body_consumers_not_physical_tasks() {
+        let fixture = Fixture::new();
+        let original_tag = tag(0);
+        let certified_tag = tag(1);
+        let original_store = AdapterEffect::StoreBody {
+            tag: original_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+        };
+        let certified_store = AdapterEffect::StoreBody {
+            tag: certified_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+        };
+        let original_validate = AdapterEffect::ValidateBody {
+            tag: original_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+        };
+        let certified_validate = AdapterEffect::ValidateBody {
+            tag: certified_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+        };
+        let original_fetch = AdapterEffect::FetchBody {
+            tag: original_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let certified_fetch = AdapterEffect::FetchBody {
+            tag: certified_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(fixture.qc(wire::GlobalPhase::Commit)),
+        };
+        let stage_owners = |fetch: &AdapterEffect,
+                            store: &AdapterEffect,
+                            validate: &AdapterEffect,
+                            root_tag,
+                            ordinal| {
+            let fetch = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(fetch),
+                vec![RuntimeEffectOwnership::fresh_for_test(root_tag, ordinal)],
+            )
+            .expect("bind exact Fetch ownership")
+            .pop()
+            .expect("one Fetch owner");
+            let store = fetch
+                .rebind_as_inherited_adapter_effect(store)
+                .expect("Fetch authorizes Store");
+            let validate = store
+                .rebind_as_inherited_adapter_effect(validate)
+                .expect("Store authorizes Validate");
+            (store, validate)
+        };
+        let (original_store_owner, original_validate_owner) = stage_owners(
+            &original_fetch,
+            &original_store,
+            &original_validate,
+            original_tag,
+            7_101,
+        );
+        let (certified_store_owner, certified_validate_owner) = stage_owners(
+            &certified_fetch,
+            &certified_store,
+            &certified_validate,
+            certified_tag,
+            7_102,
+        );
+        let body_key = (fixture.manifest.round, fixture.manifest.subject);
+
+        let mut store_executor = fixture.executor(EffectQueueConfig::default());
+        let mut store_services = fixture.services();
+        store_executor
+            .bind_body_pipeline_owner(original_tag, &fixture.manifest)
+            .expect("bind original Store pipeline");
+        store_executor
+            .begin_store(
+                original_tag,
+                fixture.manifest.clone(),
+                Arc::<[u8]>::from(fixture.body.clone()),
+                StorePurpose::Reducer,
+                original_store_owner,
+                &mut store_services,
+            )
+            .expect("start original Store task");
+        let store_id = store_services.store_tasks[0].id();
+        let immutable_store = store_executor.pending_stores[&store_id].task.clone();
+        let store_work_cursor = store_executor.next_work_id;
+        store_executor.runtime.round_tag = Some(certified_tag);
+        store_executor.reconciled_tag = Some(certified_tag);
+        store_executor
+            .retain_effect_batch(vec![certified_store], vec![certified_store_owner])
+            .expect("retain Commit-authorized Store after EnterView");
+        assert_eq!(
+            store_executor
+                .drain_retained_effect_batch(&mut store_services, false)
+                .expect("redispatch the immutable Store task"),
+            1
+        );
+        assert_eq!(store_executor.next_work_id, store_work_cursor);
+        assert_eq!(
+            store_executor.pending_stores[&store_id].task,
+            immutable_store
+        );
+        assert_eq!(
+            store_executor.pending_stores[&store_id]
+                .consumer
+                .as_ref()
+                .expect("Store keeps one reducer consumer")
+                .tag(),
+            certified_tag
+        );
+        assert_eq!(
+            store_executor.body_pipeline_owners[&body_key].tag,
+            certified_tag
+        );
+        assert!(
+            store_services
+                .store_tasks
+                .iter()
+                .all(|task| task == &immutable_store),
+            "the physical Store work ID, tag, bytes, and lifecycle owner remain immutable"
+        );
+        let stored = store_services.execute_store(store_id);
+        let durable = stored.receipt().clone();
+        assert_eq!(stored.tag(), original_tag);
+        store_executor
+            .complete_body_store(stored, &mut store_services)
+            .expect("the old-tag physical Store completes into the rebound consumer");
+        assert!(matches!(
+            store_executor.runtime.completions.as_slice(),
+            [RuntimeCompletion::BodyStored(tag, round, subject, _)]
+                if *tag == certified_tag
+                    && *round == fixture.manifest.round
+                    && *subject == fixture.manifest.subject
+        ));
+
+        let mut validation_executor = fixture.executor(EffectQueueConfig::default());
+        let mut validation_services = store_services;
+        validation_executor
+            .recovered_bodies
+            .insert(body_key, (fixture.manifest.clone(), durable.clone()));
+        validation_executor
+            .durable_bodies
+            .insert(body_key, durable.clone());
+        validation_executor
+            .bind_body_pipeline_owner(original_tag, &fixture.manifest)
+            .expect("bind original validation pipeline");
+        validation_executor
+            .begin_validation(
+                fixture.manifest.round,
+                fixture.manifest.subject,
+                durable,
+                ValidationConsumer::Reducer {
+                    tag: original_tag,
+                    ownership: original_validate_owner,
+                },
+                &mut validation_services,
+            )
+            .expect("start original validation task");
+        let validation_id = validation_services.validation_tasks[0].id();
+        let immutable_validation = validation_executor.pending_validations[&validation_id]
+            .task
+            .clone();
+        let validation_work_cursor = validation_executor.next_work_id;
+        validation_executor.runtime.round_tag = Some(certified_tag);
+        validation_executor.reconciled_tag = Some(certified_tag);
+        validation_executor
+            .retain_effect_batch(vec![certified_validate], vec![certified_validate_owner])
+            .expect("retain Commit-authorized validation after EnterView");
+        assert_eq!(
+            validation_executor
+                .drain_retained_effect_batch(&mut validation_services, false)
+                .expect("redispatch the immutable validation task"),
+            1
+        );
+        assert_eq!(validation_executor.next_work_id, validation_work_cursor);
+        assert_eq!(
+            validation_executor.pending_validations[&validation_id].task,
+            immutable_validation
+        );
+        assert_eq!(
+            validation_executor.pending_validations[&validation_id]
+                .consumer
+                .as_ref()
+                .expect("validation keeps one reducer consumer")
+                .tag(),
+            certified_tag
+        );
+        assert_eq!(
+            validation_executor.body_pipeline_owners[&body_key].tag,
+            certified_tag
+        );
+        assert!(
+            validation_services
+                .validation_tasks
+                .iter()
+                .all(|task| task == &immutable_validation),
+            "the physical validation work ID, durable receipt, and lifecycle owner remain immutable"
+        );
+        let validated = validation_services.execute_validation(validation_id);
+        validation_executor
+            .complete_body_validation(validated, &mut validation_services)
+            .expect("the old physical validation completes into the rebound consumer");
+        assert!(matches!(
+            validation_executor.runtime.completions.as_slice(),
+            [RuntimeCompletion::ValidationSucceeded(tag, round, subject, _)]
+                if *tag == certified_tag
+                    && *round == fixture.manifest.round
+                    && *subject == fixture.manifest.subject
+        ));
+        assert!(!validation_executor.status().fail_closed);
+    }
+
+    #[test]
+    fn enter_view_and_fetch_authority_upgrade_retain_the_protected_fetch_owner() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let ordinary = AdapterEffect::FetchBody {
+            tag: tag(0),
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        executor
+            .consume_effects(vec![ordinary], &mut services)
+            .expect("start the ordinary protected-body acquisition");
+        let original = services.fetch_tasks[0].clone();
+        let work_id = original.id();
+
+        // Model a later reducer macro-step whose stronger QC was admitted by
+        // an independent runtime lifecycle. Retention must join that authority
+        // to the already-live physical fetch before EnterView rebinds it.
+        executor.runtime.effect_owners.clear();
+        executor.runtime.round_tag = Some(tag(1));
+        executor.runtime.locked_body = Some((fixture.manifest.round, fixture.manifest.subject));
+        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+        let sources = certified_sources(&fixture, &prepare);
+        let mut timeout = timeout_at_view(&fixture, 0);
+        timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+
+        executor
+            .consume_effects(
+                vec![
+                    AdapterEffect::EnterView {
+                        tag: tag(1),
+                        certificate: timeout,
+                        protected_body: Some((fixture.manifest.round, fixture.manifest.subject)),
+                    },
+                    AdapterEffect::FetchBody {
+                        tag: tag(1),
+                        round: fixture.manifest.round,
+                        subject: fixture.manifest.subject,
+                        manifest: Some(fixture.manifest.clone()),
+                        certified_sources: sources,
+                        certificate: Some(prepare.clone()),
+                    },
+                ],
+                &mut services,
+            )
+            .expect("EnterView and its authority upgrade retain one physical fetch owner");
+
+        assert_eq!(executor.pending_fetches.len(), 1);
+        let pending = &executor.pending_fetches[&work_id].task;
+        assert_eq!(pending.tag, tag(1));
+        assert_eq!(pending.ownership(), original.ownership());
+        assert_eq!(
+            pending
+                .certified_request()
+                .map(|request| &request.certificate),
+            Some(&prepare)
+        );
+        assert!(
+            services
+                .fetch_tasks
+                .iter()
+                .all(|task| { task.id() == work_id && task.ownership() == original.ownership() })
+        );
+        assert!(!executor.status().fail_closed);
     }
 
     #[test]

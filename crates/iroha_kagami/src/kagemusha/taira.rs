@@ -101,7 +101,7 @@ pub(super) struct PrepareTestnetBootstrapV4Args {
     /// Runtime account whose private key signs Torii offline commands.
     #[arg(long)]
     command_authority: String,
-    /// XOR amount minted to the command authority for mandatory readiness and fees.
+    /// XOR amount minted to the command authority for transaction fees.
     #[arg(long, default_value = "1000000")]
     fee_mint: String,
     /// Apple App ID prefix, normally the Developer Team ID.
@@ -122,7 +122,7 @@ pub(super) struct PrepareTestnetBootstrapV4Args {
     /// Android signing-certificate SHA-256; repeat for signer rotation.
     #[arg(long, value_parser = parse_sha256, required = true)]
     android_signing_certificate_sha256: Vec<[u8; 32]>,
-    /// New private path receiving the complete unsigned offline-enabled genesis.
+    /// New private path receiving the unsigned Taira genesis with Kagemusha release fixtures.
     #[arg(long)]
     output: PathBuf,
     /// New external JSON path receiving the exact operator-reviewed release identity.
@@ -1097,7 +1097,7 @@ pub(super) fn prepare_testnet_bootstrap_v4<T: std::io::Write>(
     }
     let output_genesis = output_genesis.with_consensus_meta();
     let output_json = norito::json::to_json_pretty(&output_genesis)
-        .wrap_err("failed to encode offline-enabled Taira genesis")?;
+        .wrap_err("failed to encode Taira genesis with Kagemusha release fixtures")?;
     let operator_identity_json = norito::json::to_json_pretty(&operator_identity)
         .wrap_err("failed to encode operator-reviewed Taira release identity")?;
     publish_new_durable_file(writer, &args.output, output_json.as_bytes())?;

@@ -6398,6 +6398,7 @@ pub mod isi {
     }
 
     fn ensure_contract_subject_binding(
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Result<AccountId, Error> {
@@ -6423,6 +6424,10 @@ pub mod isi {
                 subject
             }
         };
+        if state_transaction.world.account(&contract_subject).is_err() {
+            Register::account(Account::new(contract_subject.clone()))
+                .execute(authority, state_transaction)?;
+        }
         match state_transaction
             .world
             .contract_subject_addresses
@@ -6455,7 +6460,7 @@ pub mod isi {
     ) -> Result<bool, Error> {
         let contract_address = payload.contract_address.clone();
         let contract_subject =
-            ensure_contract_subject_binding(state_transaction, &contract_address)?;
+            ensure_contract_subject_binding(authority, state_transaction, &contract_address)?;
         let manifest = state_transaction
             .world
             .contract_manifests
@@ -7337,7 +7342,7 @@ pub mod isi {
                 &manifest,
             )?;
             let contract_subject =
-                ensure_contract_subject_binding(state_transaction, &contract_address)?;
+                ensure_contract_subject_binding(authority, state_transaction, &contract_address)?;
             let existing = state_transaction
                 .world
                 .contract_instances
@@ -19558,6 +19563,86 @@ pub mod isi {
                         + 1,
                 )
                 .is_err()
+            );
+        }
+
+        #[test]
+        fn contract_subject_binding_materializes_missing_account_and_preserves_existing_account() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect("seed lifecycle authority");
+
+            let missing_address = ContractAddress::derive(
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &ALICE_ID,
+                41,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("missing-subject contract address");
+            let missing_subject = missing_address.subject_id();
+            assert!(state_transaction.world.account(&missing_subject).is_err());
+
+            let bound_subject = super::ensure_contract_subject_binding(
+                &ALICE_ID,
+                &mut state_transaction,
+                &missing_address,
+            )
+            .expect("bind and materialize missing contract subject");
+            assert_eq!(bound_subject, missing_subject);
+            assert!(state_transaction.world.account(&missing_subject).is_ok());
+            assert!(crate::smartcontracts::code::is_historical_contract_subject(
+                &state_transaction.world,
+                &missing_subject,
+            ));
+
+            let existing_address = ContractAddress::derive(
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &ALICE_ID,
+                42,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("existing-subject contract address");
+            let existing_subject = existing_address.subject_id();
+            let marker: Name = "contract_subject_marker".parse().expect("metadata key");
+            let mut metadata = Metadata::default();
+            metadata.insert(marker.clone(), Json::new("preserve-me"));
+            Register::account(
+                Account::new(existing_subject.clone()).with_metadata(metadata.clone()),
+            )
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("seed existing contract subject account");
+
+            let bound_existing = super::ensure_contract_subject_binding(
+                &ALICE_ID,
+                &mut state_transaction,
+                &existing_address,
+            )
+            .expect("bind existing contract subject without replacing it");
+            assert_eq!(bound_existing, existing_subject);
+            assert_eq!(
+                state_transaction
+                    .world
+                    .account(&existing_subject)
+                    .expect("existing subject remains registered")
+                    .metadata()
+                    .get(&marker),
+                metadata.get(&marker),
+                "binding must not replace or repair an existing subject account",
             );
         }
 
@@ -37421,6 +37506,11 @@ seiyaku GovernanceLifecycle {
                 DataSpaceId::UNIVERSAL,
             )
             .expect("contract address");
+            let contract_subject = contract_address.subject_id();
+            assert!(
+                stx.world.account(&contract_subject).is_err(),
+                "the activation fixture must begin without a subject account",
+            );
 
             let activate = scode::ActivateContractInstance {
                 contract_address: contract_address.clone(),
@@ -37447,6 +37537,10 @@ seiyaku GovernanceLifecycle {
             assert_eq!(
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash)
+            );
+            assert!(
+                stx.world.account(&contract_subject).is_ok(),
+                "activation must atomically materialize its deterministic subject account",
             );
 
             let deactivate = scode::DeactivateContractInstance {
@@ -37636,6 +37730,11 @@ seiyaku GovernanceLifecycle {
                 DataSpaceId::UNIVERSAL,
             )
             .expect("nonce one address");
+            let subject_at_nonce_0 = address_at_nonce_0.subject_id();
+            assert!(
+                stx.world.account(&subject_at_nonce_0).is_err(),
+                "the deployment fixture must begin without a subject account",
+            );
 
             let foreign_chain_address = ContractAddress::derive(
                 &iroha_data_model::ChainId::from("foreign-contract-deployment-chain"),
@@ -37737,6 +37836,10 @@ seiyaku GovernanceLifecycle {
             assert_eq!(
                 stx.world.contract_address_by_alias_at(&alias, 0),
                 Some(address_at_nonce_0.clone())
+            );
+            assert!(
+                stx.world.account(&subject_at_nonce_0).is_ok(),
+                "atomic deployment must materialize its deterministic subject account",
             );
 
             let nonce_key: Name =

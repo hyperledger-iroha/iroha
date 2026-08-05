@@ -39,6 +39,8 @@ jobs:
       - name: Verify canonical numeric fixtures and consensus behavior
         run: |
           cargo test --locked -p ivm --test ivm_group_06 numeric_
+          cargo test --locked -p ivm --test ivm_group_01 abi_hash_versions::
           cargo test --locked -p ivm --test ivm_group_03 gas_schedule_hash
+          cargo run --locked -p ivm --features dev-tools --bin gen_abi_hash_doc -- --check
           cargo test --locked -p ivm --test ivm_group_05 kotodama_checked_arithmetic::
           cargo test --locked -p iroha_primitives randomized_decimal_arithmetic_matches_independent_rational_reference

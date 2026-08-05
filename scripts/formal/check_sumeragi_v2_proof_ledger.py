@@ -884,7 +884,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "d2f24737c0a9ed5fddc579101ab48ea8a1820ef83508319b9942f6381a65109b",
-    "effect_candidate_retain": "b7fbdd5ae5da857c63f2a5adbea69698c4b1f76bca99649d1ff7cf7674eb7535",
+    "effect_candidate_retain": "9f9d0352ea5921e9d081c0cc4775ed26676b0f213866870a681cf9d901d6aa98",
     "relay_retry": "f668e5ce645905c1e717c47f35512de6102d0d64f71da6b8508ce454209015f6",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",

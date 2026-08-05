@@ -5818,6 +5818,7 @@ impl NetworkRelayShared {
             | SoracloudLocalReadProxyResponse(_)
             | ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
+            | QueuePlanAdmissionPublication(_)
             | Health
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
@@ -16021,7 +16022,7 @@ fn validate_config_for_check(
     validate_config_offline(config).change_context(MainError::Config)?;
     if build_kagemusha_qualification_seal && genesis.is_none() {
         return Err(Report::new(MainError::Config).attach(
-            "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full offline genesis validation",
+            "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full Kagemusha release and genesis validation",
         ));
     }
 
@@ -16307,7 +16308,7 @@ fn validate_genesis_execution_offline(
     let frozen_lane_manifests =
         freeze_lane_manifests_for_startup_replay(&replay_nexus).map_err(|error| {
             Report::new(MainError::Config).attach(format!(
-                "lane manifest registry is not ready for offline genesis validation: {error}"
+                "lane manifest registry is not ready for Kagemusha release and genesis validation: {error}"
             ))
         })?;
     state.install_lane_manifests(&frozen_lane_manifests);
@@ -20989,7 +20990,7 @@ mod tests {
 
             let error = validate_config_for_check(&config, None, true)
                 .err()
-                .expect("seal publication must wait for full offline genesis validation");
+                .expect("seal publication must wait for full Kagemusha release and genesis validation");
             let rendered = format!("{error:?}");
             assert!(
                 rendered.contains("requires locally available genesis"),

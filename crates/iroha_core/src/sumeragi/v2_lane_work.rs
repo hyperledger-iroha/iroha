@@ -59,7 +59,8 @@ use super::{
         AutonomousLaneReservationSlotPlan,
         autonomous_lane_reservation_identity_hashes_for_proposal,
         pinned_autoscale_validator_pops_for_set, plan_autonomous_lane_reservation_slot,
-        prepare_v2_lane_payload_plan, proposal_lookahead_enabled, v2_known_lane_tip_for_route,
+        prepare_v2_lane_payload_plan, prepare_v2_lane_payload_validation_plan,
+        proposal_lookahead_enabled, v2_known_lane_tip_for_route,
     },
     message::{
         BlockMessage, LANE_HISTORICAL_RECOVERY_VERSION_V2, LaneHistoricalRecoveryKindV1,
@@ -1077,8 +1078,9 @@ impl DurableLaneRolloverAuthority {
                             None
                         }
                     } else if exact_proposal
-                        && proposal_height == self.height
-                        && self.winning_proposal_hashes.contains(&proposal_hash)
+                        && (proposal_height < self.height
+                            || (proposal_height == self.height
+                                && self.winning_proposal_hashes.contains(&proposal_hash)))
                         && matches!(message, BlockMessage::LaneBlockVote(vote)
                         if retained_qcs.iter().any(|retained| {
                             lane_qc_subsumes_vote(retained, vote)
@@ -1086,20 +1088,23 @@ impl DurableLaneRolloverAuthority {
                     {
                         // A QC for this exact phase already subsumes the local
                         // vote which may still be backpressured in the network
-                        // actor. Validate the vote before retiring that stale
-                        // fanout owner; a later phase/certificate is not
-                        // covered here because it carries unique progress.
-                        if let Some(validator_pops) = validator_pops {
-                            validate_winning_lane_output(message, proposal, validator_pops)?;
-                            Some(Hash::new_from_chunks(&[
-                                b"iroha:sumeragi:v2:lane-rollover-subsumed-vote:v1\0",
-                                self.finality_artifact_hash.as_ref(),
-                                rollover_source_hash.as_ref(),
-                                message_hash.as_ref(),
-                            ]))
-                        } else {
-                            None
-                        }
+                        // actor. Individual vote verification needs only the
+                        // signed body and the proposal's immutable committee,
+                        // so the same proof remains valid after the unfinished
+                        // session crosses into a later global height without
+                        // inheriting that height's PoP authority. A later
+                        // phase/certificate is not covered here because it
+                        // carries unique progress.
+                        let BlockMessage::LaneBlockVote(vote) = message else {
+                            unreachable!("subsumed-vote guard accepted another lane output")
+                        };
+                        validate_lane_vote_for_proposal(vote, proposal)?;
+                        Some(Hash::new_from_chunks(&[
+                            b"iroha:sumeragi:v2:lane-rollover-subsumed-vote:v1\0",
+                            self.finality_artifact_hash.as_ref(),
+                            rollover_source_hash.as_ref(),
+                            message_hash.as_ref(),
+                        ]))
                     } else {
                         None
                     }
@@ -1381,14 +1386,7 @@ fn validate_winning_lane_output(
             }
         }
         BlockMessage::LaneBlockVote(vote) => {
-            let phase = vote.body.phase;
-            vote.validate_ingress(phase)
-                .map_err(|error| error.to_string())?;
-            if vote.body != proposal.vote_body(phase)
-                || !proposal.descriptor.validator_set.contains(&vote.signer)
-            {
-                return Err("winning lane vote differs from the exact durable proposal".to_owned());
-            }
+            validate_lane_vote_for_proposal(vote, proposal)?;
         }
         BlockMessage::LaneBlockQc(qc) => {
             validate_winning_lane_qc(qc, proposal, signer_pops)?;
@@ -1403,6 +1401,27 @@ fn validate_winning_lane_output(
             validate_winning_lane_qc(&certificate.commit_qc, proposal, signer_pops)?;
         }
         _ => return Err("rollover authority received non-lane output".to_owned()),
+    }
+    Ok(())
+}
+
+/// Validate one standalone vote against the exact retained proposal.
+///
+/// Unlike aggregate QC verification this needs no proof-of-possession map: the
+/// signer and signature are carried by the vote itself. Keeping this check
+/// independent lets a same-phase retained QC retire an older exact vote after
+/// the unfinished session has crossed a global-height boundary.
+fn validate_lane_vote_for_proposal(
+    vote: &LaneBlockVoteV1,
+    proposal: &LaneBlockProposalV1,
+) -> Result<(), String> {
+    let phase = vote.body.phase;
+    vote.validate_ingress(phase)
+        .map_err(|error| error.to_string())?;
+    if vote.body != proposal.vote_body(phase)
+        || !proposal.descriptor.validator_set.contains(&vote.signer)
+    {
+        return Err("winning lane vote differs from the exact durable proposal".to_owned());
     }
     Ok(())
 }
@@ -4669,7 +4688,29 @@ impl V2LaneWorkAdapter {
                 return V2LaneIngressOutcome::Rejected;
             };
             if !expected.unavailable_indices.is_empty() || expected.ownerships != ownerships {
-                return V2LaneIngressOutcome::Rejected;
+                // A PrepareQC-locked body is received validation work, not a
+                // fresh local-production attempt. The exact canonical
+                // predecessor may already be committed globally while its
+                // independently durable lane certificate/application receipt
+                // is still catching up on this validator. Keep proposal
+                // production blocked on that debt, but authenticate the
+                // immutable locked body with the same canonical-Kura fallback
+                // used by candidate validation so local sidecar lag cannot
+                // turn a quorum lock into process-fatal consensus divergence.
+                let Ok(recovered) = prepare_v2_lane_payload_validation_plan(
+                    self.state.as_ref(),
+                    self.kura.as_ref(),
+                    &self.context,
+                    global_view,
+                    global_leader,
+                    &routes,
+                    &hashes,
+                ) else {
+                    return V2LaneIngressOutcome::Rejected;
+                };
+                if !recovered.unavailable_indices.is_empty() || recovered.ownerships != ownerships {
+                    return V2LaneIngressOutcome::Rejected;
+                }
             }
         }
         let mut proposals = Vec::with_capacity(ownerships.len());
@@ -13573,6 +13614,11 @@ impl V2LaneWorkAdapter {
                 PendingQueuePlanAdmissionDisposition::EligibleAbsent => {
                     pending_queue_plan_admissions.push(certificate_bytes);
                 }
+                PendingQueuePlanAdmissionDisposition::Future => {
+                    // Keep the authenticated, bounded certificate durable until this peer
+                    // reaches its canonical authority frontier. It will be reclassified on
+                    // the next exact parent frontier and must not enter an early carrier.
+                }
             }
         }
         self.drive_lane_drain(active_view)?;
@@ -21311,22 +21357,92 @@ pub(super) mod tests {
 
     #[test]
     fn unfinished_historical_lane_session_crosses_a_second_rollover_without_later_pops() {
-        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 2);
+        let (parent_adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (parent_block, proposal) = globally_anchored_lane_block_fixture(&parent_adapter, &keys);
+        parent_adapter
+            .kura
+            .store_block(parent_block.clone())
+            .expect("persist the exact globally anchored lane proposal");
+        let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
+        commit_test_block_to_state(
+            parent_adapter.state.as_ref(),
+            &committed_parent,
+            &parent_adapter.context,
+        );
+        let successor_context = successor_context_for_parent(&parent_adapter, &parent_block);
+        let local_peer = parent_adapter.local_peer.clone();
+        let local_key = parent_adapter.key_pair.clone();
+        let state = Arc::clone(&parent_adapter.state);
+        let kura = Arc::clone(&parent_adapter.kura);
+        let limits = parent_adapter.limits;
+        drop(parent_adapter);
+
+        let mut adapter = V2LaneWorkAdapter::new(
+            successor_context,
+            local_peer,
+            local_key,
+            true,
+            state,
+            kura,
+            limits,
+            None,
+        )
+        .expect("open the true successor-height adapter");
         let lane_id = LaneId::SINGLE;
         let dataspace_id = DataSpaceId::UNIVERSAL;
         let incarnation = adapter
             .state
             .lane_incarnation_at_height(lane_id, 1)
             .expect("lane incarnation is active at the retained proposal height");
-        let proposal =
-            proposal_for_route(&adapter, &keys, lane_id, dataspace_id, incarnation, 1, 1);
+        assert!(
+            adapter
+                .lane_sessions
+                .proposals_without_commit_qc()
+                .contains(&proposal),
+            "successor startup must hydrate the exact unfinished canonical proposal"
+        );
+        let retained_vote = adapter
+            .lane_sessions
+            .local_vote_rebroadcast_artifacts_for(&adapter.local_peer)
+            .into_iter()
+            .find_map(|(pending, vote)| (pending == proposal).then_some(vote))
+            .expect("successor hydration mints the local historical Prepare vote");
+        assert!(
+            adapter
+                .lane_sessions
+                .local_vote_rebroadcast_artifacts_for(&adapter.local_peer)
+                .iter()
+                .any(|(_, vote)| vote == &retained_vote),
+            "the exact local vote must initially own retransmission"
+        );
+        let retained_prepare_qc = lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);
+        let retained_prepare_pops = adapter.pops_for_lane_qc(&retained_prepare_qc);
         assert_eq!(
-            adapter.lane_sessions.insert_proposal(proposal.clone()),
+            adapter
+                .lane_sessions
+                .insert_qc_with_pops(retained_prepare_qc, &retained_prepare_pops),
             Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert!(
+            adapter
+                .lane_sessions
+                .local_vote_rebroadcast_artifacts_for(&adapter.local_peer)
+                .iter()
+                .all(|(_, vote)| vote != &retained_vote),
+            "the retained same-phase QC must supersede ordinary vote retransmission"
         );
 
         let leader = usize::try_from(adapter.context.leader(0)).expect("leader index");
-        let current_block = test_block(2, None, None, &keys[leader]);
+        let current_block = test_block(
+            2,
+            adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|certificate| certificate.subject.block_hash),
+            None,
+            &keys[leader],
+        );
         let current_finality = finality_artifact_for_block(&adapter, &keys, &current_block);
         let sources = adapter
             .retained_lane_rollover_sources(&current_finality)
@@ -21334,26 +21450,98 @@ pub(super) mod tests {
         let source = sources
             .get(&proposal.proposal_hash)
             .expect("the retained proposal keeps an exact successor owner");
-        match source {
-            DurableLaneSessionSource::Retained {
-                proposal: retained,
-                message_hashes,
-                validator_pops,
-                ..
-            } => {
-                assert_eq!(retained, &proposal);
-                assert!(
-                    message_hashes.contains(&HashOf::new(&BlockMessage::LaneBlockProposal(
-                        proposal.clone()
-                    )))
-                );
-                assert!(
-                    validator_pops.is_none(),
-                    "historical exact output must not inherit a later height's PoP authority"
-                );
-            }
-            other => panic!("unexpected historical rollover source: {other:?}"),
-        }
+        let DurableLaneSessionSource::Retained {
+            proposal: retained,
+            message_hashes,
+            retained_qcs,
+            validator_pops,
+            ..
+        } = source
+        else {
+            panic!("unexpected historical rollover source: {source:?}")
+        };
+        assert_eq!(retained, &proposal);
+        assert!(
+            message_hashes.contains(&HashOf::new(&BlockMessage::LaneBlockProposal(
+                proposal.clone()
+            )))
+        );
+        assert!(
+            !message_hashes.contains(&HashOf::new(&BlockMessage::LaneBlockVote(
+                retained_vote.clone()
+            ))),
+            "the regression requires a transport-owned vote absent from the current cache snapshot"
+        );
+        assert!(
+            retained_qcs
+                .iter()
+                .any(|qc| lane_qc_subsumes_vote(qc, &retained_vote)),
+            "the successor snapshot must retain the exact same-phase QC which displaced the vote"
+        );
+        assert_eq!(
+            retained_vote.body.proposal_height, proposal.descriptor.proposal_height,
+            "vote and retained proposal must name one historical height"
+        );
+        assert_eq!(
+            retained_vote.body.proposal_hash, proposal.proposal_hash,
+            "vote and retained proposal must name one exact session"
+        );
+        assert!(
+            retained_vote.body.proposal_height < current_finality.height,
+            "the regression must cross a later global-height boundary"
+        );
+        assert!(
+            validator_pops.is_none(),
+            "historical exact output must not inherit a later height's PoP authority"
+        );
+
+        let authority =
+            DurableLaneRolloverAuthority::new(&current_finality, BTreeSet::new(), sources);
+        assert!(
+            authority
+                .covered_source_hash(
+                    &current_finality,
+                    &BlockMessage::LaneBlockVote(retained_vote.clone()),
+                )
+                .expect("validate the historical vote subsumed by its exact retained QC")
+                .is_some(),
+            "a same-phase retained QC must retire an older backpressured vote after rollover"
+        );
+        assert!(
+            !authority.uses_retained_source(&BlockMessage::LaneBlockVote(retained_vote.clone())),
+            "the subsumed vote must retire instead of duplicating the successor-owned QC"
+        );
+
+        let mut forged_vote = retained_vote.clone();
+        forged_vote.bls_signature[0] ^= 0x80;
+        assert!(
+            authority
+                .covered_source_hash(&current_finality, &BlockMessage::LaneBlockVote(forged_vote),)
+                .is_err(),
+            "a retained QC must not hide a forged individual vote"
+        );
+        let later_phase_vote = signed_lane_vote(&proposal, CertPhase::Commit, &adapter.key_pair);
+        assert!(
+            authority
+                .covered_source_hash(
+                    &current_finality,
+                    &BlockMessage::LaneBlockVote(later_phase_vote),
+                )
+                .is_err(),
+            "a PrepareQC must not retire a later-phase vote carrying unique progress"
+        );
+        let outsider = KeyPair::try_from_seed(vec![0xFE; 32], Algorithm::BlsNormal)
+            .expect("deterministic non-member BLS key");
+        let non_member_vote = signed_lane_vote(&proposal, CertPhase::Prepare, &outsider);
+        assert!(
+            authority
+                .covered_source_hash(
+                    &current_finality,
+                    &BlockMessage::LaneBlockVote(non_member_vote),
+                )
+                .is_err(),
+            "a valid signature from outside the immutable committee must remain rejected"
+        );
 
         let future = proposal_for_route(&adapter, &keys, lane_id, dataspace_id, incarnation, 3, 1);
         let error = adapter
@@ -24386,6 +24574,139 @@ pub(super) mod tests {
             &adapter.context,
             &block,
         ));
+    }
+
+    #[test]
+    fn locked_body_binding_accepts_canonical_successor_while_local_sidecars_lag() {
+        let (parent, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (parent_block, parent_proposal) = globally_anchored_lane_block_fixture(&parent, &keys);
+        parent
+            .kura
+            .store_block(parent_block.clone())
+            .expect("persist exact raw lane predecessor");
+        let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
+        commit_test_block_to_state(parent.state.as_ref(), &committed_parent, &parent.context);
+        assert_eq!(
+            parent
+                .state
+                .unapplied_lane_block_artifact_heights_snapshot_cached()
+                .get(&(
+                    parent_proposal.descriptor.lane_id,
+                    parent_proposal.descriptor.dataspace_id,
+                )),
+            Some(&parent_proposal.descriptor.lane_block_height),
+            "the regression requires a canonical predecessor whose independent lane sidecars are still pending"
+        );
+        assert!(
+            !parent
+                .kura
+                .lane_block_application_receipt_available(&parent_proposal),
+            "the raw canonical predecessor must not already have an application receipt"
+        );
+
+        let successor_context = successor_context_for_parent(&parent, &parent_block);
+        let local_peer = parent.local_peer.clone();
+        let local_key = parent.key_pair.clone();
+        let state = Arc::clone(&parent.state);
+        let kura = Arc::clone(&parent.kura);
+        let limits = parent.limits;
+        drop(parent);
+        let mut successor = V2LaneWorkAdapter::new(
+            successor_context,
+            local_peer,
+            local_key,
+            true,
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            limits,
+            None,
+        )
+        .expect("open successor while predecessor sidecars remain pending");
+
+        let transaction_key = KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::Ed25519)
+            .expect("deterministic successor transaction key");
+        let transaction = TransactionBuilder::new(
+            successor.context.chain_id.clone(),
+            AccountId::new(transaction_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(transaction_key.private_key());
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let global_view = 0;
+        let leader_index = usize::try_from(successor.context.leader(global_view))
+            .expect("successor leader index fits usize");
+        let global_leader = &successor.context.roster[leader_index].validator;
+        let strict = prepare_v2_lane_payload_plan(
+            state.as_ref(),
+            kura.as_ref(),
+            &successor.context,
+            global_view,
+            global_leader,
+            std::slice::from_ref(&route),
+            std::slice::from_ref(&Hash::from(entrypoint_hash)),
+        )
+        .expect("strict producer planning remains deterministic");
+        assert_eq!(
+            strict.unavailable_indices,
+            BTreeSet::from([0]),
+            "fresh local production must remain blocked on the missing predecessor sidecars"
+        );
+        let recovered = prepare_v2_lane_payload_validation_plan(
+            state.as_ref(),
+            kura.as_ref(),
+            &successor.context,
+            global_view,
+            global_leader,
+            std::slice::from_ref(&route),
+            std::slice::from_ref(&Hash::from(entrypoint_hash)),
+        )
+        .expect("derive received ownership from the exact canonical predecessor");
+        assert!(recovered.unavailable_indices.is_empty());
+        assert_eq!(recovered.ownerships.len(), 1);
+        assert_eq!(
+            recovered.ownerships[0].previous_lane_block_height,
+            parent_proposal.descriptor.lane_block_height
+        );
+        assert_eq!(
+            recovered.ownerships[0].previous_lane_block_descriptor_hash,
+            Some(parent_proposal.descriptor.descriptor_hash)
+        );
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(successor.context.height).expect("non-zero successor height"),
+            Some(parent_block.hash()),
+            None,
+            None,
+            successor.context.height,
+            global_view,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint_hash,
+                route.lane_id,
+                route.dataspace_id,
+            )])
+            .with_lane_payload_ownerships(recovered.ownerships),
+        ));
+        let successor_block = builder
+            .build_with_signature(
+                u64::try_from(leader_index).expect("successor leader index fits u64"),
+                keys[leader_index].private_key(),
+            )
+            .canonical_resultless_proposal();
+        let (locked_round, locked_subject) = global_lock_for_block(&successor, &successor_block);
+        assert_eq!(
+            successor.mark_global_body_locked(locked_round, locked_subject),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        assert_ne!(
+            successor.bind_locked_global_body(&successor_block),
+            V2LaneIngressOutcome::Rejected,
+            "an exact PrepareQC-locked successor must not kill a validator merely because its independent predecessor sidecars are catching up"
+        );
     }
 
     #[test]

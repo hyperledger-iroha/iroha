@@ -69,12 +69,14 @@ kagami = ""
 # alias = "core"
 # dataspace = "universal"
 # visibility = "public"
+# metadata = {}
 #
 # [[nexus.lane_catalog]]
 # index = 1
 # alias = "governance"
 # dataspace = "universal"
 # visibility = "restricted"
+# metadata = {}
 #
 # Optional dataspace catalog entries:
 # [[nexus.dataspace_catalog]]
@@ -85,8 +87,5 @@ kagami = ""
 # Enable/disable data availability gating (RBC + availability QC).
 # DA/RBC is always enabled in first-release Iroha 3 profiles.
 
-[torii]
-# Optional overrides for DA ingest spool roots (used when DA is enabled).
-# [torii.da_ingest]
-# replay_cache_store_dir = "./data/torii/da_replay"
-# manifest_store_dir = "./data/torii/da_manifests"
+# Torii DA ingest replay and manifest roots are immutable per-generation
+# managed paths. Bundle overrides for those paths are rejected.
