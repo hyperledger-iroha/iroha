@@ -449,6 +449,12 @@ the coordinator quorum. `persist_and_wait_for_queue_plan_admission` and
 `submit_signed_transaction_for_ingress_globally_synced` in
 `crates/iroha_torii/src/lib.rs` persist the certificate before wakeup and wait
 for the exact replicated WSV registry value before returning public acceptance.
+Torii disseminates the persisted certificate to the coordinator route with the
+control-plane `QueuePlanAdmissionPublication` message (wire tag 20). Sumeragi
+then forwards the exact Kura-backed bytes from a non-global-leader validator to
+the frozen global leader with the distinct consensus
+`QueuePlanAdmissionCertificate` handoff (wire tag 21); the two messages have
+separate subscribers, retry ownership, and bounded decoders.
 `State::stage_queue_plan_admissions` owns the immutable global CAS.
 `Queue::reserve_transactions_for_lane_bounded`, queue replay/expiry, and
 `V2LaneWorkAdapter::refresh_merge_candidates` admit autonomous ownership only
