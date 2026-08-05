@@ -59,7 +59,7 @@ const ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS: u8 = u8::MAX;
 /// A reducer transition without persistence already has this exact source
 /// bound. Persistence is acknowledged synchronously, but the record-specific
 /// budgets below prove that replacing the sole `Persist` effect with its
-/// causal `Persisted` continuation produces at most five effects. Keeping the
+/// causal `Persisted` continuation produces at most four effects. Keeping the
 /// adapter bound equal to the reducer bound therefore matches the executor's
 /// retained-batch contract without inflating either queue.
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize = reducer::MAX_EFFECTS_PER_STEP;
@@ -74,11 +74,12 @@ const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACR
 
 /// Largest record-specific `Persist -> Persisted` flattened batch.
 ///
-/// The witness is locally formed `InstallTimeout`: `Persist` precedes one
-/// retained local TimeoutVote broadcast, while its acknowledgement causally
-/// prepends `EnterView`, one protected-body fetch, the TC broadcast, and one
-/// reconstructed locked Commit signature. Thus `2 - 1 + 4 = 5`.
-const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 5;
+/// The witness is locally formed `InstallTimeout`: its individual TimeoutVote
+/// is subsumed by the certificate, so the source emits only `Persist`; the
+/// acknowledgement can emit `EnterView`, one protected-body fetch, the TC
+/// broadcast, and one reconstructed locked Commit signature. Thus the exact
+/// maximum is four.
+const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 4;
 
 // Every persistence-flattened batch must fit the executor's already verified
 // source-transition capacity. A future record shape which breaks this
@@ -138,10 +139,10 @@ impl PersistenceMacroStepClass {
             Self::LockAndCommit => PersistenceMacroStepBudget::new(3, 1),
             // TimeoutElapsed emits only Persist; Persisted emits Sign.
             Self::TimeoutIntent => PersistenceMacroStepBudget::new(1, 1),
-            // Signed TimeoutVote emits Persist before its retained old-view
-            // vote broadcast. The durable continuation can causally prepend
-            // EnterView, fetch, TC broadcast, and Sign to that old-view tail.
-            Self::InstallTimeout => PersistenceMacroStepBudget::new(2, 4),
+            // A quorum-forming signed TimeoutVote is subsumed by its TC and
+            // emits only Persist; Persisted can emit EnterView, fetch, the TC
+            // broadcast, and Sign.
+            Self::InstallTimeout => PersistenceMacroStepBudget::new(1, 4),
             // Signed CommitVote can prefix Persist with its vote broadcast;
             // Persisted can emit the CommitQC broadcast and one body/apply
             // stage. Decision invalidates every queued pre-decision signer.
@@ -1349,6 +1350,40 @@ impl DeferredOccurrenceOwnershipEvidence {
         };
         evidence.projection_hash = deferred_occurrence_ownership_projection_hash(&evidence);
         evidence.validate_exact().then_some(evidence)
+    }
+
+    /// Mint one exact local/causal Busy capability and its matching runtime
+    /// seal for serialized-runtime boundary tests.
+    #[cfg(test)]
+    pub(crate) fn local_for_runtime_test(
+        source: &DeferredAdmissionOrdinalSource,
+        causal_lifecycle_key: Hash,
+        initial_lifecycle_ordinal: u128,
+        physical_cut: u128,
+    ) -> (Self, DeferredRuntimeOwnershipSeal) {
+        let mut admission_capability = source
+            .mint(DeferredAdmissionOrigin::LocalOrCausal)
+            .expect("test deferred ordinal source remains exact");
+        admission_capability.runtime_ownership = Some(DeferredRuntimeOwnershipBinding {
+            causal_lifecycle_key,
+            initial_lifecycle_ordinal,
+            authenticated_ingress: false,
+            source_physical_ordinal: None,
+            physical_cut,
+        });
+        let runtime_seal = admission_capability
+            .runtime_ownership_seal()
+            .expect("test deferred capability owns one exact runtime seal");
+        let mut evidence = Self {
+            admission_ordinal: admission_capability.ordinal,
+            authenticated_ingress: false,
+            source_identity: Arc::clone(&admission_capability.source_identity),
+            admission_capability,
+            projection_hash: Hash::new([]),
+        };
+        evidence.projection_hash = deferred_occurrence_ownership_projection_hash(&evidence);
+        assert!(evidence.validate_exact());
+        (evidence, runtime_seal)
     }
 
     /// Validate the private actor capability and immutable provenance bit.
@@ -9603,6 +9638,40 @@ impl SumeragiV2Adapter {
                 || !self.deferred_inputs.is_empty())
     }
 
+    /// Return whether replay or a pending safety-WAL acknowledgement owns the
+    /// only legal next reducer transition. Pacemaker ingress must remain
+    /// queued until that exact asynchronous completion is delivered.
+    pub(crate) fn pacemaker_escape_is_parked(&self) -> bool {
+        !self.fail_closed
+            && (!self.replay_complete || self.reducer.pending_persistence_record().is_some())
+    }
+
+    /// Return whether an active signature request is the sole reducer fence.
+    /// Certified TC/CommitQC ingress may bypass only this state; persistence
+    /// and replay fences always precede every network transition.
+    pub(crate) fn signature_fence_is_active(&self) -> bool {
+        !self.fail_closed
+            && self.replay_complete
+            && self.reducer.pending_persistence_record().is_none()
+            && self.reducer.awaiting_signature().is_some()
+    }
+
+    /// Return the exact active signer owner used to scope runtime retry
+    /// exclusions. A duplicate certified message leaves this identity
+    /// unchanged, while consuming the signer or installing a successor
+    /// signable changes it even when both tasks share one reducer tag.
+    pub(crate) fn signature_fence_identity(
+        &self,
+    ) -> Option<(reducer::EventTag, reducer::SignableMessage)> {
+        if !self.signature_fence_is_active() {
+            return None;
+        }
+        self.reducer
+            .awaiting_signature()
+            .cloned()
+            .map(|message| (self.reducer.current_tag(), message))
+    }
+
     /// Return whether one exact runtime completion opens the active signing
     /// fence which currently makes older adapter-owned debt unserviceable.
     ///
@@ -9640,8 +9709,11 @@ impl SumeragiV2Adapter {
     /// [`Self::completion_unblocks_deferred_fence`].
     ///
     /// This is deliberately a proof, not a broad command-class hint. Internal
-    /// callbacks must survive reducer preflight, while authenticated ingress
-    /// must have a fresh semantic-admission path and convert against the
+    /// callbacks must retain the current tag and survive reducer preflight,
+    /// while queued authenticated ingress is deliberately retagged at
+    /// dispatch and must therefore be classified against the current reducer
+    /// incarnation regardless of its stored tag. Authenticated input must
+    /// also have a fresh semantic-admission path and convert against the
     /// current registry. A duplicate, equivocation report, unsafe proposal,
     /// capacity terminal, stale view, malformed conversion, or independent
     /// signature callback therefore remains an ordinary ordered owner.
@@ -9656,7 +9728,6 @@ impl SumeragiV2Adapter {
 
         if self.fail_closed
             || !self.replay_complete
-            || tag != self.reducer.current_tag()
             || self.reducer.pending_persistence_record().is_some()
             || self.reducer.awaiting_signature().is_none()
         {
@@ -9673,7 +9744,9 @@ impl SumeragiV2Adapter {
             | AdapterCommand::ValidationSucceeded { .. }
             | AdapterCommand::ValidationFailed { .. }
             | AdapterCommand::ApplicationCompleted(_) => {
-                self.preflight_runtime_command_admission(tag, command) == AdmissionPreflight::Admit
+                tag == self.reducer.current_tag()
+                    && self.preflight_runtime_command_admission(tag, command)
+                        == AdmissionPreflight::Admit
             }
         }
     }
@@ -16425,7 +16498,7 @@ mod tests {
     }
 
     #[test]
-    fn persistence_macro_step_budgets_have_exact_five_effect_maximum() {
+    fn persistence_macro_step_budgets_have_exact_four_effect_maximum() {
         let expected = [
             (
                 PersistenceMacroStepClass::ProposalIntent,
@@ -16449,7 +16522,7 @@ mod tests {
             ),
             (
                 PersistenceMacroStepClass::InstallTimeout,
-                PersistenceMacroStepBudget::new(2, 4),
+                PersistenceMacroStepBudget::new(1, 4),
             ),
             (
                 PersistenceMacroStepClass::Decision,
@@ -16479,8 +16552,74 @@ mod tests {
                 .budget()
                 .flattened_effects(),
             MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP,
-            "local TC formation is the unique five-effect persistence witness"
+            "local TC formation is the four-effect persistence witness"
         );
+    }
+
+    #[test]
+    fn quorum_forming_local_timeout_flattens_to_certificate_only() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let round = reducer::Round::new(tag.height(), tag.view());
+        let context_id = adapter.reducer.context().id();
+
+        for signer_index in [1_u32, 2] {
+            let signer = adapter
+                .registry
+                .validator_id(signer_index)
+                .expect("remote timeout signer belongs to the frozen roster");
+            let retained = adapter
+                .reducer
+                .step(reducer::Event::TimeoutVoteReceived {
+                    tag,
+                    vote: reducer::SignedTimeoutVote::new(
+                        reducer::TimeoutVote::new(context_id, round, signer, None),
+                        reducer::OpaqueSignature::new(vec![
+                            u8::try_from(signer_index)
+                                .expect("small signer index");
+                            96
+                        ]),
+                    ),
+                })
+                .expect("retain the remote timeout share before local signing");
+            assert!(retained.effects().is_empty());
+        }
+
+        let sign = adapter
+            .timeout_elapsed(tag)
+            .expect("persist the local timeout intent");
+        let sign_tag = match sign.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected timeout signing frontier: {effects:?}"),
+        };
+        let formed = adapter
+            .signature_completed(sign_tag, vec![0xA1; 96])
+            .expect("flatten the quorum-forming timeout persistence boundary");
+        assert!(matches!(
+            formed.effects(),
+            [
+                AdapterEffect::EnterView {
+                    tag: entered_tag,
+                    protected_body: None,
+                    ..
+                },
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+                    ..
+                }),
+            ] if entered_tag.view() == tag.view() + 1
+                && certificate.round.view == tag.view()
+                && certificate.groups.iter().any(|group| group.signers.contains(&0))
+        ));
+        assert_eq!(adapter.current_tag().view(), tag.view() + 1);
+        assert!(!adapter.fail_closed);
     }
 
     #[test]
@@ -16891,6 +17030,153 @@ mod tests {
         assert!(matches!(sign.as_slice(), [AdapterEffect::Sign { .. }]));
         assert_eq!(adapter.wal.recovered_records().len(), 1);
         assert_eq!(adapter.reducer.durable_state().last_id().get(), 1);
+    }
+
+    #[test]
+    fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
+        use super::super::v2_runtime::{
+            RuntimeQueueConfig, RuntimeSelectedCandidateOwnership, RuntimeSelectedOwnerKind,
+            RuntimeStep, SerializedV2Runtime,
+        };
+
+        let directory = TempDir::new().expect("temporary pending-WAL directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let pending = adapter
+            .reducer
+            .step(reducer::Event::TimeoutElapsed {
+                tag: adapter.current_tag(),
+            })
+            .expect("stage one real TimeoutIntent persistence fence");
+        assert!(matches!(
+            pending.effects(),
+            [reducer::Effect::Persist { .. }]
+        ));
+        assert!(adapter.pacemaker_escape_is_parked());
+        assert!(!adapter.signature_fence_is_active());
+
+        let wire_context = adapter.wire_context.clone();
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic pending-WAL key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        assert!(
+            keys.iter()
+                .zip(&wire_context.roster)
+                .all(|(key, validator)| key.public_key() == validator.validator.public_key())
+        );
+        let round = wire::ConsensusRound {
+            context_id: wire_context.id(),
+            height: wire_context.height,
+            view: 0,
+        };
+        let signers = vec![0, 1, 2];
+        let preimage = wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("small signer index")].private_key(),
+                    &preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let certificate = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
+                round,
+                groups: vec![wire::TimeoutVoteGroup {
+                    highest_prepare_qc: None,
+                    signers,
+                    aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                        .expect("aggregate pending-WAL timeout certificate"),
+                }],
+            }),
+        );
+
+        let now = Instant::now();
+        let (mut runtime, startup) = SerializedV2Runtime::new(
+            adapter,
+            startup,
+            now,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(4, 1, 1),
+        )
+        .expect("construct runtime across the pending persistence cut");
+        assert!(startup.is_empty());
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime while persistence owns dispatch");
+        runtime
+            .enqueue_network(certificate)
+            .expect("admit the authenticated TC behind the WAL fence");
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(
+            runtime
+                .try_step_pacemaker_escape(now)
+                .expect("parked pacemaker observation remains valid")
+                .is_none(),
+            "certified progress cannot cross an unacknowledged safety write"
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(runtime.last_scheduler_ownership().is_none());
+
+        let post_persist = runtime
+            .driver_mut_for_test()
+            .drive_effects(pending.into_effects())
+            .expect("append, fsync, and acknowledge the exact TimeoutIntent");
+        assert!(matches!(
+            post_persist.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+        runtime
+            .observe_effects_with_test_ownership(now, &post_persist)
+            .expect("retain the signer effect's runtime owner");
+        assert!(!runtime.driver().pacemaker_escape_is_parked());
+        assert!(runtime.driver().signature_fence_is_active());
+
+        let escaped = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("post-ack pacemaker selection remains exact")
+            .expect("the queued TC advances after its WAL predecessor");
+        let RuntimeStep::Advanced(effects) = escaped else {
+            panic!("the post-ack TC unexpectedly idled")
+        };
+        assert!(matches!(
+            effects.as_slice(),
+            [AdapterEffect::EnterView { tag, .. }] if tag.view() == 1
+        ));
+        let evidence = runtime
+            .take_last_scheduler_ownership()
+            .expect("post-ack TC retains one exact scheduler owner");
+        assert_eq!(
+            evidence.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
+        );
+        assert!(matches!(
+            evidence.candidate,
+            RuntimeSelectedCandidateOwnership::Exact(_)
+        ));
+        assert_eq!(evidence.validate_exact(), Ok(()));
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("consume the post-ack EnterView ownership");
+        assert_eq!(runtime.queued_commands(), 0);
+        assert!(!runtime.driver().fail_closed);
     }
 
     #[test]
@@ -18506,7 +18792,7 @@ mod tests {
     }
 
     #[test]
-    fn locally_signed_timeout_quorum_leads_with_enter_view_after_wal() {
+    fn locally_signed_timeout_quorum_leads_with_enter_view_and_subsumes_vote() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
@@ -18559,18 +18845,14 @@ mod tests {
                         ..
                     },
                     AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(_),
-                        ..
-                    }),
-                    AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+                        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
                         ..
                     }),
                 ] if entered_tag.view() == round.view + 1
-                    && vote.round == round
-                    && vote.signer == 0
+                    && certificate.round == round
+                    && certificate.groups.iter().any(|group| group.signers.contains(&0))
             ),
-            "the advancing WAL continuation must precede its retained old-view broadcast: {entered:?}"
+            "the advancing WAL continuation must lead and its durable TC must subsume the old-view vote: {entered:?}"
         );
     }
 

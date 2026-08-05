@@ -19013,10 +19013,20 @@ if !self.commands.is_empty()
         runtime_items,
         "oldest_active_lifecycle_ordinal",
         """
-self.dormant_local_fifo_reservations.iter().try_fold(
-    command_minimum,
+for reservation in &self.dormant_local_fifo_reservations {
+    if reservation.admission_ordinal == 0
+        || !self
+            .lifecycle_ordinals
+            .recognizes_minted(reservation.admission_ordinal)
+            .map_err(|_| EnqueueError::FailClosed)?
+    {
+        return Err(EnqueueError::FailClosed);
+    }
+}
+Ok(command_minimum)
 """,
-        "dormant Local owners must participate in global minimum selection",
+        "dormant Local owners must consume capacity and retain exact minted "
+        "identity without becoming runnable global minima before materialization",
     )
     require_item_sequence(
         "runtime",
@@ -59195,12 +59205,18 @@ def _production_causal_fifo_source_fidelity_errors(
             item = _require_rust_item(
                 adapter_path, adapter_source, item_name, errors
             )
+            expected_attributes = (
+                ("#[cfg_attr(not(test), allow(dead_code))]",)
+                if item_name == "drain_deferred_with_evidence"
+                else ()
+            )
             _require_rust_item_context(
                 adapter_path,
                 item,
                 context,
                 description,
                 errors,
+                expected_attributes=expected_attributes,
             )
             if item is not None:
                 expected_sha256 = _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[
@@ -59214,6 +59230,76 @@ def _production_causal_fifo_source_fidelity_errors(
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        observed_adapter_fence_items: dict[str, RustItem | None] = {}
+        for item_name, description in (
+            (
+                "pacemaker_escape_is_parked",
+                "adapter replay and persistence pacemaker parking predicate",
+            ),
+            (
+                "signature_fence_is_active",
+                "adapter exact signature-fence activity predicate",
+            ),
+            (
+                "signature_fence_identity",
+                "adapter exact signer-incarnation projection",
+            ),
+        ):
+            item = _require_rust_item(adapter_path, adapter_source, item_name, errors)
+            observed_adapter_fence_items[item_name] = item
+            _require_rust_item_context(
+                adapter_path,
+                item,
+                (("impl", "SumeragiV2Adapter"),),
+                description,
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                adapter_path,
+                item,
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[
+                    f"adapter_{item_name}"
+                ],
+                description,
+                errors,
+            )
+        _require_rust_token_sequence(
+            adapter_path,
+            observed_adapter_fence_items.get("pacemaker_escape_is_parked"),
+            """
+!self.fail_closed
+    && (!self.replay_complete || self.reducer.pending_persistence_record().is_some())
+""",
+            "pacemaker parking must cover replay and the exact pending safety-WAL record",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            observed_adapter_fence_items.get("signature_fence_is_active"),
+            """
+!self.fail_closed
+    && self.replay_complete
+    && self.reducer.pending_persistence_record().is_none()
+    && self.reducer.awaiting_signature().is_some()
+""",
+            "the signature fence must be distinct from replay and persistence",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            observed_adapter_fence_items.get("signature_fence_identity"),
+            """
+if !self.signature_fence_is_active() {
+    return None;
+}
+self.reducer
+    .awaiting_signature()
+    .cloned()
+    .map(|message| (self.reducer.current_tag(), message))
+""",
+            "retry exclusions must bind the exact event tag and signable message",
+            errors,
+        )
         authenticated_deferred_adapter_items = (
             (
                 "matches_authenticated_runtime_bytes",
@@ -59372,7 +59458,9 @@ if let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) =
             """
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize =
     reducer::MAX_EFFECTS_PER_STEP;
-const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 5;
+const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize =
+    MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 2;
+const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 4;
 const _: () = assert!(
     MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP
         <= MAX_ADAPTER_EFFECTS_PER_MACRO_STEP
@@ -59386,8 +59474,9 @@ const _: () = assert!(
         if macro_bound_count != 1:
             errors.append(
                 f"{adapter_path}: the adapter macro-step bound must remain the "
-                "reducer source bound with the exact reviewed five-effect "
-                f"persistence witness; found {macro_bound_count} contracts"
+                "reducer source bound with the exact reviewed two-authority "
+                "recovery allowance and four-effect persistence witness; found "
+                f"{macro_bound_count} contracts"
             )
         drive = _require_rust_item(
             adapter_path, adapter_source, "drive_effects", errors
@@ -59833,6 +59922,11 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
 
         for item_name, delegate, description in (
             (
+                "certified_progress_bypasses_signature_fence",
+                "wire_payload_is_certified_fence_escape(authenticated.payload())",
+                "production certified Progress signature-fence escape delegate",
+            ),
+            (
                 "completion_unblocks_deferred_fence",
                 "SumeragiV2Adapter::completion_unblocks_deferred_fence(self, tag, command)",
                 "production exact signature-fence completion delegate",
@@ -59841,6 +59935,21 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
                 "command_is_blocked_by_deferred_fence",
                 "SumeragiV2Adapter::command_is_blocked_by_deferred_fence(self, tag, command)",
                 "production reducer-fenced command delegate",
+            ),
+            (
+                "pacemaker_escape_is_parked",
+                "SumeragiV2Adapter::pacemaker_escape_is_parked(self)",
+                "production replay/persistence pacemaker parking delegate",
+            ),
+            (
+                "signature_fence_is_active",
+                "SumeragiV2Adapter::signature_fence_is_active(self)",
+                "production exact signature-fence activity delegate",
+            ),
+            (
+                "signature_fence_identity",
+                "SumeragiV2Adapter::signature_fence_identity(self)",
+                "production exact signer-incarnation identity delegate",
             ),
         ):
             matching = tuple(
@@ -59868,6 +59977,15 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
                 description,
                 errors,
             )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                matching[0],
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[
+                    f"runtime_driver_{item_name}"
+                ],
+                description,
+                errors,
+            )
 
         bounded_ingress_context = (
             (
@@ -59886,12 +60004,12 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
         observed_fence_ingress_items: dict[str, RustItem | None] = {}
         for item_name, description in (
             (
-                "pop_fence_completion_with_ownership",
-                "proof-gated exact fence-completion FIFO removal",
+                "pop_fence_dependency_with_ownership",
+                "proof-gated exact fence-dependency FIFO removal",
             ),
             (
-                "fence_blocked_lifecycle_owners",
-                "proof-gated reducer-fenced FIFO owner snapshot",
+                "fence_blocked_occurrence_owners",
+                "proof-gated reducer-fenced FIFO occurrence snapshot",
             ),
         ):
             matching = tuple(
@@ -59924,14 +60042,24 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
             )
         require_runtime_item_order(
             observed_fence_ingress_items.get(
-                "pop_fence_completion_with_ownership"
+                "pop_fence_dependency_with_ownership"
             ),
             (
                 "let _ = self.oldest_lifecycle_ordinal()?;",
                 "let queue_before = self.ownership_snapshot();",
-                ".position(|queued| queued.class == CommandClass::Completion "
-                "&& matches_fence(queued))",
-                "identity.kind != RuntimeCommandKind::SignatureCompleted",
+                "for (index, queued) in self.commands.iter().enumerate()",
+                "cached_queue_occurrence_owner(&self.selection_source_identity)",
+                "if queued_lifecycle != lifecycle_ordinal",
+                "let is_completion = queued.class == CommandClass::Completion",
+                "queued.identity.kind == RuntimeCommandKind::SignatureCompleted",
+                "queued.ingress_ownership.is_none()",
+                "queued.causal_origin.root_identity.kind "
+                "!= RuntimeCommandKind::SignatureCompleted",
+                "matches_fence_completion(queued)",
+                "let is_predecessor = !is_completion "
+                "&& is_unblocked_predecessor(queued);",
+                "let key = (admission_ordinal, index);",
+                "if selected_key.is_none_or(|current| key < current)",
                 "let selection_seal = self.mint_selection_seal(",
                 "let mut candidate = RuntimeFifoCandidateOwnership",
                 "if !runtime_fifo_candidate_ingress_is_exact(&candidate)",
@@ -59941,7 +60069,7 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
 let command = self
     .commands
     .remove(index)
-    .expect("selected fence completion remains present");
+    .expect("selected fence dependency remains present");
 """,
                 """
 debug_assert_eq!(
@@ -59950,20 +60078,409 @@ debug_assert_eq!(
 );
 """,
             ),
-            "fence completion removal must validate all FIFO owners, select an "
-            "exact signature completion, and remove only that physical owner",
+            "fence dependency removal must validate all FIFO owners, compare the "
+            "exact completion and runnable predecessors by immutable physical "
+            "rank, and remove only the selected physical occurrence",
         )
         require_runtime_item_order(
-            observed_fence_ingress_items.get("fence_blocked_lifecycle_owners"),
+            observed_fence_ingress_items.get("fence_blocked_occurrence_owners"),
             (
                 "let _ = self.oldest_lifecycle_ordinal()?;",
                 "self.commands",
                 ".filter(|queued| is_blocked(queued))",
-                ".map(TaggedCommand::lifecycle_owner)",
+                ".cached_queue_occurrence_owner(&self.selection_source_identity)",
+                ".cloned()",
+                ".ok_or(EnqueueError::FailClosed)",
                 ".collect()",
             ),
-            "fence-blocked owner projection must validate the complete queue "
-            "before collecting only driver-proved physical owners",
+            "fence-blocked occurrence projection must validate the complete "
+            "queue before collecting only exact driver-proved physical owners",
+        )
+
+        nonforgeable_helper_items: dict[str, RustItem | None] = {}
+        for item_name in _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN:
+            item = _require_rust_item(
+                runtime_path,
+                runtime_source,
+                item_name,
+                errors,
+            )
+            nonforgeable_helper_items[item_name] = item
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[item_name],
+                f"non-forgeable queue/signature-fence helper {item_name}",
+                errors,
+            )
+        _require_rust_item_context(
+            runtime_path,
+            nonforgeable_helper_items.get("cached_queue_occurrence_owner"),
+            (
+                (
+                    "impl",
+                    "<",
+                    "C",
+                    ":",
+                    "ExactRuntimeCommandIdentity",
+                    ">",
+                    "TaggedCommand",
+                    "<",
+                    "C",
+                    ">",
+                ),
+            ),
+            "source-bound queue occurrence cache lookup",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "oldest_active_lifecycle_ordinal_before_physical_cut_excluding"
+            ),
+            """
+if physical_cut == 0 {
+    return Err(EnqueueError::FailClosed);
+}
+let mut excluded_by_admission = BTreeMap::new();
+for owner in excluded_occurrences {
+    if !owner.validate_exact()
+        || !Arc::ptr_eq(&owner.source_identity, &self.selection_source_identity)
+        || excluded_by_admission
+            .insert(owner.admission_ordinal, owner)
+            .is_some()
+    {
+        return Err(EnqueueError::FailClosed);
+    }
+}
+""",
+            "target-relative FIFO exclusion must accept only unique exact "
+            "occurrences minted by this bounded queue",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("ownership_snapshot"),
+            """
+let occurrence_owners = self
+    .commands
+    .iter()
+    .map(|queued| {
+        queued
+            .cached_queue_occurrence_owner(&self.selection_source_identity)
+            .cloned()
+    })
+    .collect::<Option<Vec<_>>>();
+let occurrence_scan_complete = occurrence_owners.is_some();
+""",
+            "queue snapshots must derive their exact occurrence set from "
+            "queue-cached, source-bound capabilities",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "runtime_queue_ownership_snapshot_projection_hash"
+            ),
+            """
+projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-snapshot:v3");
+append_runtime_identity_field(
+    &mut projection,
+    &(Arc::as_ptr(&snapshot.source_identity) as usize).to_le_bytes(),
+);
+append_runtime_queue_projection(&mut projection, snapshot.projection);
+projection.push(u8::from(snapshot.occurrence_scan_complete));
+append_runtime_identity_u64(
+    &mut projection,
+    u64::try_from(snapshot.occurrence_owners.len())
+        .expect("bounded runtime occurrence count is representable as u64"),
+);
+for owner in &snapshot.occurrence_owners {
+    append_runtime_identity_field(&mut projection, owner.projection_hash.as_ref());
+}
+""",
+            "queue snapshot hashing must bind scan completeness and every "
+            "physical occurrence capability in FIFO order",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("matches_scheduler_occurrence"),
+            """
+self.queue_before_snapshot_hash == before.projection_hash
+""",
+            "queue selection validation must bind the private pre-selection "
+            "snapshot rather than only its public length/cursor projection",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("matches_scheduler_occurrence"),
+            """
+RuntimeQueueOccurrenceOwner::from_candidate(candidate).is_some_and(|selected| {
+    usize::try_from(self.selected_position)
+        .ok()
+        .and_then(|position| before.occurrence_owners.get(position))
+        == Some(&selected)
+""",
+            "queue selection validation must match the exact selected physical "
+            "occurrence at its immutable pre-removal position",
+            errors,
+        )
+        for item_name in (
+            "ownership_snapshot",
+            "mint_selection_seal",
+            "contains_queue_occurrence_owner",
+            "restore_selected_command",
+            "oldest_active_lifecycle_ordinal_before_physical_cut_excluding",
+            "pop_pacemaker_progress_with_ownership",
+        ):
+            expected_attributes = (
+                ("#[allow(clippy::too_many_arguments)]",)
+                if item_name == "mint_selection_seal"
+                else ()
+            )
+            _require_rust_item_context(
+                runtime_path,
+                nonforgeable_helper_items.get(item_name),
+                bounded_ingress_context,
+                f"non-forgeable bounded-ingress helper {item_name}",
+                errors,
+                expected_attributes=expected_attributes,
+            )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("mint_selection_seal"),
+            "queue_before_snapshot_hash: queue_before.projection_hash",
+            "queue-issued selection seals must bind the exact private "
+            "pre-selection snapshot hash",
+            errors,
+        )
+
+        contextual_nonforgeable_items: dict[str, RustItem | None] = {}
+        for item_name, context_name, item_context, description in (
+            (
+                "validate_exact",
+                "occurrence_owner_validate_exact",
+                (("impl", "RuntimeQueueOccurrenceOwner"),),
+                "exact physical FIFO occurrence capability validation",
+            ),
+            (
+                "matches_queued",
+                "occurrence_owner_matches_queued",
+                (("impl", "RuntimeQueueOccurrenceOwner"),),
+                "source-bound queued occurrence matching",
+            ),
+            (
+                "validate_identity",
+                "queue_snapshot_validate_identity",
+                (("impl", "RuntimeQueueOwnershipSnapshot"),),
+                "private queue snapshot identity validation",
+            ),
+            (
+                "validate_identity",
+                "queue_selection_validate_identity",
+                (("impl", "RuntimeQueueSelectionSeal"),),
+                "queue-issued selection seal validation",
+            ),
+            (
+                "matches_scheduler_occurrence",
+                "queue_selection_matches_scheduler_occurrence",
+                (("impl", "RuntimeQueueSelectionSeal"),),
+                "queue-issued scheduler occurrence matching",
+            ),
+            (
+                "validate_exact",
+                "scheduler_evidence_validate_exact",
+                (("impl", "RuntimeSchedulerOwnershipEvidence"),),
+                "complete scheduler ownership evidence validation",
+            ),
+        ):
+            matching = tuple(
+                item
+                for item in rust_items(runtime_source, item_name)
+                if item.brace_context == item_context
+            )
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                contextual_nonforgeable_items[context_name] = None
+                continue
+            item = matching[0]
+            contextual_nonforgeable_items[context_name] = item
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                item_context,
+                description,
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[context_name],
+                description,
+                errors,
+            )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("occurrence_owner_validate_exact"),
+            """
+self.admission_ordinal != 0
+    && self.identity.validate_exact()
+    && self.projection_hash == runtime_queue_occurrence_owner_projection_hash(self)
+""",
+            "physical occurrence capabilities must validate ordinal, immutable "
+            "command identity, and their complete projection hash",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("occurrence_owner_matches_queued"),
+            """
+Arc::ptr_eq(&self.source_identity, source_identity)
+    && queued.cached_queue_occurrence_owner(source_identity) == Some(self)
+""",
+            "physical occurrence matching must preserve queue-instance pointer "
+            "identity and the command's cached exact capability",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("queue_snapshot_validate_identity"),
+            """
+let occurrences_are_exact = self.occurrence_scan_complete
+    && u64::try_from(self.occurrence_owners.len()) == Ok(self.projection.len)
+    && self.occurrence_index.len() == self.occurrence_owners.len()
+""",
+            "private queue snapshot validation must prove a complete, unique "
+            "occurrence scan for every public queue slot",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("queue_selection_validate_identity"),
+            """
+self.queue_before.len != 0
+    && self.queue_before.len <= self.queue_before.capacity
+""",
+            "queue-issued selection validation must reject empty, over-capacity "
+            "pre-selection projections",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("scheduler_evidence_validate_exact"),
+            """
+let queue_snapshots_are_exact = self.queue_before_snapshot.validate_identity()
+    && self.queue_after_snapshot.validate_identity()
+""",
+            "scheduler evidence must independently validate the private before "
+            "and after snapshots",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            contextual_nonforgeable_items.get("scheduler_evidence_validate_exact"),
+            """
+let fence_retry_sets_are_exact = runtime_queue_occurrence_set_matches_snapshot(
+    &self.fence_retry_blocked_fifo_before,
+    &self.queue_before_snapshot,
+) && runtime_queue_occurrence_set_matches_snapshot(
+    &self.fence_retry_blocked_fifo_after,
+    &self.queue_after_snapshot,
+);
+""",
+            "scheduler evidence must bind every retry exclusion to an exact "
+            "occurrence present in the corresponding private snapshot",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "runtime_queue_occurrence_owner_projection_hash"
+            ),
+            """
+append_runtime_identity_field(
+    &mut projection,
+    &(Arc::as_ptr(&owner.source_identity) as usize).to_le_bytes(),
+);
+append_runtime_identity_field(&mut projection, &owner.admission_ordinal.to_le_bytes());
+append_runtime_identity_field(&mut projection, owner.identity.projection_hash.as_ref());
+""",
+            "physical occurrence hashing must bind queue-instance identity, "
+            "immutable admission ordinal, and exact command identity",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "runtime_queue_occurrence_set_matches_snapshot"
+            ),
+            """
+Arc::ptr_eq(&owner.source_identity, &snapshot.source_identity)
+    && seen.insert(owner.admission_ordinal)
+    && snapshot
+        .occurrence_index
+        .get(&owner.admission_ordinal)
+        .and_then(|index| snapshot.occurrence_owners.get(*index))
+        == Some(owner)
+""",
+            "retry occurrence sets must be unique and match the same queue "
+            "instance's exact admission-indexed snapshot entries",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "runtime_queue_selection_seal_projection_hash"
+            ),
+            """
+append_runtime_identity_field(&mut projection, seal.queue_before_snapshot_hash.as_ref());
+append_runtime_identity_field(
+    &mut projection,
+    &seal.oldest_lifecycle_ordinal.to_le_bytes(),
+);
+append_runtime_optional_ordinal(&mut projection, seal.completion_minimum_lifecycle_ordinal);
+append_runtime_optional_ordinal(&mut projection, seal.progress_minimum_lifecycle_ordinal);
+append_runtime_optional_ordinal(&mut projection, seal.normal_minimum_lifecycle_ordinal);
+append_runtime_identity_u64(&mut projection, seal.completion_count);
+append_runtime_identity_u64(&mut projection, seal.progress_count);
+append_runtime_identity_u64(&mut projection, seal.normal_count);
+projection.push(seal.selected_class);
+append_runtime_identity_u64(&mut projection, seal.selected_position);
+append_runtime_identity_field(
+    &mut projection,
+    &seal.selected_admission_ordinal.to_le_bytes(),
+);
+append_runtime_identity_field(
+    &mut projection,
+    &seal.selected_lifecycle_ordinal.to_le_bytes(),
+);
+""",
+            "queue selection hashing must bind the private snapshot and the "
+            "selected physical/logical occurrence coordinates",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("runtime_scheduler_projection_hash"),
+            """
+append_runtime_queue_occurrence_owners(
+    &mut projection,
+    &evidence.fence_retry_blocked_fifo_before,
+);
+append_runtime_queue_occurrence_owners(
+    &mut projection,
+    &evidence.fence_retry_blocked_fifo_after,
+);
+projection.push(u8::from(evidence.fence_retry_marker_required));
+""",
+            "scheduler ownership hashing must bind both retry-exclusion sets "
+            "and the exact marker transition claim",
+            errors,
         )
 
         runtime_ingress_context = (("impl", "RuntimeIngressOwnershipEvidence"),)
@@ -60466,27 +60983,27 @@ if matches!(
             errors,
         )
 
-        busy_regression_name = (
-            "commit_certificate_response_coalesces_with_exact_busy_deferred_qc"
+        response_regression_name = (
+            "network_admission_uses_exact_normal_and_progress_reservations"
         )
-        busy_regression = _require_rust_item(
-            runtime_path, runtime_source, busy_regression_name, errors
+        response_regression = _require_rust_item(
+            runtime_path, runtime_source, response_regression_name, errors
         )
         _require_rust_item_context(
             runtime_path,
-            busy_regression,
+            response_regression,
             (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
-            "Busy-deferred authenticated response coalescing regression",
+            "CommitCertificateResponse progress-reservation regression",
             errors,
             expected_attributes=("#[test]",),
         )
         _require_rust_item_token_sha256(
             runtime_path,
-            busy_regression,
+            response_regression,
             _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
-                busy_regression_name
+                response_regression_name
             ],
-            "Busy-deferred authenticated response coalescing regression",
+            "CommitCertificateResponse progress-reservation regression",
             errors,
         )
         causal_runtime_regressions: dict[str, RustItem | None] = {}
@@ -60930,6 +61447,11 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                 runtime_context,
                 description,
                 errors,
+                expected_attributes=(
+                    ("#[cfg_attr(not(test), allow(dead_code))]",)
+                    if item_name == "minimum_active_lifecycle_ordinal_for_deferred"
+                    else ()
+                ),
             )
             if item is not None:
                 expected_sha256 = _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[
@@ -60943,6 +61465,113 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        for item_name in (
+            "physically_eligible_deferred_admission_ordinals",
+            "current_signature_fence_identity",
+            "clear_fence_retry_blocked_fifo_owners",
+            "reconcile_fence_retry_blocked_fifo_owners",
+            "retain_fence_retry_blocked_fifo_owner",
+            "retain_scheduler_ownership",
+            "try_step_pacemaker_escape",
+            "dispatch_one_pacemaker_progress",
+        ):
+            _require_rust_item_context(
+                runtime_path,
+                nonforgeable_helper_items.get(item_name),
+                runtime_context,
+                f"non-forgeable serialized-runtime helper {item_name}",
+                errors,
+            )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("current_signature_fence_identity"),
+            """
+let identity = self
+    .driver
+    .signature_fence_identity()
+    .map_err(|_| EnqueueError::FailClosed)?;
+if self.driver.signature_fence_is_active() != identity.is_some() {
+    return Err(EnqueueError::FailClosed);
+}
+Ok(identity)
+""",
+            "retry exclusion scope must derive from the driver's exact signer "
+            "identity and agree with its active-fence claim",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "reconcile_fence_retry_blocked_fifo_owners"
+            ),
+            """
+if self.driver.all_deferred_admission_ordinals().is_empty()
+    || self.driver.deferred_work_is_serviceable()
+    || !self.driver.signature_fence_is_active()
+{
+    self.clear_fence_retry_blocked_fifo_owners();
+    return Ok(());
+}
+""",
+            "retry exclusions must retire when deferred debt disappears, "
+            "becomes serviceable, or no signature fence remains",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "reconcile_fence_retry_blocked_fifo_owners"
+            ),
+            """
+if marker_fence_identity != &current_fence_identity {
+    self.clear_fence_retry_blocked_fifo_owners();
+    return Ok(());
+}
+if self.fence_retry_blocked_fifo_owners.len() > self.ingress.config.capacity {
+    return Err(EnqueueError::FailClosed);
+}
+let queue_snapshot = self.ingress.ownership_snapshot();
+if !queue_snapshot.validate_identity() {
+    return Err(EnqueueError::FailClosed);
+}
+""",
+            "retry reconciliation must scope exclusions to one signer "
+            "incarnation, preserve the queue bound, and validate the exact "
+            "current snapshot before retaining any marker",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "retain_fence_retry_blocked_fifo_owner"
+            ),
+            """
+if self.driver.all_deferred_admission_ordinals().is_empty()
+    || self.driver.deferred_work_is_serviceable()
+    || !self.driver.signature_fence_is_active()
+    || !self.ingress.contains_queue_occurrence_owner(&owner)?
+{
+    return Err(EnqueueError::FailClosed);
+}
+""",
+            "a retry exclusion may be minted only for an exact occurrence "
+            "still retained behind the same active unserviceable signature fence",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get(
+                "retain_fence_retry_blocked_fifo_owner"
+            ),
+            """
+if self.fence_retry_blocked_fifo_owners.len() >= self.ingress.config.capacity {
+    return Err(EnqueueError::FailClosed);
+}
+self.fence_retry_blocked_fifo_owners.push(owner);
+""",
+            "retry exclusions must remain bounded by physical FIFO capacity",
+            errors,
+        )
         pacemaker_escape = _require_rust_item(
             runtime_path,
             runtime_source,
@@ -60959,14 +61588,19 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
         require_runtime_item_order(
             pacemaker_escape,
             (
+                "self.reconcile_fence_retry_blocked_fifo_owners()",
+                "self.driver.pacemaker_escape_is_parked()",
                 "self.freeze_due_clock_owners(now)",
                 "self.scheduler_arbitration_inputs(now)",
                 "if timeout_due",
                 "return self.step(now).map(Some)",
+                "self.dispatch_one_fence_dependency(now, Some(SERVICE_CLASS_PROGRESS))?",
                 "self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS))?",
                 "self.dispatch_one_pacemaker_progress(now)",
             ),
-            "typed pacemaker escape must prefer the absolute timeout and otherwise admit only Progress-root work",
+            "typed pacemaker escape must preserve replay/persistence parking, "
+            "prefer the absolute timeout, and otherwise admit only an exact "
+            "Progress-root fence dependency or continuation",
         )
         pacemaker_progress = _require_rust_item(
             runtime_path,
@@ -60984,14 +61618,33 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
         require_runtime_item_order(
             pacemaker_progress,
             (
+                "if self.driver.pacemaker_escape_is_parked()",
+                "let fence_retry_blocked_fifo_before = "
+                "self.fence_retry_blocked_fifo_owners.clone();",
+                "let retry_blocked_admissions = self",
+                "let active_unserviceable_fence = "
+                "self.driver.signature_fence_is_active()",
                 "pop_pacemaker_progress_with_ownership",
+                "retry_blocked_admissions.contains(&ordinal)",
+                "driver.certified_progress_bypasses_signature_fence(&queued.command)",
+                "driver.command_is_blocked_by_deferred_fence(queued.tag, &queued.command)",
                 "driver.certified_progress_bypasses_signature_fence(command)",
                 "RuntimeQueueSelectionKind::PacemakerCertifiedProgress",
                 "owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS",
                 "self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?",
+                "if certified_fence_escape && (retry_unadmitted || retained_deferred_ingress)",
+                "if retry_unadmitted",
+                "self.ingress.restore_selected_command(retry_command, &candidate)",
+                "arbitration.fence_retry_marker_required = true;",
+                "RuntimeQueueOccurrenceOwner::from_candidate(&candidate)",
+                "self.retain_fence_retry_blocked_fifo_owner(retry_owner)",
+                "RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained",
                 "self.finish_dispatched_step(",
             ),
-            "pacemaker FIFO escape must retain exact selection evidence and Progress-root ownership through shared completion",
+            "pacemaker FIFO escape must exclude exact prior retry occurrences, "
+            "distinguish certified fence escapes from unblocked Progress roots, "
+            "restore retry ownership with one bounded fence marker, and retain "
+            "exact selection evidence through shared completion",
         )
         _require_rust_token_sequence(
             runtime_path,
@@ -61051,8 +61704,36 @@ for queued in &self.ingress.commands {
             "the complete target-relative lifecycle minimum excludes no owner",
             errors,
         )
-        target_relative_minimum = observed_runtime_items.get(
+        target_relative_minimum_wrapper = observed_runtime_items.get(
             "minimum_active_lifecycle_ordinal_for_deferred_excluding"
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            target_relative_minimum_wrapper,
+            """
+self.minimum_active_lifecycle_ordinal_for_deferred_excluding_occurrences(
+    target,
+    excluded,
+    &[],
+)
+""",
+            "the logical-owner exclusion wrapper must delegate to the exact "
+            "occurrence-aware target-relative minimum without excluding a "
+            "physical FIFO occurrence",
+            errors,
+        )
+        target_relative_minimum = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "minimum_active_lifecycle_ordinal_for_deferred_excluding_occurrences",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            target_relative_minimum,
+            runtime_context,
+            "target-relative physical-occurrence lifecycle minimum",
+            errors,
         )
         require_runtime_item_order(
             target_relative_minimum,
@@ -61061,8 +61742,8 @@ for queued in &self.ingress.commands {
                 """
 self.ingress
     .oldest_active_lifecycle_ordinal_before_physical_cut_excluding(
-    target.physical_cut,
-    excluded,
+        target.physical_cut,
+        excluded_occurrences,
 )?
 """,
                 "if excluded.iter().any(|excluded| excluded == owner)",
@@ -61075,11 +61756,11 @@ self.ingress
             "only pre-cut physical predecessors, and validate every active Busy "
             "occurrence before comparing logical rank",
         )
-        eligible_deferred = observed_runtime_items.get(
-            "eligible_deferred_admission_ordinals"
+        physically_eligible_deferred = nonforgeable_helper_items.get(
+            "physically_eligible_deferred_admission_ordinals"
         )
         require_runtime_item_order(
-            eligible_deferred,
+            physically_eligible_deferred,
             (
                 """
 if !deferred_lifecycle_ordinals_are_unique(&self.deferred_lifecycle_ownership)
@@ -61098,6 +61779,18 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
                 "self.retransmit_owner_physical_cut",
                 "u128::from(source_physical_ordinal) >= retransmit_cut",
                 "(!physically_behind_an_active_target).then_some(*admission_ordinal)",
+            ),
+            "physical deferred eligibility must validate every active Busy "
+            "occurrence and remove only occurrences behind another deferred "
+            "target or a frozen clock cut",
+        )
+        eligible_deferred = observed_runtime_items.get(
+            "eligible_deferred_admission_ordinals"
+        )
+        require_runtime_item_order(
+            eligible_deferred,
+            (
+                "self.physically_eligible_deferred_admission_ordinals()?",
                 "let physically_ineligible_owners = self.deferred_lifecycle_ownership",
                 """
 let mut eligible = BTreeSet::new();
@@ -61108,8 +61801,9 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
                 "&physically_ineligible_owners",
                 "eligible.insert(*admission_ordinal);",
             ),
-            "deferred eligibility must globally remove post-cut occurrences before "
-            "choosing the logical minimum of the remaining frozen prefix",
+            "logical deferred eligibility must delegate physical-cut filtering "
+            "to the dedicated helper before choosing the logical minimum of "
+            "the remaining frozen prefix",
         )
         require_runtime_item_order(
             observed_runtime_items.get("validate_clock_owner_physical_cuts"),
@@ -61182,39 +61876,70 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
         require_runtime_item_order(
             observed_runtime_items.get("step"),
             (
+                "self.reconcile_fence_retry_blocked_fifo_owners()",
                 "self.freeze_due_clock_owners(now)",
-                "self.dispatch_one_fence_dependency(now)?",
-                "!timeout_preempts",
+                "let timeout_preempts = self.scheduler_arbitration_inputs(now)",
+                "if !timeout_preempts && let Some(step) = "
+                "self.dispatch_one_fence_dependency(now, None)?",
+                "if !timeout_preempts && let Some(step) = "
                 "self.dispatch_one_adapter_deferred(now, None)?",
                 "let selected_round_tag = self.round_tag;",
             ),
-            "live scheduling must freeze clock owners, service one exact fence "
+            "live scheduling must reconcile exact retry markers, freeze clock "
+            "owners, honor absolute timeout preemption, service one exact fence "
             "dependency, then service ordinary adapter debt before arbitration",
         )
         require_runtime_item_order(
             observed_runtime_items.get("dispatch_one_fence_dependency"),
             (
-                "if self.driver.deferred_work_is_serviceable()",
+                "if self.driver.deferred_work_is_serviceable() "
+                "|| !self.driver.signature_fence_is_active()",
                 "let active_deferred = self.driver.all_deferred_admission_ordinals();",
-                "let eligible_deferred = self.eligible_deferred_admission_ordinals()",
+                "let eligible_deferred = self."
+                "physically_eligible_deferred_admission_ordinals()",
+                "let Some((target_ordinal, target)) = eligible_deferred",
                 ".min_by_key(|(ordinal, owner)| (owner.owner().lifecycle_ordinal(), *ordinal))",
                 "self.driver.deferred_occurrence_ownership(target_ordinal)",
                 "target_occurrence_ownership.still_retained()",
                 ".matches_retained_runtime_ownership_seal(&target.runtime_seal)",
-                ".fence_blocked_lifecycle_owners(",
-                ".minimum_active_lifecycle_ordinal_for_deferred_excluding(",
-                ".pop_fence_completion_with_ownership(",
+                ".fence_blocked_occurrence_owners(",
+                ".chain(self.fence_retry_blocked_fifo_owners.iter().cloned())",
+                "blocked_by_admission.insert(owner.admission_ordinal, owner.clone())",
+                ".minimum_active_lifecycle_ordinal_for_deferred_excluding_occurrences(",
+                "&blocked_fifo_occurrences",
+                ".pop_fence_dependency_with_ownership(",
                 "driver.completion_unblocks_deferred_fence(queued.tag, &queued.command)",
+                "required_predecessor_root_class.is_none_or(|class| "
+                "queued.causal_origin.root_class == class)",
+                "!blocked_admissions.contains(&ordinal)",
+                "arbitration.fence_completion_bypass = is_completion;",
+                "arbitration.fence_dependency_required_root_class = "
+                "(!is_completion).then_some(required_predecessor_root_class).flatten();",
+                "if !is_completion",
+                "let retry_command = command.clone();",
+                "if retry_unadmitted { if self.ingress."
+                "restore_selected_command(retry_command, &candidate).is_err()",
+                "RuntimeQueueOccurrenceOwner::from_candidate(&candidate)",
+                "self.retain_fence_retry_blocked_fifo_owner(retry_owner)",
+                "arbitration.fence_retry_marker_required = true;",
+                "RuntimeSelectedOwnerKind::FencePredecessorRetryRetained",
+                "RuntimeSelectedOwnerKind::FencePredecessor",
+                "self.finish_dispatched_step(",
                 "let dispatch = match self.driver.dispatch(command)",
-                "if dispatch.retry_unadmitted",
+                "if dispatch.retry_unadmitted "
+                "|| dispatch.deferred_ordinal.is_some() "
+                "|| dispatch.deferred_ingress.is_some()",
                 """
 self.accept_driver_dispatch(
     dispatch,
     &owner,
     parent_statement,
-    RuntimeDispatchIngress::LocalOrCausal
+    RuntimeDispatchIngress::LocalOrCausal,
 )?
 """,
+                "if retry_unadmitted { self.latch_fail_closed("
+                '"matching fence completion retained retry state")',
+                "self.clear_fence_retry_blocked_fifo_owners();",
                 "RuntimeSelectedOwnerKind::FenceCompletion",
                 "self.retain_effect_ownership(",
                 "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
@@ -61222,10 +61947,11 @@ self.accept_driver_dispatch(
                 "self.complete_driver_dispatch_leader_wire_owners(",
                 "self.observe_effects(now, &effects)",
             ),
-            "the signature-fence dispatcher must prove the dependency edge, "
-            "validate the target's exact occurrence capability and physical cut, "
-            "remove one exact completion, transfer every successor, and retire "
-            "the selected parent plus adapter-side orphans in one serialized macro-step",
+            "the signature-fence dispatcher must prove the target and physical "
+            "cut, merge only exact blocked occurrences, select the minimum "
+            "completion or runnable predecessor, bound retry with an exact "
+            "occurrence marker, and allow only a nonretryable matching completion "
+            "to clear the fence and transfer every successor",
         )
         observed_runtime_ownership_items: dict[str, RustItem | None] = {}
         for item_name, description in (
@@ -61490,6 +62216,7 @@ Ok((
             runtime_context,
             "shared live-dispatch successor and parent terminal handoff",
             errors,
+            expected_attributes=("#[allow(clippy::too_many_arguments)]",),
         )
         _require_rust_item_context(
             runtime_path,
@@ -86740,10 +87467,20 @@ let mut minimum = self
         runtime_path,
         ingress_items.get("oldest_active_lifecycle_ordinal"),
         """
-self.dormant_local_fifo_reservations.iter().try_fold(
-    command_minimum,
+for reservation in &self.dormant_local_fifo_reservations {
+    if reservation.admission_ordinal == 0
+        || !self
+            .lifecycle_ordinals
+            .recognizes_minted(reservation.admission_ordinal)
+            .map_err(|_| EnqueueError::FailClosed)?
+    {
+        return Err(EnqueueError::FailClosed);
+    }
+}
+Ok(command_minimum)
 """,
-        "latent Local FIFO reservations must participate in the oldest active owner",
+        "latent Local FIFO reservations must retain exact minted identity but "
+        "remain passive until a runnable occurrence materializes",
         errors,
     )
     _require_rust_token_sequence(

@@ -272,7 +272,7 @@ requires the host to invoke the runtime fairly and every admitted external
 operation to terminate or report failure.
 
 Reducer effects are also structurally bounded. The largest flattened
-persistence macro-step contains five effects, below the fixed limit of eight
+persistence macro-step contains four effects, below the fixed limit of eight
 effects per serialized adapter macro-step. When adapter debt is serviceable,
 each runtime turn services exactly one deferred adapter macro-step before timers
 or newer ingress; this decreases that debt without allowing one turn to
@@ -1700,7 +1700,7 @@ recovery. The authoritative ingress leg pins `5N+3H+2` count potential, the
 certified-fence-escape, TimeoutVote, and TransportCompletion byte reserves, frozen-layout wire-size
 activation, cross-validator isolation, and fair service; the
 adapter/runtime legs pin the independent `2N+3` Busy-deferred partitions and
-runtime Progress admission. They also pin the five-effect maximum flattened
+runtime Progress admission. They also pin the four-effect maximum flattened
 persistence macro-step below the eight-effect bound, exactly one serviceable
 deferred adapter step per runtime turn, and refusal of terminal readiness while
 any deferred Completion, Progress input, or ordinary input remains. The adapter

@@ -121,7 +121,13 @@ fn main() {
     let expected = format!("{BEGIN}\n{table}{END}");
 
     let header_paths = header_paths(&options.root);
-    let runtime_hash = hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
+    let runtime_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    assert_eq!(
+        runtime_hash[runtime_hash.len() - 1] & 1,
+        1,
+        "refusing to publish an invalid ABI-surface diagnostic sentinel"
+    );
+    let runtime_hash = hex::encode(runtime_hash);
     let runtime_sample_paths = runtime_sample_paths(&options.root);
     let gas_hash = hex::encode(ivm::gas::schedule_hash().as_ref());
     let outputs = prepare_outputs(

@@ -81,8 +81,8 @@ MaterializationUsesReservedSlot ==
 
 Init ==
   /\ phase = "Full"
-  /\ targetReserved
-  /\ ~targetQueued
+  /\ targetReserved = TRUE
+  /\ targetQueued = FALSE
   /\ earlierServeOwners = 1
   /\ ordinaryCompletionPrefix = 1
   /\ laterLocalOwners = 0
@@ -159,8 +159,8 @@ MaterializeExactTarget ==
   /\ frozenPredecessorDebt = 0
   /\ LaterOwnerCount = 0
   /\ phase' = "Materialized"
-  /\ ~targetReserved'
-  /\ targetQueued'
+  /\ targetReserved' = FALSE
+  /\ targetQueued' = TRUE
   /\ UNCHANGED
        <<earlierServeOwners, ordinaryCompletionPrefix,
          laterLocalOwners, laterCausalOwners, laterControlOwners,

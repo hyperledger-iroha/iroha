@@ -4834,8 +4834,25 @@ impl Reducer {
                 let message = ConsensusMessageV2::TimeoutVote(signed.clone());
                 self.remember_control(message.clone());
                 let mut local = self.on_timeout_vote(signed)?.into_effects();
-                effects.append(&mut local);
-                effects.push(Effect::Broadcast(message));
+                let installs_timeout = local.iter().any(|effect| {
+                    matches!(
+                        effect,
+                        Effect::Persist { entry, .. }
+                            if matches!(entry.record(), WalRecord::InstallTimeout(_))
+                    )
+                });
+                if installs_timeout {
+                    // This signature completed the local timeout quorum. The
+                    // resulting durable TC subsumes the individual old-view
+                    // vote, so expose only its InstallTimeout fence. The
+                    // persisted continuation can then keep EnterView first,
+                    // the TC as its control broadcast, and any reconstructed
+                    // signature request last in the executor macro-step.
+                    effects.append(&mut local);
+                } else {
+                    effects.push(Effect::Broadcast(message));
+                    effects.append(&mut local);
+                }
             }
         }
         if self.pending_persistence.is_none() && self.awaiting_signature.is_none() {

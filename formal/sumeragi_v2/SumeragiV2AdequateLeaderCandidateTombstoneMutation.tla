@@ -86,45 +86,12 @@ CandidateIdentity(
    kind |-> "Candidate",
    payload |-> payload]
 
-CandidateA ==
-  CandidateIdentity(
-    "target", 0, "leader", 1,
-    "subject", "Prepare/4", "target", "payload-A")
-
-CandidateB ==
-  CandidateIdentity(
-    "target", 0, "leader", 1,
-    "subject", "Prepare/4", "target", "payload-B")
-
-CandidateC ==
-  CandidateIdentity(
-    "target", 0, "leader", 2,
-    "subject", "Prepare/4", "target", "payload-C")
-
-CandidateD ==
-  CandidateIdentity(
-    "target", 0, "leader", 1,
-    "subject", "Prepare/4", "target", "durable-replay-D")
-
-CandidateS ==
-  CandidateIdentity(
-    "target", 0, "leader", 1,
-    "subject", "SignVote", "target", "durable-signature-S")
-
-CandidateE ==
-  CandidateIdentity(
-    "target", 0, "leader", 1,
-    "subject", "Nondispatchable", "target", "terminal-discard-E")
-
-CandidateK ==
-  CandidateIdentity(
-    "target", 0, "leader", 1,
-    "chunk-subject-K", "Chunk", "target", "held-chunk-K")
-
-CandidateJ ==
-  CandidateIdentity(
-    "target", 0, "leader", 1,
-    "chunk-subject-J", "Chunk", "target", "decided-chunk-J")
+NoCertificateReference ==
+  [context |-> [height |-> 0],
+   height |-> 0,
+   view |-> 0,
+   phase |-> "None",
+   subject |-> "none"]
 
 AggregateCertificateReference ==
   [context |-> [height |-> 0],
@@ -132,6 +99,59 @@ AggregateCertificateReference ==
    view |-> 1,
    phase |-> "Commit",
    subject |-> "subject"]
+
+OpaqueCandidatePayload(identity) ==
+  [identity |-> identity,
+   reference |-> NoCertificateReference,
+   signers |-> {}]
+
+CandidateA ==
+  CandidateIdentity(
+    "target", 0, "leader", 1,
+    "subject", "Prepare/4", "target",
+    OpaqueCandidatePayload("payload-A"))
+
+CandidateB ==
+  CandidateIdentity(
+    "target", 0, "leader", 1,
+    "subject", "Prepare/4", "target",
+    OpaqueCandidatePayload("payload-B"))
+
+CandidateC ==
+  CandidateIdentity(
+    "target", 0, "leader", 2,
+    "subject", "Prepare/4", "target",
+    OpaqueCandidatePayload("payload-C"))
+
+CandidateD ==
+  CandidateIdentity(
+    "target", 0, "leader", 1,
+    "subject", "Prepare/4", "target",
+    OpaqueCandidatePayload("durable-replay-D"))
+
+CandidateS ==
+  CandidateIdentity(
+    "target", 0, "leader", 1,
+    "subject", "SignVote", "target",
+    OpaqueCandidatePayload("durable-signature-S"))
+
+CandidateE ==
+  CandidateIdentity(
+    "target", 0, "leader", 1,
+    "subject", "Nondispatchable", "target",
+    OpaqueCandidatePayload("terminal-discard-E"))
+
+CandidateK ==
+  CandidateIdentity(
+    "target", 0, "leader", 1,
+    "chunk-subject-K", "Chunk", "target",
+    OpaqueCandidatePayload("held-chunk-K"))
+
+CandidateJ ==
+  CandidateIdentity(
+    "target", 0, "leader", 1,
+    "chunk-subject-J", "Chunk", "target",
+    OpaqueCandidatePayload("decided-chunk-J"))
 
 AggregateEvidenceA ==
   [reference |-> AggregateCertificateReference,
@@ -143,9 +163,10 @@ AggregateEvidenceSuperset ==
      {"signer-1", "signer-2", "signer-3", "signer-4"}]
 
 AggregateCandidatePayload(evidence) ==
-  IF NormalizeAggregateEvidence
-  THEN evidence.reference
-  ELSE evidence
+  [identity |-> "aggregate-certificate",
+   reference |-> evidence.reference,
+   signers |->
+     IF NormalizeAggregateEvidence THEN {} ELSE evidence.signers]
 
 CandidateQa ==
   CandidateIdentity(

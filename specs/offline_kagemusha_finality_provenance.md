@@ -139,12 +139,12 @@ cache entry.
 
 The C/Swift verification boundary accepts five logical inputs: the canonical
 proof, canonical roster artifact, complete canonical top-up anchor, canonical
-V3 manifest, and the manifest's expected non-zero SHA-256. Native ingress
+V4 manifest, and the manifest's expected non-zero SHA-256. Native ingress
 applies separate proof, roster, anchor, and manifest byte caps before copying
-or decoding. The public symbol currently returns the unavailable error before
-decoding otherwise valid inputs: a content address is not a release trust root,
-and recursive init does not yet consume a verified-finality capability. Both
-gates must be implemented before this boundary can become callable.
+or decoding. The public symbol verifies those inputs directly, and recursive
+init performs the same verified-finality check inside its native boundary.
+Artifact installation remains the release trust root: a content address alone
+cannot make the proof backend available.
 
 Current size goldens cover the canonical peer-payment wire at depths 1, 2, 4,
 8, and 64 with one or two branch claims. Provenance remains a deduplicated

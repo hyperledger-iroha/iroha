@@ -1698,6 +1698,71 @@ fn timeout_is_durable_before_signing_and_view_change() {
 }
 
 #[test]
+fn quorum_forming_local_timeout_broadcasts_only_durable_certificate() {
+    let context = context();
+    let mut reducer = Reducer::new(context.clone(), Some(id(1)), Generation::new(1)).unwrap();
+    let tag = reducer.current_tag();
+    let round = Round::new(context.height(), tag.view());
+
+    for signer in [2_u8, 3] {
+        let retained = reducer
+            .step(Event::TimeoutVoteReceived {
+                tag,
+                vote: SignedTimeoutVote::new(
+                    TimeoutVote::new(context.id(), round, id(signer), None),
+                    signature(signer),
+                ),
+            })
+            .expect("retain the remote timeout share before local signing");
+        assert!(retained.effects().is_empty());
+    }
+
+    let timeout_intent = only_persist(
+        reducer
+            .step(Event::TimeoutElapsed { tag })
+            .expect("start the local durable timeout intent"),
+    );
+    let sign = acknowledge(&mut reducer, &timeout_intent);
+    assert!(matches!(
+        sign.effects(),
+        [Effect::Sign {
+            message: SignableMessage::TimeoutVote(_),
+            ..
+        }]
+    ));
+
+    let formed = reducer
+        .step(Event::Signed {
+            tag,
+            signature: signature(1),
+        })
+        .expect("the local signature forms the timeout certificate");
+    let install = match formed.effects() {
+        [Effect::Persist { entry, .. }]
+            if matches!(entry.record(), WalRecord::InstallTimeout(_)) =>
+        {
+            entry.clone()
+        }
+        effects => panic!(
+            "quorum-forming local timeout must expose only its durable TC fence: {effects:?}"
+        ),
+    };
+
+    let entered = acknowledge(&mut reducer, &install);
+    assert!(matches!(
+        entered.effects(),
+        [
+            Effect::EnterView {
+                tag: entered_tag,
+                protected_lock: None,
+                ..
+            },
+            Effect::Broadcast(ConsensusMessageV2::TimeoutCertificate(certificate)),
+        ] if entered_tag.view() == tag.view() + 1 && certificate.round() == round
+    ));
+}
+
+#[test]
 fn self_contained_timeout_high_qc_cannot_poison_an_eligible_quorum() {
     let context = context();
     let round = Round::new(context.height(), 0);

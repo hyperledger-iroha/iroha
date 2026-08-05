@@ -1231,7 +1231,8 @@ enum FairV2IngressLeaderWireStatus {
     /// The exact retry retains this record's token, but the record does not
     /// enter the global selector until that packet passes current capacity
     /// checks and the durable gate marks it Ingress. A later WAL-durable view
-    /// or Decision cut instead retires it without waiting for that retry.
+    /// or Decision cut instead retires a view-scoped owner without waiting for
+    /// that retry. Request-bound certified-body recovery survives both cuts.
     Dormant,
     Ingress,
     Runtime,
@@ -1992,6 +1993,33 @@ impl FairV2IngressMessageKind {
                 | Self::V2VrfCommit
                 | Self::V2VrfReveal
         )
+    }
+}
+
+fn fair_v2_ingress_consensus_round(
+    message: &BlockMessage,
+) -> Option<iroha_data_model::block::consensus_v2::ConsensusRound> {
+    use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
+
+    let BlockMessage::V2(message) = message else {
+        return None;
+    };
+    match &message.payload {
+        ConsensusMessageV2Payload::Proposal(proposal) => Some(proposal.round),
+        ConsensusMessageV2Payload::Vote(vote) => Some(vote.round),
+        ConsensusMessageV2Payload::QuorumCertificate(certificate) => Some(certificate.round),
+        ConsensusMessageV2Payload::TimeoutVote(vote) => Some(vote.round),
+        ConsensusMessageV2Payload::TimeoutCertificate(certificate) => Some(certificate.round),
+        ConsensusMessageV2Payload::PayloadManifest(manifest) => Some(manifest.round),
+        ConsensusMessageV2Payload::CertifiedBodyRequest(request) => Some(request.round),
+        ConsensusMessageV2Payload::CertifiedBodyResponse(response) => Some(response.manifest.round),
+        ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
+            Some(response.certificate.round)
+        }
+        ConsensusMessageV2Payload::PayloadChunk(_)
+        | ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | ConsensusMessageV2Payload::VrfCommit(_)
+        | ConsensusMessageV2Payload::VrfReveal(_) => None,
     }
 }
 
@@ -3904,18 +3932,58 @@ fn fair_v2_ingress_required_block_sync_p2p_frame_bytes(
     .max(fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FairV2IngressRejectReason {
+    UnsupportedMessageKind,
+    WrongProtocolVersion,
+    MessageTooLarge,
+    UnsupportedEnvelope,
+    PendingWireOwnershipMismatch,
+    RouteOwnershipInvalid,
+    AttemptCursorInvalid,
+    OwnershipEvidenceInvalid,
+    SourceLaneInvalid,
+    UnauthorizedTransportCompletion,
+    ProductiveOriginMissing,
+    ProductiveOriginOutsideRoster,
+    WrongHeightContext,
+    LeaderWireObsoleteOrConflicting,
+}
+
+#[derive(Debug)]
+struct FairV2IngressRejection {
+    inbound: InboundBlockMessage,
+    reason: FairV2IngressRejectReason,
+}
+
 #[derive(Debug)]
 enum FairV2IngressPushError {
     Closed(InboundBlockMessage),
     FailStop(InboundBlockMessage),
     Full(InboundBlockMessage),
-    Rejected(InboundBlockMessage),
+    Rejected(FairV2IngressRejection),
+}
+
+impl FairV2IngressPushError {
+    fn rejected(inbound: InboundBlockMessage, reason: FairV2IngressRejectReason) -> Self {
+        Self::Rejected(FairV2IngressRejection { inbound, reason })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FairV2IngressPushDisposition {
     Enqueued,
     Coalesced,
+}
+
+/// Why a checked fair-ingress dequeue crossed its downstream admission gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FairV2IngressDequeueDisposition {
+    /// The downstream consumer admitted the exact occurrence normally.
+    Admit,
+    /// The monotone safety-WAL recovery cut permanently obsoleted the exact
+    /// productive wire, so capacity cannot make it relevant again.
+    RetireObsolete,
 }
 
 /// Fixed-capacity, roster-aware v2 ingress with per-hop admission and service fairness.
@@ -5333,6 +5401,23 @@ impl FairV2Ingress {
         &self,
         runtime: &serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt,
     ) -> Result<(), String> {
+        self.mark_leader_wire_volatile_terminal_checked(runtime, false)
+    }
+
+    /// Publish a volatile terminal only when the live safety-WAL cut has
+    /// permanently obsoleted this exact runtime owner.
+    pub(crate) fn mark_obsolete_leader_wire_volatile_terminal(
+        &self,
+        runtime: &serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt,
+    ) -> Result<(), String> {
+        self.mark_leader_wire_volatile_terminal_checked(runtime, true)
+    }
+
+    fn mark_leader_wire_volatile_terminal_checked(
+        &self,
+        runtime: &serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt,
+        require_obsolete: bool,
+    ) -> Result<(), String> {
         let token = runtime.token();
         let mut state = self.state.lock();
         let gate = state
@@ -5355,6 +5440,11 @@ impl FairV2Ingress {
             || record.restored_runtime_owner != Some(runtime.owner())
         {
             return Err("leader-wire volatile terminal changed runtime ownership".to_owned());
+        }
+        if require_obsolete && !gate.identity_is_obsolete(&token.identity)? {
+            return Err(
+                "leader-wire obsolete terminal lacks durable recovery authority".to_owned(),
+            );
         }
         gate.mark_volatile_terminal(runtime)?;
         let record = state
@@ -5461,14 +5551,20 @@ impl FairV2Ingress {
     ) -> Result<FairV2IngressPushDisposition, FairV2IngressPushError> {
         let class = FairV2IngressClass::classify(&inbound);
         let Some(message_kind) = FairV2IngressMessageKind::classify(inbound.message()) else {
-            return Err(FairV2IngressPushError::Rejected(inbound));
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::UnsupportedMessageKind,
+            ));
         };
         let is_timeout_vote = fair_v2_ingress_is_timeout_vote(&inbound);
         let is_transport_completion = class == FairV2IngressClass::TransportCompletion;
         let encoded = match inbound.message() {
             BlockMessage::V2(message) => {
                 if message.validate_version().is_err() {
-                    return Err(FairV2IngressPushError::Rejected(inbound));
+                    return Err(FairV2IngressPushError::rejected(
+                        inbound,
+                        FairV2IngressRejectReason::WrongProtocolVersion,
+                    ));
                 }
                 Arc::<[u8]>::from(message.encode())
             }
@@ -5494,11 +5590,19 @@ impl FairV2Ingress {
                     _ => MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES,
                 };
                 if encoded_len > lane_limit {
-                    return Err(FairV2IngressPushError::Rejected(inbound));
+                    return Err(FairV2IngressPushError::rejected(
+                        inbound,
+                        FairV2IngressRejectReason::MessageTooLarge,
+                    ));
                 }
                 encoded
             }
-            _ => return Err(FairV2IngressPushError::Rejected(inbound)),
+            _ => {
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::UnsupportedEnvelope,
+                ));
+            }
         };
         let encoded_len = encoded.len();
         let wire_hash = CryptoHash::new(encoded.as_ref());
@@ -5547,7 +5651,10 @@ impl FairV2Ingress {
                     .as_ref()
                     .is_none_or(|evidence| !evidence.validate_exact())
             {
-                return Err(FairV2IngressPushError::Rejected(inbound));
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::PendingWireOwnershipMismatch,
+                ));
             }
             let routes_before = queued.inbound.reply_routes.clone();
             let routes_candidate = inbound.reply_routes.clone();
@@ -5561,16 +5668,27 @@ impl FairV2Ingress {
                 routes_candidate.as_ref(),
             ) {
                 Ok(action) => action,
-                Err(_) => return Err(FairV2IngressPushError::Rejected(inbound)),
+                Err(_) => {
+                    return Err(FairV2IngressPushError::rejected(
+                        inbound,
+                        FairV2IngressRejectReason::RouteOwnershipInvalid,
+                    ));
+                }
             };
             let routes_after = match (&routes_before, &routes_candidate) {
                 (Some(retained), Some(candidate)) => {
                     let mut merged = retained.clone();
                     let Ok(receipt) = merged.merge_with_receipt(candidate) else {
-                        return Err(FairV2IngressPushError::Rejected(inbound));
+                        return Err(FairV2IngressPushError::rejected(
+                            inbound,
+                            FairV2IngressRejectReason::RouteOwnershipInvalid,
+                        ));
                     };
                     let Some(receipt_output) = receipt.into_output(retained, candidate) else {
-                        return Err(FairV2IngressPushError::Rejected(inbound));
+                        return Err(FairV2IngressPushError::rejected(
+                            inbound,
+                            FairV2IngressRejectReason::RouteOwnershipInvalid,
+                        ));
                     };
                     Some(receipt_output)
                 }
@@ -5583,7 +5701,10 @@ impl FairV2Ingress {
                 routes_candidate.as_ref(),
                 routes_after.as_ref(),
             ) else {
-                return Err(FairV2IngressPushError::Rejected(inbound));
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::RouteOwnershipInvalid,
+                ));
             };
             let attempts_before = prior_evidence.attempts.clone();
             let candidate_attempts =
@@ -5593,7 +5714,10 @@ impl FairV2Ingress {
                 &candidate_attempts,
                 routes_after.as_ref(),
             ) else {
-                return Err(FairV2IngressPushError::Rejected(inbound));
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::AttemptCursorInvalid,
+                ));
             };
             let attempts_before_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_before);
             let attempts_after_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_after);
@@ -5623,10 +5747,16 @@ impl FairV2Ingress {
                 attempts_after_hash,
             };
             if !occurrence.validate_exact() {
-                return Err(FairV2IngressPushError::Rejected(inbound));
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+                ));
             }
             let Some(evidence) = prior_evidence.merged(occurrence) else {
-                return Err(FairV2IngressPushError::Rejected(inbound));
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+                ));
             };
             let lane = state
                 .lanes
@@ -5668,7 +5798,10 @@ impl FairV2Ingress {
         }
         let source_lane_is_new = !state.lanes.contains_key(&source);
         if source_lane_is_new && !matches!(source, FairV2IngressSource::Authenticated(_)) {
-            return Err(FairV2IngressPushError::Rejected(inbound));
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::SourceLaneInvalid,
+            ));
         }
         let empty_lane = FairV2IngressLane::default();
         let lane = state.lanes.get(&source).unwrap_or(&empty_lane);
@@ -5699,7 +5832,10 @@ impl FairV2Ingress {
             && !is_current_validator_origin
             && !authenticated_historical_recovery_response
         {
-            return Err(FairV2IngressPushError::Rejected(inbound));
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::UnauthorizedTransportCompletion,
+            ));
         }
         let (owned_class_bytes, source_class_byte_limit) = if uses_certified_fence_escape_reserve {
             (
@@ -5751,7 +5887,10 @@ impl FairV2Ingress {
             )
         };
         if encoded_len > source_class_byte_limit || encoded_len > self.byte_capacity {
-            return Err(FairV2IngressPushError::Rejected(inbound));
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::MessageTooLarge,
+            ));
         }
 
         let routes_candidate = inbound.reply_routes.clone();
@@ -5759,7 +5898,10 @@ impl FairV2Ingress {
         let Some(route_capacity) =
             fair_v2_ingress_route_capacity(None, routes_candidate.as_ref(), routes_after.as_ref())
         else {
-            return Err(FairV2IngressPushError::Rejected(inbound));
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::RouteOwnershipInvalid,
+            ));
         };
         let attempts_before = Vec::new();
         let attempts_after = fair_v2_ingress_attempts_for_routes(&[], routes_after.as_ref());
@@ -5770,10 +5912,16 @@ impl FairV2Ingress {
             && fair_v2_ingress_is_productive_leader_wire(inbound.message())
         {
             let Some(semantic_origin) = inbound.sender().cloned() else {
-                return Err(FairV2IngressPushError::Rejected(inbound));
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::ProductiveOriginMissing,
+                ));
             };
             if !state.roster.contains(&semantic_origin) {
-                return Err(FairV2IngressPushError::Rejected(inbound));
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::ProductiveOriginOutsideRoster,
+                ));
             }
             let derivation = fair_v2_ingress_leader_wire_identity(
                 &state,
@@ -5787,7 +5935,10 @@ impl FairV2Ingress {
                     return Err(FairV2IngressPushError::FailStop(inbound));
                 };
                 if identity.context_id != context_id || identity.height != height {
-                    return Err(FairV2IngressPushError::Rejected(inbound));
+                    return Err(FairV2IngressPushError::rejected(
+                        inbound,
+                        FairV2IngressRejectReason::WrongHeightContext,
+                    ));
                 }
             }
             derivation
@@ -5816,7 +5967,10 @@ impl FairV2Ingress {
                 return Err(FairV2IngressPushError::Full(inbound));
             }
             Err(FairV2IngressLeaderWireAdmissionError::Rejected) => {
-                return Err(FairV2IngressPushError::Rejected(inbound));
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::LeaderWireObsoleteOrConflicting,
+                ));
             }
             Err(FairV2IngressLeaderWireAdmissionError::Exhausted) => {
                 state.open = false;
@@ -5835,7 +5989,10 @@ impl FairV2Ingress {
                     state.open = false;
                     return Err(FairV2IngressPushError::FailStop(inbound));
                 }
-                return Err(FairV2IngressPushError::Rejected(inbound));
+                return Err(FairV2IngressPushError::rejected(
+                    inbound,
+                    FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+                ));
             }};
         }
         if source_lane_is_new {
@@ -6082,7 +6239,10 @@ impl FairV2Ingress {
                 state.open = false;
                 return Err(FairV2IngressPushError::FailStop(inbound));
             }
-            return Err(FairV2IngressPushError::Rejected(inbound));
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+            ));
         }
         let admission_ordinal = carrier_admission_ordinal;
         let certified_request = match inbound.message() {
@@ -6287,6 +6447,20 @@ impl FairV2Ingress {
         self.try_recv_if_at_checked(Instant::now(), predicate)
     }
 
+    /// Checked production dequeue which also releases a productive wire made
+    /// permanently obsolete by the monotone safety-WAL recovery cut.
+    ///
+    /// An obsolete carrier still crosses the ordinary durable
+    /// `Ingress -> Runtime` handoff. The caller must immediately publish its
+    /// `Runtime -> VolatileTerminal` transition instead of sending the payload
+    /// to the reducer. Temporary downstream backpressure remains queued.
+    pub(crate) fn try_recv_if_checked_retiring_obsolete(
+        &self,
+        predicate: impl FnMut(&InboundBlockMessage) -> bool,
+    ) -> Result<Option<(InboundBlockMessage, FairV2IngressDequeueDisposition)>, String> {
+        self.try_recv_if_at_checked_classified(Instant::now(), true, predicate)
+    }
+
     #[cfg(test)]
     fn try_recv_if_at(
         &self,
@@ -6301,8 +6475,18 @@ impl FairV2Ingress {
     fn try_recv_if_at_checked(
         &self,
         service_attempt_at: Instant,
-        mut predicate: impl FnMut(&InboundBlockMessage) -> bool,
+        predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Result<Option<InboundBlockMessage>, String> {
+        self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)
+            .map(|selected| selected.map(|(inbound, _)| inbound))
+    }
+
+    fn try_recv_if_at_checked_classified(
+        &self,
+        service_attempt_at: Instant,
+        retire_obsolete_leader_wire: bool,
+        mut predicate: impl FnMut(&InboundBlockMessage) -> bool,
+    ) -> Result<Option<(InboundBlockMessage, FairV2IngressDequeueDisposition)>, String> {
         let _service_guard = self.service_lock.lock();
         let (ready_sources, candidates) = {
             let mut state = self.state.lock();
@@ -6369,14 +6553,12 @@ impl FairV2Ingress {
                 .filter(|record| record.status == FairV2IngressLeaderWireStatus::Ingress)
                 .cloned()
                 .collect::<Vec<_>>();
+            let mut obsolete_leader_wire_tokens = BTreeSet::new();
             if state.requires_leader_wire_lifecycle_gate {
-                let durable_ordinals = state
-                    .leader_wire_lifecycle_gate
-                    .as_ref()
-                    .ok_or_else(|| {
-                        "leader-wire selector crossed an unbound durable gate".to_owned()
-                    })?
-                    .ingress_scheduler_ordinals()?;
+                let gate = state.leader_wire_lifecycle_gate.as_ref().ok_or_else(|| {
+                    "leader-wire selector crossed an unbound durable gate".to_owned()
+                })?;
+                let durable_ordinals = gate.ingress_scheduler_ordinals()?;
                 let active_ordinals = active_leader_wire_owners
                     .iter()
                     .map(|record| record.token.scheduler_ordinal)
@@ -6385,6 +6567,13 @@ impl FairV2Ingress {
                     return Err(
                         "leader-wire selector changed its durable Ingress owner set".to_owned()
                     );
+                }
+                if retire_obsolete_leader_wire {
+                    for record in &active_leader_wire_owners {
+                        if gate.identity_is_obsolete(&record.token.identity)? {
+                            obsolete_leader_wire_tokens.insert(record.token.clone());
+                        }
+                    }
                 }
             }
             let mut leader_wire_carrier_ordinals = BTreeMap::new();
@@ -6644,6 +6833,11 @@ impl FairV2Ingress {
                                                 entry.admission_ordinal,
                                                 Arc::clone(&entry.inbound),
                                                 dependency_bypass,
+                                                entry.leader_wire_token.as_ref().is_some_and(
+                                                    |token| {
+                                                        obsolete_leader_wire_tokens.contains(token)
+                                                    },
+                                                ),
                                             )
                                         })
                                 })
@@ -6659,9 +6853,14 @@ impl FairV2Ingress {
         // currently admissible. Only after downstream admission rejects that
         // entire strict set may a dependency cross the control barrier.
         'sources: for (source_index, source_candidates) in candidates.iter().enumerate() {
-            for (admission_ordinal, inbound, dependency_bypass) in source_candidates {
-                if !dependency_bypass && predicate(inbound.as_ref()) {
-                    selected = Some((source_index, *admission_ordinal));
+            for (admission_ordinal, inbound, dependency_bypass, obsolete) in source_candidates {
+                if !dependency_bypass && (*obsolete || predicate(inbound.as_ref())) {
+                    let disposition = if *obsolete {
+                        FairV2IngressDequeueDisposition::RetireObsolete
+                    } else {
+                        FairV2IngressDequeueDisposition::Admit
+                    };
+                    selected = Some((source_index, *admission_ordinal, disposition));
                     break 'sources;
                 }
             }
@@ -6673,15 +6872,20 @@ impl FairV2Ingress {
             // completion. No dependency replaces the durable owner; it only
             // makes that owner admissible on a later turn.
             'bypass: for (source_index, source_candidates) in candidates.iter().enumerate() {
-                for (admission_ordinal, inbound, dependency_bypass) in source_candidates {
-                    if *dependency_bypass && predicate(inbound.as_ref()) {
-                        selected = Some((source_index, *admission_ordinal));
+                for (admission_ordinal, inbound, dependency_bypass, obsolete) in source_candidates {
+                    if *dependency_bypass && (*obsolete || predicate(inbound.as_ref())) {
+                        let disposition = if *obsolete {
+                            FairV2IngressDequeueDisposition::RetireObsolete
+                        } else {
+                            FairV2IngressDequeueDisposition::Admit
+                        };
+                        selected = Some((source_index, *admission_ordinal, disposition));
                         break 'bypass;
                     }
                 }
             }
         }
-        let Some((selected_source_index, admission_ordinal)) = selected else {
+        let Some((selected_source_index, admission_ordinal, mut disposition)) = selected else {
             return Ok(None);
         };
         drop(candidates);
@@ -6708,6 +6912,35 @@ impl FairV2Ingress {
                     .position(|entry| entry.admission_ordinal == admission_ordinal)
             })
             .expect("serialized fair-ingress candidate must remain queued until selection");
+        if retire_obsolete_leader_wire {
+            let selected_token = state
+                .lanes
+                .get(&source)
+                .and_then(|lane| lane.entries.get(admitted_index))
+                .and_then(|entry| entry.leader_wire_token.as_ref());
+            let is_obsolete = match selected_token {
+                Some(token) => state
+                    .leader_wire_lifecycle_gate
+                    .as_ref()
+                    .ok_or_else(|| {
+                        "obsolete leader-wire dequeue crossed an unbound durable gate".to_owned()
+                    })?
+                    .identity_is_obsolete(&token.identity)?,
+                None => false,
+            };
+            if disposition == FairV2IngressDequeueDisposition::RetireObsolete && !is_obsolete {
+                return Err(
+                    "leader-wire recovery authority regressed during classified dequeue".to_owned(),
+                );
+            }
+            if is_obsolete {
+                // The recovery authority is monotone. It may advance while the
+                // downstream predicate runs, so upgrade a normally admitted
+                // selection rather than allowing newly obsolete control into
+                // the reducer.
+                disposition = FairV2IngressDequeueDisposition::RetireObsolete;
+            }
+        }
         let leader_wire_ownership = {
             let entry = state
                 .lanes
@@ -6907,7 +7140,7 @@ impl FairV2Ingress {
                 "selected fair-ingress envelope changed its immutable physical cut".to_owned(),
             );
         }
-        Ok(Some(inbound))
+        Ok(Some((inbound, disposition)))
     }
 
     /// First receiver-local physical ordinal not yet allocated at this
@@ -7090,9 +7323,20 @@ impl SumeragiHandle {
                         .activate_restart_required_from_permit(permit);
                     SumeragiIngressDisposition::FailStop(inbound)
                 }
-                Err(FairV2IngressPushError::Rejected(inbound)) => {
-                    iroha_logger::warn!(?queue, "permanently rejected Sumeragi ingress envelope");
-                    SumeragiIngressDisposition::Rejected(inbound)
+                Err(FairV2IngressPushError::Rejected(rejection)) => {
+                    let message_kind =
+                        FairV2IngressMessageKind::classify(rejection.inbound.message());
+                    let round = fair_v2_ingress_consensus_round(rejection.inbound.message());
+                    iroha_logger::warn!(
+                        ?queue,
+                        reason = ?rejection.reason,
+                        ?message_kind,
+                        ?round,
+                        semantic_origin = ?rejection.inbound.sender(),
+                        authenticated_via = ?rejection.inbound.via(),
+                        "permanently rejected Sumeragi ingress envelope"
+                    );
+                    SumeragiIngressDisposition::Rejected(rejection.inbound)
                 }
             };
         }

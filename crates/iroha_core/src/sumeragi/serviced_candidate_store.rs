@@ -680,9 +680,12 @@ impl From<ProducerContinuationTerminalToken> for LeaderWireStableTerminalEvidenc
 /// Opaque durable epoch boundary reconstructed by the already-opened adapter.
 ///
 /// The generic ingress snapshot is opened only after safety-WAL replay. This
-/// capability lets it retire records made obsolete by a certified view
-/// advance or durable Decision without treating its own terminal projection as
-/// authority. It is process-local and never enters either snapshot format.
+/// capability lets it retire view-scoped control records made obsolete by a
+/// certified view advance or durable Decision without treating its own
+/// terminal projection as authority. Manifest chunks and historical certified-
+/// body responses are transport completions; the reducer can make Decision
+/// durable before obtaining the exact body, so neither cut can obsolete them.
+/// The capability is process-local and never enters either snapshot format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LeaderWireRecoveryAuthority {
     context_id: wire::HeightContextId,
@@ -748,15 +751,14 @@ impl LeaderWireRecoveryAuthority {
 
     /// Return whether this durable cut permanently rejects one lifecycle token.
     pub(super) fn obsoletes(self, token: &FairV2IngressLeaderWireToken) -> bool {
+        self.obsoletes_identity(&token.identity)
+    }
+
+    fn obsoletes_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
         // A certified view or Decision closes reducer-producing control, not
         // transport completion. The selected block can still be missing when
         // Decision becomes durable, so its exact chunk/body response must
         // reach the downstream fetch, manifest, request, and subject checks.
-        token.source_class == FairV2IngressLeaderWireSourceClass::Control
-            && (self.decision_durable || token.identity.view < self.durable_view)
-    }
-
-    fn obsoletes_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
         identity.phase.source_class() == FairV2IngressLeaderWireSourceClass::Control
             && (self.decision_durable || identity.view < self.durable_view)
     }
@@ -2148,10 +2150,13 @@ impl LeaderWireLifecycleStoreGate {
                 );
             }
             // Safety-WAL replay is an independent monotone authority. Once it
-            // has durably advanced beyond this view, or recorded Decision for
-            // the height, no generic ingress owner from the obsolete episode
-            // can be resurrected. Retire the record while preserving both file
-            // high-watermarks so subsequent admission cannot reuse an ordinal.
+            // has durably advanced beyond this view, no view-scoped control
+            // owner from the obsolete episode can be resurrected. Manifest
+            // chunks and request-bound certified-body responses remain
+            // necessary historical recovery data even after Decision: the
+            // reducer can decide before obtaining its exact body. Retire
+            // rejected records while preserving both file high-watermarks so
+            // subsequent admission cannot reuse an ordinal.
             if recovery_authority.obsoletes(&record.token) {
                 changed = true;
                 continue;
@@ -4109,7 +4114,7 @@ mod tests {
             if decision_durable {
                 assert!(
                     reopened.reserve(newer).is_err(),
-                    "Decision retires every same-height lifecycle"
+                    "Decision retires every same-height view-scoped lifecycle"
                 );
             } else {
                 reopened
@@ -4201,6 +4206,138 @@ mod tests {
             gate.reserve(response)
                 .expect("the downstream request must authenticate the certified response");
         }
+    }
+
+    #[test]
+    fn leader_wire_recovery_cuts_preserve_historical_response_and_conflict_fence() {
+        let directory = TempDir::new().expect("temporary directory");
+        let context = context();
+        let wal = directory.path().join("leader-wire-certified-response.wal");
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        let max_chunks = 2;
+        let capacity = LeaderWireLifecycleStoreGate::derived_capacity(roster.len(), max_chunks)
+            .expect("derived gate capacity");
+        let initial_authority = leader_wire_recovery_authority(&context);
+        let (gate, _) = LeaderWireLifecycleStoreGate::open(
+            &wal,
+            context.id(),
+            context.height,
+            OWNER_A,
+            roster.clone(),
+            capacity,
+            max_chunks,
+            initial_authority,
+            &[],
+            &[],
+        )
+        .expect("open leader-wire gate");
+        let origin = context.roster[0].validator.clone();
+        let response = leader_wire_slot_token(
+            &context,
+            &origin,
+            FairV2IngressLeaderWirePhase::CertifiedResponse,
+            None,
+            11,
+            73,
+        );
+        let proposal = leader_wire_slot_token(
+            &context,
+            &origin,
+            FairV2IngressLeaderWirePhase::Proposal,
+            None,
+            12,
+            74,
+        );
+        gate.reserve(response.clone())
+            .expect("reserve historical response");
+        gate.reserve(proposal.clone())
+            .expect("reserve view-scoped proposal");
+        drop(gate);
+
+        let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+            &wal,
+            context.id(),
+            context.height,
+            OWNER_A,
+            roster.clone(),
+            capacity,
+            max_chunks,
+            initial_authority,
+            &[],
+            &[],
+        )
+        .expect("reopen leader-wire owners as dormant");
+        assert_eq!(restore.records().len(), 2);
+
+        let advanced = leader_wire_recovery_authority_at(&context, OWNER_A, 3, false);
+        gate.advance_recovery_cut(advanced, &BTreeSet::from([proposal.slot.clone()]))
+            .expect("retire only the view-scoped dormant owner");
+        assert!(
+            gate.identity_is_obsolete(&proposal.identity)
+                .expect("inspect proposal cut")
+        );
+        assert!(
+            !gate
+                .identity_is_obsolete(&response.identity)
+                .expect("inspect historical response cut"),
+            "an outstanding certified-body recovery must survive local view advance"
+        );
+        let restore = gate.restore().expect("inspect retained recovery owner");
+        assert_eq!(restore.records().len(), 1);
+        assert_eq!(restore.records()[0].token(), &response);
+        assert_eq!(
+            restore.records()[0].status(),
+            LeaderWireLifecycleStatus::Dormant
+        );
+
+        let replay = gate
+            .admit_ingress(response.clone())
+            .expect("reactivate the exact historical response");
+        assert!(!replay.inserted());
+        assert_eq!(replay.status(), LeaderWireLifecycleStatus::Ingress);
+        let mut conflicting = response.clone();
+        conflicting.identity.subject_hash = Hash::new(b"conflicting certified subject");
+        conflicting.identity.canonical_wire_hash = Hash::new(b"conflicting certified bytes");
+        conflicting.admission_ordinal = 13;
+        conflicting.scheduler_ordinal = 75;
+        assert!(
+            gate.admit_ingress(conflicting).is_err(),
+            "the view-cut exception must not weaken one-owner same-slot conflict fencing"
+        );
+
+        let decision = leader_wire_recovery_authority_at(&context, OWNER_A, 3, true);
+        drop(gate);
+        let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+            &wal,
+            context.id(),
+            context.height,
+            OWNER_A,
+            roster,
+            capacity,
+            max_chunks,
+            decision,
+            &[],
+            &[],
+        )
+        .expect("replay the decided height before its exact body is recovered");
+        assert_eq!(restore.records().len(), 1);
+        assert_eq!(restore.records()[0].token(), &response);
+        assert_eq!(
+            restore.records()[0].status(),
+            LeaderWireLifecycleStatus::Dormant
+        );
+        assert!(
+            !gate
+                .identity_is_obsolete(&response.identity)
+                .expect("inspect decided-body recovery cut"),
+            "durable Decision can precede exact decided-body recovery"
+        );
+        gate.admit_ingress(response)
+            .expect("the exact decided-body response can reactivate after restart");
     }
 
     #[test]

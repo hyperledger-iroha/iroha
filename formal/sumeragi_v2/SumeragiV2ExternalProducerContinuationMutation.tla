@@ -103,10 +103,10 @@ TerminalIdentityCannotResurrect ==
 Init ==
   /\ phase = "ConditionalSource"
   /\ continuation = NoRecord
-  /\ exactCarrier
-  /\ ~materializedFromExactCarrier
-  /\ ~conditionalResurrected
-  /\ ~volatileResurrected
+  /\ exactCarrier = TRUE
+  /\ materializedFromExactCarrier = FALSE
+  /\ conditionalResurrected = FALSE
+  /\ volatileResurrected = FALSE
 
 DepartConditional ==
   /\ phase = "ConditionalSource"
@@ -116,8 +116,8 @@ DepartConditional ==
        THEN Continuation(
               ConditionalIdentity, "ConditionalTransport", "Reserved")
        ELSE NoRecord
-  /\ exactCarrier'
-  /\ ~materializedFromExactCarrier'
+  /\ exactCarrier' = TRUE
+  /\ materializedFromExactCarrier' = FALSE
   /\ UNCHANGED <<conditionalResurrected, volatileResurrected>>
 
 ServiceConditional ==
@@ -139,8 +139,8 @@ ServiceConditional ==
                THEN Continuation(
                       VolatileIdentity, "VolatileBody", "Reserved")
                ELSE NoRecord
-          /\ exactCarrier'
-          /\ ~materializedFromExactCarrier'
+          /\ exactCarrier' = TRUE
+          /\ materializedFromExactCarrier' = FALSE
   /\ UNCHANGED volatileResurrected
 
 ServiceVolatile ==
@@ -175,7 +175,11 @@ VolatileFairness ==
   IF FairVolatileService THEN WF_vars(ServiceVolatile) ELSE TRUE
 
 Spec ==
-  Init /\ [][Next]_vars /\ ConditionalFairness /\ VolatileFairness
+  Init
+    /\ [][Next]_vars
+    /\ WF_vars(DepartConditional)
+    /\ ConditionalFairness
+    /\ VolatileFairness
 
 ExternalContinuationsReachTerminal == <>(phase = "Done")
 

@@ -46,16 +46,16 @@ Init ==
   /\ phase = "Fresh"
   /\ currentView = 0
   /\ currentGeneration = 0
-  /\ ~commitReceipt
-  /\ ~beginDecisionOwner
-  /\ ~decision
+  /\ commitReceipt = FALSE
+  /\ beginDecisionOwner = FALSE
+  /\ decision = FALSE
 
 AdmitCommitCertificate ==
   /\ phase = "Fresh"
   /\ phase' = "Admitted"
-  /\ commitReceipt'
-  /\ beginDecisionOwner'
-  /\ ~decision'
+  /\ commitReceipt' = TRUE
+  /\ beginDecisionOwner' = TRUE
+  /\ decision' = FALSE
   /\ UNCHANGED <<currentView, currentGeneration>>
 
 InstallTimeoutCertificate ==
@@ -72,8 +72,8 @@ ServiceImportedDecisionTail ==
   /\ phase = "TcInstalled"
   /\ beginDecisionOwner
   /\ phase' = "Decided"
-  /\ decision'
-  /\ ~beginDecisionOwner'
+  /\ decision' = TRUE
+  /\ beginDecisionOwner' = FALSE
   /\ UNCHANGED <<currentView, currentGeneration, commitReceipt>>
 
 Next ==
@@ -84,6 +84,7 @@ Next ==
 Spec ==
   Init
     /\ [][Next]_vars
+    /\ WF_vars(InstallTimeoutCertificate)
     /\ WF_vars(ServiceImportedDecisionTail)
 
 ReceiptEventuallyDecides == commitReceipt ~> decision

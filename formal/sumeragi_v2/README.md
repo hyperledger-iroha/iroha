@@ -1434,7 +1434,7 @@ recovery, post-decision timeout/TC quiescence, and the exact
 `5N+3H+2`/`2N+3` admission boundaries in addition to exact-lock,
 completion-ownership, future-acquisition rejection, rebound durable retry, and
 executor-batch boundaries. Those adapter boundaries pin a maximum flattened
-persistence macro-step of five effects within the reducer's eight-effect bound,
+persistence macro-step of four effects within the reducer's eight-effect bound,
 service at most one Busy-deferred adapter macro-step per serialized runtime
 turn, and require the Completion, Progress, and Normal deferred queues all to
 be empty before terminal readiness. A production-default capacity regression
@@ -1491,7 +1491,13 @@ Dormant set, removes it while retaining both ordinal high-watermarks, and
 publishes before the fair-ingress mirror is pruned. Failure rolls the gate back
 and leaves the mirror unchanged; Ingress and Runtime carriers are outside this
 cut, and below-cut admission is rejected rather than reported as capacity
-exhaustion.
+exhaustion. `CertifiedResponse` is the deliberate exception to view and
+Decision obsolescence: Decision can be durable before the decided body is
+available locally. Its old proposal view therefore remains admissible only as
+the bounded historical-completion class, after which the exact outstanding
+request, QC, responder signature, subject, canonical body, and DA manifest
+checks remain authoritative. Proposal chunks and every control phase stay
+view-scoped.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence

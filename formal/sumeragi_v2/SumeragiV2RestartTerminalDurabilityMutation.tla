@@ -81,20 +81,20 @@ Init ==
   /\ phase = "Fresh"
   /\ wire = WireRecord("Pending")
   /\ producerContinuations = {}
-  /\ ~transientMarker
-  /\ ~durableServiceTombstone
-  /\ packetOwned
-  /\ ~candidateOwned
+  /\ transientMarker = FALSE
+  /\ durableServiceTombstone = FALSE
+  /\ packetOwned = TRUE
+  /\ candidateOwned = FALSE
 
 ConsumeWithVolatileMarker ==
   /\ phase = "Fresh"
   /\ phase' = "VolatileConsumed"
   /\ wire' = WireRecord("Terminal")
   /\ producerContinuations' = {ProducerTerminal}
-  /\ transientMarker'
-  /\ ~durableServiceTombstone'
-  /\ ~packetOwned'
-  /\ ~candidateOwned'
+  /\ transientMarker' = TRUE
+  /\ durableServiceTombstone' = FALSE
+  /\ packetOwned' = FALSE
+  /\ candidateOwned' = FALSE
 
 RestartVolatileTerminal ==
   /\ phase = "VolatileConsumed"
@@ -102,13 +102,13 @@ RestartVolatileTerminal ==
   /\ IF RequireDurableTerminalPair
      THEN /\ wire' = WireRecord("Pending")
           /\ producerContinuations' = {}
-          /\ packetOwned'
+          /\ packetOwned' = TRUE
      ELSE /\ wire' = wire
           /\ producerContinuations' = producerContinuations
-          /\ ~packetOwned'
-  /\ ~transientMarker'
-  /\ ~durableServiceTombstone'
-  /\ ~candidateOwned'
+          /\ packetOwned' = FALSE
+  /\ transientMarker' = FALSE
+  /\ durableServiceTombstone' = FALSE
+  /\ candidateOwned' = FALSE
 
 RetryReopenedVolatileTerminal ==
   /\ phase = "VolatileRestarted"
@@ -124,19 +124,19 @@ ConsumeWithDurableTombstone ==
   /\ phase' = "DurableConsumed"
   /\ wire' = WireRecord("Terminal")
   /\ producerContinuations' = {ProducerTerminal}
-  /\ ~transientMarker'
-  /\ durableServiceTombstone'
-  /\ ~packetOwned'
-  /\ ~candidateOwned'
+  /\ transientMarker' = FALSE
+  /\ durableServiceTombstone' = TRUE
+  /\ packetOwned' = FALSE
+  /\ candidateOwned' = FALSE
 
 RestartDurableTerminal ==
   /\ phase = "DurableConsumed"
   /\ phase' = "DurableRestarted"
   /\ UNCHANGED
        <<wire, producerContinuations, durableServiceTombstone>>
-  /\ ~transientMarker'
-  /\ ~packetOwned'
-  /\ ~candidateOwned'
+  /\ transientMarker' = FALSE
+  /\ packetOwned' = FALSE
+  /\ candidateOwned' = FALSE
 
 Next ==
   \/ ConsumeWithVolatileMarker

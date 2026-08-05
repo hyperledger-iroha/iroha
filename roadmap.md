@@ -26147,7 +26147,7 @@ preflight allocates neither work nor request ownership on failure. An exact
 transport-only `CertifiedBodyResponse` with a still-live matching logical
 request registration may cross retained reducer-effect debt and release that
 request capacity, while `CommitCertificateResponse` remains
-reducer-ordered. The largest flattened persistence macro-step has five effects
+reducer-ordered. The largest flattened persistence macro-step has four effects
 against the eight-effect adapter/reducer bound. Runtime scheduling services one
 deferred adapter step per turn before timers and newer ingress once older
 WAL/signature work is serviceable; a subsequent unexpected `Busy` is terminal,

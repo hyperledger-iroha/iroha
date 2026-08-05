@@ -98,12 +98,12 @@ ReopenedFamilyUsesFreshOrdinal ==
 
 Init ==
   /\ phase = "Awaiting"
-  /\ activeRequest
-  /\ durableRequest
+  /\ activeRequest = TRUE
+  /\ durableRequest = TRUE
   /\ claimIdentities = {}
   /\ claimOrdinals = {}
   /\ nextOrdinal = 1
-  /\ ~familyConsumed
+  /\ familyConsumed = FALSE
 
 AdmitFirstResponse ==
   /\ phase = "Awaiting"
@@ -146,8 +146,8 @@ ReceiveCompetingResponder ==
 ConsumeResponse ==
   /\ phase \in {"Claimed", "Duplicated", "Contended"}
   /\ phase' = "Consumed"
-  /\ ~activeRequest'
-  /\ familyConsumed'
+  /\ activeRequest' = FALSE
+  /\ familyConsumed' = TRUE
   /\ claimIdentities' =
        IF RetireConsumedFamily THEN {} ELSE claimIdentities
   /\ claimOrdinals' =
@@ -168,9 +168,9 @@ DelayedRetryAfterConsumption ==
 RestartSameHeight ==
   /\ phase = "Claimed"
   /\ phase' = "Restarted"
-  /\ activeRequest'
-  /\ durableRequest'
-  /\ ~familyConsumed'
+  /\ activeRequest' = TRUE
+  /\ durableRequest' = TRUE
+  /\ familyConsumed' = FALSE
   /\ claimIdentities' =
        IF ReopenDurableFamilyAfterRestart THEN {} ELSE claimIdentities
   /\ claimOrdinals' =
