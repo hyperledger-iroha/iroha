@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "4feda6be5196d970ff4a0a114bca7f302c96fa967845a965bcdbe11a2978906f"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "c7e5a3524b71d7fb6097dee0d51d0e23387d0c004f4278165d0bb55f1242e671"
+        "2c3798b6ecf1652c1ef88696ff29faa545ccadd1806f11f72f6d375da7198c7f"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "e672412b541730e0e2f0d80b7f0e03e54fb009397a9182e09cad233e5cabdda2"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 309
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 310
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 313
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 314
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb"
+        "d82616565324fc5a939136e0c93921138ae75e7367a94fd31a68bdf8d74ececf"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -151,7 +151,7 @@ def test_release_inventory_constants_match_current_source_seal(
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
     assert receipt_module._PRODUCTION_TEST_COUNT == 826
-    assert receipt_module._G_UNIT_TEST_COUNT == 309
+    assert receipt_module._G_UNIT_TEST_COUNT == 313
     assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 826
     receipt_module_counts = {
         module_name: count
@@ -160,7 +160,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert receipt_module_counts["sumeragi::v2_effects::tests"] == 71
     assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 68
     assert receipt_module_counts["sumeragi::v2_worker::tests"] == 131
-    assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 309
+    assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 313
 
 
 def test_release_corridor_rejects_network_skips_and_zero_test_filters(
@@ -2017,13 +2017,14 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "preflight-release-bootstrap pytest 232" in release_source
     assert "did not run exactly 37 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 37" in release_source
-    assert "did not run exactly 321 passing tests" in release_source
-    assert "preflight-release-receipt pytest 321" in release_source
+    assert "did not run exactly 327 passing tests" in release_source
+    assert "preflight-release-receipt pytest 327" in release_source
     assert "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py" in release_source
     assert (
         "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py"
         in release_source
     )
+    assert "pytests/scripts/nexus_cross_dataspace_launcher_test.py" in release_source
     assert (
         '"preflight-chaos-launcher",\n                "pytest",\n                5,'
         in receipt_source
@@ -2041,9 +2042,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                321,'
+        '"preflight-release-receipt",\n                "pytest",\n                327,'
         in receipt_source
     )
+    assert "pytests/scripts/nexus_cross_dataspace_launcher_test.py" in receipt_source
     assert "did not run exactly 4047 passing tests" in release_source
     assert "preflight-proof-fidelity pytest 4047" in release_source
     assert (
@@ -2362,8 +2364,139 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
 def test_multilane_inventory_checker_rejects_weakened_production_count(
     tmp_path: Path,
 ) -> None:
-    """Standalone and aggregate guards reject inventory-seal weakening."""
+    """Standalone and aggregate guards reject count or release-control weakening."""
 
+    checker = ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
+    checker_source = checker.read_text(encoding="utf-8")
+    helper_start = checker_source.index("require_exact_token() {")
+    helper_end = checker_source.index("\n}\n", helper_start) + 3
+    helper = checker_source[helper_start:helper_end]
+    guard_tokens = (
+        '  "readonly NATIVE_AMX_RELEASE_ITERATIONS=${native_amx_release_iterations}"',
+        "  '    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_NATIVE_AMX_SOAK_ITERATIONS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)'",
+        "  '  ENV_VARS+=(\"IROHA_NATIVE_AMX_SOAK_ITERATIONS=${NATIVE_AMX_RELEASE_ITERATIONS}\")'",
+        "  'const EX297_IDLE_CHAIN_RELEASE_TEST: &str ='",
+        "  '    \"sumeragi_localnet_smoke::permissioned_idle_chain_advances_only_for_external_or_internal_work\";'",
+        "  '    let context = EX297_IDLE_CHAIN_RELEASE_TEST;'",
+    )
+    for token in guard_tokens:
+        assert checker_source.count(token) == 1, token
+
+    native_declaration = "readonly NATIVE_AMX_RELEASE_ITERATIONS=10"
+    reserved_control = (
+        "    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|"
+        "IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|"
+        "IROHA_NATIVE_AMX_SOAK_ITERATIONS|IROHA_MULTILANE_RELEASE_MODE|"
+        "IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)"
+    )
+    native_assignment = (
+        '  ENV_VARS+=("IROHA_NATIVE_AMX_SOAK_ITERATIONS='
+        '${NATIVE_AMX_RELEASE_ITERATIONS}")'
+    )
+    idle_declaration = "const EX297_IDLE_CHAIN_RELEASE_TEST: &str ="
+    idle_value = (
+        '    "sumeragi_localnet_smoke::'
+        'permissioned_idle_chain_advances_only_for_external_or_internal_work";'
+    )
+    idle_context = "    let context = EX297_IDLE_CHAIN_RELEASE_TEST;"
+
+    probe = "\n".join(
+        (
+            "set -euo pipefail",
+            helper,
+            "readonly native_amx_release_iterations=10",
+            'readonly launcher="$1"',
+            'readonly idle_file="$2"',
+            'readonly idle_impl_file="$3"',
+            'require_exact_token "$launcher" "readonly NATIVE_AMX_RELEASE_ITERATIONS=${native_amx_release_iterations}"',
+            f"require_exact_token \"$launcher\" '{reserved_control}'",
+            f"require_exact_token \"$launcher\" '{native_assignment}'",
+            f"require_exact_token \"$idle_file\" '{idle_declaration}'",
+            f"require_exact_token \"$idle_file\" '{idle_value}'",
+            f"require_exact_token \"$idle_impl_file\" '{idle_context}'",
+        )
+    )
+    bash = shutil.which("bash")
+    assert bash is not None
+    launcher = tmp_path / "run_nexus_cross_dataspace_atomic_swap.sh"
+    idle_file = tmp_path / "sumeragi_localnet_smoke.rs"
+    idle_impl_file = tmp_path / "idle_chain.rs"
+    launcher_source = "\n".join(
+        (native_declaration, reserved_control, native_assignment, "")
+    )
+    idle_source = "\n".join((idle_declaration, idle_value, ""))
+    idle_impl_source = f"{idle_context}\n"
+    launcher.write_text(launcher_source, encoding="utf-8")
+    idle_file.write_text(idle_source, encoding="utf-8")
+    idle_impl_file.write_text(idle_impl_source, encoding="utf-8")
+
+    command = [
+        bash,
+        "-c",
+        probe,
+        "inventory-release-control-probe",
+        str(launcher),
+        str(idle_file),
+        str(idle_impl_file),
+    ]
+    baseline = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert baseline.returncode == 0, baseline.stderr
+
+    mutations = (
+        (
+            launcher,
+            launcher_source,
+            native_declaration,
+            "readonly NATIVE_AMX_RELEASE_ITERATIONS=9",
+            native_declaration,
+        ),
+        (
+            launcher,
+            launcher_source,
+            "IROHA_NATIVE_AMX_SOAK_ITERATIONS|",
+            "",
+            reserved_control,
+        ),
+        (
+            launcher,
+            launcher_source,
+            native_assignment,
+            '  ENV_VARS+=("IROHA_NATIVE_AMX_SOAK_ITERATIONS=9")',
+            native_assignment,
+        ),
+        (
+            idle_impl_file,
+            idle_impl_source,
+            idle_context,
+            "    let context = stringify!(permissioned_idle_chain_advances_only_for_external_or_internal_work);",
+            idle_context,
+        ),
+    )
+    for target, canonical_source, old, new, expected_token in mutations:
+        launcher.write_text(launcher_source, encoding="utf-8")
+        idle_file.write_text(idle_source, encoding="utf-8")
+        idle_impl_file.write_text(idle_impl_source, encoding="utf-8")
+        assert canonical_source.count(old) == 1, old
+        target.write_text(canonical_source.replace(old, new, 1), encoding="utf-8")
+        mutated = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert mutated.returncode != 0
+        assert (
+            "required multilane release inventory token is missing or duplicated"
+            in mutated.stderr
+        )
+        assert expected_token in mutated.stderr
     module = load_checker()
     checker = ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
     checker_source = checker.read_text(encoding="utf-8")

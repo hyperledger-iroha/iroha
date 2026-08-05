@@ -19,9 +19,10 @@ Options:
                           Fault-soak duration; must be exactly 7200
   --native-amx-fault-soak Run the rotating-validator Native AMX fault soak
   --native-amx-iterations <N>
-                          Native AMX soak iterations, 1..100 (default: 10)
+                          Native AMX soak iterations, 1..100 (standalone default: 10)
   --multilane-four-peer-release
                           Run all six mandatory non-ignored four-peer release gates
+                          with the Native AMX soak pinned to 10 iterations
   --target-dir <PATH>     Set CARGO_TARGET_DIR for the test run
   --evidence-dir <PATH>   Persist exact per-run logs and completion accounting
   --fast                  Run cargo via scripts/cargo_fast.sh when available
@@ -49,6 +50,7 @@ PROFILE="debug"
 RUN_SCOPE="case"
 NATIVE_AMX_ITERATIONS=""
 readonly NATIVE_AMX_FAULT_SOAK_TEST="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+readonly NATIVE_AMX_RELEASE_ITERATIONS=10
 readonly NATIVE_AMX_GROUPED_PRUNING_MARKER="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
 readonly AUTOSCALE_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
 readonly AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
@@ -229,7 +231,7 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" && "$PROFILE" != "release" ]]; then
 fi
 for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   case "${extra%%=*}" in
-    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)
+    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_NATIVE_AMX_SOAK_ITERATIONS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)
       echo "--env may not override reserved cross-dataspace evidence control ${extra%%=*}" >&2
       exit 2
       ;;
@@ -301,6 +303,12 @@ fi
 for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   ENV_VARS+=("$extra")
 done
+# The six-gate release corpus has one canonical Native AMX soak budget. Append
+# it after caller-supplied values so an inherited environment cannot reduce or
+# otherwise alter the release evidence.
+if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
+  ENV_VARS+=("IROHA_NATIVE_AMX_SOAK_ITERATIONS=${NATIVE_AMX_RELEASE_ITERATIONS}")
+fi
 # This proof launcher must never translate a sandbox-denied localnet into a
 # successful test. Append the requirement after caller-supplied values so an
 # `--env` override cannot weaken it.

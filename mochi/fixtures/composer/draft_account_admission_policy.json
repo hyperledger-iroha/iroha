@@ -3,7 +3,7 @@
   "domain": "wonderland.universal",
   "policy": {
     "mode": {
-      "mode": "ImplicitReceive",
+      "mode": "implicit_receive",
       "value": null
     },
     "max_implicit_creations_per_tx": 3,
@@ -12,7 +12,7 @@
       "asset_definition_id": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi",
       "amount": "1",
       "destination": {
-        "destination": "Burn",
+        "destination": "burn",
         "value": null
       }
     },

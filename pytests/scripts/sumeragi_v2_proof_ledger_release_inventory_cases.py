@@ -57,26 +57,26 @@
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=309",
-            "readonly expected_multilane_focus_test_count=308",
-            "multilane G-UNIT source count must be sealed as 309",
+            "readonly expected_multilane_focus_test_count=313",
+            "readonly expected_multilane_focus_test_count=312",
+            "multilane G-UNIT source count must be sealed as 313",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 310 ]]; then""",
+            """'[:space:]')" != 314 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 309 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 309 focus rows",
+            """'[:space:]')" != 313 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 313 focus rows",
         ),
         (
-            "The canonical 309-row TSV is",
-            "The canonical 308-row TSV is",
-            "G-UNIT inventory comment must seal 309 rows",
+            "The canonical 313-row TSV is",
+            "The canonical 312-row TSV is",
+            "G-UNIT inventory comment must seal 313 rows",
         ),
         (
-            "including exact 309/309 G-UNIT,",
-            "including exact 308/309 G-UNIT,",
-            "terminal success text must seal exact 309/309 G-UNIT",
+            "including exact 313/313 G-UNIT,",
+            "including exact 312/313 G-UNIT,",
+            "terminal success text must seal exact 313/313 G-UNIT",
         ),
         (
             "  sumeragi::v2_core::refinement::tests::"

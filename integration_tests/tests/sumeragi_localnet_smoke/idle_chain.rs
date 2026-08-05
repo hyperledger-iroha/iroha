@@ -179,7 +179,7 @@ pub(super) async fn run() -> Result<()> {
                     "forward",
                 );
         });
-    let context = stringify!(permissioned_idle_chain_advances_only_for_external_or_internal_work);
+    let context = EX297_IDLE_CHAIN_RELEASE_TEST;
     if release_mode {
         eprintln!("[multilane-release-gate] started: {context}");
     }

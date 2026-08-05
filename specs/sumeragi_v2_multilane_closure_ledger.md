@@ -455,6 +455,14 @@ then forwards the exact Kura-backed bytes from a non-global-leader validator to
 the frozen global leader with the distinct consensus
 `QueuePlanAdmissionCertificate` handoff (wire tag 21); the two messages have
 separate subscribers, retry ownership, and bounded decoders.
+`validate_queue_plan_admission_publication` and
+`V2LaneWorkAdapter::accept_queue_plan_admission_certificate` reject a
+self-consistent `Future` classification before Kura persistence because the
+receiver cannot yet compare its embedded predecessor, lifecycle, and roster
+with canonical authority. `V2LaneWorkAdapter::refresh_merge_candidates`
+retains an already-durable `Future` certificate and reclassifies it only after
+the local canonical frontier catches up; it never places that evidence in an
+early carrier.
 `State::stage_queue_plan_admissions` owns the immutable global CAS.
 `Queue::reserve_transactions_for_lane_bounded`, queue replay/expiry, and
 `V2LaneWorkAdapter::refresh_merge_candidates` admit autonomous ownership only
@@ -472,7 +480,9 @@ CAS; a conflicting binding must fail closed and can never execute.
 **Focused and adversarial tests.** Cover split-route public acceptance,
 execution before global CAS, two conflicting CAS attempts, restart ABA, local
 TTL expiry, deferred ingress, cancellation, guard drop, missing or mismatched
-binding material, and duplicate execution. Inject every crash boundary between
+binding material, duplicate execution, near-future leader handoff, far-future
+Torii publication, and durable future-evidence recovery. Inject every crash
+boundary between
 certificate persistence, wakeup, WSV publication, queue reservation, carrier
 application, and authenticated loser cleanup.
 
@@ -1038,21 +1048,20 @@ accept/reject mismatch.
 `crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs` and its
 `native_amx_grouped` module generate
 `fixtures/sumeragi_v2/native_amx_v2_grouped.json`, including grouped golden
-data, application evidence, and 50 negative controls.
+data, application evidence, and 51 negative controls.
 `NativeAmxAttestationBodyV2::computed_grouped_participant_settlement` is the
 explicit production builder; single-source construction is labelled as a test
 fixture.
 `ci/run_native_amx_v2_grouped_sdk_parity.sh` source-binds the exact fixture and
 OpenAPI, Python, JavaScript source/distribution, Swift, Kotlin, and Java
-consumers. The current harness contract requires OpenAPI `7`, Python `56`,
-JavaScript `54`, Swift `3`, Kotlin `6`, and Java `5` cases against fixture
-SHA-256
-`ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`
+consumers. The current source-bound harness inventory requires OpenAPI `7`,
+Python `58`, JavaScript `56`, Swift `4`, Kotlin `6`, and Java `5` cases against
+fixture SHA-256
+`7cf8617c3f4e0fb01439486f19053f5b9ebb645eb23e48f0c9c7b18c2be883f5`
 and suite-source manifest SHA-256
-`ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
-Current standalone OpenAPI and installed-package Python runs pass `7/7` and
-`56/56`, respectively. Those results are not a fresh archived replay of every
-surface. Closure remains open until one release gate archives every language
+`0da8e8780da02d8aa2603116e7e7491ea3f4a5375ff40618d35bf20203a8d0b8`.
+These counts and hashes seal source inventory; they are not executed release
+evidence. Closure remains open until one release gate archives every language
 consumer together.
 
 **Closure condition.** Generate one canonical grouped fixture and negative
@@ -1136,15 +1145,15 @@ identical temporary), reservation duplication, base-state mismatch, bounded
 fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
-The release runner now inventories 289 exact, non-ignored multilane focus
-tests: 105 core multilane tests, 127 core queue-journal tests, seven
-configuration tests, eight in `iroha_data_model`, 39 in Torii, one in
+The release runner now inventories 313 exact, non-ignored multilane focus
+tests: 117 core multilane tests, 137 core queue-journal tests, seven
+configuration tests, eight in `iroha_data_model`, 41 in Torii, one in
 Torii-shared, and two in the integration support library. The canonical
-inventory contains 290 TSV lines and has SHA-256
-`1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733`.
+inventory contains 314 TSV lines and has SHA-256
+`d82616565324fc5a939136e0c93921138ae75e7367a94fd31a68bdf8d74ececf`.
 The exact-source reservation-journal slice passes `65/65`, and its local
 identity-bound refinement regression passes `1/1`. That source inventory is
-not a passing 289-test transcript; the full focused rerun and archived receipt
+not a passing 313-test transcript; the full focused rerun and archived receipt
 remain required.
 
 ### G-FORMAL — source-bound models and expected mutations
@@ -1243,16 +1252,16 @@ Swift, Kotlin core-jvm, and mirrored Java suites against the same Rust-owned
 grouped corpus. Archive the corpus hash and per-SDK results. No SDK may skip a
 negative or substitute a hand-authored fixture.
 
-The Rust generator, 50-control grouped corpus, six-surface parity harness, and
-fixture/suite source-hash binding are present. The current harness contract
-requires OpenAPI `7`, Python `56`, JavaScript `54`, Swift `3`, Kotlin `6`, and
-Java `5` cases against fixture SHA-256
-`ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`
+The Rust generator, 51-control grouped corpus, six-surface parity harness, and
+fixture/suite source-hash binding are present. The current source-bound harness
+inventory requires OpenAPI `7`, Python `58`, JavaScript `56`, Swift `4`, Kotlin
+`6`, and Java `5` cases against fixture SHA-256
+`7cf8617c3f4e0fb01439486f19053f5b9ebb645eb23e48f0c9c7b18c2be883f5`
 and suite-source manifest SHA-256
-`ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
-Current standalone OpenAPI and installed-package Python runs pass `7/7` and
-`56/56`, respectively. One archived release replay of every required surface
-is not yet recorded, so neither `ML-API-04` closure nor this gate advances.
+`0da8e8780da02d8aa2603116e7e7491ea3f4a5375ff40618d35bf20203a8d0b8`.
+These counts and hashes seal source inventory; they are not executed release
+evidence. One archived release replay of every required surface is not yet
+recorded, so neither `ML-API-04` closure nor this gate advances.
 
 ### G-FINAL — clean release validation
 

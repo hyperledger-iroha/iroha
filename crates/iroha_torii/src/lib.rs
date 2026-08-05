@@ -27018,8 +27018,13 @@ fn validate_queue_plan_admission_publication(
     }
     match disposition {
         PendingQueuePlanAdmissionDisposition::Exact
-        | PendingQueuePlanAdmissionDisposition::EligibleAbsent
-        | PendingQueuePlanAdmissionDisposition::Future => {}
+        | PendingQueuePlanAdmissionDisposition::EligibleAbsent => {}
+        PendingQueuePlanAdmissionDisposition::Future => {
+            return Err(
+                "QueuePlan admission publication is ahead of the local canonical authority frontier; retry after catch-up"
+                    .to_owned(),
+            );
+        }
         PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
             return Err(
                 "canonical WSV already binds this entrypoint to another QueuePlan admission"

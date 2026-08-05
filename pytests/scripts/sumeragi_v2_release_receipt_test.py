@@ -1238,6 +1238,53 @@ def make_g4p_evidence(
     }
 
 
+def test_ex297_idle_release_markers_bind_the_exact_launcher_filter() -> None:
+    launcher_source = (
+        ROOT_DIR / "scripts" / "run_nexus_cross_dataspace_atomic_swap.sh"
+    ).read_text(encoding="utf-8")
+    idle_test_source = (
+        ROOT_DIR / "integration_tests" / "tests" / "sumeragi_localnet_smoke.rs"
+    ).read_text(encoding="utf-8")
+    idle_impl_source = (
+        ROOT_DIR
+        / "integration_tests"
+        / "tests"
+        / "sumeragi_localnet_smoke"
+        / "idle_chain.rs"
+    ).read_text(encoding="utf-8")
+
+    launcher_match = re.search(
+        r'^readonly EX297_IDLE_CHAIN_RELEASE_TEST="(?P<name>[^"]+)"$',
+        launcher_source,
+        flags=re.MULTILINE,
+    )
+    source_match = re.search(
+        r'^const EX297_IDLE_CHAIN_RELEASE_TEST: &str =\s*'
+        r'"(?P<name>[^"]+)";$',
+        idle_test_source,
+        flags=re.MULTILINE,
+    )
+    assert launcher_match is not None
+    assert source_match is not None
+
+    exact_name = (
+        "sumeragi_localnet_smoke::"
+        "permissioned_idle_chain_advances_only_for_external_or_internal_work"
+    )
+    assert launcher_match.group("name") == exact_name
+    assert source_match.group("name") == exact_name
+    assert idle_impl_source.count(
+        "    let context = EX297_IDLE_CHAIN_RELEASE_TEST;"
+    ) == 1
+    assert idle_impl_source.count("let context =") == 1
+    assert idle_impl_source.count(
+        '        eprintln!("[multilane-release-gate] started: {context}");'
+    ) == 1
+    assert idle_impl_source.count(
+        '        eprintln!("[multilane-release-gate] completed: {context}");'
+    ) == 1
+
+
 def make_g12_evidence(
     tmp_path: Path,
     *,

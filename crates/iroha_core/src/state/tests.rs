@@ -57701,7 +57701,7 @@ fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives()
     assert_eq!(
         state
             .classify_pending_queue_plan_admission(&certificate, 3)
-            .expect("future authenticated certificate is retained, not rejected")
+            .expect("future self-consistent certificate is retained, not rejected")
             .1,
         PendingQueuePlanAdmissionDisposition::Future
     );

@@ -387,13 +387,13 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "command",
 )
 _PRODUCTION_TEST_COUNT = 826
-_G_UNIT_TEST_COUNT = 309
+_G_UNIT_TEST_COUNT = 313
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        115,
+        117,
         "lib",
     ),
     (
@@ -435,7 +435,7 @@ _G_UNIT_GROUPS = (
         "required_multilane_torii_focus_tests",
         "g-unit-iroha-torii",
         "iroha_torii",
-        39,
+        41,
         "lib",
     ),
     (
@@ -1100,12 +1100,13 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                321,
+                327,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
                 "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py "
-                "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py",
+                "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py "
+                "pytests/scripts/nexus_cross_dataspace_launcher_test.py",
             ),
             (
                 "preflight-multilane-scaling",

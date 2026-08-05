@@ -369,6 +369,7 @@ def copy_queue_plan_semantic_request_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/torii_proxy.rs"),
         Path("crates/iroha_core/src/queue.rs"),
         Path("crates/iroha_core/src/queue/journal.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
         Path("crates/iroha_torii/src/lib.rs"),
     ):
         destination = tmp_path / relative
@@ -17491,6 +17492,34 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
             "binding.validate_for_request(app.chain_id.as_ref(), &transaction, &routing_plan)",
             "binding.validate_for_transaction_and_plan(&transaction, &routing_plan)",
             "Torii QueuePlan execution must validate the shared semantic identity before dispatch",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_queue_plan_admission_certificate(",
+            "PendingQueuePlanAdmissionDisposition::Future => {",
+            "PendingQueuePlanAdmissionDisposition::Stale => {",
+            "V2LaneWorkAdapter::accept_queue_plan_admission_certificate declaration and complete control flow",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn refresh_merge_candidates(",
+            "PendingQueuePlanAdmissionDisposition::Future => {",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent => {",
+            "V2LaneWorkAdapter::refresh_merge_candidates declaration and complete control flow",
+        ),
+        (
+            "crates/iroha_torii/src/lib.rs",
+            "fn validate_queue_plan_admission_publication(",
+            "PendingQueuePlanAdmissionDisposition::Future => {",
+            "PendingQueuePlanAdmissionDisposition::Stale => {",
+            "validate_queue_plan_admission_publication declaration and complete control flow",
+        ),
+        (
+            "crates/iroha_torii/src/lib.rs",
+            "fn ingest_queue_plan_admission_publication(",
+            "let binding = validate_queue_plan_admission_publication(app, publication)?;",
+            "let binding = validate_queue_plan_admission_publication(app, publication).unwrap();",
+            "ingest_queue_plan_admission_publication declaration and complete control flow",
         ),
     ),
 )

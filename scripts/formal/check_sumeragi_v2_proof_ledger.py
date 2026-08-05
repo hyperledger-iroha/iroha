@@ -75604,6 +75604,14 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
     journal_path = (
         repo_root / "crates" / "iroha_core" / "src" / "queue" / "journal.rs"
     )
+    lane_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_lane_work.rs"
+    )
     torii_path = repo_root / "crates" / "iroha_torii" / "src" / "lib.rs"
     errors: list[str] = []
     sources: dict[Path, str] = {}
@@ -75611,6 +75619,7 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
         (binding_path, "shared QueuePlan semantic-request kernel"),
         (queue_path, "core strict QueuePlan admission call site"),
         (journal_path, "durable QueuePlan reconstruction call site"),
+        (lane_path, "Sumeragi QueuePlan ingress and durable recovery seam"),
         (torii_path, "Torii QueuePlan ingress call site"),
     ):
         if not path.is_file() or path.is_symlink():
@@ -75622,6 +75631,7 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
     binding_source = sources[binding_path]
     queue_source = sources[queue_path]
     journal_source = sources[journal_path]
+    lane_source = sources[lane_path]
     torii_source = sources[torii_path]
 
     durable_kernel = _require_rust_item(
@@ -75913,6 +75923,63 @@ if let Err(error) =
         "Torii QueuePlan execution must validate the shared semantic identity before dispatch",
         errors,
     )
+
+    lane_future_items = {
+        item_name: _require_qualified_rust_item(
+            lane_path,
+            lane_source,
+            "V2LaneWorkAdapter",
+            item_name,
+            errors,
+            description,
+        )
+        for item_name, description in (
+            (
+                "accept_queue_plan_admission_certificate",
+                "QueuePlan future-certificate Sumeragi ingress rejection",
+            ),
+            (
+                "refresh_merge_candidates",
+                "QueuePlan durable future-certificate recovery retention",
+            ),
+        )
+    }
+    for item_name, item in lane_future_items.items():
+        qualified_name = f"V2LaneWorkAdapter::{item_name}"
+        _require_rust_item_token_sha256(
+            lane_path,
+            item,
+            _QUEUE_PLAN_FUTURE_INGRESS_ITEM_SHA256[qualified_name],
+            qualified_name,
+            errors,
+        )
+
+    torii_future_items = {
+        item_name: _require_rust_item(torii_path, torii_source, item_name, errors)
+        for item_name in (
+            "validate_queue_plan_admission_publication",
+            "ingest_queue_plan_admission_publication",
+        )
+    }
+    torii_ingress_attributes = (
+        '#[cfg(any(feature = "p2p_ws", feature = "connect"))]',
+    )
+    for item_name, item in torii_future_items.items():
+        _require_rust_item_context(
+            torii_path,
+            item,
+            (),
+            f"QueuePlan future-certificate Torii ingress seam {item_name}",
+            errors,
+            expected_attributes=torii_ingress_attributes,
+        )
+        _require_rust_item_token_sha256(
+            torii_path,
+            item,
+            _QUEUE_PLAN_FUTURE_INGRESS_ITEM_SHA256[item_name],
+            item_name,
+            errors,
+        )
     return errors
 
 

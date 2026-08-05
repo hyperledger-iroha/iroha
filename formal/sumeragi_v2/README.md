@@ -494,7 +494,12 @@ height-context state are not migrated in place.
   The QueuePlan binding covers the shared V2 binding and coordinator quorum,
   Kura-before-wake-before-WSV public acceptance, immutable registry CAS,
   Exact-gated autonomous ownership, restart/TTL retention, and exact
-  authenticated loser cleanup.
+  authenticated loser cleanup. Its static source contract also requires both
+  Torii publication ingress and the Sumeragi leader handoff to reject a
+  `Future` authority classification before Kura persistence, while the durable
+  recovery scan retains already-persisted `Future` evidence until canonical
+  reclassification and never admits it to an early carrier. This source seal
+  is not a model-checked future-frontier theorem; that evidence remains open.
   It also binds the bounded autonomous stage projection, its durable-stage
   reducer, and the data-model stage geometry/order validation; diagnostics
   cannot advance beyond revalidated evidence or authorize consensus state.

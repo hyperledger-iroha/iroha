@@ -36,6 +36,7 @@ readonly autoscale_restart_qualified_test="nexus::autoscale_localnet::${autoscal
 readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+readonly native_amx_release_iterations=10
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
 readonly ex297_idle_test="permissioned_idle_chain_advances_only_for_external_or_internal_work"
 readonly ex297_idle_qualified_test="sumeragi_localnet_smoke::${ex297_idle_test}"
@@ -101,6 +102,15 @@ require_exact_token \
   "readonly NATIVE_AMX_FAULT_SOAK_TEST=\"${native_test}\""
 require_exact_token \
   "$launcher" \
+  "readonly NATIVE_AMX_RELEASE_ITERATIONS=${native_amx_release_iterations}"
+require_exact_token \
+  "$launcher" \
+  '    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_NATIVE_AMX_SOAK_ITERATIONS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)'
+require_exact_token \
+  "$launcher" \
+  '  ENV_VARS+=("IROHA_NATIVE_AMX_SOAK_ITERATIONS=${NATIVE_AMX_RELEASE_ITERATIONS}")'
+require_exact_token \
+  "$launcher" \
   "readonly NATIVE_AMX_GROUPED_PRUNING_MARKER=\"${native_grouped_pruning_marker}\""
 require_exact_token \
   "$launcher" \
@@ -108,6 +118,15 @@ require_exact_token \
 require_exact_token \
   "$launcher" \
   "readonly EX297_IDLE_CHAIN_RELEASE_MARKER=\"${ex297_idle_marker}\""
+require_exact_token \
+  "$idle_file" \
+  'const EX297_IDLE_CHAIN_RELEASE_TEST: &str ='
+require_exact_token \
+  "$idle_file" \
+  '    "sumeragi_localnet_smoke::permissioned_idle_chain_advances_only_for_external_or_internal_work";'
+require_exact_token \
+  "$idle_impl_file" \
+  '    let context = EX297_IDLE_CHAIN_RELEASE_TEST;'
 require_exact_token \
   "$launcher" \
   "readonly EX297_PHASE_CUT_RELEASE_TEST=\"${ex297_phase_cut_test}\""
@@ -164,7 +183,7 @@ require_exact_token \
   "readonly native_amx_grouped_parity_harness=\"${grouped_parity_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=309"
+  "readonly expected_multilane_focus_test_count=313"
 require_exact_token \
   "$release_runner" \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
@@ -205,7 +224,7 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 51"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 309"
+  "_G_UNIT_TEST_COUNT = 313"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -514,13 +533,13 @@ for block in source_sealed_blocks:
         reject(f"source-sealed command/evidence block {label} is missing or duplicated")
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 115,
+    "required_multilane_core_focus_tests": 117,
     "required_multilane_queue_journal_focus_tests": 137,
     "required_multilane_config_lib_focus_tests": 3,
     "required_multilane_config_runtime_focus_tests": 2,
     "required_multilane_config_fixtures_focus_tests": 2,
     "required_multilane_data_model_focus_tests": 8,
-    "required_multilane_torii_focus_tests": 39,
+    "required_multilane_torii_focus_tests": 41,
     "required_multilane_torii_shared_focus_tests": 1,
     "required_multilane_integration_lib_focus_tests": 2,
 }
@@ -558,9 +577,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 309 or len(set(all_focus_entries)) != 309:
+if len(all_focus_entries) != 313 or len(set(all_focus_entries)) != 313:
     reject(
-        "multilane focus-test arrays must contain 309 globally distinct tests; "
+        "multilane focus-test arrays must contain 313 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -570,7 +589,7 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        115,
+        117,
         "--lib",
     ),
     (
@@ -612,7 +631,7 @@ g_unit_groups = (
         "required_multilane_torii_focus_tests",
         "g-unit-iroha-torii",
         "iroha_torii",
-        39,
+        41,
         "--lib",
     ),
     (
@@ -642,7 +661,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 309 count is not published exactly once")
+        reject("G-UNIT expected 313 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -1258,4 +1277,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 81 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 38 modules, exact 309/309 G-UNIT (115 core, 137 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), six mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 81 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 38 modules, exact 313/313 G-UNIT (117 core, 137 queue-journal, 7 config, 8 data-model, 41 Torii, 1 Torii-shared, 2 integration), six mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"

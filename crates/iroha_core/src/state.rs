@@ -2776,9 +2776,12 @@ pub enum PendingQueuePlanAdmissionDisposition {
     Exact,
     /// No marker exists and the complete certificate is eligible for the next carrier.
     EligibleAbsent,
-    /// The certificate is authentic but its bound canonical frontier has not arrived locally yet.
+    /// The certificate is cryptographically self-consistent against its embedded roster, but its
+    /// bound canonical frontier has not arrived locally yet.
     ///
-    /// Callers must retain the bounded durable certificate and reclassify it after catch-up.
+    /// Durable-reconciliation callers must retain an already-persisted bounded certificate and
+    /// reclassify it after catch-up. Network ingress must reject it until canonical predecessor,
+    /// lifecycle, and authority checks are possible.
     Future,
     /// A different well-formed immutable marker already owns this source identity.
     DefinitiveConflict,
@@ -36890,10 +36893,11 @@ impl State {
     /// Classify one durable pending QueuePlan certificate against canonical
     /// WSV, history, and the complete current lane lifecycle.
     ///
-    /// Authentication or marker-decoding failures remain errors. Once the
-    /// certificate is authenticated, a well-formed conflicting marker or a
-    /// stale lifecycle/history binding is definitive and may be retired at an
-    /// exact durable parent frontier.
+    /// Cryptographic/structural or marker-decoding failures remain errors.
+    /// Once the certificate is self-consistent, a well-formed conflicting
+    /// marker or a stale lifecycle/history binding is definitive and may be
+    /// retired at an exact durable parent frontier. A `Future` result has not
+    /// yet established canonical authority and is not a network-ingress grant.
     pub fn classify_pending_queue_plan_admission(
         &self,
         bytes: &[u8],

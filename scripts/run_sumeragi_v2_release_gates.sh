@@ -2077,6 +2077,8 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_lane_work::tests::historical_recovery_diagnostics_are_typed_bounded_and_payload_free
   sumeragi::v2_lane_work::tests::native_participant_pruned_carrier_retries_queue_pressure_and_retires_carrier_siblings
   sumeragi::v2_lane_work::tests::merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_journal
+  sumeragi::v2_lane_work::tests::queue_plan_leader_rejects_future_handoff_until_canonical_frontier
+  sumeragi::v2_lane_work::tests::queue_plan_durable_future_source_waits_for_canonical_frontier
 )
 required_multilane_queue_journal_focus_tests=(
   queue::journal::tests::queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context
@@ -2267,6 +2269,8 @@ required_multilane_torii_focus_tests=(
   operator_signatures::tests::torii_proxy_middleware_exposes_authenticated_unlisted_peer_identity
   router::builder::tests::torii_proxy_peer_witness_is_sealed_as_identity_bound_authentication
   tests_queue_metadata::queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash
+  tests_runtime_handlers::queue_plan_admission_publication_rejects_future_frontier_before_persistence
+  tests_runtime_handlers::queue_plan_admission_publication_rejects_far_future_self_described_roster
 )
 required_multilane_torii_shared_focus_tests=(
   route_catalog::tests::internal_torii_proxy_is_the_only_identity_bound_operator_route
@@ -2288,7 +2292,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=309
+readonly expected_multilane_focus_test_count=313
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2459,7 +2463,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 309-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 313-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2567,8 +2571,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 310 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 309 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 314 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 313 focused tests" >&2
     exit 1
   fi
 fi
@@ -3243,6 +3247,7 @@ release_receipt_contract_files=(
   pytests/scripts/sumeragi_v2_release_receipt_test.py
   pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py
   pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py
+  pytests/scripts/nexus_cross_dataspace_launcher_test.py
 )
 release_receipt_contract_log="$(corridor_contract_log_path preflight-release-receipt)"
 set +e
@@ -3251,16 +3256,16 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^321 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^327 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 321 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 327 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 321 \
+  preflight-release-receipt pytest 327 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -3791,4 +3796,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 309/309 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 313/313 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

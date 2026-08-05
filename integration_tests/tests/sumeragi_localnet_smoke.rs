@@ -188,6 +188,8 @@ const REALISTIC_30TPS_RAM_LFE_EMAIL_POLICY_ID: &str = "email#realistic";
 const REALISTIC_30TPS_RAM_LFE_EMAIL_PROGRAM_ID: &str = "email_realistic";
 const FAIL_ON_SANDBOX_SKIP_ENV: &str = "IROHA_FAIL_ON_SANDBOX_SKIP";
 const MULTILANE_RELEASE_MODE_ENV: &str = "IROHA_MULTILANE_RELEASE_MODE";
+const EX297_IDLE_CHAIN_RELEASE_TEST: &str =
+    "sumeragi_localnet_smoke::permissioned_idle_chain_advances_only_for_external_or_internal_work";
 const EX297_IDLE_CHAIN_RELEASE_MARKER: &str = "[ex-297-idle-evidence] \
 clean_idle=passed external_non_empty=passed internal_non_empty=passed";
 // Grouped localnet runs can take longer to publish authoritative Nexus bindings

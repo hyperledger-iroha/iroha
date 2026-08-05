@@ -2472,14 +2472,13 @@ mod cli_tests {
         env,
         ffi::OsString,
         path::{Path, PathBuf},
-        sync::{Mutex, OnceLock},
+        sync::Mutex,
     };
 
     use super::*;
 
     fn cli_env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        test_support::env_lock()
     }
 
     struct CliEnvGuard {
@@ -2687,7 +2686,7 @@ lane_count = 2
     fn parse_cli_rejects_retired_da_flags() {
         let error = parse_cli_overrides_from(vec![OsString::from("--disable-da")])
             .expect_err("retired DA toggle must be rejected");
-        assert!(error.to_string().contains("unknown option"));
+        assert_eq!(error.to_string(), "unknown flag `--disable-da`");
     }
 
     #[test]
@@ -2917,41 +2916,17 @@ lane_count = 2
     }
 
     #[cfg(unix)]
-    fn write_kagami_override_stub(root: &Path) -> (PathBuf, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let script_path = root.join("kagami_cli_override.sh");
-        let log_path = root.join("kagami_cli_override.log");
-        let script = r#"#!/bin/sh
-set -e
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-printf '%s\n' "$@" >> "$SCRIPT_DIR/kagami_cli_override.log"
-if [ "$1" = "--version" ]; then
-  echo "kagami-stub iroha3"
-  exit 0
-fi
-cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
-JSON
-"#;
-        std::fs::write(&script_path, script).expect("write kagami CLI override stub");
-        let mut perms = std::fs::metadata(&script_path)
-            .expect("override stub metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).expect("set override stub permissions");
-        (script_path, log_path)
-    }
-
-    #[cfg(unix)]
     #[test]
     fn cli_overrides_apply_kagami_path_to_supervisor_builder() {
         if !super::socket_bind_available() {
             eprintln!("Skipping CLI override supervisor test due to socket restrictions");
             return;
         }
+        let _env = cli_env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("temp dir");
-        let (script_path, log_path) = write_kagami_override_stub(temp.path());
+        let log_path = temp.path().join("kagami_cli_override.log");
+        let _log_guard = test_support::TestEnvGuard::set("MOCHI_TEST_KAGAMI_LOG", &log_path);
+        let (script_path, _signature_guard) = test_support::install_kagami_stub(temp.path());
 
         let mut overrides = CliOverrides::default();
         overrides.binaries.kagami = Some(script_path.clone());

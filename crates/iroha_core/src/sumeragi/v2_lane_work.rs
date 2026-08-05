@@ -13713,9 +13713,10 @@ impl V2LaneWorkAdapter {
                     }
                 }
                 PendingQueuePlanAdmissionDisposition::Future => {
-                    // Keep the authenticated, bounded certificate durable until this peer
-                    // reaches its canonical authority frontier. It will be reclassified on
-                    // the next exact parent frontier and must not enter an early carrier.
+                    // Keep the already-durable, cryptographically self-consistent certificate
+                    // until this peer reaches its canonical authority frontier. It will be
+                    // reclassified on the next exact parent frontier and must not enter an
+                    // early carrier.
                 }
             }
         }
@@ -13987,6 +13988,13 @@ impl V2LaneWorkAdapter {
                 return Ok(V2LaneIngressOutcome::Rejected);
             }
             PendingQueuePlanAdmissionDisposition::EligibleAbsent => {}
+            PendingQueuePlanAdmissionDisposition::Future => {
+                // The embedded quorum is only self-consistent until this receiver
+                // reaches the certificate's authority frontier and can compare its
+                // predecessor, lifecycle, and roster with canonical state. The
+                // sender retains the durable source and retries after catch-up.
+                return Ok(V2LaneIngressOutcome::Rejected);
+            }
         }
         let certificate_hash = Hash::new(certificate.as_slice());
         let already_pending = self
@@ -31010,7 +31018,25 @@ pub(super) mod tests {
             .height
             .checked_sub(1)
             .expect("non-genesis QueuePlan fixture height");
-        let proposal_height = adapter.context.height;
+        queue_plan_admission_certificate_for_lane_work_test_at_authority_height(
+            adapter,
+            validator_keypairs,
+            tag,
+            authority_height,
+            predecessor_block_hash,
+        )
+    }
+
+    fn queue_plan_admission_certificate_for_lane_work_test_at_authority_height(
+        adapter: &V2LaneWorkAdapter,
+        validator_keypairs: &[KeyPair],
+        tag: u8,
+        authority_height: u64,
+        predecessor_block_hash: Option<HashOf<BlockHeader>>,
+    ) -> (crate::torii_proxy::QueuePlanAdmissionBindingV2, Vec<u8>) {
+        let proposal_height = authority_height
+            .checked_add(1)
+            .expect("QueuePlan fixture proposal height");
         let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
             LaneId::SINGLE,
             DataSpaceId::UNIVERSAL,
@@ -31261,6 +31287,225 @@ pub(super) mod tests {
             V2LaneIngressOutcome::Duplicate,
             "an exact retransmission must remain idempotent"
         );
+        assert!(!adapter.output_guard.restart_required());
+    }
+
+    #[test]
+    fn queue_plan_leader_rejects_future_handoff_until_canonical_frontier() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        prepare_queue_plan_admission_handoff_fixture(&mut adapter, &keys);
+        assert_eq!(
+            adapter.context.roster
+                [usize::try_from(adapter.context.leader(0)).expect("leader index fits usize")]
+            .validator,
+            adapter.local_peer
+        );
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("install exact unlocked leader view");
+        adapter.drain_effects(usize::MAX);
+
+        let original_canonical_tip = adapter.state.block_hashes.view().last().copied();
+
+        let future_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"future QueuePlan handoff predecessor",
+        ));
+        {
+            let mut block_hashes = adapter.state.block_hashes.block();
+            block_hashes.push_for_tests(future_predecessor);
+            block_hashes.commit_for_tests();
+        }
+        let future_authority_height = adapter.context.height;
+        let (_, certificate) =
+            queue_plan_admission_certificate_for_lane_work_test_at_authority_height(
+                &adapter,
+                &keys,
+                0x47,
+                future_authority_height,
+                Some(future_predecessor),
+            );
+        {
+            let block_hashes = adapter.state.block_hashes.block_and_revert();
+            assert_eq!(
+                block_hashes.last().copied(),
+                original_canonical_tip,
+                "the receiver must be restored behind the certificate authority frontier"
+            );
+            block_hashes.commit_for_tests();
+        }
+        assert!(
+            u64::try_from(adapter.state.committed_height())
+                .expect("test committed height fits u64")
+                < future_authority_height
+        );
+        assert_eq!(
+            adapter
+                .state
+                .classify_pending_queue_plan_admission(&certificate, adapter.context.height)
+                .expect("future QueuePlan certificate remains classifiable")
+                .1,
+            PendingQueuePlanAdmissionDisposition::Future
+        );
+        let observer = PeerId::new(
+            KeyPair::try_from_seed(vec![0xD2; 32], Algorithm::Ed25519)
+                .expect("deterministic future observer key")
+                .public_key()
+                .clone(),
+        );
+        assert!(
+            adapter
+                .context
+                .roster
+                .iter()
+                .all(|entry| entry.validator != observer)
+        );
+
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: observer.clone(),
+                    certificate: Arc::new(certificate.clone()),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert_eq!(
+            adapter
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("inspect rejected future QueuePlan certificate"),
+            None
+        );
+        assert!(adapter.merge_entries.values().all(|pending| {
+            !matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions.contains(&certificate)
+            )
+        }));
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: observer,
+                    certificate: Arc::new(certificate.clone()),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected,
+            "a future handoff retransmission must remain rejected until catch-up"
+        );
+        assert_eq!(
+            adapter
+                .kura
+                .pending_queue_plan_admission_certificates_bounded(
+                    adapter.kura.pending_queue_plan_admission_capacity(),
+                )
+                .expect("read bounded retained QueuePlan certificates")
+                .len(),
+            0
+        );
+        assert!(adapter.merge_entries.values().all(|pending| {
+            !matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions.contains(&certificate)
+            )
+        }));
+        assert!(
+            adapter.drain_effects(usize::MAX).is_empty(),
+            "a rejected future handoff must not emit consensus or retry traffic"
+        );
+
+        let (_, eligible) = queue_plan_admission_certificate_for_lane_work_test(
+            &adapter,
+            &keys,
+            0x49,
+            exact_queue_plan_predecessor(&adapter),
+        );
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: adapter.local_peer.clone(),
+                    certificate: Arc::new(eligible.clone()),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted,
+            "rejecting an early handoff must preserve capacity for current canonical work"
+        );
+        assert!(adapter.merge_entries.values().any(|pending| {
+            matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions.contains(&eligible)
+            )
+        }));
+        assert!(!adapter.output_guard.restart_required());
+    }
+
+    #[test]
+    fn queue_plan_durable_future_source_waits_for_canonical_frontier() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        prepare_queue_plan_admission_handoff_fixture(&mut adapter, &keys);
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("install exact unlocked leader view");
+        adapter.drain_effects(usize::MAX);
+
+        let future_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"durable future QueuePlan predecessor",
+        ));
+        {
+            let mut block_hashes = adapter.state.block_hashes.block();
+            block_hashes.push_for_tests(future_predecessor);
+            block_hashes.commit_for_tests();
+        }
+        let (_, certificate) =
+            queue_plan_admission_certificate_for_lane_work_test_at_authority_height(
+                &adapter,
+                &keys,
+                0x48,
+                adapter.context.height,
+                Some(future_predecessor),
+            );
+        {
+            let block_hashes = adapter.state.block_hashes.block_and_revert();
+            assert_ne!(block_hashes.last().copied(), Some(future_predecessor));
+            block_hashes.commit_for_tests();
+        }
+        assert_eq!(
+            adapter
+                .state
+                .classify_pending_queue_plan_admission(&certificate, adapter.context.height)
+                .expect("durable future QueuePlan source remains classifiable")
+                .1,
+            PendingQueuePlanAdmissionDisposition::Future
+        );
+        adapter
+            .kura
+            .persist_pending_queue_plan_admission_certificate(&certificate)
+            .expect("persist recovered future QueuePlan source");
+
+        adapter
+            .refresh_merge_candidates(0)
+            .expect("future durable source must defer without poisoning refresh");
+        assert_eq!(
+            adapter
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("read retained durable future QueuePlan source")
+                .as_deref(),
+            Some(certificate.as_slice())
+        );
+        assert!(adapter.merge_entries.values().all(|pending| {
+            !matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions.contains(&certificate)
+            )
+        }));
+        assert!(adapter.drain_effects(usize::MAX).is_empty());
         assert!(!adapter.output_guard.restart_required());
     }
 
