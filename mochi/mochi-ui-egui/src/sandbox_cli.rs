@@ -307,7 +307,25 @@ async fn prove_readiness(
     let mcp_probe = validate_local_mcp_for_startup(&client, readiness_options.timeout)
         .await
         .map_err(|err| format!("failed while validating local MCP in {stage}: {err}"))?;
+    let final_session = supervisor.session_info().map_err(|err| {
+        format!("failed while revalidating the selected generation after {stage}: {err}")
+    })?;
+    let session = verify_final_readiness_session(stage, &session, final_session)?;
     Ok(ReadinessProof { session, mcp_probe })
+}
+
+fn verify_final_readiness_session(
+    stage: &str,
+    initial: &SupervisorSessionInfo,
+    final_session: SupervisorSessionInfo,
+) -> Result<SupervisorSessionInfo, String> {
+    if &final_session != initial {
+        return Err(format!(
+            "{stage} sandbox session changed during readiness (initial generation `{}`, final generation `{}`)",
+            initial.generation_id, final_session.generation_id
+        ));
+    }
+    Ok(final_session)
 }
 
 fn managed_peer_clients(
@@ -680,6 +698,37 @@ mod tests {
             onboarding_signer_file: sandbox_root.join("runtime/onboarding-signer.key"),
             onboarding_token_file: sandbox_root.join("runtime/onboarding.token"),
         }
+    }
+
+    #[test]
+    fn final_readiness_session_accepts_exact_revalidated_selection() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let initial = session_fixture(temp.path());
+        assert_eq!(
+            verify_final_readiness_session("regenerated generation", &initial, initial.clone())
+                .expect("unchanged revalidated session"),
+            initial
+        );
+    }
+
+    #[test]
+    fn final_readiness_session_rejects_selection_or_metadata_changes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let initial = session_fixture(temp.path());
+        let mut changed_generation = initial.clone();
+        changed_generation.generation_id = "fedcba9876543210fedcba9876543210".to_owned();
+        let error =
+            verify_final_readiness_session("regenerated generation", &initial, changed_generation)
+                .expect_err("selection change must fail readiness");
+        assert!(error.contains("session changed during readiness"));
+        assert!(error.contains("fedcba9876543210fedcba9876543210"));
+
+        let mut changed_endpoint = initial.clone();
+        changed_endpoint.torii_url = "http://127.0.0.1:8181".to_owned();
+        let error =
+            verify_final_readiness_session("regenerated generation", &initial, changed_endpoint)
+                .expect_err("connection metadata change must fail readiness");
+        assert!(error.contains("session changed during readiness"));
     }
 
     #[test]

@@ -321,6 +321,10 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
         ),
         ("selected SoraFS directory", storage_dir.join("sorafs")),
         (
+            "selected Soracloud runtime directory",
+            storage_dir.join("soracloud_runtime"),
+        ),
+        (
             "selected streaming directory",
             storage_dir.join("streaming"),
         ),

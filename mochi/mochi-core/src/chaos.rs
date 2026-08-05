@@ -1,7 +1,6 @@
 //! Izanami-backed chaos helpers for the Mochi desktop shell.
 
 use std::{
-    fs,
     path::PathBuf,
     pin::Pin,
     sync::{
@@ -17,7 +16,7 @@ use iroha_data_model::{block::SignedBlock, domain::DomainId, isi::InstructionBox
 use iroha_genesis::GenesisBlock;
 use iroha_test_samples::ALICE_KEYPAIR;
 use tokio::runtime::Handle;
-use toml::{Table, Value};
+use toml::Table;
 
 use crate::{Supervisor, ToriiClient};
 use izanami::faults::{
@@ -32,7 +31,7 @@ pub enum ChaosPreset {
     PeerBounce,
     /// Temporarily exaggerate gossip delays for one peer.
     SlowGossip,
-    /// Isolate one peer from the trusted roster for a short period.
+    /// Isolate one peer with complete bidirectional P2P packet loss for a short period.
     PartitionOne,
     /// Add transient CPU and disk pressure locally.
     ResourcePressure,
@@ -62,7 +61,9 @@ impl ChaosPreset {
         match self {
             Self::PeerBounce => "Stop one peer, pause briefly, then restart it.",
             Self::SlowGossip => "Restart one peer with a slower gossip cadence for a moment.",
-            Self::PartitionOne => "Restart one peer with an empty trusted-peer roster.",
+            Self::PartitionOne => {
+                "Restart one peer with complete inbound and outbound P2P packet loss."
+            }
             Self::ResourcePressure => "Run short CPU and disk pressure bursts locally.",
             Self::BadActor => "Send malformed payloads to Torii and watch rejections land.",
             Self::WipeAndRejoin => "Blow away one peer's local storage and let it rejoin.",
@@ -299,8 +300,6 @@ struct MochiFaultPeer {
     supervisor: Arc<Mutex<Supervisor>>,
     alias: String,
     kura_store_dir: PathBuf,
-    trusted_peer_entry: String,
-    isolated_trusted_peers_pop: Vec<Value>,
     client: MochiFaultClient,
 }
 
@@ -316,33 +315,6 @@ impl MochiFaultPeer {
             .ok_or_else(|| ChaosError::UnknownPeer {
                 alias: alias.to_owned(),
             })?;
-        let config = fs::read_to_string(peer.config_path())
-            .map_err(|err| ChaosError::Message(format!("read peer config failed: {err}")))?;
-        let table: Table = toml::from_str(&config)
-            .map_err(|err| ChaosError::Message(format!("parse peer config failed: {err}")))?;
-        let peer_public_key = peer.peer_id().to_string();
-        let trusted_peer_entry = format!("{peer_public_key}@{}", peer.p2p_address());
-        let isolated_trusted_peers_pop = table
-            .get("trusted_peers_pop")
-            .and_then(Value::as_array)
-            .cloned()
-            .ok_or_else(|| {
-                ChaosError::Message("peer config missing trusted_peers_pop roster".to_owned())
-            })?
-            .into_iter()
-            .filter(|entry| {
-                entry
-                    .as_table()
-                    .and_then(|table| table.get("public_key"))
-                    .and_then(Value::as_str)
-                    == Some(peer_public_key.as_str())
-            })
-            .collect::<Vec<_>>();
-        if isolated_trusted_peers_pop.is_empty() {
-            return Err(ChaosError::Message(format!(
-                "peer config missing trusted_peers_pop entry for `{peer_public_key}`"
-            )));
-        }
         let kura_store_dir = peer.kura_store_dir().to_path_buf();
         let client = guard.torii_client(alias).ok_or_else(|| {
             ChaosError::Message(format!("torii client unavailable for `{alias}`"))
@@ -352,8 +324,6 @@ impl MochiFaultPeer {
             supervisor: shared.clone(),
             alias: alias.to_owned(),
             kura_store_dir,
-            trusted_peer_entry,
-            isolated_trusted_peers_pop,
             client: MochiFaultClient { client },
         })
     }
@@ -372,14 +342,6 @@ impl FaultPeer for MochiFaultPeer {
 
     fn client(&self) -> Self::Client {
         self.client.clone()
-    }
-
-    fn isolated_trusted_peer_entry(&self) -> EyreResult<String> {
-        Ok(self.trusted_peer_entry.clone())
-    }
-
-    fn isolated_trusted_peers_pop_entries(&self) -> EyreResult<Vec<Value>> {
-        Ok(self.isolated_trusted_peers_pop.clone())
     }
 
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -406,7 +368,7 @@ impl FaultPeer for MochiFaultPeer {
                 .lock()
                 .map_err(|_| eyre!("supervisor mutex poisoned"))?;
             guard
-                .restart_peer_with_extra_layers(&alias, &extra_layers)
+                .restart_peer_with_extra_layers_and_start(&alias, &extra_layers)
                 .map_err(|err| eyre!(err.to_string()))
         })
     }

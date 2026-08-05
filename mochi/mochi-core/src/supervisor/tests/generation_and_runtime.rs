@@ -342,6 +342,74 @@ fn selected_storage_resolver_reports_config_only_overlay_separately() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn overlay_and_start_launches_a_previously_stopped_peer() {
+    if !ports_available("overlay_and_start_launches_a_previously_stopped_peer") {
+        return;
+    }
+    let _env = env_lock().lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _kagami = KagamiStub::install(temp.path());
+    let irohad = write_long_running_irohad_stub(temp.path());
+    let _irohad = EnvVarGuard::set("MOCHI_IROHAD", irohad.as_os_str());
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+        .data_root(temp.path())
+        .build()
+        .expect("build supervisor");
+    let previous_generation = supervisor.generation_id().to_owned();
+    let mut network = toml::Table::new();
+    network.insert(
+        "debug_packet_loss_inbound_percent".to_owned(),
+        toml::Value::Integer(37),
+    );
+    network.insert(
+        "debug_packet_loss_outbound_percent".to_owned(),
+        toml::Value::Integer(37),
+    );
+    let mut overlay = toml::Table::new();
+    overlay.insert("network".to_owned(), toml::Value::Table(network));
+
+    supervisor
+        .restart_peer_with_extra_layers_and_start("peer0", &[overlay])
+        .expect("publish overlay and start stopped peer");
+
+    assert_ne!(supervisor.generation_id(), previous_generation);
+    assert!(supervisor.peers()[0].is_running());
+    let config = fs::read_to_string(supervisor.peers()[0].config_path()).expect("read overlay config");
+    assert!(config.contains("debug_packet_loss_inbound_percent = 37"));
+    assert!(config.contains("debug_packet_loss_outbound_percent = 37"));
+    assert!(config.contains("[network]"));
+    supervisor.stop_all().expect("stop overlay peer");
+}
+
+#[cfg(unix)]
+#[test]
+fn overlay_and_start_preserves_an_already_running_peer() {
+    if !ports_available("overlay_and_start_preserves_an_already_running_peer") {
+        return;
+    }
+    let _env = env_lock().lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _kagami = KagamiStub::install(temp.path());
+    let irohad = write_long_running_irohad_stub(temp.path());
+    let _irohad = EnvVarGuard::set("MOCHI_IROHAD", irohad.as_os_str());
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+        .data_root(temp.path())
+        .build()
+        .expect("build supervisor");
+    supervisor.start_peer("peer0").expect("start peer0");
+    let previous_generation = supervisor.generation_id().to_owned();
+
+    supervisor
+        .restart_peer_with_extra_layers_and_start("peer0", &[])
+        .expect("replace running peer config without a duplicate-start failure");
+
+    assert_ne!(supervisor.generation_id(), previous_generation);
+    assert!(supervisor.peers()[0].is_running());
+    supervisor.stop_all().expect("stop restored peer");
+}
+
 #[test]
 fn second_supervisor_cannot_publish_until_current_owner_drops() {
     if !ports_available("second_supervisor_cannot_publish_until_current_owner_drops") {

@@ -82,6 +82,34 @@ impl Supervisor {
         self.restart_peer_with_extra_layers_inner(alias, extra_layers, None)
     }
 
+    /// Re-render one peer with temporary overlays and ensure it is running afterwards.
+    ///
+    /// Unlike [`Self::restart_peer_with_extra_layers`], this entry point starts a peer that was
+    /// deliberately stopped before the overlay was published. It is used by fault injection,
+    /// where storage must be quiescent before configuration changes but the injected fault must
+    /// execute against a live validator.
+    pub fn restart_peer_with_extra_layers_and_start(
+        &mut self,
+        alias: &str,
+        extra_layers: &[toml::Table],
+    ) -> Result<()> {
+        self.restart_peer_with_extra_layers(alias, extra_layers)?;
+        self.refresh_peer_states();
+        let running = self
+            .peers
+            .iter()
+            .find(|peer| peer.alias() == alias)
+            .ok_or_else(|| SupervisorError::PeerUnknown {
+                alias: alias.to_owned(),
+            })?
+            .is_running();
+        if running {
+            Ok(())
+        } else {
+            self.start_peer(alias)
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn restart_peer_with_extra_layers_with_publication_fault(
         &mut self,

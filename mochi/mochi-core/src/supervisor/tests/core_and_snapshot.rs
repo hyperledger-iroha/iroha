@@ -1284,6 +1284,7 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
             &["kura", "store_dir"][..],
             &["snapshot", "store_dir"][..],
             &["sorafs", "storage", "data_dir"][..],
+            &["soracloud_runtime", "state_dir"][..],
             &["streaming", "session_store_dir"][..],
             &["streaming", "soranet", "provision_spool_dir"][..],
             &["streaming", "soravpn", "provision_spool_dir"][..],
