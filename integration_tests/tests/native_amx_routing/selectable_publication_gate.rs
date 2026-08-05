@@ -24,7 +24,7 @@ fn musubi_selectable_fault_localnet_builder() -> NetworkBuilder {
         ))
         .with_config_layer(move |layer| {
             layer.write(
-                ["governance", "sorafs_pin_fee_treasury_account"],
+                ["gov", "sorafs_pin_fee_treasury_account"],
                 treasury.clone(),
             );
         })
