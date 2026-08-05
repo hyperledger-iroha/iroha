@@ -448,7 +448,7 @@ evidence.
 ## Sumeragi V2 production multilane release closure
 
 On the current tree, the independent 81-leg release inventory contract is
-sealed at 826 production tests across 38 modules, 309 G-UNIT rows, and four
+sealed at 826 production tests across 38 modules, 309 G-UNIT rows, and six
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -468,7 +468,9 @@ through non-empty commits. The recovery phase-cut matrix separately admits at
 most one explicitly armed empty carrier, verifies that `blocks_non_empty` does
 not advance for it, and proves that the chain returns to ordinary non-empty
 publication after restart. Final source-sealed execution remains part of the
-real-network release gates above rather than an implementation TODO.
+real-network release gates above rather than an implementation TODO. Both exact
+tests are now fail-closed members of the six-run G-4P launcher, receipt, and
+bootstrap inventory; a sandbox skip cannot satisfy their completion contract.
 
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
