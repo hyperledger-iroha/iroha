@@ -2519,13 +2519,6 @@ def test_full_bootstrap_succeeds_with_real_terminal_receipt_validator(
     ).strip()
     sealed_identity_json = sealed_source.read_text(encoding="utf-8").strip()
 
-    staged_bootstrap = fixture_root / "prepared-bootstrap"
-    shutil.move(str(bootstrap_evidence), staged_bootstrap)
-    staged_release_runner = staged_bootstrap / "release-runner"
-    assert staged_release_runner.is_dir()
-    assert not bootstrap_evidence.exists()
-    release_fixture.evidence = bootstrap_evidence
-
     release_fixture.manifest = _write(
         release_fixture.trust / "fixed-release-identity.py",
         f'''#!/usr/bin/env python3
@@ -2595,6 +2588,13 @@ else:
         + "\n",
         0o400,
     )
+
+    staged_bootstrap = fixture_root / "prepared-bootstrap"
+    shutil.move(str(bootstrap_evidence), staged_bootstrap)
+    staged_release_runner = staged_bootstrap / "release-runner"
+    assert staged_release_runner.is_dir()
+    assert not bootstrap_evidence.exists()
+    release_fixture.evidence = bootstrap_evidence
 
     def evidence_path(name: str) -> str:
         path = evidence[name]
