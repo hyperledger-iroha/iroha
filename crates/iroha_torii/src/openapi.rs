@@ -6003,7 +6003,7 @@ fn explorer_paths() -> Map {
             "Explorer",
             "Fetch asset definition detail (explorer).",
             "Fetch asset definition detail for explorer usage.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/ExplorerAssetDefinition",
             vec![string_path_param(
                 "definition_id",
                 "Asset definition identifier.",
@@ -6042,8 +6042,11 @@ fn explorer_paths() -> Map {
             "Explorer",
             "Fetch asset detail (explorer).",
             "Fetch asset detail for explorer usage.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("asset_id", "Canonical Base58 asset id.")],
+            "#/components/schemas/ExplorerAsset",
+            vec![string_path_param(
+                "asset_id",
+                "Canonical `<base58-definition-id>#<i105-account-id>` asset holding id, optionally suffixed with `#dataspace:<id>`.",
+            )],
         )),
     );
     paths.insert(
@@ -24748,6 +24751,9 @@ fn openapi_schemas() -> Map {
             "required": [
                 "id",
                 "owning_domain",
+                "name",
+                "description",
+                "alias",
                 "mintable",
                 "logo",
                 "metadata",
@@ -24767,6 +24773,19 @@ fn openapi_schemas() -> Map {
                         { "type": "null" }
                     ]
                 },
+                "name": { "type": "string", "minLength": 1 },
+                "description": {
+                    "oneOf": [
+                        { "type": "string" },
+                        { "type": "null" }
+                    ]
+                },
+                "alias": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 1 },
+                        { "type": "null" }
+                    ]
+                },
                 "mintable": { "type": "string", "minLength": 1 },
                 "logo": {
                     "oneOf": [
@@ -24777,9 +24796,58 @@ fn openapi_schemas() -> Map {
                 "metadata": { "$ref": "#/components/schemas/JsonValue" },
                 "owned_by": { "type": "string", "minLength": 1 },
                 "assets": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "total_quantity": { "$ref": "#/components/schemas/JsonValue" },
-                "locked_quantity": { "$ref": "#/components/schemas/JsonValue" },
-                "circulating_quantity": { "$ref": "#/components/schemas/JsonValue" }
+                "total_quantity": { "$ref": "#/components/schemas/Quantity" },
+                "locked_quantity": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/Quantity" },
+                        { "type": "null" }
+                    ]
+                },
+                "circulating_quantity": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/Quantity" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ExplorerAsset".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "id", "definition_id", "account_id", "asset_name", "asset_alias", "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "definition_id": { "type": "string", "minLength": 1 },
+                "account_id": { "type": "string", "minLength": 1 },
+                "asset_name": { "type": "string", "minLength": 1 },
+                "asset_alias": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 1 },
+                        { "type": "null" }
+                    ]
+                },
+                "value": { "$ref": "#/components/schemas/Quantity" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ExplorerAssetsCursorPage".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["pagination", "items"],
+            "additionalProperties": false,
+            "properties": {
+                "pagination": { "$ref": "#/components/schemas/ExplorerCursorMeta" },
+                "items": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": { "$ref": "#/components/schemas/ExplorerAsset" }
+                }
             }
         }),
     );
@@ -43015,6 +43083,143 @@ mod tests {
         assert!(explorer_assets.contains(&"asset_id".to_owned()));
         assert!(explorer_assets.contains(&"owned_by".to_owned()));
         assert!(explorer_assets.contains(&"definition".to_owned()));
+    }
+
+    #[test]
+    fn explorer_asset_schemas_expose_authoritative_names_and_aliases() {
+        let document = generate_spec();
+        let schemas = document
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("OpenAPI component schemas");
+        let definition = schemas
+            .get("ExplorerAssetDefinition")
+            .and_then(Value::as_object)
+            .expect("ExplorerAssetDefinition schema");
+        let definition_required = definition
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("ExplorerAssetDefinition required fields");
+        for field in ["name", "description", "alias"] {
+            assert!(
+                definition_required
+                    .iter()
+                    .any(|candidate| candidate.as_str() == Some(field)),
+                "asset definition must require `{field}`"
+            );
+        }
+        let definition_properties = definition
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("ExplorerAssetDefinition properties");
+        assert_eq!(
+            definition_properties
+                .get("total_quantity")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/Quantity")
+        );
+        for field in ["locked_quantity", "circulating_quantity"] {
+            assert!(
+                definition_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("oneOf"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|variants| variants.iter().any(|variant| {
+                        variant
+                            .as_object()
+                            .and_then(|variant| variant.get("$ref"))
+                            .and_then(Value::as_str)
+                            == Some("#/components/schemas/Quantity")
+                    })),
+                "asset definition `{field}` must reference Quantity"
+            );
+        }
+
+        let asset = schemas
+            .get("ExplorerAsset")
+            .and_then(Value::as_object)
+            .expect("ExplorerAsset schema");
+        let asset_required = asset
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("ExplorerAsset required fields");
+        for field in ["asset_name", "asset_alias", "value"] {
+            assert!(
+                asset_required
+                    .iter()
+                    .any(|candidate| candidate.as_str() == Some(field)),
+                "asset must require `{field}`"
+            );
+        }
+        assert_eq!(
+            asset
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("value"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/Quantity")
+        );
+        for (page, item) in [
+            ("ExplorerAssetsCursorPage", "ExplorerAsset"),
+            (
+                "ExplorerAssetDefinitionsCursorPage",
+                "ExplorerAssetDefinition",
+            ),
+        ] {
+            let expected = format!("#/components/schemas/{item}");
+            assert_eq!(
+                schemas
+                    .get(page)
+                    .and_then(Value::as_object)
+                    .and_then(|page| page.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get("items"))
+                    .and_then(Value::as_object)
+                    .and_then(|items| items.get("items"))
+                    .and_then(Value::as_object)
+                    .and_then(|items| items.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(expected.as_str())
+            );
+        }
+
+        let response_schema_ref = |path: &str| {
+            document
+                .get("paths")
+                .and_then(Value::as_object)
+                .and_then(|paths| paths.get(path))
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("get"))
+                .and_then(Value::as_object)
+                .and_then(|get| get.get("responses"))
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        assert_eq!(
+            response_schema_ref("/v1/explorer/asset-definitions/{definition_id}"),
+            Some("#/components/schemas/ExplorerAssetDefinition".to_owned())
+        );
+        assert_eq!(
+            response_schema_ref("/v1/explorer/assets/{asset_id}"),
+            Some("#/components/schemas/ExplorerAsset".to_owned())
+        );
     }
 
     #[test]

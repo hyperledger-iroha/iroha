@@ -134,6 +134,10 @@ test("validates canonical asset definition ids and asset holdings", () => {
     composeAssetHoldingId(assetId, accountId, "42"),
     `${assetId}#${accountId}#dataspace:42`,
   );
+  assert.equal(
+    normalizeAssetHoldingId(`${assetId}#${accountId}#dataspace:18446744073709551615`),
+    `${assetId}#${accountId}#dataspace:18446744073709551615`,
+  );
   assert.equal(assetReferencesMatch(assetId, `${assetId}#${accountId}`), true);
   assert.equal(tryNormalizeAssetDefinitionId("66owaQmAQMuHxPzxUN3bqZ6FJfDb"), null);
 });
@@ -163,14 +167,17 @@ test("rejects malformed asset definitions and holdings instead of matching by sh
       return true;
     },
   );
-  assert.throws(
-    () => normalizeAssetHoldingId(`${assetId}#${accountId}#dataspace:not-a-number`),
-    (error) => {
-      assert(error instanceof ValidationError);
-      assert.equal(error.code, ValidationErrorCode.INVALID_ASSET_ID);
-      return true;
-    },
-  );
+  for (const scope of ["not-a-number", "01", "18446744073709551616"]) {
+    assert.throws(
+      () => normalizeAssetHoldingId(`${assetId}#${accountId}#dataspace:${scope}`),
+      (error) => {
+        assert(error instanceof ValidationError);
+        assert.equal(error.code, ValidationErrorCode.INVALID_ASSET_ID);
+        return true;
+      },
+    );
+    assert.throws(() => composeAssetHoldingId(assetId, accountId, scope));
+  }
   assert.equal(tryExtractAssetDefinitionId(`${badChecksumAssetId}#${accountId}`), null);
   assert.equal(assetReferencesMatch(`${badChecksumAssetId}#${accountId}`, `${badChecksumAssetId}#${accountId}`), false);
   assert.equal(extractAssetDefinitionId(`${assetId}#${accountId}`), assetId);

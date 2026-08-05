@@ -2,6 +2,7 @@ export {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
+  canonicalizeDomainLabel,
   decodeI105AccountAddress,
   encodeI105AccountAddress,
   inspectAccountId,

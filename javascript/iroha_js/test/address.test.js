@@ -481,11 +481,26 @@ test("canonicalizeDomainLabel matches the Rust domain-segment policy", () => {
   assert.equal(punycode, "xn--exmple-cua");
   assert.equal(canonicalizeDomainLabel("foo_bar"), "foo_bar");
   assert.equal(canonicalizeDomainLabel("bücher"), "xn--bcher-kva");
+  assert.equal(canonicalizeDomainLabel("bücher.example"), "xn--bcher-kva.example");
+  assert.equal(canonicalizeDomainLabel("01"), "01");
+  assert.equal(canonicalizeDomainLabel("127.00.0.1"), "127.00.0.1");
+  assert.equal(canonicalizeDomainLabel("0x7f.1"), "0x7f.1");
+  assert.equal(canonicalizeDomainLabel("\uFEFFfoo"), "foo");
+  assert.equal(canonicalizeDomainLabel("foo\uFEFF"), "foo");
+  const longestLabels = ["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61)];
+  assert.equal(canonicalizeDomainLabel(longestLabels.join(".")), longestLabels.join("."));
 
   for (const invalid of [
     "-leading",
     "trailing-",
     "ab--cd",
+    "foo.-bar",
+    "foo.trailing-",
+    "foo.ab--cd",
+    "foo..bar",
+    "a".repeat(64),
+    `${"\u00AD".repeat(128)}a`,
+    ["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(62)].join("."),
     "ḷ",
     "foo:123",
     "foo/bar",
@@ -494,8 +509,6 @@ test("canonicalizeDomainLabel matches the Rust domain-segment policy", () => {
     "foo%41",
     " foo",
     "foo ",
-    "\uFEFFfoo",
-    "foo\uFEFF",
   ]) {
     assert.throws(
       () => canonicalizeDomainLabel(invalid),

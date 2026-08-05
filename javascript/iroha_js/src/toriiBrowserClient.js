@@ -1,5 +1,6 @@
 import { Buffer } from "buffer";
 
+import { AccountAddress, canonicalizeDomainLabel } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { NumericV1, NumericV1Error } from "./numericV1.js";
 import { browserSignedTransactionHashHex } from "./transactionCodec.js";
@@ -15,6 +16,10 @@ import {
 } from "./kagemushaOffline.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+import {
+  normalizeAssetDefinitionId,
+  normalizeAssetHoldingId,
+} from "./normalizers.js";
 import {
   AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
@@ -176,6 +181,134 @@ function requireNonEmptyString(value, context) {
     throw new TypeError(`${context} must not be empty`);
   }
   return trimmed;
+}
+
+const ASSET_NAME_MAX_BYTES = 128;
+const ASSET_DESCRIPTION_MAX_BYTES = 2_048;
+const NAME_MAX_BYTES = 255;
+const UTF8_ENCODER = new TextEncoder();
+
+function containsUnicodeControl(value) {
+  return /\p{Cc}/u.test(value);
+}
+
+function containsBidiControl(value) {
+  return /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);
+}
+
+function trimRustWhitespace(value) {
+  return value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+}
+
+function requireAssetHumanName(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string`);
+  }
+  const trimmed = trimRustWhitespace(value);
+  if (!trimmed) {
+    throw new TypeError(`${context} must not be blank`);
+  }
+  if (UTF8_ENCODER.encode(trimmed).byteLength > ASSET_NAME_MAX_BYTES) {
+    throw new TypeError(`${context} exceeds the 128-byte limit`);
+  }
+  if (value.includes("#") || value.includes("@") || containsUnicodeControl(value)) {
+    throw new TypeError(`${context} contains a reserved separator or control character`);
+  }
+  return value;
+}
+
+function requireAssetDescription(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string or null`);
+  }
+  if (!trimRustWhitespace(value)) {
+    throw new TypeError(`${context} must not be blank when provided`);
+  }
+  if (UTF8_ENCODER.encode(value).byteLength > ASSET_DESCRIPTION_MAX_BYTES) {
+    throw new TypeError(`${context} exceeds the 2048-byte limit`);
+  }
+  if (containsUnicodeControl(value)) {
+    throw new TypeError(`${context} must not contain control characters`);
+  }
+  return value;
+}
+
+function requireCanonicalNameSegment(value, context) {
+  const normalized = value.normalize("NFC");
+  if (
+    !value ||
+    UTF8_ENCODER.encode(value).byteLength > NAME_MAX_BYTES ||
+    UTF8_ENCODER.encode(normalized).byteLength > NAME_MAX_BYTES ||
+    /\p{White_Space}/u.test(value) ||
+    containsUnicodeControl(value) ||
+    containsBidiControl(value) ||
+    /[@#$]/u.test(value) ||
+    /\p{White_Space}/u.test(normalized) ||
+    containsUnicodeControl(normalized) ||
+    containsBidiControl(normalized) ||
+    /[@#$]/u.test(normalized)
+  ) {
+    throw new TypeError(`${context} must be a canonical Iroha Name`);
+  }
+  return value;
+}
+
+function asciiLowercase(value) {
+  return value.replace(/[A-Z]/gu, (character) => character.toLowerCase());
+}
+
+function requireCanonicalAssetAlias(value, expectedName, context) {
+  if (typeof value !== "string" || trimRustWhitespace(value) !== value) {
+    throw new TypeError(`${context} must be an exact asset-definition alias`);
+  }
+  const parts = value.split("#");
+  if (parts.length !== 2 || parts[1].includes("@")) {
+    throw new TypeError(`${context} must use the canonical asset-definition alias form`);
+  }
+  const scope = parts[1].split(".");
+  if (scope.length < 1 || scope.length > 2) {
+    throw new TypeError(`${context} must use the canonical asset-definition alias form`);
+  }
+  const aliasName = requireCanonicalNameSegment(parts[0], `${context}.name`);
+  for (let index = 0; index < scope.length; index += 1) {
+    requireCanonicalNameSegment(scope[index], `${context}.scope[${index}]`);
+  }
+  if (asciiLowercase(aliasName) !== asciiLowercase(expectedName)) {
+    throw new TypeError(`${context} name must match the authoritative asset name`);
+  }
+  return value;
+}
+
+function requireCanonicalDomainId(value, context) {
+  if (typeof value !== "string" || trimRustWhitespace(value) !== value) {
+    throw new TypeError(`${context} must be an exact fully qualified domain id`);
+  }
+  let lastError;
+  for (let index = value.indexOf("."); index >= 0; index = value.indexOf(".", index + 1)) {
+    try {
+      const canonical = `${canonicalizeDomainLabel(value.slice(0, index))}.${canonicalizeDomainLabel(value.slice(index + 1))}`;
+      if (canonical === value) return value;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new TypeError(`${context} must be a canonical fully qualified domain id`, {
+    cause: lastError,
+  });
+}
+
+function requireCanonicalMintable(value, context) {
+  if (value === "Infinitely" || value === "Once" || value === "Not") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical Mintable label`);
+  }
+  const match = /^Limited\(([1-9]\d*)\)$/u.exec(value);
+  if (!match || BigInt(match[1]) > 0xffff_ffffn) {
+    throw new TypeError(`${context} must be Infinitely, Once, Not, or Limited(nonzero-u32)`);
+  }
+  return value;
 }
 
 function normalizeContractDeploymentStateRequest(value) {
@@ -507,6 +640,9 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
   const fields = [
     "id",
     "owning_domain",
+    "name",
+    "description",
+    "alias",
     "mintable",
     "logo",
     "metadata",
@@ -520,20 +656,21 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
   if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
     throw new TypeError(`${context} has missing or unsupported fields`);
   }
-  for (const field of ["id", "mintable", "owned_by"]) {
-    const normalized = requireNonEmptyString(value[field], `${context}.${field}`);
-    if (normalized !== value[field]) {
-      throw new TypeError(`${context}.${field} must be an exact string`);
-    }
-  }
+  requireExactCanonicalIdentifier(value.id, `${context}.id`, normalizeAssetDefinitionId);
+  requireExactCanonicalAccountId(value.owned_by, `${context}.owned_by`);
+  requireCanonicalMintable(value.mintable, `${context}.mintable`);
+  requireAssetHumanName(value.name, `${context}.name`);
   if (value.owning_domain !== null) {
-    const owningDomain = requireNonEmptyString(
+    requireCanonicalDomainId(
       value.owning_domain,
       `${context}.owning_domain`,
     );
-    if (owningDomain !== value.owning_domain) {
-      throw new TypeError(`${context}.owning_domain must be an exact string or null`);
-    }
+  }
+  if (value.description !== null) {
+    requireAssetDescription(value.description, `${context}.description`);
+  }
+  if (value.alias !== null) {
+    requireCanonicalAssetAlias(value.alias, value.name, `${context}.alias`);
   }
   for (const field of ["logo", "locked_quantity", "circulating_quantity"]) {
     if (value[field] !== null && typeof value[field] !== "string") {
@@ -556,6 +693,94 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
     }
   }
   return normalized;
+}
+
+function requireExactCanonicalIdentifier(value, context, normalize) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string`);
+  }
+  let canonical;
+  try {
+    canonical = normalize(value, context);
+  } catch (error) {
+    throw new TypeError(`${context} must be canonical`, { cause: error });
+  }
+  if (canonical !== value) {
+    throw new TypeError(`${context} must use exact canonical form`);
+  }
+  return value;
+}
+
+function requireExactCanonicalAccountId(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string`);
+  }
+  let parsed;
+  try {
+    parsed = AccountAddress.parseEncoded(value);
+  } catch (error) {
+    throw new TypeError(`${context} must be a canonical I105 account id`, {
+      cause: error,
+    });
+  }
+  if (parsed.address.toI105(parsed.chainDiscriminant) !== value) {
+    throw new TypeError(`${context} must use exact canonical I105 form`);
+  }
+  return value;
+}
+
+function requireExactCanonicalAssetHoldingId(value, context) {
+  const id = requireExactCanonicalIdentifier(value, context, normalizeAssetHoldingId);
+  requireExactCanonicalAccountId(id.split("#")[1], `${context}.accountId`);
+  return id;
+}
+
+function normalizeExplorerAssetRecord(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  const fields = [
+    "id",
+    "definition_id",
+    "account_id",
+    "asset_name",
+    "asset_alias",
+    "value",
+  ];
+  const keys = Object.keys(value);
+  if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
+    throw new TypeError(`${context} has missing or unsupported fields`);
+  }
+  const id = requireExactCanonicalAssetHoldingId(value.id, `${context}.id`);
+  const definitionId = requireExactCanonicalIdentifier(
+    value.definition_id,
+    `${context}.definition_id`,
+    normalizeAssetDefinitionId,
+  );
+  const accountId = requireExactCanonicalAccountId(
+    value.account_id,
+    `${context}.account_id`,
+  );
+  const idParts = id.split("#");
+  if (idParts[0] !== definitionId || idParts[1] !== accountId) {
+    throw new TypeError(`${context}.id must bind definition_id and account_id`);
+  }
+  const assetName = requireAssetHumanName(value.asset_name, `${context}.asset_name`);
+  const assetAlias = value.asset_alias === null
+    ? null
+    : requireCanonicalAssetAlias(
+      value.asset_alias,
+      assetName,
+      `${context}.asset_alias`,
+    );
+  return {
+    id,
+    definition_id: definitionId,
+    account_id: accountId,
+    asset_name: assetName,
+    asset_alias: assetAlias,
+    value: requireCanonicalQuantity(value.value, `${context}.value`),
+  };
 }
 
 function normalizeExplorerCursor(value, context, { nullable = false } = {}) {
@@ -1859,7 +2084,6 @@ export class ToriiBrowserClient {
         ...normalizeExplorerCursorPagination(opts, "listExplorerAccounts options"),
         domain: opts.domain,
         with_asset: opts.withAsset ?? opts.with_asset,
-        address_format: opts.addressFormat ?? opts.address_format,
       },
       signal: signalFrom(opts),
     }).then((payload) =>
@@ -1870,7 +2094,6 @@ export class ToriiBrowserClient {
   getExplorerAccount(accountId, options = {}) {
     const opts = requireObject(options, "getExplorerAccount options");
     return this._json("GET", `/v1/explorer/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}`, {
-      params: { address_format: opts.addressFormat ?? opts.address_format },
       signal: signalFrom(opts),
     });
   }
@@ -1908,17 +2131,18 @@ export class ToriiBrowserClient {
     }).then((payload) => {
       const context = "explorer assets response";
       return normalizeExplorerCursorPage(payload, context, (item, index) =>
-        normalizeQuantityRecord(item, `${context}.items[${index}]`, ["value"]),
+        normalizeExplorerAssetRecord(item, `${context}.items[${index}]`),
       );
     });
   }
 
   getExplorerAsset(assetId, options = {}) {
     const opts = requireObject(options, "getExplorerAsset options");
-    return this._json("GET", `/v1/explorer/assets/${encodeURIComponent(requireNonEmptyString(assetId, "assetId"))}`, {
+    const canonicalId = requireExactCanonicalAssetHoldingId(assetId, "assetId");
+    return this._json("GET", `/v1/explorer/assets/${encodeURIComponent(canonicalId)}`, {
       signal: signalFrom(opts),
     }).then((payload) =>
-      normalizeQuantityRecord(payload, "explorer asset response", ["quantity"]),
+      normalizeExplorerAssetRecord(payload, "explorer asset response"),
     );
   }
 
@@ -2199,6 +2423,25 @@ export class ToriiBrowserClient {
     });
   }
 
+  getExplorerAssetDefinition(assetDefinitionId, options = {}) {
+    const opts = requireObject(options, "getExplorerAssetDefinition options");
+    const canonicalId = requireExactCanonicalIdentifier(
+      assetDefinitionId,
+      "assetDefinitionId",
+      normalizeAssetDefinitionId,
+    );
+    return this._json("GET", `/v1/explorer/asset-definitions/${encodeURIComponent(canonicalId)}`, {
+      headers: opts.headers,
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? [200],
+    }).then((payload) =>
+      normalizeExplorerAssetDefinitionRecord(
+        payload,
+        "explorer asset definition response",
+      ),
+    );
+  }
+
   getExplorerAssetDefinitionEconometrics(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getExplorerAssetDefinitionEconometrics options");
     return this._json("GET", `/v1/explorer/asset-definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}/econometrics`, {
@@ -2378,7 +2621,6 @@ export class ToriiBrowserClient {
         block: opts.block,
         status: opts.status,
         asset_id: opts.assetId ?? opts.asset_id,
-        address_format: opts.addressFormat ?? opts.address_format,
       },
       signal: signalFrom(opts),
     });
@@ -2393,7 +2635,6 @@ export class ToriiBrowserClient {
         block: opts.block,
         status: opts.status,
         asset_id: opts.assetId ?? opts.asset_id,
-        address_format: opts.addressFormat ?? opts.address_format,
       },
       signal: signalFrom(opts),
     });
@@ -2402,7 +2643,6 @@ export class ToriiBrowserClient {
   getExplorerTransaction(hash, options = {}) {
     const opts = requireObject(options, "getExplorerTransaction options");
     return this._json("GET", `/v1/explorer/transactions/${encodeURIComponent(requireNonEmptyString(hash, "hash"))}`, {
-      params: { address_format: opts.addressFormat ?? opts.address_format },
       signal: signalFrom(opts),
     });
   }
@@ -2419,7 +2659,6 @@ export class ToriiBrowserClient {
         transaction_status: opts.transactionStatus ?? opts.transaction_status,
         block: opts.block,
         asset_id: opts.assetId ?? opts.asset_id,
-        address_format: opts.addressFormat ?? opts.address_format,
       },
       signal: signalFrom(opts),
     });
@@ -2437,7 +2676,6 @@ export class ToriiBrowserClient {
         transaction_status: opts.transactionStatus ?? opts.transaction_status,
         block: opts.block,
         asset_id: opts.assetId ?? opts.asset_id,
-        address_format: opts.addressFormat ?? opts.address_format,
       },
       signal: signalFrom(opts),
     });
@@ -2446,7 +2684,6 @@ export class ToriiBrowserClient {
   getExplorerInstruction(transactionHash, index, options = {}) {
     const opts = requireObject(options, "getExplorerInstruction options");
     return this._json("GET", `/v1/explorer/instructions/${encodeURIComponent(requireNonEmptyString(transactionHash, "transactionHash"))}/${encodeURIComponent(String(index))}`, {
-      params: { address_format: opts.addressFormat ?? opts.address_format },
       signal: signalFrom(opts),
     });
   }
