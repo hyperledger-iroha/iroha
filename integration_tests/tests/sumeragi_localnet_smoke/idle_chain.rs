@@ -29,14 +29,6 @@ pub(super) async fn run_permissioned_progress() -> Result<()> {
                 .write(
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    2_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
                 );
         });
 
@@ -180,14 +172,6 @@ pub(super) async fn run() -> Result<()> {
                 .write(
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    2_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
                 );
         });
     let context = stringify!(permissioned_idle_chain_advances_only_for_external_or_internal_work);
