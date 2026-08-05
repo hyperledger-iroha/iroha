@@ -248,6 +248,14 @@ pub const TX_RETRIEVAL_INTERVAL: Duration = Duration::from_millis(100);
 pub const MAX_LANE_DRAIN_VOTE_WIRE_BYTES: usize = lane_consensus::MAX_LANE_DRAIN_VOTE_BYTES;
 const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 4;
 const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 20;
+const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG: u32 = 21;
+/// Hard Norito frame bound for one QueuePlan admission-certificate handoff.
+///
+/// The certificate body itself is capped by the merge-ledger contract. The
+/// fixed headroom covers the `NetworkMessage` enum and `Arc<Vec<u8>>` archive
+/// framing without permitting a second unbounded payload.
+pub const MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES: usize =
+    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES + 64 * 1024;
 const MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS: usize = MAX_LANE_DRAIN_VOTE_WIRE_BYTES;
 // A canonical 128-member BLS committee needs just over 256 KiB under Norito's
 // conservative nested alignment-copy accounting. Keep deterministic headroom
@@ -570,6 +578,10 @@ pub enum NetworkMessage {
     /// Certified QueuePlan admission disseminated to every live authoritative validator.
     #[codec(index = 20)]
     QueuePlanAdmissionPublication(Arc<torii_proxy::QueuePlanAdmissionPublicationV1>),
+    /// Canonical quorum QueuePlan admission certificate handed to the current
+    /// global leader for inclusion in the next merge carrier.
+    #[codec(index = 21)]
+    QueuePlanAdmissionCertificate(Arc<Vec<u8>>),
 }
 
 impl NetworkMessage {
@@ -673,7 +685,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             NetworkMessage::LaneRelay(_)
             | NetworkMessage::MergeCommitteeSignature(_)
             | NetworkMessage::LaneDrainVote(_)
-            | NetworkMessage::NativeAmx(_) => T::Consensus,
+            | NetworkMessage::NativeAmx(_)
+            | NetworkMessage::QueuePlanAdmissionCertificate(_) => T::Consensus,
             NetworkMessage::SoracloudLocalReadProxyRequest(_)
             | NetworkMessage::SoracloudLocalReadProxyResponse(_)
             | NetworkMessage::ToriiProxyRequest(_)
@@ -728,7 +741,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             Self::LaneRelay(_)
             | Self::MergeCommitteeSignature(_)
             | Self::LaneDrainVote(_)
-            | Self::NativeAmx(_) => ProgressReconstruction::Retransmit,
+            | Self::NativeAmx(_)
+            | Self::QueuePlanAdmissionCertificate(_) => ProgressReconstruction::Retransmit,
             _ => ProgressReconstruction::Exact,
         }
     }
@@ -754,7 +768,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         let topic = match tag {
             0 => inbound_sumeragi_topic(field)?,
             1 | 7 => Topic::Other,
-            2..=4 | 6 => Topic::Consensus,
+            2..=4 | 6 | 21 => Topic::Consensus,
             5 => inbound_certified_merge_sidecar_topic(field, flags)?,
             8 => inbound_transaction_gossip_topic(field, flags)?,
             9 => Topic::PeerGossip,
@@ -814,6 +828,27 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                     MAX_CERTIFICATE_BYTES,
                     MAX_WIRE_BYTES.saturating_mul(2),
                     16,
+                )))
+            }
+            NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG => {
+                if framed_len > MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES {
+                    return Err(norito::core::Error::ArchiveLengthExceeded {
+                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                        limit: u64::try_from(MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES)
+                            .unwrap_or(u64::MAX),
+                    });
+                }
+                let max_body = iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+                Ok(Some(norito::DecodeLimits::new(
+                    max_body,
+                    MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
+                    MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
+                    // Archive validation accounts both the archived vector and
+                    // aligned owned reconstruction buffers. A maximum legal
+                    // certificate currently consumes just over five body
+                    // lengths under that conservative accounting.
+                    MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES.saturating_mul(8),
+                    64,
                 )))
             }
             _ => Ok(None),
@@ -974,7 +1009,8 @@ mod tests {
     use norito::{codec::Encode, core as ncore};
 
     use crate::{
-        MAX_LANE_DRAIN_VOTE_WIRE_BYTES, NetworkMessage, PeerTrustGossip, PeersGossip,
+        MAX_LANE_DRAIN_VOTE_WIRE_BYTES, MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
+        NetworkMessage, PeerTrustGossip, PeersGossip,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         queue::{RoutingDecision, RoutingPlan},
         role::RoleIdWithOwner,
@@ -1139,6 +1175,12 @@ mod tests {
                 NetworkTopic::Control,
                 SubscriberRoute::General,
             ),
+            (
+                NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![0x21])),
+                21,
+                NetworkTopic::Consensus,
+                SubscriberRoute::General,
+            ),
         ];
 
         for (message, expected_tag, expected_topic, expected_route) in fixtures {
@@ -1172,6 +1214,81 @@ mod tests {
 
         assert!(matches!(decoded, NetworkMessage::Health));
         assert_eq!(raw_network_topic(&message), NetworkTopic::Health);
+    }
+
+    #[test]
+    fn queue_plan_admission_handoff_uses_bounded_consensus_decode() {
+        let max_body = iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+        let message = NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![0xA5; max_body]));
+        let encoded = norito::to_bytes(&message).expect("encode maximum admission handoff");
+        assert_eq!(raw_network_tag(&message), 21);
+        assert_eq!(message.topic(), NetworkTopic::Consensus);
+        assert_eq!(raw_network_topic(&message), NetworkTopic::Consensus);
+        assert_eq!(
+            message.progress_reconstruction(),
+            iroha_p2p::network::message::ProgressReconstruction::Retransmit
+        );
+        assert!(encoded.len() <= MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES);
+        let view = ncore::from_bytes_view(&encoded).expect("inspect maximum admission handoff");
+        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            view.as_bytes(),
+            encoded.len(),
+            view.flags(),
+        )
+        .expect("select admission handoff decode policy")
+        .expect("admission handoff installs decode limits");
+        let decoded = ncore::decode_from_bytes_with_limits::<NetworkMessage>(&encoded, limits)
+            .expect("maximum admission bytes fit the bounded network decoder");
+        assert!(matches!(
+            decoded,
+            NetworkMessage::QueuePlanAdmissionCertificate(bytes) if bytes.len() == max_body
+        ));
+    }
+
+    #[test]
+    fn oversized_queue_plan_admission_handoff_hits_frame_cap() {
+        let message = NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![
+            0xA5;
+            MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES
+        ]));
+        let encoded = norito::to_bytes(&message).expect("encode oversized admission handoff");
+        assert!(encoded.len() > MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES);
+        let view = ncore::from_bytes_view(&encoded).expect("inspect oversized admission handoff");
+        let error = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            view.as_bytes(),
+            encoded.len(),
+            view.flags(),
+        )
+        .expect_err("oversized admission handoff must fail before typed decode");
+        assert!(matches!(
+            error,
+            ncore::Error::ArchiveLengthExceeded { limit, .. }
+                if limit == MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES as u64
+        ));
+    }
+
+    #[test]
+    fn queue_plan_admission_handoff_rejects_body_over_certificate_cap() {
+        let max_body = iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+        let message =
+            NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![0xA5; max_body + 1]));
+        let encoded = norito::to_bytes(&message).expect("encode overlong admission body");
+        assert!(
+            encoded.len() <= MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
+            "fixture must exercise the bounded typed decoder below the outer frame cap"
+        );
+        let view = ncore::from_bytes_view(&encoded).expect("inspect overlong admission body");
+        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            view.as_bytes(),
+            encoded.len(),
+            view.flags(),
+        )
+        .expect("overlong body still fits the outer frame")
+        .expect("tag 21 installs bounded decode limits");
+        assert!(
+            ncore::decode_from_bytes_with_limits::<NetworkMessage>(&encoded, limits).is_err(),
+            "the typed Vec bound must reject one byte beyond the certificate contract"
+        );
     }
 
     #[test]
@@ -1209,6 +1326,7 @@ mod tests {
             (17, NetworkTopic::Control),
             (18, NetworkTopic::Control),
             (19, NetworkTopic::Control),
+            (21, NetworkTopic::Consensus),
         ] {
             let (mut payload, flags) =
                 norito::codec::encode_with_header_flags(&SingleFieldNetworkMessage::Field(0));
