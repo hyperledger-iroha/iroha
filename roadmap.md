@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-03
+Last updated: 2026-08-05
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -20,8 +20,17 @@ V1/revision-3 checkpoint lists elsewhere in this file are historical and do
 not add release gates. Guarded formatting, explicit production `iroha_core`
 library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
 regressions, generated-artifact determinism, exact profile-config admission,
-and public consensus wire roundtrips are complete. The outstanding revision-4
-work is limited to:
+and public consensus wire roundtrips are complete.
+
+EX-292/EX-297 proposal admission and recovery semantics are implemented. Clean
+idle heights do not manufacture ordinary empty proposals; only an explicitly
+armed, bounded recovery heartbeat may use one empty recovery carrier. That
+carrier advances finalized height without incrementing `blocks_non_empty`, and
+NPoS/Mochi workload qualification counts non-empty commits. This is a consensus
+hard cut: upgrade the complete validator committee together, never as a rolling
+or mixed old/new validator deployment.
+
+The outstanding revision-4 work is limited to:
 
 - Repair or isolate the unrelated committed `iroha_core`, `iroha_data_model`,
   and daemon test-harness compilation failures, and extend the host guard
@@ -275,6 +284,12 @@ hash-tree artifacts now describe the 110-entry release schema. Focused
 data-model, Core, IVM, bridge, fixture, and cross-SDK execution remains required
 before these audit items can close; physical Kagemusha recursion also remains
 blocked on a clean SSH-signed source seal and reviewed external inputs.
+The restored `cfleaf03`/`cfnode03` Axiom Poseidon empty root is a state
+compatibility hard cut. A persisted chain, snapshot, or confidential checkpoint
+created with the superseded canonical-empty root must not be opened by the new
+binaries without an explicit reviewed migration; otherwise rebuild/resync it
+from authoritative corrected state. There is no implicit root rewrite or mixed
+old/new persisted-state rollout.
 Before cross-SDK closure, replace the Swift, Kotlin, and Android confidential
 Merkle helpers' legacy polynomial compressor and raw-zero leaves with Core's
 current `cfleaf03`/`cfnode03` Axiom Poseidon construction. Publish shared
@@ -446,10 +461,14 @@ transition-checked latest-index publication, configured evidence-byte bounds,
 and State-frontier authentication. Its focused failing-mutation pytest cases
 must still execute on the final source before freeze.
 
-- Run a live four-validator idle-chain check for the restored proposal-work
-  gate, confirming that idle heights do not manufacture empty blocks while
-  explicitly armed recovery heartbeats and genuine internal work still
-  advance.
+The EX-297 real four-validator qualification sources are implemented. The
+idle-chain gate holds one canonical tip through the cadence, retransmission, and
+commit-quorum windows, then proves that external and internal-only work advance
+through non-empty commits. The recovery phase-cut matrix separately admits at
+most one explicitly armed empty carrier, verifies that `blocks_non_empty` does
+not advance for it, and proves that the chain returns to ordinary non-empty
+publication after restart. Final source-sealed execution remains part of the
+real-network release gates above rather than an implementation TODO.
 
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
