@@ -179,6 +179,13 @@ pub(crate) struct PreparedCandidateWork {
     /// Canonically lane-ordered, producer-authenticated autonomous payloads
     /// anchored without ordinary global execution.
     pub(crate) autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
+    /// Exact merge-QC message digest which must be carried by this candidate.
+    ///
+    /// Lane work sets this after it creates or observes control-plane work
+    /// whose collection must survive until the matching certified merge entry
+    /// is attached. The assembler defers all other proposal work while that
+    /// exact carrier is unavailable.
+    pub(crate) required_merge_carrier_digest: Option<Hash>,
 }
 
 impl PreparedCandidateWork {
@@ -190,6 +197,7 @@ impl PreparedCandidateWork {
             native_amx_receipts: vec![None; candidate_count],
             lane_payload_ownerships: Vec::new(),
             autonomous_lane_payloads: Vec::new(),
+            required_merge_carrier_digest: None,
         }
     }
 }
@@ -521,6 +529,14 @@ impl V2CandidateAssembler {
             validate_prepared_work(request.context, view, &descriptors, &prepared_work)?;
 
             report.selected = selected.len();
+            if merge_carrier_requirement_is_unmet(&prepared_work, &request.attachments) {
+                report.work_deferred = report.work_deferred.saturating_add(1);
+                if request.queue.transaction_selection_durability_faulted() {
+                    return Err(CandidateError::RestartRequired);
+                }
+                validate_request(&request)?;
+                return Ok(CandidateAssemblyOutcome::NoProposalWork(report));
+            }
             if !request.allow_empty_recovery_heartbeat
                 && !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work)
             {
@@ -841,6 +857,21 @@ fn candidate_has_proposal_work(
         || attachments.sccp_commitment_root.is_some()
         || attachments.certified_merge_carrier_header.is_some()
         || attachments.certified_merge_entry.is_some()
+}
+
+fn merge_carrier_requirement_is_unmet(
+    prepared_work: &PreparedCandidateWork,
+    attachments: &CandidateAttachments,
+) -> bool {
+    prepared_work
+        .required_merge_carrier_digest
+        .is_some_and(|required_digest| {
+            attachments
+                .certified_merge_entry
+                .as_ref()
+                .map(|entry| entry.merge_qc.message_digest)
+                != Some(required_digest)
+        })
 }
 
 fn stripped_carrier_context_matches(
@@ -1451,6 +1482,7 @@ mod tests {
         account::AccountId,
         block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
         consensus::{VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
+        merge::MergeQuorumCertificate,
         nexus::{DataSpaceId, LaneId},
         peer::PeerId,
         transaction::TransactionBuilder,
@@ -1679,6 +1711,18 @@ mod tests {
         allow_empty_recovery_heartbeat: bool,
         attachments: CandidateAttachments,
     ) -> CandidateAssemblyOutcome {
+        assemble_empty_snapshot_candidate_with_work(
+            allow_empty_recovery_heartbeat,
+            attachments,
+            SingleRouteWorkProvider,
+        )
+    }
+
+    fn assemble_empty_snapshot_candidate_with_work<Work: CandidateWorkProvider>(
+        allow_empty_recovery_heartbeat: bool,
+        attachments: CandidateAttachments,
+        work_provider: Work,
+    ) -> CandidateAssemblyOutcome {
         let (state, mut context, anchor, key) = snapshot_parent_fixture();
         context.da_layout.max_payload_size_bytes = 64 * 1024;
         context.da_layout.max_chunk_count = 128;
@@ -1714,9 +1758,61 @@ mod tests {
             output_guard: &output_guard,
             attachments,
             allow_empty_recovery_heartbeat,
-            work_provider: SingleRouteWorkProvider,
+            work_provider,
         })
         .expect("empty snapshot candidate assembly")
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct RequiredMergeWorkProvider {
+        digest: Hash,
+    }
+
+    impl CandidateWorkProvider for RequiredMergeWorkProvider {
+        fn prepare(
+            &mut self,
+            _context: &wire::HeightContext,
+            _view: wire::View,
+            candidates: &[CandidateDescriptor<'_>],
+        ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
+            Ok(PreparedCandidateWork {
+                native_amx_receipts: vec![None; candidates.len()],
+                lane_payload_ownerships: Vec::new(),
+                autonomous_lane_payloads: Vec::new(),
+                required_merge_carrier_digest: Some(self.digest),
+            })
+        }
+    }
+
+    fn merge_carrier_entry(message_digest: Hash) -> MergeLedgerEntry {
+        let validator_set = Vec::new();
+        MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
+            epoch_id: 0,
+            lane_catalog_hash: Hash::new(b"candidate merge carrier catalog"),
+            active_lanes: Vec::new(),
+            incarnation_root: Hash::new(b"candidate merge carrier incarnations"),
+            activation_root: Hash::new(b"candidate merge carrier activations"),
+            lane_snapshots: Vec::new(),
+            global_state_root: Hash::new(b"candidate merge carrier state"),
+            merge_qc: MergeQuorumCertificate::new(
+                0,
+                0,
+                3,
+                HashOf::from_untyped_unchecked(Hash::new(b"candidate merge carrier parent")),
+                Hash::new(b"candidate merge carrier chain"),
+                VALIDATOR_SET_HASH_VERSION_V1,
+                HashOf::new(&validator_set),
+                validator_set,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                message_digest,
+            ),
+            execution_batch: None,
+            lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
+        }
     }
 
     #[test]
@@ -1751,6 +1847,71 @@ mod tests {
             panic!("due time-trigger work must produce a candidate");
         };
         assert_eq!(candidate.scan_report(), CandidateScanReport::default());
+        assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
+    }
+
+    #[test]
+    fn required_merge_carrier_defers_clock_work_when_entry_is_absent() {
+        let required_digest = Hash::new(b"required absent candidate merge carrier");
+        let outcome = assemble_empty_snapshot_candidate_with_work(
+            false,
+            CandidateAttachments {
+                time_trigger_clock_progress_required: true,
+                ..CandidateAttachments::default()
+            },
+            RequiredMergeWorkProvider {
+                digest: required_digest,
+            },
+        );
+        let CandidateAssemblyOutcome::NoProposalWork(report) = outcome else {
+            panic!("clock work must wait for its required certified merge carrier");
+        };
+        assert_eq!(report.selected, 0);
+        assert_eq!(report.work_deferred, 1);
+    }
+
+    #[test]
+    fn required_merge_carrier_defers_clock_work_when_digest_differs() {
+        let required_digest = Hash::new(b"required mismatched candidate merge carrier");
+        let outcome = assemble_empty_snapshot_candidate_with_work(
+            false,
+            CandidateAttachments {
+                time_trigger_clock_progress_required: true,
+                certified_merge_entry: Some(merge_carrier_entry(Hash::new(
+                    b"different candidate merge carrier",
+                ))),
+                ..CandidateAttachments::default()
+            },
+            RequiredMergeWorkProvider {
+                digest: required_digest,
+            },
+        );
+        let CandidateAssemblyOutcome::NoProposalWork(report) = outcome else {
+            panic!("clock work must not carry a different certified merge entry");
+        };
+        assert_eq!(report.selected, 0);
+        assert_eq!(report.work_deferred, 1);
+    }
+
+    #[test]
+    fn required_merge_carrier_allows_clock_work_when_digest_matches() {
+        let required_digest = Hash::new(b"matching candidate merge carrier");
+        let outcome = assemble_empty_snapshot_candidate_with_work(
+            false,
+            CandidateAttachments {
+                time_trigger_clock_progress_required: true,
+                certified_merge_entry: Some(merge_carrier_entry(required_digest)),
+                ..CandidateAttachments::default()
+            },
+            RequiredMergeWorkProvider {
+                digest: required_digest,
+            },
+        );
+        let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
+            panic!("the exact certified merge entry must release the carrier barrier");
+        };
+        assert_eq!(candidate.scan_report().selected, 0);
+        assert_eq!(candidate.scan_report().work_deferred, 0);
         assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
     }
 
@@ -1948,6 +2109,7 @@ mod tests {
             native_amx_receipts: Vec::new(),
             lane_payload_ownerships: Vec::new(),
             autonomous_lane_payloads: envelopes,
+            required_merge_carrier_digest: None,
         };
         assert!(validate_prepared_work(&context, 0, &[], &prepared).is_ok());
 

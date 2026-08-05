@@ -1182,7 +1182,9 @@ evidence.
 
 **Evidence:** Open.
 
-Fresh four-peer suites must cover automatic expansion/contraction, restart
+Fresh four-peer suites must cover clean idle stability, workload-driven
+non-empty progress, the exact PrepareQC/CommitQC/world-commit recovery cuts,
+automatic expansion/contraction, restart
 recovery, same-ID A/B/A recreation, grouped and mixed-role Native application,
 same-route handling, offline/Byzantine validator rotation, body pruning,
 evidence-aware drain, archive, and useful autonomous execution through the
@@ -1192,9 +1194,10 @@ canonical carrier. Required anchors include
 and the strict autoscale cycle tests in
 `integration_tests/tests/nexus/autoscale_localnet.rs`, after their production
 prerequisites are reachable. A skipped test or test-only producer is a failure.
-The mandatory four-peer lifecycle and rotating-validator Native tests are now
-non-ignored and source-bound into the release runner, but no fresh completion
-artifact is recorded here.
+The six mandatory four-peer lifecycle, rotating-validator Native, EX-297 idle,
+and EX-297 recovery-cut tests are now non-ignored and source-bound into the
+release launcher, receipt validator, and bootstrap consumer, but no fresh
+completion artifact is recorded here.
 
 ### G-12P — twelve lane validators on a 13-peer global committee
 

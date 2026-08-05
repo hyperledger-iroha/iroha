@@ -61385,6 +61385,29 @@ if matches!(
             "CommitCertificateResponse progress-reservation regression",
             errors,
         )
+        busy_regression_name = (
+            "certified_tc_crosses_full_retry_retained_prepare_prefix"
+        )
+        busy_regression = _require_rust_item(
+            runtime_path, runtime_source, busy_regression_name, errors
+        )
+        _require_rust_item_context(
+            runtime_path,
+            busy_regression,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "certified TC retry-retained Prepare-prefix regression",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            busy_regression,
+            _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
+                busy_regression_name
+            ],
+            "certified TC retry-retained Prepare-prefix regression",
+            errors,
+        )
         causal_runtime_regressions: dict[str, RustItem | None] = {}
         runtime_test_context = (
             ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
@@ -89263,20 +89286,15 @@ let metadata =
         ),
         (
             """
-let aggregate_bytes = match kind {
-    NativeAmxEvidenceKind::Manifest => &mut manifest_bytes,
-    NativeAmxEvidenceKind::Receipt => &mut receipt_bytes,
-};
-*aggregate_bytes = aggregate_bytes.checked_add(encoded_len)
+evidence_bytes = evidence_bytes.checked_add(encoded_len).ok_or_else(|| {
 """,
-            "standalone Native AMX manifest and receipt byte totals must be "
-            "independent and overflow checked",
+            "standalone Native AMX shared byte total must be overflow checked",
         ),
         (
             """
-if *aggregate_bytes > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES {
+if evidence_bytes > self.native_amx_participant_evidence_file_bytes() {
 """,
-            "standalone Native AMX aggregate byte bounds",
+            "standalone Native AMX evidence must share the configured aggregate byte bound",
         ),
         (
             """
@@ -96068,10 +96086,10 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         else harness[unit_start:chaos_start]
     )
     required_unit_inventory_tokens = (
-        "    if ((${#listed_unit_tests[@]} != 137)); then",
-        '      echo "expected exactly 137 Sumeragi v2 reducer unit tests" >&2',
+        "    if ((${#listed_unit_tests[@]} != 140)); then",
+        '      echo "expected exactly 140 Sumeragi v2 reducer unit tests" >&2',
         "    if ((${#listed_ignored_unit_tests[@]} != 0)); then",
-        '      echo "reducer unit gate requires all 137 tests to be runnable" >&2',
+        '      echo "reducer unit gate requires all 140 tests to be runnable" >&2',
     )
     missing_unit_inventory_tokens = [
         token
@@ -96080,7 +96098,7 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
     ]
     if missing_unit_inventory_tokens:
         errors.append(
-            f"{harness_path}: --unit must seal exactly 137 runnable "
+            f"{harness_path}: --unit must seal exactly 140 runnable "
             "source-shared tests; missing or repeated "
             f"{missing_unit_inventory_tokens}"
         )
@@ -96571,8 +96589,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 400:
-        errors.append("internal release-regression seal must contain exactly 400 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 410:
+        errors.append("internal release-regression seal must contain exactly 410 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:

@@ -21,7 +21,7 @@ Options:
   --native-amx-iterations <N>
                           Native AMX soak iterations, 1..100 (default: 10)
   --multilane-four-peer-release
-                          Run both mandatory non-ignored four-peer release gates
+                          Run all six mandatory non-ignored four-peer release gates
   --target-dir <PATH>     Set CARGO_TARGET_DIR for the test run
   --evidence-dir <PATH>   Persist exact per-run logs and completion accounting
   --fast                  Run cargo via scripts/cargo_fast.sh when available
@@ -53,6 +53,10 @@ readonly NATIVE_AMX_GROUPED_PRUNING_MARKER="[multilane-release-native-evidence] 
 readonly AUTOSCALE_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
 readonly AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
 readonly AUTOSCALE_DRAIN_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
+readonly EX297_IDLE_CHAIN_RELEASE_TEST="sumeragi_localnet_smoke::permissioned_idle_chain_advances_only_for_external_or_internal_work"
+readonly EX297_IDLE_CHAIN_RELEASE_MARKER="[ex-297-idle-evidence] clean_idle=passed external_non_empty=passed internal_non_empty=passed"
+readonly EX297_PHASE_CUT_RELEASE_TEST="musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay"
+readonly EX297_PHASE_CUT_RELEASE_MARKER="[ex-297-phase-cut-evidence] after_prepare_qc=passed after_commit_qc=passed before_world_commit=passed exact_once=passed"
 readonly CROSS_DATASPACE_CASE_TEST="nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing"
 readonly CROSS_DATASPACE_FAULT_SOAK_TEST="nexus::cross_dataspace_localnet::cross_dataspace_two_hour_fault_soak_preserves_multilane_application"
 readonly CROSS_DATASPACE_SEED_PREFIX="nexus-cross-dataspace-v1-seed-"
@@ -302,6 +306,7 @@ done
 # `--env` override cannot weaken it.
 ENV_VARS+=("IROHA_TEST_REQUIRE_NETWORK=1")
 ENV_VARS+=("IROHA_TEST_NETWORK_START_ATTEMPTS=1")
+ENV_VARS+=("IROHA_FAIL_ON_SANDBOX_SKIP=1")
 
 wait_for_cargo_idle() {
   while true; do
@@ -374,7 +379,9 @@ validate_multilane_release_markers() {
   local test_name="$1"
   local log_path="$2"
   if [[ "$test_name" == "$AUTOSCALE_FOUR_PEER_RELEASE_TEST" \
-    || "$test_name" == "$NATIVE_AMX_FAULT_SOAK_TEST" ]]; then
+    || "$test_name" == "$NATIVE_AMX_FAULT_SOAK_TEST" \
+    || "$test_name" == "$EX297_IDLE_CHAIN_RELEASE_TEST" \
+    || "$test_name" == "$EX297_PHASE_CUT_RELEASE_TEST" ]]; then
     if [[ "$(grep -Fxc -- "[multilane-release-gate] started: ${test_name}" "$log_path" || true)" != 1 ]]; then
       echo "${test_name} did not enter mandatory multilane release mode" >&2
       return 1
@@ -388,9 +395,23 @@ validate_multilane_release_markers() {
     echo "${test_name} reported a forbidden developer opt-out in release mode" >&2
     return 1
   fi
+  if grep -Eq -- "sandbox(ed| restrictions) skip" "$log_path"; then
+    echo "${test_name} reported a forbidden sandbox skip in release mode" >&2
+    return 1
+  fi
   if [[ "$test_name" == "$NATIVE_AMX_FAULT_SOAK_TEST" ]] \
     && [[ "$(grep -Fxc -- "$NATIVE_AMX_GROUPED_PRUNING_MARKER" "$log_path" || true)" != 1 ]]; then
     echo "${test_name} did not prove one exact grouped Native AMX durable/pruning recovery" >&2
+    return 1
+  fi
+  if [[ "$test_name" == "$EX297_IDLE_CHAIN_RELEASE_TEST" ]] \
+    && [[ "$(grep -Fxc -- "$EX297_IDLE_CHAIN_RELEASE_MARKER" "$log_path" || true)" != 1 ]]; then
+    echo "${test_name} did not prove one exact clean-idle/external/internal EX-297 sequence" >&2
+    return 1
+  fi
+  if [[ "$test_name" == "$EX297_PHASE_CUT_RELEASE_TEST" ]] \
+    && [[ "$(grep -Fxc -- "$EX297_PHASE_CUT_RELEASE_MARKER" "$log_path" || true)" != 1 ]]; then
+    echo "${test_name} did not prove the exact EX-297 phase-cut matrix" >&2
     return 1
   fi
 }
@@ -510,9 +531,11 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
     "nexus_and_streaming|${AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST}"
     "nexus_and_streaming|${AUTOSCALE_DRAIN_FOUR_PEER_RELEASE_TEST}"
     "native_amx_routing|${NATIVE_AMX_FAULT_SOAK_TEST}"
+    "consensus_and_da|${EX297_IDLE_CHAIN_RELEASE_TEST}"
+    "native_amx_routing|${EX297_PHASE_CUT_RELEASE_TEST}"
   )
-  if ((${#release_specs[@]} != 4)); then
-    echo "expected exactly four mandatory four-peer multilane release tests" >&2
+  if ((${#release_specs[@]} != 6)); then
+    echo "expected exactly six mandatory four-peer multilane release tests" >&2
     exit 1
   fi
   passed_runs=0
@@ -573,8 +596,8 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
       >>"$runs_path"
     ((passed_runs += 1))
   done
-  if ((passed_runs != 4)); then
-    echo "mandatory multilane four-peer release gates passed ${passed_runs}/4" >&2
+  if ((passed_runs != 6)); then
+    echo "mandatory multilane four-peer release gates passed ${passed_runs}/6" >&2
     exit 1
   fi
   completion_path="${evidence_run_dir}/COMPLETED.tsv"
@@ -587,18 +610,20 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
     source_manifest_sha256 "$release_source_manifest_sha256" \
     cargo_lock_sha256 "$release_cargo_lock_sha256" \
     prebuilt_manifest_sha256 "$release_prebuilt_manifest_sha256" \
-    expected_runs 4 \
+    expected_runs 6 \
     passed_runs "$passed_runs" \
     failed_runs 0 \
     skipped_runs 0 \
     native_grouped_pruning_evidence passed \
+    ex297_idle_evidence passed \
+    ex297_phase_cut_evidence passed \
     runs_sha256 "$(sha256_file "$runs_path")" \
     >"$completion_tmp"
   mv -- "$completion_tmp" "$completion_path"
   publish_completion_path \
     "$completion_path" \
     "$multilane_completion_pointer"
-  echo "[nexus-cross-swap] mandatory four-peer multilane release gates passed 4/4; completion=${completion_path}"
+  echo "[nexus-cross-swap] mandatory four-peer multilane release gates passed 6/6; completion=${completion_path}"
   exit
 fi
 

@@ -1246,7 +1246,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc`.
+`07b5827f8a9203fcf7a8bd7ffe5aafe03da92436c2b7a0c577b364a78a802165`.
 Nine of those legs execute the separate 309-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 310 TSV lines and has SHA-256
 `b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb`.
@@ -1501,7 +1501,7 @@ source-sealed release leg before it becomes release evidence.
 
 The preceding source-shared formal harness passed 118/118
 unit/reducer/WAL/refinement tests and 8/8 model-trace replay tests. The current
-harness inventories 137 runnable reducer tests and still requires a fresh
+harness inventories 140 runnable reducer tests and still requires a fresh
 source-sealed run. The earlier fast-network mode passed all nine named
 deterministic network simulations. Those unsealed results do not replace the
 source-sealed release leg, and the pinned Verus receipt described by the formal
@@ -2127,7 +2127,7 @@ Formal evidence includes the completion, pinned harness lock and toolchain,
 proof ledger/evidence/log, multilane Apalache evidence, and the TLAPS resource
 JSONL and summary. The
 receipt also carries all 160 matrix logs; exact G-4P completion, summary, and
-four run logs; exact deterministic G-12 seed completion, summary, and ten run
+six run logs; exact deterministic G-12 seed completion, summary, and ten run
 logs; the two-hour G-12 fault-soak completion and log; the closed multilane
 scaling bundle, retained validator, four authenticated digest anchors, retained
 tool inventory, and repository-root binding; the chaos completion/log; and the

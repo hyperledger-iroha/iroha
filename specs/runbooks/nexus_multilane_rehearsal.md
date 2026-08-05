@@ -160,6 +160,15 @@ Run every required DA/RBC case with skips treated as failures:
    artifact from the retired incarnations.
 7. Require peer convergence on canonical Kura/WSV state, transaction queries,
    Native receipts, queue ownership, and all endpoint projections.
+8. Hold one settled canonical tip across the signed-cadence, retransmission,
+   and commit-quorum windows, then prove that external and internal-only work
+   each advance the chain through non-empty commits. Raw finalized height is
+   not a workload counter; retain converged `blocks_non_empty` evidence.
+9. Cut Native AMX publication independently after Prepare QC, after Commit QC,
+   and before world-state commit. After each restart, prove exact-once
+   application. An explicitly armed recovery may admit at most one empty
+   heartbeat carrier, which must not increment `blocks_non_empty`; ordinary
+   non-empty publication must resume afterward.
 
 ### Fresh 13-peer corridor and soak (`G-12P`)
 

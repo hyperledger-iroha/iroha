@@ -247,6 +247,34 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     .0
 }
 
+pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
+    mut extra_transactions: Vec<Vec<InstructionBox>>,
+    mut post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+) -> GenesisBlock {
+    init_instruction_registry();
+    strip_handshake_metadata_transactions(&mut extra_transactions);
+    strip_handshake_metadata_transactions(&mut post_topology_transactions);
+    build_minimal_genesis_unexecuted_with_post_topology(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        genesis_key_pair,
+        chain_id(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+    )
+    .0
+}
+
 pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
     extra_transactions: Vec<Vec<InstructionBox>>,
     post_topology_transactions: Vec<Vec<InstructionBox>>,

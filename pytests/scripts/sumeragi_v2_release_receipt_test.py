@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import runpy
+import shlex
 import shutil
 import stat
 import subprocess
@@ -285,7 +286,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
+        "1ec65218b718871ac51fe47896c64aec0004832fd944a29e48e02f5e826038a7"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -1147,6 +1148,15 @@ def make_g4p_evidence(
             "native_amx_rotating_validator_fault_soak_preserves_independent_"
             "participant_qcs",
         ),
+        (
+            "consensus_and_da",
+            "sumeragi_localnet_smoke::"
+            "permissioned_idle_chain_advances_only_for_external_or_internal_work",
+        ),
+        (
+            "native_amx_routing",
+            "musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay",
+        ),
     )
 
     logs = []
@@ -1154,17 +1164,28 @@ def make_g4p_evidence(
     for index, (target, test) in enumerate(release_tests):
         log = evidence_dir / f"run-{index:02d}-{target}.log"
         release_markers = []
-        if index in (0, 3):
+        if index in (0, 3, 4, 5):
             release_markers.append(
                 f"[multilane-release-gate] started: {test}"
             )
-        if target == "native_amx_routing":
+        if index == 3:
             release_markers.append(
                 "[multilane-release-native-evidence] grouped_sources=2 "
                 "durable_manifest=passed body_eviction_recovery=passed "
                 "authenticated_remote_recovery=passed exact_once=passed"
             )
-        if index in (0, 3):
+        if index == 4:
+            release_markers.append(
+                "[ex-297-idle-evidence] clean_idle=passed "
+                "external_non_empty=passed internal_non_empty=passed"
+            )
+        if index == 5:
+            release_markers.append(
+                "[ex-297-phase-cut-evidence] after_prepare_qc=passed "
+                "after_commit_qc=passed before_world_commit=passed "
+                "exact_once=passed"
+            )
+        if index in (0, 3, 4, 5):
             release_markers.append(
                 f"[multilane-release-gate] completed: {test}"
             )
@@ -1199,11 +1220,13 @@ def make_g4p_evidence(
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
             "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
-            "expected_runs": "4",
-            "passed_runs": "4",
+            "expected_runs": "6",
+            "passed_runs": "6",
             "failed_runs": "0",
             "skipped_runs": "0",
             "native_grouped_pruning_evidence": "passed",
+            "ex297_idle_evidence": "passed",
+            "ex297_phase_cut_evidence": "passed",
             "runs_sha256": sha256(summary),
         },
     )
@@ -1313,7 +1336,13 @@ def make_g12_evidence(
     }
 
 
-def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
+def make_evidence(
+    tmp_path: Path, *, archived_git_prelude: str = ""
+) -> dict[str, Path | str | list[Path]]:
+    fixture_root = tmp_path / "receipt-fixture" / "evidence"
+    fixture_root.mkdir(parents=True, mode=0o700)
+    fixture_root.chmod(0o700)
+    tmp_path = fixture_root
     candidate_manifest = "a" * 64
     sealed_manifest = "b" * 64
     tree = "2" * 40
@@ -1373,7 +1402,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     signature_revocation.write_bytes(b"")
     fake_git = (
         "#!/bin/sh\n"
-        "case \"$*\" in\n"
+        + archived_git_prelude
+        + "case \"$*\" in\n"
         "  'rev-parse --show-toplevel') pwd -P ;;\n"
         f"  'rev-parse --verify HEAD^{{commit}}') printf '%s\\n' {head} ;;\n"
         f"  'rev-parse --verify {head}^{{tree}}') printf '%s\\n' {tree} ;;\n"
@@ -2840,7 +2870,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
+        "1ec65218b718871ac51fe47896c64aec0004832fd944a29e48e02f5e826038a7"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -3890,10 +3920,66 @@ def test_receipt_rejects_rehashed_g4p_run_identity_mismatch(
 
 
 @pytest.mark.parametrize(
+    ("log_index", "marker"),
+    (
+        (
+            4,
+            "[ex-297-idle-evidence] clean_idle=passed "
+            "external_non_empty=passed internal_non_empty=passed",
+        ),
+        (
+            5,
+            "[ex-297-phase-cut-evidence] after_prepare_qc=passed "
+            "after_commit_qc=passed before_world_commit=passed exact_once=passed",
+        ),
+    ),
+)
+def test_receipt_rejects_rehashed_g4p_log_missing_ex297_marker(
+    tmp_path: Path, log_index: int, marker: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    logs = evidence["g4p_logs"]
+    summary = evidence["g4p_summary"]
+    completion = evidence["g4p_completion"]
+    assert isinstance(logs, list)
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+    log = logs[log_index]
+    assert isinstance(log, Path)
+    original = log.read_text(encoding="utf-8")
+    assert original.count(f"{marker}\n") == 1
+    log.write_text(original.replace(f"{marker}\n", "", 1), encoding="utf-8")
+
+    rows = summary.read_text(encoding="utf-8").splitlines()
+    fields = rows[log_index + 1].split("\t")
+    fields[3] = sha256(log)
+    rows[log_index + 1] = "\t".join(fields)
+    summary.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    completion_fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    completion_fields["runs_sha256"] = sha256(summary)
+    write_tsv(completion, completion_fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert (
+        f"G-4P run log {log_index} does not prove one exact passing mandatory G-4P test"
+        in result.stderr
+    )
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     (
         ("schema_version", "2"),
         ("source_manifest_sha256", "0" * 64),
+        ("expected_runs", "4"),
+        ("ex297_idle_evidence", "failed"),
+        ("ex297_phase_cut_evidence", "failed"),
     ),
 )
 def test_receipt_rejects_g4p_completion_schema_or_release_mismatch(
@@ -5404,7 +5490,10 @@ def test_hand_invoked_writer_rejects_fake_machine_completion_artifacts(
     result = run_writer(evidence, output, SCRIPT)
 
     assert result.returncode == 1
-    assert "archived formal Verus evidence failed validation" in result.stderr
+    assert (
+        "archived formal ledger has an invalid cross-tool evidence requirement"
+        in result.stderr
+    )
     assert not output.exists()
 
 
@@ -5685,6 +5774,54 @@ def test_receipt_rejects_seed_summary_row_with_extra_column(tmp_path: Path) -> N
 
     assert result.returncode == 1
     assert "extra or missing columns" in result.stderr
+
+
+def test_receipt_fixture_ignores_unrelated_shared_pytest_root_churn(
+    tmp_path: Path,
+) -> None:
+    simulated_pytest_root = tmp_path / "pytest-of-user"
+    test_root = simulated_pytest_root / "pytest-1" / "test-case"
+    test_root.mkdir(parents=True)
+    unrelated_session = simulated_pytest_root / "pytest-unrelated"
+    churn_commands = (
+        f"mkdir {shlex.quote(str(unrelated_session))}\n"
+        f"rmdir {shlex.quote(str(unrelated_session))}\n"
+    )
+    evidence = make_evidence(
+        test_root,
+        archived_git_prelude=churn_commands,
+    )
+    writer = fixture_writer(test_root)
+    git_path = evidence["signature_git"]
+    taira_log = evidence["taira_log"]
+    completion = evidence["taira_completion"]
+    assert isinstance(git_path, Path)
+    assert isinstance(taira_log, Path)
+    assert isinstance(completion, Path)
+    watched_ancestors = (
+        git_path.parent,
+        *tuple(git_path.parent.parents)[:3],
+    )
+    assert watched_ancestors[-1] == test_root
+    assert simulated_pytest_root not in watched_ancestors
+    taira_log.write_text(
+        "running 1 test\n"
+        "test forged_taira_soak ... ok\n\n"
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+        "42 filtered out; finished in 86400.01s\n",
+        encoding="utf-8",
+    )
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["log_sha256"] = sha256(taira_log)
+    write_tsv(completion, fields)
+
+    result = run_writer(evidence, test_root / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "Taira log does not prove its one exact passing soak" in result.stderr
 
 
 def test_receipt_revalidates_archived_taira_semantics(tmp_path: Path) -> None:

@@ -4034,6 +4034,79 @@ mod tests {
     }
 
     #[test]
+    fn leader_wire_recovery_authority_obsoletes_control_at_durable_cuts() {
+        let context = context();
+        let origin = context.roster[0].validator.clone();
+        let control_phases = [
+            FairV2IngressLeaderWirePhase::Proposal,
+            FairV2IngressLeaderWirePhase::PrepareVote,
+            FairV2IngressLeaderWirePhase::CommitVote,
+            FairV2IngressLeaderWirePhase::PrepareQc,
+            FairV2IngressLeaderWirePhase::CommitQc,
+            FairV2IngressLeaderWirePhase::TimeoutVote,
+            FairV2IngressLeaderWirePhase::TimeoutCertificate,
+        ];
+        for (label, authority) in [
+            (
+                "advanced-view",
+                leader_wire_recovery_authority_at(&context, OWNER_A, 3, false),
+            ),
+            (
+                "durable-decision",
+                leader_wire_recovery_authority_at(&context, OWNER_A, 2, true),
+            ),
+        ] {
+            for (index, phase) in control_phases.into_iter().enumerate() {
+                let ordinal = u64::try_from(index).expect("phase index fits u64") + 1;
+                let token = leader_wire_slot_token(
+                    &context,
+                    &origin,
+                    phase,
+                    None,
+                    ordinal,
+                    u128::from(ordinal),
+                );
+                assert!(authority.obsoletes(&token), "{label}: {phase:?}");
+                assert!(
+                    authority.obsoletes_identity(&token.identity),
+                    "{label} identity: {phase:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn leader_wire_recovery_authority_keeps_body_transport_live_at_durable_cuts() {
+        let context = context();
+        let origin = context.roster[0].validator.clone();
+        for (label, authority) in [
+            (
+                "advanced-view",
+                leader_wire_recovery_authority_at(&context, OWNER_A, 3, false),
+            ),
+            (
+                "durable-decision",
+                leader_wire_recovery_authority_at(&context, OWNER_A, 2, true),
+            ),
+        ] {
+            for (phase, chunk_index) in [
+                (FairV2IngressLeaderWirePhase::Chunk, Some(0)),
+                (FairV2IngressLeaderWirePhase::CertifiedResponse, None),
+            ] {
+                let token = leader_wire_slot_token(&context, &origin, phase, chunk_index, 1, 1);
+                assert!(
+                    !authority.obsoletes(&token),
+                    "{label}: old-view {phase:?} remains eligible"
+                );
+                assert!(
+                    !authority.obsoletes_identity(&token.identity),
+                    "{label}: old-view {phase:?} identity remains eligible"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn leader_wire_recovery_authority_retires_obsolete_records_and_retains_highwaters() {
         for (label, durable_view, decision_durable, publish_terminal) in [
             ("advanced-view", 3, false, false),

@@ -712,6 +712,14 @@ pub enum LaneRelayMessage {
     Envelope(LaneRelayEnvelope),
     /// Merge-committee signature share admitted from the authenticated relay.
     MergeSignature(MergeCommitteeSignature),
+    /// Canonical quorum QueuePlan admission certificate handed off by an
+    /// authenticated peer to the current global leader.
+    QueuePlanAdmissionCertificate {
+        /// Authenticated transport sender.
+        sender: PeerId,
+        /// Exact canonical certificate bytes persisted by the source Kura.
+        certificate: Arc<Vec<u8>>,
+    },
     /// Certified merge-sidecar request or chunk with its transport sender.
     CertifiedMergeSidecar {
         /// Semantic protocol origin.
@@ -1018,6 +1026,15 @@ pub(crate) enum FairV2IngressLeaderWirePhase {
 }
 
 impl FairV2IngressLeaderWirePhase {
+    /// Return whether this wire can still complete a decided block body.
+    ///
+    /// A durable Decision or certified view advance closes consensus-control
+    /// work, but it must not suppress chunks or certified responses needed by
+    /// a peer that learned the Decision before receiving the full body.
+    pub(super) const fn is_body_transport(self) -> bool {
+        matches!(self, Self::Chunk | Self::CertifiedResponse)
+    }
+
     const fn source_class(self) -> FairV2IngressLeaderWireSourceClass {
         match self {
             Self::Proposal
@@ -7230,6 +7247,7 @@ pub struct SumeragiHandle {
     block: Arc<FairV2Ingress>,
     lane_relay: mpsc::SyncSender<LaneRelayMessage>,
     wake: mpsc::SyncSender<()>,
+    pending_queue_plan_admission_dirty: Arc<AtomicBool>,
     ingress_ready: Arc<AtomicBool>,
     output_guard: Arc<ConsensusOutputGuard>,
 }
@@ -7239,6 +7257,7 @@ impl SumeragiHandle {
         block: Arc<FairV2Ingress>,
         lane_relay: mpsc::SyncSender<LaneRelayMessage>,
         wake: mpsc::SyncSender<()>,
+        pending_queue_plan_admission_dirty: Arc<AtomicBool>,
         ingress_ready: Arc<AtomicBool>,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Self {
@@ -7246,6 +7265,7 @@ impl SumeragiHandle {
             block,
             lane_relay,
             wake,
+            pending_queue_plan_admission_dirty,
             ingress_ready,
             output_guard,
         }
@@ -7259,14 +7279,16 @@ impl SumeragiHandle {
     /// has been durably published in Kura.
     ///
     /// The certificate itself is never transferred through an in-memory
-    /// channel: the runner re-reads bounded, hash-addressed Kura evidence when
-    /// constructing the next canonical carrier. A saturated wake channel is
-    /// already an equivalent outstanding notification.
+    /// channel: the runner re-reads bounded, hash-addressed Kura evidence. The
+    /// coalescing dirty bit remains set across a saturated wake channel and is
+    /// cleared only after the nonleader-to-leader handoff scan succeeds.
     #[must_use]
     pub fn notify_pending_queue_plan_admission(&self) -> bool {
         let Some(_permit) = self.output_guard.acquire() else {
             return false;
         };
+        self.pending_queue_plan_admission_dirty
+            .store(true, Ordering::Release);
         if !self.ingress_ready.load(Ordering::Acquire) {
             return false;
         }
@@ -7439,6 +7461,17 @@ impl SumeragiHandle {
             );
             return SumeragiIngressDisposition::Rejected(message);
         }
+        if let LaneRelayMessage::QueuePlanAdmissionCertificate { certificate, .. } = &message
+            && (certificate.is_empty()
+                || certificate.len()
+                    > iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES)
+        {
+            iroha_logger::debug!(
+                certificate_bytes = certificate.len(),
+                "rejecting empty or oversized QueuePlan admission-certificate handoff"
+            );
+            return SumeragiIngressDisposition::Rejected(message);
+        }
         match self.lane_relay.try_send(message) {
             Ok(()) => {
                 status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
@@ -7583,14 +7616,61 @@ fn test_sumeragi_handle_with_source_geometry(
     block.open().expect("open configured test ingress");
     let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(block_capacity);
     let (wake_tx, _wake_rx) = mpsc::sync_channel(1);
+    let pending_queue_plan_admission_dirty = Arc::new(AtomicBool::new(false));
     let handle = SumeragiHandle::new(
         Arc::clone(&block),
         lane_relay_tx,
         wake_tx,
+        pending_queue_plan_admission_dirty,
         Arc::new(AtomicBool::new(true)),
         ConsensusOutputGuard::isolated(),
     );
     (handle, block, lane_relay_rx)
+}
+
+#[cfg(test)]
+#[test]
+fn queue_plan_admission_notification_retains_dirty_state_when_wake_delivery_fails() {
+    let (handle, _block, _lane_relay) = test_sumeragi_handle(4);
+    assert!(
+        !handle
+            .pending_queue_plan_admission_dirty
+            .load(Ordering::Acquire)
+    );
+    assert!(
+        !handle.notify_pending_queue_plan_admission(),
+        "the fixture intentionally drops its wake receiver"
+    );
+    assert!(
+        handle
+            .pending_queue_plan_admission_dirty
+            .load(Ordering::Acquire),
+        "Kura-backed work must remain discoverable after a failed wake delivery"
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn queue_plan_admission_ingress_rejects_empty_and_oversized_bodies_before_enqueue() {
+    let (handle, _block, lane_relay) = test_sumeragi_handle(4);
+    let sender = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+    for certificate in [
+        Arc::new(Vec::new()),
+        Arc::new(vec![
+            0xA5;
+            iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
+                + 1
+        ]),
+    ] {
+        assert!(matches!(
+            handle.try_incoming_lane_relay_owned(LaneRelayMessage::QueuePlanAdmissionCertificate {
+                sender: sender.clone(),
+                certificate,
+            }),
+            SumeragiIngressDisposition::Rejected(_)
+        ));
+    }
+    assert!(lane_relay.try_recv().is_err());
 }
 
 /// Feature-gated real ingress owner used by dependent-crate liveness tests.
@@ -7821,11 +7901,13 @@ impl SumeragiStartArgs {
         let queue_wake = Arc::clone(&queue);
         let queue_wake_tx = wake_tx.clone();
         let ingress_ready = Arc::new(AtomicBool::new(false));
+        let pending_queue_plan_admission_dirty = Arc::new(AtomicBool::new(true));
 
         let handle = SumeragiHandle::new(
             Arc::clone(&block),
             lane_relay_tx,
             wake_tx,
+            Arc::clone(&pending_queue_plan_admission_dirty),
             Arc::clone(&ingress_ready),
             Arc::clone(&output_guard),
         );
@@ -7844,6 +7926,7 @@ impl SumeragiStartArgs {
             network,
             genesis_network,
             lane_relay_rx,
+            pending_queue_plan_admission_dirty,
             ingress_ready,
             output_guard: Arc::clone(&output_guard),
             block_rx: block,
@@ -8088,6 +8171,7 @@ struct SumeragiWorker {
     network: IrohaNetwork,
     genesis_network: GenesisWithPubKey,
     lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,
+    pending_queue_plan_admission_dirty: Arc<AtomicBool>,
     ingress_ready: Arc<AtomicBool>,
     output_guard: Arc<ConsensusOutputGuard>,
     block_rx: Arc<FairV2Ingress>,

@@ -729,6 +729,88 @@ fn test_nexus_fixture_constructor_opens_custom_primary_without_archiving_default
 }
 
 #[test]
+fn pre_genesis_nexus_fixture_matches_multilane_daemon_startup_incarnations() {
+    let secondary_lane = LaneConfig {
+        id: LaneId::new(1),
+        alias: "secondary-fixture".to_owned(),
+        ..LaneConfig::default()
+    };
+    let catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), secondary_lane])
+        .expect("two-lane fixture catalog");
+    let state = State::new_with_pre_genesis_nexus_for_testing(
+        World::default(),
+        iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: catalog.clone(),
+            ..Default::default()
+        },
+        LiveQueryStore::start_test(),
+    );
+
+    let full_catalog_incarnations =
+        derive_static_lane_incarnations(&DEFAULT_TEST_CHAIN_ID, &catalog);
+    let primary_geometry = configured_primary_replay_geometry(&DEFAULT_TEST_CHAIN_ID, &catalog)
+        .expect("configured primary replay geometry");
+    let actual_incarnations = state.lane_incarnations_snapshot();
+
+    assert_ne!(
+        full_catalog_incarnations[&LaneId::SINGLE],
+        primary_geometry.primary_incarnation,
+        "the fixture must exercise the distinct configured-primary startup anchor"
+    );
+    assert_eq!(
+        actual_incarnations[&LaneId::SINGLE],
+        primary_geometry.primary_incarnation,
+        "the primary incarnation must match the daemon's configured-primary anchor"
+    );
+    assert_eq!(
+        actual_incarnations[&LaneId::new(1)],
+        full_catalog_incarnations[&LaneId::new(1)],
+        "a secondary lane added at startup keeps its full-catalog static incarnation"
+    );
+    assert_eq!(
+        state.lane_incarnation_activation_heights_snapshot(),
+        BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)])
+    );
+    assert_eq!(
+        state.lane_incarnation_lineage_snapshot()[&LaneId::SINGLE],
+        LaneIncarnationLineage {
+            generation: 0,
+            incarnation: primary_geometry.primary_incarnation,
+            activation_height: 0,
+        }
+    );
+}
+
+#[test]
+fn pre_genesis_nexus_fixture_keeps_single_lane_static_incarnation() {
+    let catalog = LaneCatalog::default();
+    let state = State::new_with_pre_genesis_nexus_for_testing(
+        World::default(),
+        iroha_config::parameters::actual::Nexus {
+            lane_catalog: catalog.clone(),
+            ..Default::default()
+        },
+        LiveQueryStore::start_test(),
+    );
+    let expected = derive_static_lane_incarnations(&DEFAULT_TEST_CHAIN_ID, &catalog);
+
+    assert_eq!(state.lane_incarnations_snapshot(), expected);
+    assert_eq!(
+        state.lane_incarnation_activation_heights_snapshot(),
+        BTreeMap::from([(LaneId::SINGLE, 0)])
+    );
+    assert_eq!(
+        state.lane_incarnation_lineage_snapshot()[&LaneId::SINGLE],
+        LaneIncarnationLineage {
+            generation: 0,
+            incarnation: expected[&LaneId::SINGLE],
+            activation_height: 0,
+        }
+    );
+}
+
+#[test]
 fn insert_domain_for_testing_replaces_owner_index_without_empty_bucket() {
     let domain_id = DomainId::try_new("fixture", "universal").expect("valid domain id");
     let mut world = World::new();

@@ -139,7 +139,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
+    "1ec65218b718871ac51fe47896c64aec0004832fd944a29e48e02f5e826038a7"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -279,11 +279,28 @@ _G4P_RELEASE_TESTS = (
         "native_amx_rotating_validator_fault_soak_preserves_independent_"
         "participant_qcs",
     ),
+    (
+        "consensus_and_da",
+        "sumeragi_localnet_smoke::"
+        "permissioned_idle_chain_advances_only_for_external_or_internal_work",
+    ),
+    (
+        "native_amx_routing",
+        "musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay",
+    ),
 )
 _G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER = (
     "[multilane-release-native-evidence] grouped_sources=2 "
     "durable_manifest=passed body_eviction_recovery=passed "
     "authenticated_remote_recovery=passed exact_once=passed"
+)
+_G4P_EX297_IDLE_MARKER = (
+    "[ex-297-idle-evidence] clean_idle=passed external_non_empty=passed "
+    "internal_non_empty=passed"
+)
+_G4P_EX297_PHASE_CUT_MARKER = (
+    "[ex-297-phase-cut-evidence] after_prepare_qc=passed "
+    "after_commit_qc=passed before_world_commit=passed exact_once=passed"
 )
 _CHAOS_MARKER = (
     "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
@@ -1008,7 +1025,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-source-seal",
                 "pytest",
-                30,
+                59,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/workspace_source_manifest_test.py "
                 "pytests/scripts/seal_workspace_source_test.py",
@@ -1067,7 +1084,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-bootstrap",
                 "pytest",
-                82,
+                232,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_bootstrap_test.py",
@@ -1083,7 +1100,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                316,
+                321,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
@@ -1102,7 +1119,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                3676,
+                4047,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
@@ -6289,8 +6306,18 @@ def _validate_g4p_log(snapshot: EvidenceSnapshot, name: str, test: str) -> None:
     results = [line for line in lines if line.startswith("test result:")]
     native_marker_count = lines.count(_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER)
     expected_native_marker_count = int(test == _G4P_RELEASE_TESTS[3][1])
+    idle_marker_count = lines.count(_G4P_EX297_IDLE_MARKER)
+    expected_idle_marker_count = int(test == _G4P_RELEASE_TESTS[4][1])
+    phase_cut_marker_count = lines.count(_G4P_EX297_PHASE_CUT_MARKER)
+    expected_phase_cut_marker_count = int(test == _G4P_RELEASE_TESTS[5][1])
     release_marker_count = int(
-        test in (_G4P_RELEASE_TESTS[0][1], _G4P_RELEASE_TESTS[3][1])
+        test
+        in (
+            _G4P_RELEASE_TESTS[0][1],
+            _G4P_RELEASE_TESTS[3][1],
+            _G4P_RELEASE_TESTS[4][1],
+            _G4P_RELEASE_TESTS[5][1],
+        )
     )
     if (
         lines.count("running 1 test") != 1
@@ -6300,7 +6327,13 @@ def _validate_g4p_log(snapshot: EvidenceSnapshot, name: str, test: str) -> None:
         or lines.count(f"[multilane-release-gate] completed: {test}")
         != release_marker_count
         or native_marker_count != expected_native_marker_count
+        or idle_marker_count != expected_idle_marker_count
+        or phase_cut_marker_count != expected_phase_cut_marker_count
         or any("developer opt-out" in line for line in lines)
+        or any(
+            "sandboxed skip" in line or "sandbox restrictions skipped" in line
+            for line in lines
+        )
         or len(results) != 1
         or re.fullmatch(
             r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
@@ -6339,6 +6372,8 @@ def _validate_g4p_evidence(
         "failed_runs",
         "skipped_runs",
         "native_grouped_pruning_evidence",
+        "ex297_idle_evidence",
+        "ex297_phase_cut_evidence",
         "runs_sha256",
     }
     if set(completion_fields) != expected_fields:
@@ -6351,11 +6386,13 @@ def _validate_g4p_evidence(
         "source_manifest_sha256": sealed["workspace_source_manifest_sha256"],
         "cargo_lock_sha256": sealed["cargo_lock_sha256"],
         "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
-        "expected_runs": "4",
-        "passed_runs": "4",
+        "expected_runs": "6",
+        "passed_runs": "6",
         "failed_runs": "0",
         "skipped_runs": "0",
         "native_grouped_pruning_evidence": "passed",
+        "ex297_idle_evidence": "passed",
+        "ex297_phase_cut_evidence": "passed",
     }
     if any(
         completion_fields.get(field) != value
@@ -6379,7 +6416,7 @@ def _validate_g4p_evidence(
         expected_header=("target", "test", "status", "log_sha256", "log"),
     )
     if len(rows) != len(_G4P_RELEASE_TESTS) + 1:
-        raise ReceiptError("G-4P run summary must contain exactly four runs")
+        raise ReceiptError("G-4P run summary must contain exactly six runs")
 
     logs: list[EvidenceSnapshot] = []
     expected_names = {"COMPLETED.tsv", "runs.tsv"}

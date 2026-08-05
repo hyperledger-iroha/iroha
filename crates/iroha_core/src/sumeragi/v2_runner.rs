@@ -964,6 +964,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         genesis_network,
         block_rx,
         lane_relay_rx,
+        pending_queue_plan_admission_dirty,
         wake_rx,
         shutdown_signal,
         ingress_ready,
@@ -2131,6 +2132,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 continue;
             }
 
+            if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel) {
+                let active_view = executor.local_proposal_directive()?.tag().view();
+                if !lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)? {
+                    pending_queue_plan_admission_dirty.store(true, Ordering::Release);
+                }
+            }
+
             schedule_local_proposal(
                 candidate_limits,
                 &context,
@@ -2563,7 +2571,9 @@ fn schedule_local_proposal(
                 output_guard,
                 attachments,
                 allow_empty_recovery_heartbeat: true,
-                work_provider: HeartbeatOnlyWorkProvider,
+                work_provider: HeartbeatOnlyWorkProvider {
+                    lane_work: &mut *lane_work,
+                },
             })?
         } else {
             assembler.assemble(CandidateRequest {
@@ -4630,23 +4640,41 @@ fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> Adapt
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct HeartbeatOnlyWorkProvider;
+struct HeartbeatOnlyWorkProvider<'work> {
+    lane_work: &'work mut V2LaneWorkAdapter,
+}
 
-impl CandidateWorkProvider for HeartbeatOnlyWorkProvider {
+impl CandidateWorkProvider for HeartbeatOnlyWorkProvider<'_> {
     fn prepare(
         &mut self,
         _context: &wire::HeightContext,
-        _view: wire::View,
+        view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
     ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
-        if candidates.is_empty() {
-            return Ok(PreparedCandidateWork::default());
+        if let Err(error) = self
+            .lane_work
+            .refresh_pending_queue_plan_admission_handoffs(view)
+        {
+            return Err(CandidateWorkUnavailable::new(
+                (0..candidates.len()).collect::<BTreeSet<_>>(),
+                error.to_string(),
+            ));
         }
-        Err(CandidateWorkUnavailable::new(
-            (0..candidates.len()).collect::<BTreeSet<_>>(),
-            "local fallback requested an empty heartbeat",
-        ))
+        if !candidates.is_empty() {
+            return Err(CandidateWorkUnavailable::new(
+                (0..candidates.len()).collect::<BTreeSet<_>>(),
+                "local fallback requested an empty heartbeat",
+            ));
+        }
+        Ok(PreparedCandidateWork {
+            required_merge_carrier_digest: self
+                .lane_work
+                .required_merge_carrier_digest(view)
+                .map_err(|error| {
+                    CandidateWorkUnavailable::new(BTreeSet::new(), error.to_string())
+                })?,
+            ..PreparedCandidateWork::default()
+        })
     }
 }
 
@@ -4957,6 +4985,7 @@ where
         | V2LaneWorkEffect::PostNativeAmx { .. }
         | V2LaneWorkEffect::PostLaneDrainVote { .. }
         | V2LaneWorkEffect::BroadcastMerge(_)
+        | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
         | V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => return true,
     };
     let Some(routes) = reply_routes.as_mut() else {
@@ -5034,6 +5063,13 @@ fn dispatch_lane_work_effect(
         }
         V2LaneWorkEffect::BroadcastMerge(signature) => {
             services.broadcast_merge_to_voters(signature);
+        }
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+            peer,
+            view,
+            certificate,
+        } => {
+            services.post_queue_plan_admission_certificate(peer, view, certificate);
         }
         V2LaneWorkEffect::PostCertifiedMergeSidecar {
             peer,
@@ -6276,7 +6312,18 @@ mod tests {
     #[test]
     fn heartbeat_provider_accepts_only_an_empty_descriptor_batch() {
         let (context, _) = context();
-        let mut provider = HeartbeatOnlyWorkProvider;
+        let (mut lane_work, _) = super::super::v2_lane_work::tests::fixture_with_durable_parent(
+            wire::ConsensusMode::Permissioned,
+        );
+        lane_work
+            .refresh_pending_queue_plan_admission_handoffs(0)
+            .expect("heartbeat fixture has an exact durable parent frontier");
+        lane_work
+            .required_merge_carrier_digest(0)
+            .expect("heartbeat fixture derives its current merge-carrier requirement");
+        let mut provider = HeartbeatOnlyWorkProvider {
+            lane_work: &mut lane_work,
+        };
         assert_eq!(
             provider
                 .prepare(&context, 0, &[])

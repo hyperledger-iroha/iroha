@@ -33,8 +33,10 @@ use iroha::{
             EventBox,
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
         },
+        executor::Executor,
         isi::{
-            Grant, Instruction, InstructionBox, Log, Mint, Register, SetParameter,
+            Grant, GrantBox, Instruction, InstructionBox, Log, Mint, Register, SetParameter,
+            Upgrade,
             musubi::{
                 AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1,
                 RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
@@ -89,7 +91,10 @@ use iroha::{
                 ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
             },
         },
-        transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
+        transaction::{
+            FeePaymentIntent, IvmBytecode, SignedTransaction, TransactionEntrypoint,
+            error::TransactionRejectionReason,
+        },
     },
     query::QueryError,
 };
@@ -152,9 +157,15 @@ const NATIVE_AMX_SOAK_ITERATIONS_MAX: usize = 100;
 const NATIVE_AMX_GROUP_SIZE: usize = 2;
 const EVICTED_BLOCK_INDEX_START: u64 = u64::MAX;
 const BLOCK_INDEX_ENTRY_BYTES: usize = core::mem::size_of::<u64>() * 2;
+const QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE: &str = "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
+const ALREADY_ENQUEUED_REJECT_CODE: &str = "PRTRY:ALREADY_ENQUEUED";
+const ALREADY_COMMITTED_REJECT_CODE: &str = "PRTRY:ALREADY_COMMITTED";
+const CANONICAL_EXECUTOR: &[u8] = include_bytes!("../../defaults/executor.to");
 const NATIVE_AMX_GROUPED_PRUNING_MARKER: &str = "[multilane-release-native-evidence] \
 grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed \
 authenticated_remote_recovery=passed exact_once=passed";
+const EX297_PHASE_CUT_RELEASE_MARKER: &str = "[ex-297-phase-cut-evidence] \
+after_prepare_qc=passed after_commit_qc=passed before_world_commit=passed exact_once=passed";
 const NATIVE_AMX_MANIFEST_FILE_PREFIX: &str = "native_amx_manifest_v1_";
 const NATIVE_AMX_RECEIPT_FILE_PREFIX: &str = "native_amx_receipt_v1_";
 const NATIVE_AMX_EVIDENCE_FILE_SUFFIX: &str = ".norito";
@@ -398,6 +409,12 @@ fn routing_policy() -> Table {
 }
 
 fn localnet_builder() -> NetworkBuilder {
+    localnet_builder_with_extra_genesis(Vec::new())
+}
+
+fn localnet_builder_with_extra_genesis(
+    extra_genesis_transactions: Vec<Vec<InstructionBox>>,
+) -> NetworkBuilder {
     let gas_account_literal = gas_account()
         .canonical_i105()
         .expect("canonical gas account literal");
@@ -413,9 +430,9 @@ fn localnet_builder() -> NetworkBuilder {
         .with_peers(PEERS)
         .with_auto_populated_trusted_peers()
         .without_npos_genesis_bootstrap()
-        .with_genesis_block(|topology, topology_entries| {
+        .with_genesis_block(move |topology, topology_entries| {
             let mut genesis = genesis_factory_with_post_topology(
-                Vec::new(),
+                extra_genesis_transactions.clone(),
                 genesis_post_topology_transactions(topology.as_ref()),
                 topology,
                 topology_entries,
@@ -496,10 +513,64 @@ fn musubi_fault_replica_providers() -> [ProviderId; 3] {
 }
 
 fn musubi_fault_localnet_builder() -> NetworkBuilder {
-    localnet_builder().with_genesis_instruction(Grant::account_permission(
+    localnet_builder_with_extra_genesis(musubi_fault_genesis_transactions())
+}
+
+fn musubi_fault_genesis_transactions() -> Vec<Vec<InstructionBox>> {
+    let upgrade = Upgrade::new(Executor::new(IvmBytecode::from_compiled(
+        CANONICAL_EXECUTOR.to_vec(),
+    )));
+    let grants = [
         Permission::from(CanRegisterSorafsProviderOwner),
-        ALICE_ID.clone(),
-    ))
+        Permission::from(CanRegisterSorafsPin),
+        Permission::from(CanIssueSorafsReplicationOrder),
+        Permission::from(CanCompleteSorafsReplicationOrder),
+    ]
+    .into_iter()
+    .map(|permission| InstructionBox::from(Grant::account_permission(permission, ALICE_ID.clone())))
+    .collect();
+
+    vec![vec![InstructionBox::from(upgrade)], grants]
+}
+
+#[test]
+fn musubi_fault_genesis_installs_default_executor_before_sorafs_grants() {
+    let transactions = musubi_fault_genesis_transactions();
+    let [upgrade_transaction, grants_transaction] = transactions.as_slice() else {
+        panic!("Musubi fault genesis should contain executor and grants transactions");
+    };
+    let [upgrade_instruction] = upgrade_transaction.as_slice() else {
+        panic!("Musubi fault executor transaction should contain one instruction");
+    };
+    let upgrade = upgrade_instruction
+        .as_any()
+        .downcast_ref::<Upgrade>()
+        .expect("first Musubi fault genesis instruction should upgrade the executor");
+    assert_eq!(upgrade.executor.bytecode.as_ref(), CANONICAL_EXECUTOR);
+
+    let grant_names = grants_transaction
+        .iter()
+        .map(|instruction| {
+            let GrantBox::Permission(grant) = instruction
+                .as_any()
+                .downcast_ref::<GrantBox>()
+                .expect("Musubi fault genesis should contain only account permission grants")
+            else {
+                panic!("Musubi fault genesis should grant account permissions");
+            };
+            assert_eq!(grant.destination, *ALICE_ID);
+            grant.object.name().to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        grant_names,
+        BTreeSet::from([
+            "CanCompleteSorafsReplicationOrder".to_owned(),
+            "CanIssueSorafsReplicationOrder".to_owned(),
+            "CanRegisterSorafsPin".to_owned(),
+            "CanRegisterSorafsProviderOwner".to_owned(),
+        ])
+    );
 }
 
 fn musubi_fault_package() -> MusubiPackageIdV1 {
@@ -740,10 +811,38 @@ async fn submit_and_wait_for_approval(
 
     let submitter_for_submit = submitter.clone();
     let transaction_for_submit = transaction.clone();
-    spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
-        .await
-        .map_err(|err| eyre!("submit task join error: {err}"))?
-        .map_err(|err| eyre!("failed to submit native AMX transaction: {err}"))?;
+    let submission =
+        spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
+            .await
+            .map_err(|err| eyre!("submit task join error: {err}"))?;
+    if let Err(error) = submission {
+        let message = error.to_string();
+        ensure!(
+            message.contains(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE),
+            "failed to submit native AMX transaction: {error}"
+        );
+
+        // Torii has durably exposed an indeterminate QueuePlan admission. Keep
+        // the original event stream open and follow the response contract with
+        // one byte-identical retry after its advertised one-second interval.
+        // A duplicate-state response proves that exact signed transaction is
+        // already queued or committed; no replacement transaction is created.
+        sleep(Duration::from_secs(1)).await;
+        let retry_submitter = submitter.clone();
+        let retry_transaction = transaction.clone();
+        let retry = spawn_blocking(move || retry_submitter.submit_transaction(&retry_transaction))
+            .await
+            .map_err(|err| eyre!("byte-identical submit retry task join error: {err}"))?;
+        if let Err(error) = retry {
+            let message = error.to_string();
+            ensure!(
+                message.contains(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
+                    || message.contains(ALREADY_ENQUEUED_REJECT_CODE)
+                    || message.contains(ALREADY_COMMITTED_REJECT_CODE),
+                "byte-identical native AMX transaction retry failed: {error}"
+            );
+        }
+    }
 
     let outcome = match timeout(STATUS_WAIT_TIMEOUT, async {
         while let Some(next) = events.next().await {
@@ -778,6 +877,25 @@ async fn submit_and_wait_for_approval(
     Ok(outcome)
 }
 
+fn build_quoted_transaction<I>(
+    client: &Client,
+    instructions: impl IntoIterator<Item = I>,
+) -> Result<SignedTransaction>
+where
+    I: Into<InstructionBox>,
+{
+    let payload = client
+        .try_build_transaction_payload_from_items(
+            instructions,
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )
+        .wrap_err("build exact unsigned Native AMX transaction payload")?;
+    client
+        .quote_and_sign_transaction_payload(payload)
+        .wrap_err("quote and sign exact Native AMX transaction payload")
+}
+
 async fn wait_for_block_with_entrypoint(
     client: &Client,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -808,6 +926,39 @@ async fn wait_for_block_with_entrypoint(
     ))
 }
 
+fn ensure_committed_entrypoint_succeeded(
+    context: &str,
+    entrypoint_index: usize,
+    rejection: Option<&TransactionRejectionReason>,
+) -> Result<()> {
+    let Some(rejection) = rejection else {
+        return Ok(());
+    };
+    Err(eyre!(
+        "{context}: committed entrypoint index {entrypoint_index} was rejected: {rejection:?}"
+    ))
+}
+
+#[test]
+fn committed_entrypoint_success_check_accepts_applied_transaction() {
+    ensure_committed_entrypoint_succeeded("applied transaction", 2, None)
+        .expect("an applied committed entrypoint should pass");
+}
+
+#[test]
+fn committed_entrypoint_success_check_surfaces_execution_rejection() {
+    let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+        "fixture permission denied".to_owned(),
+    ));
+    let error =
+        ensure_committed_entrypoint_succeeded("provider setup: peer 3", 7, Some(&rejection))
+            .expect_err("a rejected committed entrypoint should fail");
+    let message = error.to_string();
+    assert!(message.contains("provider setup: peer 3"));
+    assert!(message.contains("entrypoint index 7"));
+    assert!(message.contains("fixture permission denied"));
+}
+
 async fn submit_approved_and_wait_for_all_peers(
     network: &sandbox::SerializedNetwork,
     submitter: &Client,
@@ -825,6 +976,19 @@ async fn submit_approved_and_wait_for_all_peers(
             &format!("{context}: peer {index}"),
         )
         .await?;
+        let entrypoint_index = block
+            .entrypoint_hashes()
+            .position(|hash| hash == entrypoint_hash)
+            .ok_or_else(|| {
+                eyre!(
+                    "{context}: peer {index} returned a block without committed entrypoint {entrypoint_hash}"
+                )
+            })?;
+        ensure_committed_entrypoint_succeeded(
+            &format!("{context}: peer {index} entrypoint {entrypoint_hash}"),
+            entrypoint_index,
+            block.error(entrypoint_index),
+        )?;
         if let Some(expected) = canonical.as_ref() {
             ensure!(
                 block.hash() == expected.hash(),
@@ -1037,11 +1201,7 @@ async fn prepare_selectable_musubi_publication(
             ),
         ));
     }
-    let provider_transaction = submitter.build_transaction(
-        provider_instructions,
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    let provider_transaction = build_quoted_transaction(submitter, provider_instructions)?;
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1053,14 +1213,13 @@ async fn prepare_selectable_musubi_publication(
     let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
     let domain =
         DomainId::try_new(MUSUBI_FAULT_DOMAIN, "acme").expect("Musubi fault namespace domain");
-    let namespace_home_transaction = submitter.build_transaction(
+    let namespace_home_transaction = build_quoted_transaction(
+        submitter,
         [
             dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
             domain_setup_instruction_in_dataspace(&domain, acme_dataspace, &submitter.account)?,
         ],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    )?;
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1070,14 +1229,13 @@ async fn prepare_selectable_musubi_publication(
     .await?;
 
     let binding = musubi_fault_namespace_binding();
-    let binding_transaction = submitter.build_transaction(
+    let binding_transaction = build_quoted_transaction(
+        submitter,
         [InstructionBox::from(RegisterMusubiNamespaceBindingV1::new(
             binding.clone(),
             1,
         ))],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    )?;
     let binding_block = submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1098,15 +1256,14 @@ async fn prepare_selectable_musubi_publication(
         &commitment,
         &manifest,
     );
-    let archive_transaction = submitter.build_transaction(
+    let archive_transaction = build_quoted_transaction(
+        submitter,
         [InstructionBox::from(RegisterMusubiArchiveV1::new(
             commitment.clone(),
             staging_receipt,
             1,
         ))],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    )?;
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1116,7 +1273,8 @@ async fn prepare_selectable_musubi_publication(
     .await?;
 
     let (pin_manifest, pin_manifest_digest) = musubi_fault_pin_manifest(&commitment)?;
-    let pin_transaction = submitter.build_transaction(
+    let pin_transaction = build_quoted_transaction(
+        submitter,
         [InstructionBox::from(RegisterPinManifest::new(
             pin_manifest
                 .encode()
@@ -1125,9 +1283,7 @@ async fn prepare_selectable_musubi_publication(
             None,
             None,
         ))],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    )?;
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1142,7 +1298,8 @@ async fn prepare_selectable_musubi_publication(
     canonical_order
         .validate()
         .wrap_err("validate selectable Musubi replication order")?;
-    let issue_transaction = submitter.build_transaction(
+    let issue_transaction = build_quoted_transaction(
+        submitter,
         [InstructionBox::from(IssueReplicationOrder::new(
             replication_order,
             norito::encode_canonical(&canonical_order)
@@ -1150,9 +1307,7 @@ async fn prepare_selectable_musubi_publication(
             2,
             MUSUBI_FAULT_RETENTION_EPOCH,
         ))],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    )?;
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1162,7 +1317,8 @@ async fn prepare_selectable_musubi_publication(
     .await?;
 
     let anchor = musubi_fault_finalized_anchor(submitter)?;
-    let completion_transaction = submitter.build_transaction(
+    let completion_transaction = build_quoted_transaction(
+        submitter,
         musubi_fault_replica_providers().map(|provider| {
             InstructionBox::from(CompleteReplicationOrder::new(
                 replication_order,
@@ -1173,9 +1329,7 @@ async fn prepare_selectable_musubi_publication(
                 anchor,
             ))
         }),
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    )?;
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1193,16 +1347,15 @@ async fn prepare_selectable_musubi_publication(
         replication_order,
         anchor,
     );
-    let provider_attestation_transaction = submitter.build_transaction(
+    let provider_attestation_transaction = build_quoted_transaction(
+        submitter,
         provider_attestations.iter().cloned().map(|attestation| {
             InstructionBox::from(RegisterMusubiProviderBundleAttestationV1::new(
                 attestation,
                 1,
             ))
         }),
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    )?;
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1219,7 +1372,8 @@ async fn prepare_selectable_musubi_publication(
         replication_order,
         &provider_attestation_references,
     )?;
-    let location_transaction = submitter.build_transaction(
+    let location_transaction = build_quoted_transaction(
+        submitter,
         [InstructionBox::from(AddMusubiArchiveLocationV1 {
             archive_id,
             location_id,
@@ -1230,9 +1384,7 @@ async fn prepare_selectable_musubi_publication(
             expires_at_epoch: MUSUBI_FAULT_RETENTION_EPOCH,
             expected_location_revision: 1,
         })],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    )?;
     submit_approved_and_wait_for_all_peers(
         network,
         submitter,
@@ -1249,7 +1401,8 @@ async fn prepare_selectable_musubi_publication(
     publication
         .validate()
         .wrap_err("validate selectable Musubi publication")?;
-    let transaction = submitter.build_transaction(
+    let transaction = build_quoted_transaction(
+        submitter,
         [InstructionBox::from(PublishMusubiReleaseV1::new(
             binding.namespace.clone(),
             publication,
@@ -1257,9 +1410,7 @@ async fn prepare_selectable_musubi_publication(
             1,
             None,
         ))],
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    );
+    )?;
     Ok(SelectableMusubiPublicationFixture {
         transaction,
         binding,
@@ -2562,11 +2713,7 @@ fn native_amx_bootstrap_transaction(submitter: &Client) -> Result<SignedTransact
             &submitter.account,
         )?,
     ];
-    Ok(submitter.build_transaction(
-        instructions,
-        FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    ))
+    build_quoted_transaction(submitter, instructions)
 }
 
 fn native_amx_soak_transactions(
@@ -2595,11 +2742,7 @@ fn native_amx_soak_transactions(
                     &submitter.account,
                 )?,
             ];
-            Ok(submitter.build_transaction(
-                instructions,
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))
+            build_quoted_transaction(submitter, instructions)
         })
         .collect::<Result<Vec<_>>>()?;
     transactions.sort_by_key(native_amx_source_id);
@@ -2646,14 +2789,13 @@ async fn advance_past_native_amx_eviction_tail(
     let mut last_height = target_height;
     let mut final_barrier = None;
     for offset in 0..3 {
-        let transaction = submitter.build_transaction(
+        let transaction = build_quoted_transaction(
+            submitter,
             [InstructionBox::from(Log::new(
                 Level::INFO,
                 format!("{context}: post-carrier eviction-tail barrier {offset}"),
             ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         let entrypoint_hash = transaction.hash_as_entrypoint();
         submit_and_wait_for_approval(submitter, transaction).await?;
         let block = wait_for_block_with_entrypoint(

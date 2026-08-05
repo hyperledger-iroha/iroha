@@ -36864,7 +36864,7 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "unminted fair ownership must fail closed without a physical queue position",
         ),
         (
-            "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+            "certified_tc_crosses_full_retry_retained_prepare_prefix",
             "            Some(0),",
             "            None,",
             "Busy-deferred authenticated response coalescing regression declaration and complete control flow must match",

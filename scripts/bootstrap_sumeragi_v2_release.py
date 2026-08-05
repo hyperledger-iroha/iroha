@@ -1927,6 +1927,8 @@ def _validate_terminal_release_evidence(
         "run-01-nexus_and_streaming.log",
         "run-02-nexus_and_streaming.log",
         "run-03-native_amx_routing.log",
+        "run-04-consensus_and_da.log",
+        "run-05-native_amx_routing.log",
     )
     if not isinstance(g4p_logs, list) or len(g4p_logs) != len(g4p_names):
         raise BootstrapError("terminal G-4P run-log inventory is incomplete")

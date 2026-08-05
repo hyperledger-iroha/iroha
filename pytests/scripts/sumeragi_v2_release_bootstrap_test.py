@@ -859,6 +859,8 @@ g4p_names = (
     "run-01-nexus_and_streaming.log",
     "run-02-nexus_and_streaming.log",
     "run-03-native_amx_routing.log",
+    "run-04-consensus_and_da.log",
+    "run-05-native_amx_routing.log",
 )
 g4p_logs = [
     evidence_file(g4p_root, name, (name + "\\n").encode()) for name in g4p_names

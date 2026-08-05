@@ -30456,7 +30456,9 @@ impl State {
     /// fixture's initial catalog is not a runtime lifecycle transition and must
     /// not archive a synthetic default-primary segment. Unlike the ordinary test
     /// convenience constructors, this preserves the supplied Nexus fee and
-    /// governance settings exactly so genesis pre-execution matches peer startup.
+    /// governance settings exactly. It also preserves the configured-primary
+    /// incarnation anchor used by peer startup so genesis pre-execution hashes the
+    /// same Nexus/AMX context as the daemon.
     #[must_use]
     pub fn new_with_pre_genesis_nexus_for_testing(
         world: World,
@@ -30520,6 +30522,28 @@ impl State {
         let autoscale_history_cap = autoscale_sample_history_cap(&nexus.autoscale);
         *self.nexus.get_mut() = nexus;
         self.reseed_static_lane_incarnations();
+        // A daemon opens Kura on the authenticated configured-primary catalog and
+        // only then publishes the complete configured catalog. Keep the primary
+        // incarnation from that physical anchor while secondary lanes retain the
+        // static incarnation derived from the complete catalog. Otherwise a
+        // multi-lane genesis pre-executed by the test harness is signed against a
+        // different Nexus/AMX context than peers reconstruct at startup.
+        let configured_lane_catalog = self.nexus.get_mut().lane_catalog.clone();
+        let primary_incarnation =
+            configured_primary_replay_geometry(&self.chain_id, &configured_lane_catalog)
+                .expect("validated pre-genesis Nexus must contain its configured primary lane")
+                .primary_incarnation;
+        self.lane_incarnations
+            .get_mut()
+            .insert(LaneId::SINGLE, primary_incarnation);
+        self.lane_incarnation_lineage.get_mut().insert(
+            LaneId::SINGLE,
+            LaneIncarnationLineage {
+                generation: 0,
+                incarnation: primary_incarnation,
+                activation_height: 0,
+            },
+        );
         self.install_active_lane_markers_for_tests();
         trim_autoscale_sample_history(
             self.autoscale_sample_history.get_mut(),
