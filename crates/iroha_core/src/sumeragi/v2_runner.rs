@@ -1628,6 +1628,17 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         &mut services,
                     )?;
                 }
+                if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
+                    // The retained response may predate the timeout itself,
+                    // so its strict `< target` completion turn cannot admit
+                    // the timeout signer's callback. Give exactly one owner
+                    // from the separately frozen inclusive `<= timeout` prefix
+                    // a turn before retrying the response.
+                    services.drain_timeout_recovery_prefix_completion(
+                        &mut executor,
+                        timeout_recovery_cut,
+                    )?;
+                }
                 let response_backpressured = match executor
                     .retry_retained_certified_body_response(&mut services)
                 {
@@ -1648,26 +1659,33 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     // lane. Once charged, later retries service the finite
                     // retained certificate prefix but cannot replenish it
                     // from fresh ingress and recreate the same capacity cycle.
-                    if executor.retained_response_may_admit_certified_fence_escape() {
-                        drain_v2_ingress(
-                            &block_rx,
-                            &mut executor,
-                            &mut services,
-                            &mut lane_work,
-                            output_guard.as_ref(),
-                            kura.as_ref(),
-                            &common_config.key_pair,
-                            block_sync_server
-                                .as_mut()
-                                .expect("block-sync server initialized before ingress"),
-                            &mut block_sync,
-                            &mut block_sync_request,
-                            &mut npos_vrf,
-                            V2IngressDrainMode::CertifiedFenceEscape,
-                            1,
-                        )?;
-                        executor.reconcile_retained_response_certified_fence_escape_phase();
-                    }
+                    let escape_mode =
+                        if executor.retained_response_may_admit_certified_fence_escape() {
+                            V2IngressDrainMode::CertifiedFenceEscape
+                        } else {
+                            // Spending the retained response's one certificate
+                            // opportunity cannot suppress the separate finite
+                            // current-view TimeoutVote producer episode.
+                            V2IngressDrainMode::TimeoutVoteEpisode
+                        };
+                    drain_v2_ingress(
+                        &block_rx,
+                        &mut executor,
+                        &mut services,
+                        &mut lane_work,
+                        output_guard.as_ref(),
+                        kura.as_ref(),
+                        &common_config.key_pair,
+                        block_sync_server
+                            .as_mut()
+                            .expect("block-sync server initialized before ingress"),
+                        &mut block_sync,
+                        &mut block_sync_request,
+                        &mut npos_vrf,
+                        escape_mode,
+                        1,
+                    )?;
+                    executor.reconcile_retained_response_certified_fence_escape_phase();
                     // Give one already-owned timeout/Progress root a turn
                     // before retrying the exact response. Ordinary work stays
                     // parked behind the retained physical carrier.
@@ -1764,6 +1782,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             older_predecessor_remains,
                         )
                         .map_err(V2RunnerError::Service)?;
+                }
+                if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
+                    services.drain_timeout_recovery_prefix_completion(
+                        &mut executor,
+                        timeout_recovery_cut,
+                    )?;
                 }
                 service_certified_serve_barrier_pacemaker_turn(
                     recovering_interrupted_tip,
@@ -3031,8 +3055,13 @@ fn prepare_decided_lane_recovery_ingress(
 enum V2IngressDrainMode {
     /// Normal completion/runtime/ingress round-robin.
     Ordinary,
-    /// Only a TC or CommitQC which can supersede a hung signing fence.
+    /// A TC/CommitQC which can supersede a hung signing fence, or one member of
+    /// the finite current-view TimeoutVote producer episode.
     CertifiedFenceEscape,
+    /// Only one member of the finite current-view TimeoutVote producer episode.
+    /// This remains available after a retained response spends its separate
+    /// certificate credit.
+    TimeoutVoteEpisode,
 }
 
 fn drain_v2_ingress(
@@ -3058,7 +3087,7 @@ fn drain_v2_ingress(
         return Ok(());
     }
     for turn in outer_ingress_turns(limit) {
-        if mode == V2IngressDrainMode::CertifiedFenceEscape && turn != OuterIngressTurn::Ingress {
+        if mode != V2IngressDrainMode::Ordinary && turn != OuterIngressTurn::Ingress {
             continue;
         }
         if turn == OuterIngressTurn::Completion {
@@ -3115,13 +3144,20 @@ fn drain_v2_ingress(
         let mut prepared_serve = None;
         let Some((mut inbound, dequeue_disposition)) = receiver
             .try_recv_if_checked_retiring_obsolete(|inbound| {
-                if mode == V2IngressDrainMode::CertifiedFenceEscape {
+                if mode != V2IngressDrainMode::Ordinary {
                     let BlockMessage::V2(message) = inbound.message() else {
                         return false;
                     };
-                    if message.validate_version().is_err()
-                        || !network_ingress_is_certified_fence_escape(&message.payload)
-                    {
+                    if message.validate_version().is_err() {
+                        return false;
+                    }
+                    let timeout_vote_recovery_episode =
+                        inbound.ingress_ownership().is_some_and(|ownership| {
+                            executor.can_admit_timeout_vote_recovery_episode(message, ownership)
+                        });
+                    let certified_fence_escape = mode == V2IngressDrainMode::CertifiedFenceEscape
+                        && network_ingress_is_certified_fence_escape(&message.payload);
+                    if !certified_fence_escape && !timeout_vote_recovery_episode {
                         return false;
                     }
                 }

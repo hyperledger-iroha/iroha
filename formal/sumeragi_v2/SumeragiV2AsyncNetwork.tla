@@ -2743,20 +2743,17 @@ AsyncCandidateLifecycleAdmissions ==
 AsyncNextCandidateLifecycleOrdinal(node) ==
   asyncControlServiceState.candidateLifecycleNextOrdinal[node]
 
-AsyncNextLeaderWireIngressOrdinal(node) ==
-  asyncControlServiceState.leaderWireIngressNextOrdinal[node]
-
-\* The durable leader-wire token and the volatile FairV2Ingress carrier use
-\* different ordinals.  The former is immutable across restart; the latter is
-\* allocated from the one receiver-local physical ingress sequence shared by
-\* Serve and every other accepted wire occurrence.  The underlying variable
-\* keeps its historical name so imported proof modules do not acquire a
-\* second state variable.
-AsyncNextLeaderWireLifecycleAdmissionOrdinal(node) ==
-  AsyncNextLeaderWireIngressOrdinal(node)
-
 AsyncNextIngressPhysicalOrdinal(node) ==
   asyncNextServeIngressOrdinal[node]
+
+\* A fresh durable leader-wire token and its first volatile FairV2Ingress
+\* carrier reserve the same position from the one receiver-local physical
+\* ingress sequence shared by Serve and every other accepted wire occurrence.
+\* The immutable token retains that admission position across restart, while
+\* an exact Dormant replay receives a later physical carrier from this same
+\* sequence.
+AsyncNextLeaderWireLifecycleAdmissionOrdinal(node) ==
+  AsyncNextIngressPhysicalOrdinal(node)
 
 AsyncCandidateLifecyclePhysicalCutInvariantIn(state) ==
   \A lifecycle \in state.candidateLifecycleAdmissions:
@@ -2818,6 +2815,221 @@ AsyncTimeoutLifecycleOwned(node) ==
 
 AsyncRetransmitLifecycleOwned(node) ==
   AsyncRetransmitLifecycleOrdinal(node) # 0
+
+(***************************************************************************
+Finite timeout-recovery episode ownership.
+
+The production runtime retains one non-serialized record after a local
+BeginTimeout owner transfers into its causal work.  The record freezes the
+exact timeout owner and receiver-local physical cut, the one periodic owner
+which was already frozen below that timeout (if any), and the finite
+TimeoutVote source universe for the round.  Later proof layers populate the
+owner set through the reviewed 0->1/1->1 admission dispositions; this layer
+defines the complete uniform shape and its physical-cut contract.
+
+The episode key is deliberately semantic.  Aggregate signatures, signer
+carriers, routes, and local incarnation are absent.  Full authenticated bytes
+remain only in each concrete vote owner's identity field.
+***************************************************************************)
+AsyncTimeoutRecoveryVoteOwnerDispositions ==
+  {"PreCutDescent", "RestoredDescent", "FreshReplenishment"}
+
+AsyncTimeoutRecoveryEpisodeKey(origin) ==
+  [target |-> origin.target,
+   context |-> origin.context,
+   leader |-> origin.leader,
+   view |-> origin.view,
+   subject |-> origin.subject,
+   phase |-> "TimeoutVote"]
+
+AsyncTimeoutRecoveryEpisodeKeySet ==
+  [target: ValidatorIds,
+   context: ContextRecords,
+   leader: ValidatorIds,
+   view: Views,
+   subject: SubjectOrNone,
+   phase: {"TimeoutVote"}]
+
+AsyncTimeoutRecoveryVoteOwnerSlot(key, source) ==
+  [episode |-> key, source |-> source]
+
+AsyncTimeoutRecoveryVoteOwnerSlotSet ==
+  {AsyncTimeoutRecoveryVoteOwnerSlot(key, source):
+     key \in AsyncTimeoutRecoveryEpisodeKeySet,
+     source \in VotingRoster(key.context.epoch)}
+
+AsyncTimeoutRecoveryVoteOwnerUniverse(origin) ==
+  {AsyncTimeoutRecoveryVoteOwnerSlot(
+     AsyncTimeoutRecoveryEpisodeKey(origin), source):
+     source \in VotingRoster(origin.context.epoch)}
+
+AsyncTimeoutVoteServiceIdentitySet ==
+  {AsyncLeaderWireServiceIdentity(item):
+     item \in {wire \in AsyncNetworkItems:
+                 wire.kind = "TimeoutVote"}}
+
+AsyncTimeoutRecoveryVoteOwner(
+    slot, identity, admissionOrdinal, carrierPhysicalOrdinal,
+    schedulerOrdinal, disposition) ==
+  [slot |-> slot,
+   identity |-> identity,
+   admissionOrdinal |-> admissionOrdinal,
+   carrierPhysicalOrdinal |-> carrierPhysicalOrdinal,
+   schedulerOrdinal |-> schedulerOrdinal,
+   disposition |-> disposition]
+
+AsyncTimeoutRecoveryVoteOwnerSet ==
+  {AsyncTimeoutRecoveryVoteOwner(
+     slot, identity, admissionOrdinal, carrierPhysicalOrdinal,
+     schedulerOrdinal, disposition):
+     slot \in AsyncTimeoutRecoveryVoteOwnerSlotSet,
+     identity \in AsyncTimeoutVoteServiceIdentitySet,
+     admissionOrdinal \in Nat \ {0},
+     carrierPhysicalOrdinal \in Nat \ {0},
+     schedulerOrdinal \in Nat \ {0},
+     disposition \in AsyncTimeoutRecoveryVoteOwnerDispositions}
+
+AsyncTimeoutRecoveryEpisode(
+    node, timeoutOwnerOrigin, episodeGeneration,
+    timeoutOwnerOrdinal, physicalCut,
+    preFrozenRetransmitOrdinal, preFrozenRetransmitPhysicalCut,
+    admittedTimeoutVoteOwners) ==
+  [node |-> node,
+   key |-> AsyncTimeoutRecoveryEpisodeKey(timeoutOwnerOrigin),
+   generation |-> episodeGeneration,
+   timeoutOwnerOrigin |-> timeoutOwnerOrigin,
+   timeoutOwnerOrdinal |-> timeoutOwnerOrdinal,
+   physicalCut |-> physicalCut,
+   preFrozenRetransmitOrdinal |-> preFrozenRetransmitOrdinal,
+   preFrozenRetransmitPhysicalCut |-> preFrozenRetransmitPhysicalCut,
+   timeoutVoteOwnerUniverse |->
+     AsyncTimeoutRecoveryVoteOwnerUniverse(timeoutOwnerOrigin),
+   admittedTimeoutVoteOwners |-> admittedTimeoutVoteOwners]
+
+AsyncTimeoutRecoveryEpisodeSet ==
+  {AsyncTimeoutRecoveryEpisode(
+     node, timeoutOwnerOrigin, episodeGeneration,
+     timeoutOwnerOrdinal, physicalCut,
+     preFrozenRetransmitOrdinal, preFrozenRetransmitPhysicalCut,
+     admittedTimeoutVoteOwners):
+     node \in ValidatorIds,
+     timeoutOwnerOrigin \in AsyncCandidateCausalOriginSet,
+     episodeGeneration \in Generations,
+     timeoutOwnerOrdinal \in Nat \ {0},
+     physicalCut \in Nat \ {0},
+     preFrozenRetransmitOrdinal \in Nat,
+     preFrozenRetransmitPhysicalCut \in Nat,
+     admittedTimeoutVoteOwners \in
+       SUBSET AsyncTimeoutRecoveryVoteOwnerSet}
+
+AsyncTimeoutRecoveryEpisodesIn(state) ==
+  state.timeoutRecoveryEpisodes
+
+AsyncTimeoutRecoveryEpisodesForNodeIn(state, node) ==
+  {episode \in AsyncTimeoutRecoveryEpisodesIn(state):
+     episode.node = node}
+
+AsyncTimeoutRecoveryEpisodeOwnedIn(state, node) ==
+  AsyncTimeoutRecoveryEpisodesForNodeIn(state, node) # {}
+
+AsyncTimeoutRecoveryEpisodeForNodeIn(state, node) ==
+  CHOOSE episode \in
+    AsyncTimeoutRecoveryEpisodesForNodeIn(state, node): TRUE
+
+AsyncTimeoutRecoveryEpisodes ==
+  AsyncTimeoutRecoveryEpisodesIn(asyncControlServiceState)
+
+AsyncTimeoutRecoveryEpisodeOwned(node) ==
+  AsyncTimeoutRecoveryEpisodeOwnedIn(asyncControlServiceState, node)
+
+AsyncTimeoutRecoveryEpisodeForNode(node) ==
+  AsyncTimeoutRecoveryEpisodeForNodeIn(asyncControlServiceState, node)
+
+AsyncTimeoutRecoveryVoteOwnerValidForEpisode(owner, episode) ==
+  /\ owner.slot \in episode.timeoutVoteOwnerUniverse
+  /\ owner.slot.episode = episode.key
+  /\ owner.identity.kind = "TimeoutVote"
+  /\ owner.identity.source = owner.slot.source
+  /\ owner.identity.envelope.recipient = episode.node
+  /\ AsyncControlItemContext(owner.identity) = episode.key.context
+  /\ AsyncControlItemView(owner.identity) = episode.key.view
+  /\ AsyncControlItemSubject(owner.identity) = episode.key.subject
+  /\ owner.schedulerOrdinal # episode.timeoutOwnerOrdinal
+  /\ CASE owner.disposition = "PreCutDescent" ->
+            /\ owner.schedulerOrdinal < episode.timeoutOwnerOrdinal
+            /\ owner.admissionOrdinal = owner.carrierPhysicalOrdinal
+            /\ owner.carrierPhysicalOrdinal < episode.physicalCut
+       [] owner.disposition = "RestoredDescent" ->
+            /\ owner.schedulerOrdinal < episode.timeoutOwnerOrdinal
+            /\ owner.admissionOrdinal < owner.carrierPhysicalOrdinal
+            /\ owner.admissionOrdinal < episode.physicalCut
+            /\ owner.carrierPhysicalOrdinal >= episode.physicalCut
+       [] owner.disposition = "FreshReplenishment" ->
+            /\ owner.schedulerOrdinal > episode.timeoutOwnerOrdinal
+            /\ owner.admissionOrdinal = owner.carrierPhysicalOrdinal
+            /\ owner.carrierPhysicalOrdinal >= episode.physicalCut
+
+AsyncTimeoutRecoveryEpisodeValidIn(state, episode) ==
+  /\ episode.key =
+       AsyncTimeoutRecoveryEpisodeKey(episode.timeoutOwnerOrigin)
+  /\ episode.timeoutVoteOwnerUniverse =
+       AsyncTimeoutRecoveryVoteOwnerUniverse(
+         episode.timeoutOwnerOrigin)
+  /\ IsFiniteSet(episode.timeoutVoteOwnerUniverse)
+  /\ episode.timeoutOwnerOrigin.owner = episode.node
+  /\ episode.timeoutOwnerOrigin.target = episode.node
+  /\ episode.timeoutOwnerOrigin.phase = "BeginTimeout"
+  /\ episode.timeoutOwnerOrigin.context = episode.key.context
+  /\ episode.timeoutOwnerOrigin.height = episode.key.context.height
+  /\ episode.timeoutOwnerOrigin.leader = episode.key.leader
+  /\ episode.timeoutOwnerOrigin.view = episode.key.view
+  /\ episode.timeoutOwnerOrigin.subject = episode.key.subject
+  /\ episode.timeoutOwnerOrdinal
+       < state.candidateLifecycleNextOrdinal[episode.node]
+  /\ episode.physicalCut <=
+       AsyncNextIngressPhysicalOrdinal(episode.node)
+  /\ (episode.preFrozenRetransmitOrdinal = 0)
+       = (episode.preFrozenRetransmitPhysicalCut = 0)
+  /\ IF episode.preFrozenRetransmitOrdinal # 0
+     THEN /\ episode.preFrozenRetransmitOrdinal
+                 < episode.timeoutOwnerOrdinal
+          /\ episode.preFrozenRetransmitPhysicalCut
+                 <= episode.physicalCut
+          /\ state.retransmitLifecycleOrdinal[episode.node]
+                 = episode.preFrozenRetransmitOrdinal
+          /\ state.retransmitLifecyclePhysicalCut[episode.node]
+                 = episode.preFrozenRetransmitPhysicalCut
+     ELSE TRUE
+  /\ IsFiniteSet(episode.admittedTimeoutVoteOwners)
+  /\ episode.admittedTimeoutVoteOwners
+       \subseteq AsyncTimeoutRecoveryVoteOwnerSet
+  /\ Cardinality(episode.admittedTimeoutVoteOwners)
+       <= Cardinality(episode.timeoutVoteOwnerUniverse)
+  /\ \A owner \in episode.admittedTimeoutVoteOwners:
+       AsyncTimeoutRecoveryVoteOwnerValidForEpisode(owner, episode)
+  /\ \A left, right \in episode.admittedTimeoutVoteOwners:
+       left.slot = right.slot => left = right
+
+AsyncTimeoutRecoveryEpisodeTypeInvariantIn(state) ==
+  /\ IsFiniteSet(AsyncTimeoutRecoveryEpisodesIn(state))
+  /\ AsyncTimeoutRecoveryEpisodesIn(state)
+       \subseteq AsyncTimeoutRecoveryEpisodeSet
+  /\ \A node \in ValidatorIds:
+       Cardinality(
+         AsyncTimeoutRecoveryEpisodesForNodeIn(state, node)) <= 1
+  /\ \A episode \in AsyncTimeoutRecoveryEpisodesIn(state):
+       AsyncTimeoutRecoveryEpisodeValidIn(state, episode)
+  /\ \A node \in ValidatorIds:
+       state.timeoutLifecycleOrdinal[node] # 0
+         => /\ AsyncTimeoutRecoveryEpisodeOwnedIn(state, node)
+            /\ LET episode ==
+                     AsyncTimeoutRecoveryEpisodeForNodeIn(state, node)
+               IN /\ episode.timeoutOwnerOrigin =
+                        state.timeoutLifecycleOrigin[node]
+                  /\ episode.timeoutOwnerOrdinal =
+                        state.timeoutLifecycleOrdinal[node]
+                  /\ episode.physicalCut =
+                        state.timeoutLifecyclePhysicalCut[node]
 
 \* The reviewed per-node lifecycle capacity is an injection from every live
 \* record or unmaterialized timeout reservation into the fixed slot carrier.
@@ -3331,14 +3543,14 @@ AsyncControlServiceStateTypeInvariant ==
         "candidateServiceNextOrdinal", "candidateServiceMarkers",
         "candidateTerminalTombstones",
         "producerContinuations",
-        "leaderWireIngressNextOrdinal",
         "candidateLifecycleNextOrdinal", "candidateLifecycleAdmissions",
         "ordinaryIngressCarrierEvidence",
         "timeoutRetiredThroughView",
         "timeoutLifecycleOrdinal", "timeoutLifecycleOrigin",
         "timeoutLifecyclePhysicalCut",
         "retransmitLifecycleOrdinal",
-        "retransmitLifecyclePhysicalCut"}
+        "retransmitLifecyclePhysicalCut",
+        "timeoutRecoveryEpisodes"}
   /\ asyncControlServiceState.nextOrdinal
        \in [ValidatorIds -> (Nat \ {0})]
   /\ asyncControlServiceState.certifiedResponseNextOrdinal
@@ -3346,8 +3558,6 @@ AsyncControlServiceStateTypeInvariant ==
   /\ asyncControlServiceState.certifiedFenceEscapePhase
        \in [ValidatorIds -> RetainedCertifiedFenceEscapePhases]
   /\ asyncControlServiceState.candidateServiceNextOrdinal
-       \in [ValidatorIds -> (Nat \ {0})]
-  /\ asyncControlServiceState.leaderWireIngressNextOrdinal
        \in [ValidatorIds -> (Nat \ {0})]
   /\ asyncControlServiceState.candidateLifecycleNextOrdinal
        \in [ValidatorIds -> (Nat \ {0})]
@@ -3365,6 +3575,8 @@ AsyncControlServiceStateTypeInvariant ==
        \in [ValidatorIds -> Nat]
   /\ asyncControlServiceState.retransmitLifecyclePhysicalCut
        \in [ValidatorIds -> Nat]
+  /\ AsyncTimeoutRecoveryEpisodeTypeInvariantIn(
+       asyncControlServiceState)
   /\ IsFiniteSet(AsyncControlServiceSlots)
   /\ IsFiniteSet(AsyncCertifiedResponseClaimRecords)
   /\ IsFiniteSet(AsyncCandidateServiceMarkers)
@@ -5306,6 +5518,17 @@ NodeHasDecision(node) ==
     /\ decision.node = node
     /\ decision.qc.context = context
     /\ decision.qc.phase = "Commit"
+
+\* A retained timeout-recovery episode is scoped to one exact live round.
+\* Restart generation, view/context/height advance, durable Decision, and
+\* installed-TC boundaries retire it in the control-state transformer.
+AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant ==
+  \A episode \in AsyncTimeoutRecoveryEpisodes:
+    /\ episode.key.context = context
+    /\ episode.timeoutOwnerOrigin.height = context.height
+    /\ episode.key.view = nodeView[episode.node]
+    /\ episode.generation = generation[episode.node]
+    /\ ~NodeHasDecision(episode.node)
 
 AsyncCandidateAdmissionIdentityObsolete(identity) ==
   LET consumer == identity.consumer
@@ -8235,9 +8458,12 @@ AsyncOlderRetransmitLifecycleBlocksTimeout(node) ==
   /\ AsyncRetransmitLifecycleOrdinal(node)
        < AsyncEffectiveTimeoutLifecycleOrdinal(node)
 
+\* Candidate work below the frozen cut remains a real causal predecessor.
+\* A periodic retransmit is best-effort: the absolute timeout captures its
+\* exact lower owner in the recovery episode and supersedes that pair during
+\* the successful timeout transfer instead of allowing it to starve the view.
 AsyncOlderRuntimeLifecycleBlocksTimeout(node) ==
-  \/ AsyncOlderCandidateLifecycleBlocksTimeout(node)
-  \/ AsyncOlderRetransmitLifecycleBlocksTimeout(node)
+  AsyncOlderCandidateLifecycleBlocksTimeout(node)
 
 AsyncTimeoutLifecycleIoJobSurvivesInstall(job, node, installedView) ==
   IF job.class = "Consensus"
@@ -9979,9 +10205,9 @@ Receiver-local lifecycle ownership for every productive leader wire.
 
 The wire bytes are unchanged.  On the first successful due receiver push,
 one bounded slot atomically freezes the full semantic identity, the shared
-scheduler ordinal, the distinct receiver-local admission ordinal, and the
+scheduler ordinal, the receiver-local physical admission ordinal, and the
 ingress prefixes already present at that recipient while installing the
-physical lane occurrence.  Exact retries reuse the record.  A distinct
+same physical lane occurrence.  Exact retries reuse the record.  A distinct
 identity in the same finite protocol
 slot cannot replace a live owner; after Terminal only a strictly newer view
 may replace its high-water record.  Chunk slots include the finite chunk
@@ -10919,16 +11145,15 @@ THEOREM AdmitFreshLeaderWireFreezesCurrentLocalSchedulerOrdinal ==
                  AsyncLeaderWireLifecycleIdentityAt(item, context)
             /\ record.schedulerOrdinal
                  = AsyncNextCandidateLifecycleOrdinal(recipient)
-            /\ record.admissionOrdinal
-                 =
-                   AsyncNextLeaderWireLifecycleAdmissionOrdinal(
-                     recipient)
+            /\ record.admissionOrdinal =
+                 record.physicalAdmissionOrdinal
             /\ record.physicalAdmissionOrdinal
                  = AsyncNextIngressPhysicalOrdinal(recipient)
             /\ record.status = "Ingress"
 BY Isa
    DEF AdmitHiddenPacket,
-       AsyncLeaderWireLifecycleStateAfterIngressAdmission
+       AsyncLeaderWireLifecycleStateAfterIngressAdmission,
+       AsyncNextLeaderWireLifecycleAdmissionOrdinal
 
 THEOREM AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
@@ -14957,13 +15182,13 @@ THEOREM AsyncOlderCandidateLifecyclePreventsDueTimeoutOvertake ==
 BY DEF TimeoutDue, DeferredTimeoutExecutable,
        AsyncOlderRuntimeLifecycleBlocksTimeout
 
-THEOREM AsyncOlderRetransmitLifecyclePreventsDueTimeoutOvertake ==
+THEOREM AsyncOlderRetransmitLifecycleCannotAloneBlockDueTimeout ==
   \A node \in ValidatorIds:
     /\ AsyncTimeoutClockDue(node)
     /\ AsyncOlderRetransmitLifecycleBlocksTimeout(node)
-    => /\ ~TimeoutDue(node)
-       /\ ~DeferredTimeoutExecutable(node)
-BY DEF TimeoutDue, DeferredTimeoutExecutable,
+    /\ ~AsyncOlderCandidateLifecycleBlocksTimeout(node)
+    => TimeoutDue(node)
+BY DEF TimeoutDue,
        AsyncOlderRuntimeLifecycleBlocksTimeout
 
 THEOREM AsyncOlderCandidateLifecyclePreventsDueRetransmitOvertake ==
@@ -17390,8 +17615,6 @@ AsyncControlServiceStateAfterReset(state, resetNodes) ==
      state.candidateTerminalTombstones,
    producerContinuations |->
      AsyncCandidateProducerContinuationsAfterReset(state, resetNodes),
-   leaderWireIngressNextOrdinal |->
-     state.leaderWireIngressNextOrdinal,
    candidateLifecycleNextOrdinal |->
      state.candidateLifecycleNextOrdinal,
    candidateLifecycleAdmissions |->
@@ -17410,7 +17633,19 @@ AsyncControlServiceStateAfterReset(state, resetNodes) ==
    retransmitLifecycleOrdinal |->
      state.retransmitLifecycleOrdinal,
    retransmitLifecyclePhysicalCut |->
-     state.retransmitLifecyclePhysicalCut]
+     state.retransmitLifecyclePhysicalCut,
+   timeoutRecoveryEpisodes |->
+     {episode \in state.timeoutRecoveryEpisodes:
+        episode.node \notin resetNodes}]
+
+THEOREM AsyncTimeoutRecoveryResetRetiresExactlyResetNodes ==
+  \A state, resetNodes, episode:
+    episode \in state.timeoutRecoveryEpisodes
+      => (episode \in
+            (AsyncControlServiceStateAfterReset(
+               state, resetNodes)).timeoutRecoveryEpisodes)
+           = (episode.node \notin resetNodes)
+BY DEF AsyncControlServiceStateAfterReset
 
 THEOREM AsyncCandidateProducerContinuationResetPreservesExactReservation ==
   \A state, resetNodes, record:
@@ -17484,8 +17719,6 @@ AsyncControlServiceStateAfterAdmission(state, item) ==
       candidateTerminalTombstones |->
         state.candidateTerminalTombstones,
       producerContinuations |-> state.producerContinuations,
-      leaderWireIngressNextOrdinal |->
-        state.leaderWireIngressNextOrdinal,
       candidateLifecycleNextOrdinal |->
         state.candidateLifecycleNextOrdinal,
       candidateLifecycleAdmissions |->
@@ -17503,7 +17736,9 @@ AsyncControlServiceStateAfterAdmission(state, item) ==
       retransmitLifecycleOrdinal |->
         state.retransmitLifecycleOrdinal,
       retransmitLifecyclePhysicalCut |->
-        state.retransmitLifecyclePhysicalCut]
+        state.retransmitLifecyclePhysicalCut,
+      timeoutRecoveryEpisodes |->
+        state.timeoutRecoveryEpisodes]
 
 AsyncControlServiceStateAfterService(state, item) ==
   [nextOrdinal |-> state.nextOrdinal,
@@ -17523,8 +17758,6 @@ AsyncControlServiceStateAfterService(state, item) ==
    candidateTerminalTombstones |->
      state.candidateTerminalTombstones,
    producerContinuations |-> state.producerContinuations,
-   leaderWireIngressNextOrdinal |->
-     state.leaderWireIngressNextOrdinal,
    candidateLifecycleNextOrdinal |->
      state.candidateLifecycleNextOrdinal,
    candidateLifecycleAdmissions |->
@@ -17542,7 +17775,9 @@ AsyncControlServiceStateAfterService(state, item) ==
    retransmitLifecycleOrdinal |->
      state.retransmitLifecycleOrdinal,
    retransmitLifecyclePhysicalCut |->
-     state.retransmitLifecyclePhysicalCut]
+     state.retransmitLifecyclePhysicalCut,
+   timeoutRecoveryEpisodes |->
+     state.timeoutRecoveryEpisodes]
 
 AsyncCertifiedResponseClaimStateAfterRetirement(state) ==
   LET retained ==
@@ -19996,11 +20231,12 @@ AsyncFreshServeIngressAdmissionsAreSingularThisStep ==
 
 (***************************************************************************
 Receiver-local leader-wire acceptance consumes the current shared scheduler
-high-watermark after the local physical capacity gates have succeeded.  It
-advances both that high-watermark and the separate ingress high-watermark
-before this same transition can allocate a later Serve, timeout, or ordinary
-Candidate root.  Identity comparison treats status changes and frozen-prefix
-decrements as rewrites of the same reservation.
+high-watermark after the local physical capacity gates have succeeded.  The
+same locked acceptance reserves the token's first physical admission position
+from the shared ingress high-watermark before this transition can allocate a
+later Serve, timeout, or ordinary Candidate root.  Identity comparison treats
+status changes and frozen-prefix decrements as rewrites of the same
+reservation.
 ***************************************************************************)
 AsyncFreshLeaderWireLifecycleAdmissionsForNodeThisStep(node) ==
   {record \in asyncLeaderWireLifecycles':
@@ -20024,17 +20260,12 @@ AsyncFreshLeaderWireLifecycleAdmissionOrdinalMatchesIn(state) ==
   \A node \in ValidatorIds:
     \A record \in
          AsyncFreshLeaderWireLifecycleAdmissionsForNodeThisStep(node):
-      record.admissionOrdinal =
-        state.leaderWireIngressNextOrdinal[node]
+      /\ record.admissionOrdinal = record.physicalAdmissionOrdinal
+      /\ record.physicalAdmissionOrdinal =
+           AsyncNextIngressPhysicalOrdinal(node)
 
 AsyncCandidateLifecycleStateAfterLeaderWireAdmission(state) ==
   [state EXCEPT
-     !.leaderWireIngressNextOrdinal =
-       [node \in ValidatorIds |->
-          state.leaderWireIngressNextOrdinal[node]
-            + Cardinality(
-                AsyncFreshLeaderWireLifecycleAdmissionsForNodeThisStep(
-                  node))],
      !.candidateLifecycleNextOrdinal =
        [node \in ValidatorIds |->
           state.candidateLifecycleNextOrdinal[node]
@@ -20054,8 +20285,6 @@ THEOREM AsyncDormantLeaderWireReactivationConsumesPhysicalNotLifecycleOrdinal ==
        => /\ \A node \in ValidatorIds:
                 AsyncFreshLeaderWireLifecycleAdmissionsForNodeThisStep(
                   node) = {}
-          /\ after.leaderWireIngressNextOrdinal =
-               state.leaderWireIngressNextOrdinal
           /\ after.candidateLifecycleNextOrdinal =
                state.candidateLifecycleNextOrdinal
           /\ AsyncNextIngressPhysicalOrdinal(recipient)'
@@ -20124,21 +20353,216 @@ AsyncRetransmitLifecyclePhysicalCutForStep(state, node) ==
   \* high-watermark before this same serialized boundary freezes the clock.
   ELSE AsyncNextIngressPhysicalOrdinal(node)'
 
+AsyncCandidateLifecycleNextOrdinalAfterServeIn(state, node) ==
+  state.candidateLifecycleNextOrdinal[node]
+    + Cardinality(
+        AsyncFreshServeIngressAdmissionsForNodeThisStep(node))
+    + (IF AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
+       THEN 1 ELSE 0)
+
+AsyncTimeoutRecoveryProspectiveTimeoutOrdinalIn(state, node) ==
+  IF state.timeoutLifecycleOrdinal[node] # 0
+  THEN state.timeoutLifecycleOrdinal[node]
+  ELSE IF AsyncTimeoutLifecycleUsesRecordedOriginOrdinal(state, node)
+       THEN AsyncCandidateLifecycleRecordForIn(
+              state, node,
+              AsyncCurrentTimeoutCausalOrigin(node)).ordinal
+       ELSE AsyncCandidateLifecycleNextOrdinalAfterServeIn(state, node)
+
+AsyncTimeoutRecoveryProspectivePhysicalCutIn(state, node) ==
+  AsyncTimeoutLifecyclePhysicalCutForStep(state, node)
+
+AsyncTimeoutRecoveryExistingCapturedPairExactIn(state, node) ==
+  /\ AsyncTimeoutRecoveryEpisodeOwnedIn(state, node)
+  /\ LET episode ==
+           AsyncTimeoutRecoveryEpisodeForNodeIn(state, node)
+     IN /\ episode.preFrozenRetransmitOrdinal # 0
+        /\ state.retransmitLifecycleOrdinal[node]
+             = episode.preFrozenRetransmitOrdinal
+        /\ state.retransmitLifecyclePhysicalCut[node]
+             = episode.preFrozenRetransmitPhysicalCut
+
+AsyncTimeoutRecoveryProspectiveCapturedPairExactIn(state, node) ==
+  LET timeoutOrdinal ==
+        AsyncTimeoutRecoveryProspectiveTimeoutOrdinalIn(state, node)
+      physicalCut ==
+        AsyncTimeoutRecoveryProspectivePhysicalCutIn(state, node)
+  IN /\ ~AsyncTimeoutRecoveryEpisodeOwnedIn(state, node)
+     /\ state.timeoutLifecycleOrdinal[node] = 0
+     /\ AsyncTimeoutLifecycleCanAcquireThisStep(node)
+     /\ state.retransmitLifecycleOrdinal[node] # 0
+     /\ state.retransmitLifecyclePhysicalCut[node] # 0
+     /\ state.retransmitLifecycleOrdinal[node] < timeoutOrdinal
+     /\ state.retransmitLifecyclePhysicalCut[node] <= physicalCut
+
+\* The absolute timeout may remove only the exact lower periodic pair frozen
+\* into either the existing episode or the episode created by this same
+\* serialized boundary.  A mismatching owner is not a scheduling stutter: the
+\* transition gate below rejects it before any refinement evidence is
+\* published.
+AsyncTimeoutRecoverySupersedesPreTimeoutRetransmitIn(state, node) ==
+  /\ AsyncTimeoutLifecycleTransfersThisStep(node)
+  /\ \/ AsyncTimeoutRecoveryExistingCapturedPairExactIn(state, node)
+     \/ AsyncTimeoutRecoveryProspectiveCapturedPairExactIn(state, node)
+
+AsyncTimeoutRecoveryEpisodeCreationRequiredIn(state, node) ==
+  /\ state.timeoutLifecycleOrdinal[node] = 0
+  /\ AsyncTimeoutLifecycleCanAcquireThisStep(node)
+
+AsyncTimeoutRecoveryEpisodeCreationReadyIn(
+    preClockState, timeoutBaseState, node) ==
+  LET timeoutOrdinal ==
+        AsyncTimeoutLifecycleOrdinalForStep(timeoutBaseState, node)
+      physicalCut ==
+        AsyncTimeoutLifecyclePhysicalCutForStep(timeoutBaseState, node)
+      origin == AsyncCurrentTimeoutCausalOrigin(node)
+      preOrdinal == preClockState.retransmitLifecycleOrdinal[node]
+      prePhysicalCut ==
+        preClockState.retransmitLifecyclePhysicalCut[node]
+  IN /\ AsyncTimeoutRecoveryEpisodeCreationRequiredIn(
+           timeoutBaseState, node)
+     /\ ~AsyncTimeoutRecoveryEpisodeOwnedIn(timeoutBaseState, node)
+     /\ node \notin AsyncControlServiceResetNodesThisStep
+     /\ context' = context
+     /\ nodeView'[node] = nodeView[node]
+     /\ generation'[node] = generation[node]
+     /\ ~AsyncNodeHasDecisionIn(node, context', decisions')
+     /\ AsyncPersistInstallCommandsForNodeThisStep(node) = {}
+     /\ origin.owner = node
+     /\ origin.target = node
+     /\ origin.context = context'
+     /\ origin.height = context'.height
+     /\ origin.view = nodeView'[node]
+     /\ origin.phase = "BeginTimeout"
+     /\ timeoutOrdinal # 0
+     /\ physicalCut # 0
+     /\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node)'
+     /\ (preOrdinal = 0) = (prePhysicalCut = 0)
+     /\ IF preOrdinal # 0
+        THEN /\ preOrdinal < timeoutOrdinal
+             /\ prePhysicalCut <= physicalCut
+        ELSE TRUE
+
+AsyncTimeoutRecoveryTransferPairExactIn(
+    preClockState, timeoutBaseState, node) ==
+  /\ AsyncTimeoutLifecycleTransfersThisStep(node)
+  /\ IF AsyncTimeoutRecoveryEpisodeOwnedIn(preClockState, node)
+     THEN LET episode ==
+                AsyncTimeoutRecoveryEpisodeForNodeIn(
+                  preClockState, node)
+          IN /\ timeoutBaseState.timeoutLifecycleOrdinal[node]
+                   = episode.timeoutOwnerOrdinal
+             /\ timeoutBaseState.timeoutLifecycleOrigin[node]
+                   = episode.timeoutOwnerOrigin
+             /\ timeoutBaseState.timeoutLifecyclePhysicalCut[node]
+                   = episode.physicalCut
+             /\ IF episode.preFrozenRetransmitOrdinal # 0
+                THEN /\ preClockState.retransmitLifecycleOrdinal[node]
+                           = episode.preFrozenRetransmitOrdinal
+                     /\ preClockState
+                           .retransmitLifecyclePhysicalCut[node]
+                           = episode.preFrozenRetransmitPhysicalCut
+                ELSE /\ preClockState.retransmitLifecycleOrdinal[node] = 0
+                     /\ preClockState
+                           .retransmitLifecyclePhysicalCut[node] = 0
+     ELSE AsyncTimeoutRecoveryEpisodeCreationReadyIn(
+            preClockState, timeoutBaseState, node)
+
+AsyncTimeoutRecoveryTransitionGateIn(preClockState, timeoutBaseState) ==
+  \A node \in ValidatorIds:
+    /\ (AsyncTimeoutRecoveryEpisodeCreationRequiredIn(
+           timeoutBaseState, node)
+          => AsyncTimeoutRecoveryEpisodeCreationReadyIn(
+               preClockState, timeoutBaseState, node))
+    /\ (AsyncTimeoutLifecycleTransfersThisStep(node)
+          => AsyncTimeoutRecoveryTransferPairExactIn(
+               preClockState, timeoutBaseState, node))
+
+AsyncTimeoutRecoveryEpisodeRetiresThisStep(episode) ==
+  \/ episode.node \in AsyncControlServiceResetNodesThisStep
+  \/ context' # episode.key.context
+  \/ context'.height # episode.timeoutOwnerOrigin.height
+  \/ nodeView'[episode.node] # episode.key.view
+  \/ generation'[episode.node] # episode.generation
+  \/ AsyncNodeHasDecisionIn(episode.node, context', decisions')
+  \/ AsyncPersistInstallCommandsForNodeThisStep(episode.node) # {}
+
+AsyncTimeoutRecoveryExistingCaptureClearsThisStep(
+    preClockState, node) ==
+  /\ AsyncTimeoutRecoveryExistingCapturedPairExactIn(
+       preClockState, node)
+  /\ \/ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+     \/ AsyncTimeoutLifecycleTransfersThisStep(node)
+
+AsyncTimeoutRecoveryEpisodeAfterTransition(preClockState, episode) ==
+  IF AsyncTimeoutRecoveryExistingCaptureClearsThisStep(
+       preClockState, episode.node)
+  THEN [episode EXCEPT
+          !.preFrozenRetransmitOrdinal = 0,
+          !.preFrozenRetransmitPhysicalCut = 0]
+  ELSE episode
+
+AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+    preClockState, state) ==
+  {AsyncTimeoutRecoveryEpisodeAfterTransition(
+     preClockState, episode):
+     episode \in
+       {retained \in state.timeoutRecoveryEpisodes:
+          ~AsyncTimeoutRecoveryEpisodeRetiresThisStep(retained)}}
+
+AsyncTimeoutRecoveryNewEpisodeIn(
+    preClockState, timeoutBaseState, node) ==
+  LET timeoutOrdinal ==
+        AsyncTimeoutLifecycleOrdinalForStep(timeoutBaseState, node)
+      physicalCut ==
+        AsyncTimeoutLifecyclePhysicalCutForStep(timeoutBaseState, node)
+      preOrdinal == preClockState.retransmitLifecycleOrdinal[node]
+      prePhysicalCut ==
+        preClockState.retransmitLifecyclePhysicalCut[node]
+      episode ==
+        AsyncTimeoutRecoveryEpisode(
+          node, AsyncCurrentTimeoutCausalOrigin(node), generation'[node],
+          timeoutOrdinal, physicalCut, preOrdinal, prePhysicalCut, {})
+  IN IF /\ preOrdinal # 0
+           /\ \/ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+              \/ AsyncTimeoutLifecycleTransfersThisStep(node)
+     THEN [episode EXCEPT
+             !.preFrozenRetransmitOrdinal = 0,
+             !.preFrozenRetransmitPhysicalCut = 0]
+     ELSE episode
+
+AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+    preClockState, timeoutBaseState) ==
+  {AsyncTimeoutRecoveryNewEpisodeIn(
+     preClockState, timeoutBaseState, node):
+     node \in
+       {candidate \in ValidatorIds:
+          AsyncTimeoutRecoveryEpisodeCreationRequiredIn(
+            timeoutBaseState, candidate)}}
+
+AsyncTimeoutRecoveryEpisodeStateAfterTransition(
+    preClockState, timeoutBaseState, state) ==
+  [state EXCEPT
+     !.timeoutRecoveryEpisodes =
+       AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+         preClockState, state)
+         \cup
+       AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+         preClockState, timeoutBaseState)]
+
 AsyncCandidateLifecycleStateAfterServeIngressAdmission(state) ==
   [state EXCEPT
      !.candidateLifecycleNextOrdinal =
        [node \in ValidatorIds |->
-          state.candidateLifecycleNextOrdinal[node]
-            + Cardinality(
-                AsyncFreshServeIngressAdmissionsForNodeThisStep(node))
-            + (IF AsyncRetransmitLifecycleConsumesFreshOrdinal(
-                    state, node)
-               THEN 1 ELSE 0)],
+          AsyncCandidateLifecycleNextOrdinalAfterServeIn(state, node)],
      !.retransmitLifecycleOrdinal =
        [node \in ValidatorIds |->
           IF AsyncRetransmitLifecycleResetThisStep(node)
           THEN 0
           ELSE IF AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+               THEN 0
+          ELSE IF AsyncTimeoutRecoverySupersedesPreTimeoutRetransmitIn(
+                    state, node)
                THEN 0
           ELSE IF AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
                THEN AsyncRetransmitLifecycleFreshOrdinalForStep(
@@ -20151,6 +20575,9 @@ AsyncCandidateLifecycleStateAfterServeIngressAdmission(state) ==
           IF AsyncRetransmitLifecycleResetThisStep(node)
           THEN 0
           ELSE IF AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+               THEN 0
+          ELSE IF AsyncTimeoutRecoverySupersedesPreTimeoutRetransmitIn(
+                    state, node)
                THEN 0
           ELSE IF AsyncRetransmitLifecycleConsumesFreshOrdinal(state, node)
                THEN AsyncRetransmitLifecyclePhysicalCutForStep(
@@ -20213,6 +20640,23 @@ THEOREM AsyncRetransmitCompletedEpisodeClearsActiveOwner ==
 BY SMT
    DEF AsyncCandidateLifecycleStateAfterServeIngressAdmission,
        AsyncRetransmitLifecycleConsumesFreshOrdinal
+
+THEOREM AsyncTimeoutRecoverySupersedesOnlyExactPreTimeoutRetransmit ==
+  \A state, node:
+    LET after ==
+          AsyncCandidateLifecycleStateAfterServeIngressAdmission(state)
+    IN /\ node \in ValidatorIds
+       /\ AsyncTimeoutRecoverySupersedesPreTimeoutRetransmitIn(
+            state, node)
+         => /\ after.retransmitLifecycleOrdinal[node] = 0
+            /\ after.retransmitLifecyclePhysicalCut[node] = 0
+            /\ \/ AsyncTimeoutRecoveryExistingCapturedPairExactIn(
+                      state, node)
+               \/ AsyncTimeoutRecoveryProspectiveCapturedPairExactIn(
+                    state, node)
+BY SMT
+   DEF AsyncCandidateLifecycleStateAfterServeIngressAdmission,
+       AsyncTimeoutRecoverySupersedesPreTimeoutRetransmitIn
 
 THEOREM AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition ==
   \A state, node:
@@ -20284,6 +20728,8 @@ THEOREM AsyncRetransmitLiveEpisodeRetainsIngressPhysicalCut ==
        /\ state.retransmitLifecycleOrdinal[node] # 0
        /\ ~AsyncRetransmitLifecycleResetThisStep(node)
        /\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+       /\ ~AsyncTimeoutRecoverySupersedesPreTimeoutRetransmitIn(
+             state, node)
          => /\ after.retransmitLifecycleOrdinal[node]
                   = state.retransmitLifecycleOrdinal[node]
             /\ after.retransmitLifecyclePhysicalCut[node]
@@ -20633,8 +21079,11 @@ AsyncCandidateLifecycleFinalStateFromCompacted(state) ==
       timeoutState ==
         AsyncCandidateLifecycleStateAfterTimeoutOwnership(
           serveIngressState, lifecycleState)
+      timeoutRecoveryState ==
+        AsyncTimeoutRecoveryEpisodeStateAfterTransition(
+          leaderWireState, serveIngressState, timeoutState)
   IN AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission(
-       timeoutState)
+       timeoutRecoveryState)
 
 AsyncCandidateLifecycleNoFreshOrdinaryOriginsIn(state) ==
   \A node \in ValidatorIds:
@@ -20723,9 +21172,12 @@ AsyncControlServiceSlotTransition ==
       timeoutState ==
         AsyncCandidateLifecycleStateAfterTimeoutOwnership(
           serveIngressState, lifecycleState)
+      timeoutRecoveryState ==
+        AsyncTimeoutRecoveryEpisodeStateAfterTransition(
+          leaderWireState, serveIngressState, timeoutState)
       lifecycleFinalState ==
         AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission(
-          timeoutState)
+          timeoutRecoveryState)
       finalState ==
         AsyncCertifiedFenceEscapeStateAfterRuntime(lifecycleFinalState)
   IN /\ AsyncFreshLeaderWireLifecycleAdmissionsAreSingularThisStep
@@ -20736,6 +21188,8 @@ AsyncControlServiceSlotTransition ==
      /\ AsyncFreshServeIngressAdmissionsAreSingularThisStep
      /\ AsyncFreshServeIngressSchedulerReservationMatchesIn(
           leaderWireState)
+     /\ AsyncTimeoutRecoveryTransitionGateIn(
+          leaderWireState, serveIngressState)
      /\ AsyncFreshOrdinaryIngressCarrierAdmissionsAreSingularThisStep
      /\ \A node \in ValidatorIds:
           AsyncFreshOrdinaryIngressCarrierItemsForNodeThisStep(node) # {}
@@ -20772,8 +21226,8 @@ THEOREM LeaderWireRecoveryCutRetainsOrdinalHighwaters ==
        /\ AsyncLeaderWireLifecycleRecoveryCutObsolete(record)
        /\ AsyncControlServiceSlotTransition
        => \A node \in ValidatorIds:
-            /\ AsyncNextLeaderWireIngressOrdinal(node)' =
-                 AsyncNextLeaderWireIngressOrdinal(node)
+            /\ AsyncNextIngressPhysicalOrdinal(node)' =
+                 AsyncNextIngressPhysicalOrdinal(node)
             /\ AsyncNextCandidateLifecycleOrdinal(node)' =
                  AsyncNextCandidateLifecycleOrdinal(node)
 BY IsaT(240)
@@ -20782,7 +21236,7 @@ BY IsaT(240)
        AsyncControlServiceSlotTransition,
        AsyncFreshLeaderWireLifecycleAdmissionsForNodeThisStep,
        AsyncCandidateLifecycleStateAfterLeaderWireAdmission,
-       AsyncNextLeaderWireIngressOrdinal,
+       AsyncNextIngressPhysicalOrdinal,
        AsyncNextCandidateLifecycleOrdinal
 
 THEOREM OrdinaryIngressCarrierRetirementCompactionDoesNotIncreaseEvidence ==
@@ -21642,16 +22096,23 @@ BY Isa
    DEF AsyncCandidateLifecycleStateAfterServeIngressAdmission
 
 THEOREM AsyncLeaderWireIngressHighWatermarkAdvancesByFreshAdmissions ==
-  \A state, node:
-    node \in ValidatorIds
-      => (AsyncCandidateLifecycleStateAfterLeaderWireAdmission(state))
-           .leaderWireIngressNextOrdinal[node]
-           = state.leaderWireIngressNextOrdinal[node]
-               + Cardinality(
-                   AsyncFreshLeaderWireLifecycleAdmissionsForNodeThisStep(
-                     node))
-BY Isa
-   DEF AsyncCandidateLifecycleStateAfterLeaderWireAdmission
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    LET item == (OldestDueSourcePacket(recipient, source)).item
+    IN /\ AdmitHiddenPacket(recipient, source)
+       /\ item.kind \in AsyncLeaderWireKinds
+       /\ AsyncLeaderWireLifecycleIdentityDerivable(item)
+       /\ ~AsyncLeaderWireLifecycleExactDormant(item)
+       => /\ AsyncNextIngressPhysicalOrdinal(recipient)' =
+                AsyncNextIngressPhysicalOrdinal(recipient) + 1
+          /\ \E record \in asyncLeaderWireLifecycles':
+               /\ record.identity =
+                    AsyncLeaderWireLifecycleIdentityAt(item, context)
+               /\ record.admissionOrdinal =
+                    AsyncNextIngressPhysicalOrdinal(recipient)
+               /\ record.physicalAdmissionOrdinal =
+                    AsyncNextIngressPhysicalOrdinal(recipient)
+BY AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal,
+   AdmitFreshLeaderWireFreezesCurrentLocalSchedulerOrdinal
 
 THEOREM AsyncLeaderWireSharedHighWatermarkAdvancesByFreshAdmissions ==
   \A state, node:
@@ -21715,7 +22176,8 @@ THEOREM AsyncFreshLeaderWireAdmissionProjectionFollowsRetainedOwners ==
 BY Isa
    DEF AsyncLeaderWireLifecycleTypeInvariant,
        AsyncLeaderWireLifecycleTyped,
-       AsyncNextLeaderWireIngressOrdinal,
+       AsyncNextLeaderWireLifecycleAdmissionOrdinal,
+       AsyncNextIngressPhysicalOrdinal,
        AsyncFreshLeaderWireLifecycleAdmissionOrdinalMatchesIn
 
 THEOREM AsyncServeIngressReservationPrecedesSameStepCandidateAllocation ==
@@ -21829,6 +22291,15 @@ THEOREM AsyncControlServiceTransitionRequiresAtomicLifecycleReservation ==
            serveIngressState ==
              AsyncCandidateLifecycleStateAfterServeIngressAdmission(
                leaderWireState)
+           lifecycleState ==
+             AsyncCandidateLifecycleStateAfterAdmission(
+               serveIngressState)
+           timeoutState ==
+             AsyncCandidateLifecycleStateAfterTimeoutOwnership(
+               serveIngressState, lifecycleState)
+           timeoutRecoveryState ==
+             AsyncTimeoutRecoveryEpisodeStateAfterTransition(
+               leaderWireState, serveIngressState, timeoutState)
        IN /\ AsyncFreshLeaderWireLifecycleAdmissionsAreSingularThisStep
           /\ AsyncFreshLeaderWireLifecycleAdmissionOrdinalMatchesIn(
                compactedState)
@@ -21837,6 +22308,14 @@ THEOREM AsyncControlServiceTransitionRequiresAtomicLifecycleReservation ==
           /\ AsyncFreshServeIngressAdmissionsAreSingularThisStep
           /\ AsyncFreshServeIngressSchedulerReservationMatchesIn(
                leaderWireState)
+          /\ AsyncTimeoutRecoveryTransitionGateIn(
+               leaderWireState, serveIngressState)
+          /\ timeoutRecoveryState.timeoutRecoveryEpisodes =
+               AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+                 leaderWireState, timeoutState)
+                 \cup
+               AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+                 leaderWireState, serveIngressState)
           /\ AsyncCandidateLifecycleReservationsAvailableIn(
                serveIngressState)
           /\ AsyncCandidateTerminalServiceReservationAvailableIn(
@@ -22861,14 +23340,14 @@ THEOREM AsyncControlServiceSameHeightRecoveryRetiresVolatileOwners ==
           = asyncControlServiceState.nextOrdinal
      /\ asyncControlServiceState'.certifiedResponseNextOrdinal
           = asyncControlServiceState.certifiedResponseNextOrdinal
-     /\ asyncControlServiceState'.leaderWireIngressNextOrdinal
-          = asyncControlServiceState.leaderWireIngressNextOrdinal
+     /\ asyncNextServeIngressOrdinal' = asyncNextServeIngressOrdinal
      /\ CertifiedResponseClaimRecordsAt(asyncRecoveryNode)' = {}
      /\ \A record \in AsyncControlServiceSlots':
           record.slot.recipient = asyncRecoveryNode
             => record.consumed
 BY Isa
-   DEF AsyncControlServiceSlotTransition,
+   DEF PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
+       AsyncControlServiceSlotTransition,
        AsyncControlServiceResetNodesThisStep,
        AsyncControlServiceAdmissionsThisStep,
        AsyncControlServicesThisStep,
@@ -24532,8 +25011,6 @@ AsyncTransportInit ==
         candidateServiceMarkers |-> {},
         candidateTerminalTombstones |-> {},
         producerContinuations |-> {},
-        leaderWireIngressNextOrdinal |->
-          [node \in ValidatorIds |-> 1],
         candidateLifecycleNextOrdinal |->
           [node \in ValidatorIds |-> 2],
         candidateLifecycleAdmissions |->
@@ -24550,7 +25027,8 @@ AsyncTransportInit ==
         retransmitLifecycleOrdinal |->
           [node \in ValidatorIds |-> 0],
         retransmitLifecyclePhysicalCut |->
-          [node \in ValidatorIds |-> 0]]
+          [node \in ValidatorIds |-> 0],
+        timeoutRecoveryEpisodes |-> {}]
   /\ asyncServiceActivationState =
        [restricted |-> FALSE, activeNodes |-> ValidatorIds]
 
@@ -24566,8 +25044,22 @@ THEOREM AsyncLeaderWireLifecycleRolloverInstanceStartsEmpty ==
   AsyncTransportInit
     => /\ asyncLeaderWireLifecycles = {}
        /\ \A node \in ValidatorIds:
-            AsyncNextLeaderWireIngressOrdinal(node) = 1
-BY DEF AsyncTransportInit, AsyncNextLeaderWireIngressOrdinal
+            AsyncNextLeaderWireLifecycleAdmissionOrdinal(node) = 1
+BY DEF AsyncTransportInit,
+       AsyncNextLeaderWireLifecycleAdmissionOrdinal,
+       AsyncNextIngressPhysicalOrdinal
+
+THEOREM AsyncTimeoutRecoveryRolloverInstanceStartsEmpty ==
+  AsyncTransportInit
+    => /\ AsyncTimeoutRecoveryEpisodes = {}
+       /\ \A node \in ValidatorIds:
+            ~AsyncTimeoutRecoveryEpisodeOwned(node)
+BY DEF AsyncTransportInit,
+       AsyncTimeoutRecoveryEpisodes,
+       AsyncTimeoutRecoveryEpisodesIn,
+       AsyncTimeoutRecoveryEpisodeOwned,
+       AsyncTimeoutRecoveryEpisodeOwnedIn,
+       AsyncTimeoutRecoveryEpisodesForNodeIn
 
 THEOREM AsyncCertifiedResponseClaimRolloverInstanceStartsEmpty ==
   AsyncTransportInit
@@ -26165,6 +26657,8 @@ AsyncLeaderWireLifecycleTyped(record) ==
   /\ IF AsyncLeaderWireLifecycleDormant(record)
      THEN record.physicalAdmissionOrdinal = 0
      ELSE /\ record.physicalAdmissionOrdinal \in Nat \ {0}
+          /\ record.admissionOrdinal
+               <= record.physicalAdmissionOrdinal
           /\ record.physicalAdmissionOrdinal
                < AsyncNextIngressPhysicalOrdinal(record.recipient)
   /\ record.schedulerOrdinal \in Nat \ {0}
@@ -26529,6 +27023,7 @@ AsyncStrongTypeInvariant ==
   /\ AsyncSchedulerTypeInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ AsyncControlServiceStateTypeInvariant
+  /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
   /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
   /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
   /\ AsyncLeaderWireIngressCarrierOwnershipInvariant

@@ -24088,10 +24088,46 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             "recoverable pre-FIFO clock reservation gate declaration",
         ),
         (
+            "is_physical_leader_wire_replay",
+            "token.admission_ordinal() < physical_ordinal",
+            "token.admission_ordinal() <= physical_ordinal",
+            "strict retained-token physical-replay classifier declaration",
+        ),
+        (
+            "is_physical_leader_wire_replay",
+            "token.admission_ordinal() < physical_ordinal",
+            "token.scheduler_ordinal() < physical_ordinal",
+            "strict retained-token physical-replay classifier declaration",
+        ),
+        (
+            "is_physical_leader_wire_replay",
+            "(Some(_), None) | (None, Some(_)) => Err(RuntimeIngressMergeError::Conflict)",
+            "(Some(_), None) | (None, Some(_)) => Ok(true)",
+            "strict retained-token physical-replay classifier declaration",
+        ),
+        (
             "enqueue_network_with_ingress_ownership",
-            "match self.clock_owner_reservation_blocks(owner)",
+            "match self.clock_owner_reservation_blocks_occurrence(",
             "match Ok(false)",
-            "authenticated post-cut replay admission gate declaration",
+            "authenticated strict physical-replay admission gate declaration",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "match ingress_ownership.is_physical_leader_wire_replay()",
+            "match Ok(true)",
+            "authenticated strict physical-replay admission gate declaration",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "Ok(true) if certified_physical_replay => {}",
+            "Ok(true) => {}",
+            "authenticated strict physical-replay admission gate declaration",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "wire_payload_is_certified_fence_escape(\n            authenticated.payload(),\n        )",
+            "true",
+            "authenticated strict physical-replay admission gate declaration",
         ),
         (
             "can_admit_pre_runtime_leader_wire",
@@ -24103,6 +24139,18 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             "can_admit_pre_runtime_leader_wire",
             "match self.clock_owner_reservation_blocks_occurrence(",
             "match Ok(false).and(",
+            "pre-runtime leader-wire physical-cut and clock-owner gate declaration",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "token.admission_ordinal() < source_physical_ordinal",
+            "token.admission_ordinal() <= source_physical_ordinal",
+            "pre-runtime leader-wire physical-cut and clock-owner gate declaration",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "wire_payload_is_certified_fence_escape(&runtime_message.payload)",
+            "true",
             "pre-runtime leader-wire physical-cut and clock-owner gate declaration",
         ),
         (
@@ -24122,6 +24170,96 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             "same_token_pre_runtime.runtime_physical_cut = None;",
             "same_token_pre_runtime.runtime_physical_cut = Some(0);",
             "pre-runtime exact-retry coalescing regression declaration",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert_eq!(\n            restored_receipt.token().admission_ordinal(),\n            fresh_physical_ordinal,",
+            "assert_ne!(\n            restored_receipt.token().admission_ordinal(),\n            fresh_physical_ordinal,",
+            "the regression must reject equality as a fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert!(\n            !runtime.can_admit_network_message_with_ingress_ownership(\n                &message,\n                &restored_pre_runtime,\n            ),",
+            "assert!(\n            runtime.can_admit_network_message_with_ingress_ownership(\n                &message,\n                &restored_pre_runtime,\n            ),",
+            "the regression must reject the fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "Err(NetworkIngressError::Backpressure(EnqueueError::Full))",
+            "Ok(runtime.round_tag())",
+            "the mutating seam must backpressure a fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "!runtime.fail_closed,\n            \"rejecting the fresh carrier is retryable backpressure\"",
+            "runtime.fail_closed,\n            \"rejecting the fresh carrier is retryable backpressure\"",
+            "fresh certified backpressure must remain recoverable",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "fresh_runtime.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "fresh_runtime.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "the fresh case must exercise the strict physical-replay helper",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "            Ok(true),\n            \"the fresh carrier must exercise the active timeout reservation\"",
+            "            Ok(false),\n            \"the fresh carrier must exercise the active timeout reservation\"",
+            "the fresh negative case must exercise an active clock reservation",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert_eq!(runtime.queued_commands(), queued_before_fresh);",
+            "assert_eq!(runtime.queued_commands(), queued_before_fresh + 1);",
+            "fresh backpressure must publish no queue, receipt, or terminal state",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "restored_receipt.token().admission_ordinal() < restored_physical_ordinal",
+            "restored_receipt.token().admission_ordinal() <= restored_physical_ordinal",
+            "the regression must admit only a strictly later retained replay",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert!(\n            runtime\n                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),",
+            "assert!(\n            !runtime\n                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),",
+            "the regression must admit the retained replay through fair ingress",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "the retained case must exercise the strict physical-replay helper",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "            Ok(true),\n            \"the restored carrier must exercise the narrow replay exception\"",
+            "            Ok(false),\n            \"the restored carrier must exercise the narrow replay exception\"",
+            "the positive replay case must exercise the active reservation exception",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            ".is_some_and(|queued| queued.restored_producer_stage.is_none()),",
+            ".is_some_and(|queued| queued.restored_producer_stage.is_some()),",
+            "the replay must publish exactly one ordinary authenticated Admit owner",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "RuntimeSelectedOwnerKind::Timeout",
+            "RuntimeSelectedOwnerKind::Fifo",
+            "the frozen timeout must retain the first serialized turn",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "[AdapterEffect::EnterView { tag, .. }] if tag.view() == 1",
+            "[AdapterEffect::EnterView { tag, .. }] if tag.view() == 0",
+            "the restored TC must advance the view after the timeout turn",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "terminals.len(),\n            1,",
+            "terminals.len(),\n            0,",
+            "the restored TC lifecycle must terminalize exactly once",
         ),
     )
     for item_name, old, new, expected_error in mutations:
@@ -36380,6 +36518,24 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "post-cut replay must receive recoverable backpressure before FIFO publication",
         ),
         (
+            "is_physical_leader_wire_replay",
+            "token.admission_ordinal() < physical_ordinal",
+            "token.admission_ordinal() <= physical_ordinal",
+            "strict retained-token physical-replay classifier declaration and complete control flow must match",
+        ),
+        (
+            "is_physical_leader_wire_replay",
+            "token.admission_ordinal() < physical_ordinal",
+            "token.scheduler_ordinal() < physical_ordinal",
+            "physical replay classification must require a strictly older durable admission token and reject partial ownership",
+        ),
+        (
+            "is_physical_leader_wire_replay",
+            "(Some(_), None) | (None, Some(_)) => Err(RuntimeIngressMergeError::Conflict)",
+            "(Some(_), None) | (None, Some(_)) => Ok(true)",
+            "physical replay classification must require a strictly older durable admission token and reject partial ownership",
+        ),
+        (
             "enqueue_network_with_ingress_ownership",
             "if authenticated_deferred_owner != deferred_owner",
             "if false",
@@ -36395,9 +36551,39 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             "enqueue_network_with_ingress_ownership",
-            "match self.clock_owner_reservation_blocks(owner)",
+            "match self.clock_owner_reservation_blocks_occurrence(",
             "match Ok(false)",
             "authenticated ingress ownership admission and deferred merge declaration and complete control flow must match",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "match ingress_ownership.is_physical_leader_wire_replay()",
+            "match Ok(true)",
+            "only a strictly later authenticated certified replay may cross a clock reservation before FIFO admission",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "Ok(true) if certified_physical_replay => {}",
+            "Ok(true) => {}",
+            "only a strictly later authenticated certified replay may cross a clock reservation before FIFO admission",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "wire_payload_is_certified_fence_escape(\n            authenticated.payload(),\n        )",
+            "true",
+            "only a strictly later authenticated certified replay may cross a clock reservation before FIFO admission",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "token.admission_ordinal() < source_physical_ordinal",
+            "token.admission_ordinal() <= source_physical_ordinal",
+            "pre-runtime admission must use the same strict certified physical replay exception as the mutating gate",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "wire_payload_is_certified_fence_escape(&runtime_message.payload)",
+            "true",
+            "pre-runtime admission must use the same strict certified physical replay exception as the mutating gate",
         ),
         (
             "can_admit_network_message_with_ingress_ownership",
@@ -36424,6 +36610,96 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "Err(EnqueueError::Full),",
             "Ok(()),",
             "production causal-FIFO regression deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences declaration, contract, and complete control flow must match",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert_eq!(\n            restored_receipt.token().admission_ordinal(),\n            fresh_physical_ordinal,",
+            "assert_ne!(\n            restored_receipt.token().admission_ordinal(),\n            fresh_physical_ordinal,",
+            "the regression must reject equality as a fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert!(\n            !runtime.can_admit_network_message_with_ingress_ownership(\n                &message,\n                &restored_pre_runtime,\n            ),",
+            "assert!(\n            runtime.can_admit_network_message_with_ingress_ownership(\n                &message,\n                &restored_pre_runtime,\n            ),",
+            "the regression must reject the fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "Err(NetworkIngressError::Backpressure(EnqueueError::Full))",
+            "Ok(runtime.round_tag())",
+            "the mutating seam must backpressure a fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "!runtime.fail_closed,\n            \"rejecting the fresh carrier is retryable backpressure\"",
+            "runtime.fail_closed,\n            \"rejecting the fresh carrier is retryable backpressure\"",
+            "fresh certified backpressure must remain recoverable",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "fresh_runtime.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "fresh_runtime.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "the fresh case must exercise the strict physical-replay helper",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "            Ok(true),\n            \"the fresh carrier must exercise the active timeout reservation\"",
+            "            Ok(false),\n            \"the fresh carrier must exercise the active timeout reservation\"",
+            "the fresh negative case must exercise an active clock reservation",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert_eq!(runtime.queued_commands(), queued_before_fresh);",
+            "assert_eq!(runtime.queued_commands(), queued_before_fresh + 1);",
+            "fresh backpressure must publish no queue, receipt, or terminal state",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "restored_receipt.token().admission_ordinal() < restored_physical_ordinal",
+            "restored_receipt.token().admission_ordinal() <= restored_physical_ordinal",
+            "the regression must admit only a strictly later retained replay",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert!(\n            runtime\n                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),",
+            "assert!(\n            !runtime\n                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),",
+            "the regression must admit the retained replay through fair ingress",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "the retained case must exercise the strict physical-replay helper",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "            Ok(true),\n            \"the restored carrier must exercise the narrow replay exception\"",
+            "            Ok(false),\n            \"the restored carrier must exercise the narrow replay exception\"",
+            "the positive replay case must exercise the active reservation exception",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            ".is_some_and(|queued| queued.restored_producer_stage.is_none()),",
+            ".is_some_and(|queued| queued.restored_producer_stage.is_some()),",
+            "the replay must publish exactly one ordinary authenticated Admit owner",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "RuntimeSelectedOwnerKind::Timeout",
+            "RuntimeSelectedOwnerKind::Fifo",
+            "the frozen timeout must retain the first serialized turn",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "[AdapterEffect::EnterView { tag, .. }] if tag.view() == 1",
+            "[AdapterEffect::EnterView { tag, .. }] if tag.view() == 0",
+            "the restored TC must advance the view after the timeout turn",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "terminals.len(),\n            1,",
+            "terminals.len(),\n            0,",
+            "the restored TC lifecycle must terminalize exactly once",
         ),
         (
             "take_last_scheduler_ownership",
@@ -39599,6 +39875,29 @@ def test_leader_wire_physical_ingress_production_contract_is_current(
             ".map(|(source, lane)| (source.clone(), lane.entries.len()))\n",
             ".map(|(source, _lane)| (source.clone(), 0))\n",
             "complete current physical source prefix",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "token.admission_ordinal > restore.last_admission_ordinal()",
+            "token.admission_ordinal < restore.last_admission_ordinal()",
+            "every restored durable token must remain at or below the restored physical admission high-watermark",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            ".max(restore.last_admission_ordinal());",
+            ".max(0);",
+            "restart binding must preserve the durable physical admission high-watermark",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "let admission_ordinal = state\n"
+            "        .last_admission_ordinal\n"
+            "        .checked_add(1)\n"
+            "        .ok_or(FairV2IngressLeaderWireAdmissionError::Exhausted)?;",
+            "let admission_ordinal = state\n"
+            "        .last_admission_ordinal\n"
+            "        .wrapping_add(1);",
+            "fresh leader-wire lifecycle admission must use the next physical high-watermark ordinal",
         ),
         (
             "crates/iroha_core/src/sumeragi/mod.rs",

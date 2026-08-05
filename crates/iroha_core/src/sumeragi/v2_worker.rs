@@ -7783,6 +7783,7 @@ enum CompletionDrainPolicy {
     Fair,
     IoOnly,
     ExactServePredecessor { serve_lifecycle_ordinal: u128 },
+    TimeoutRecoveryPrefix { inclusive_lifecycle_cut: u128 },
 }
 
 enum PendingServiceCompletion {
@@ -15503,6 +15504,38 @@ impl ProductionV2Services {
         runtime_capacity_available: bool,
         serve_lifecycle_ordinal: u128,
     ) -> IoCompletionTake {
+        self.take_lifecycle_prefix_completion(
+            runtime_capacity_available,
+            serve_lifecycle_ordinal,
+            false,
+        )
+    }
+
+    fn take_timeout_recovery_prefix_completion(
+        &mut self,
+        runtime_capacity_available: bool,
+        inclusive_lifecycle_cut: u128,
+    ) -> IoCompletionTake {
+        self.take_lifecycle_prefix_completion(
+            runtime_capacity_available,
+            inclusive_lifecycle_cut,
+            true,
+        )
+    }
+
+    fn take_lifecycle_prefix_completion(
+        &mut self,
+        runtime_capacity_available: bool,
+        lifecycle_cut: u128,
+        inclusive: bool,
+    ) -> IoCompletionTake {
+        let within_cut = |ordinal: u128| {
+            if inclusive {
+                ordinal <= lifecycle_cut
+            } else {
+                ordinal < lifecycle_cut
+            }
+        };
         let ownership_position =
             usize::from(!runtime_capacity_available && self.held_io_completion.is_some());
         let io_ownership = self
@@ -15511,16 +15544,14 @@ impl ProductionV2Services {
             .and_then(|io| io.completion_ownership_at(ownership_position))
             .filter(|owned| {
                 owned.runtime_lifecycle_ordinal.is_some_and(|ordinal| {
-                    ordinal < serve_lifecycle_ordinal
+                    within_cut(ordinal)
                         && (runtime_capacity_available || !owned.requires_runtime_capacity)
                 })
             });
         let local = if runtime_capacity_available {
             self.local_completions
                 .iter()
-                .filter(|completion| {
-                    completion.runtime_lifecycle_ordinal() < serve_lifecycle_ordinal
-                })
+                .filter(|completion| within_cut(completion.runtime_lifecycle_ordinal()))
                 .min_by_key(|completion| completion.runtime_lifecycle_ordinal())
                 .cloned()
         } else {
@@ -15620,6 +15651,26 @@ impl ProductionV2Services {
         )
     }
 
+    /// Admit at most one completed causal owner from the inclusive timeout
+    /// recovery prefix.
+    ///
+    /// Unlike an exact Serve predecessor, the timeout signer's completion is
+    /// owned by the cut itself and must therefore use `<=`. Fresh producers
+    /// receive larger ordinals and remain behind the retained response.
+    pub(crate) fn drain_timeout_recovery_prefix_completion<R: EffectRuntime>(
+        &mut self,
+        executor: &mut V2EffectExecutor<R>,
+        inclusive_lifecycle_cut: u128,
+    ) -> Result<usize, EffectExecutorError> {
+        self.drain_completions_inner(
+            executor,
+            1,
+            CompletionDrainPolicy::TimeoutRecoveryPrefix {
+                inclusive_lifecycle_cut,
+            },
+        )
+    }
+
     /// Service at most one I/O result from the producer prefix frozen before an
     /// off-queue exact Serve target.
     ///
@@ -15667,6 +15718,12 @@ impl ProductionV2Services {
                 } => self.take_exact_serve_predecessor_completion(
                     runtime_capacity_available,
                     serve_lifecycle_ordinal,
+                ),
+                CompletionDrainPolicy::TimeoutRecoveryPrefix {
+                    inclusive_lifecycle_cut,
+                } => self.take_timeout_recovery_prefix_completion(
+                    runtime_capacity_available,
+                    inclusive_lifecycle_cut,
                 ),
             };
             let completion = match take.completion {
@@ -24011,6 +24068,90 @@ pub(super) mod tests {
                 }),
                 retained_runtime: false,
             } if work_id == later_work_id
+        ));
+        service
+            .io
+            .as_ref()
+            .expect("attached completion corridor")
+            .admission
+            .acknowledge_completion_at(0);
+        drop(service.io.take());
+    }
+
+    #[test]
+    fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
+        let (mut service, _) = fixture();
+        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+        let timeout_ordinal = 50_u128;
+        let timeout_work_id = EffectWorkId::for_test(50);
+        let successor_work_id = EffectWorkId::for_test(51);
+        for (work_id, ordinal) in [
+            (timeout_work_id, timeout_ordinal),
+            (successor_work_id, timeout_ordinal + 1),
+        ] {
+            try_send_tracked_completion_with_lifecycle_ordinal(
+                &completion_tx,
+                &admission,
+                V2IoCompletion::Signature {
+                    work_id,
+                    signature: vec![u8::try_from(ordinal).expect("small ordinal")],
+                    outbound_payload: None,
+                },
+                Some(ordinal),
+            )
+            .expect("retain exact timeout-boundary completion");
+        }
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        });
+
+        assert!(matches!(
+            service.take_timeout_recovery_prefix_completion(true, timeout_ordinal),
+            IoCompletionTake {
+                completion: Some(PendingServiceCompletion::Io {
+                    completion: V2IoCompletion::Signature { work_id, .. },
+                    ownership_position: 0,
+                }),
+                retained_runtime: false,
+            } if work_id == timeout_work_id
+        ));
+        service
+            .io
+            .as_ref()
+            .expect("attached completion corridor")
+            .admission
+            .acknowledge_completion_at(0);
+        assert!(matches!(
+            service.take_timeout_recovery_prefix_completion(true, timeout_ordinal),
+            IoCompletionTake {
+                completion: None,
+                retained_runtime: false,
+            }
+        ));
+        assert_eq!(
+            service
+                .io
+                .as_ref()
+                .expect("attached completion corridor")
+                .completion_snapshot(Instant::now())
+                .depth,
+            1,
+            "the T+1 producer stays outside the inclusive T prefix"
+        );
+        assert!(matches!(
+            service.take_timeout_recovery_prefix_completion(true, timeout_ordinal + 1),
+            IoCompletionTake {
+                completion: Some(PendingServiceCompletion::Io {
+                    completion: V2IoCompletion::Signature { work_id, .. },
+                    ownership_position: 0,
+                }),
+                retained_runtime: false,
+            } if work_id == successor_work_id
         ));
         service
             .io

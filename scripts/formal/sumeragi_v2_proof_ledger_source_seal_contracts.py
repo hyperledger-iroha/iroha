@@ -347,6 +347,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "runtime_ingress_leader_wire_physical_carrier": (
         "964b47b38e48c18e93b0a4e9d63ac711f5ef14ed89d933ffbe1e93233d59d7c5"
     ),
+    # TODO: Replace with the reviewed token digest after the focused production
+    # replay regressions and negative mutations pass.
+    "runtime_ingress_is_physical_leader_wire_replay": "PENDING_BEHAVIOR_VALIDATION",
     "runtime_ingress_earliest_physical_carrier": (
         "aab95bf9cc5928cda4550fa375c56f8958b473940ab865b7527946eb5f235325"
     ),
@@ -451,6 +454,11 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     ),
     "distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner": (
         "9fd964c7159754e3a01d6d905f40423fb1fb4d573f033f031b3497b02969c1d4"
+    ),
+    # TODO: Replace with the reviewed token digest after the focused production
+    # replay regressions and negative mutations pass.
+    "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
+        "PENDING_BEHAVIOR_VALIDATION"
     ),
 }
 
@@ -1767,6 +1775,9 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
     ),
+    # TODO: Replace with the reviewed token digest after the focused production
+    # replay regressions and negative mutations pass.
+    "bind_leader_wire_lifecycle_gate": "PENDING_BEHAVIOR_VALIDATION",
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
