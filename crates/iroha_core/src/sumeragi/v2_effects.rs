@@ -2533,6 +2533,10 @@ pub(crate) trait EffectRuntime {
     fn set_ingress_physical_cut(&mut self, _physical_cut: u128) -> Result<(), String> {
         Ok(())
     }
+    /// Inclusive lifecycle cut of the active post-timeout recovery episode.
+    fn timeout_recovery_lifecycle_cut(&self) -> Result<Option<u128>, String> {
+        Ok(None)
+    }
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
     /// Run at most one absolute-timeout or authenticated Progress-root turn.
     fn step_pacemaker_effects(
@@ -2857,6 +2861,10 @@ pub(crate) trait EffectRuntime {
 impl EffectRuntime for SerializedV2Runtime {
     fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
         SerializedV2Runtime::set_ingress_physical_cut(self, physical_cut)
+    }
+
+    fn timeout_recovery_lifecycle_cut(&self) -> Result<Option<u128>, String> {
+        SerializedV2Runtime::timeout_recovery_lifecycle_cut(self)
     }
 
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
@@ -3634,12 +3642,39 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         message: &wire::ConsensusMessageV2,
         ingress_ownership: &FairV2IngressOwnershipEvidence,
     ) -> bool {
-        self.fatal_reason.is_none()
-            && !self.output_guard.restart_required()
-            && self.retained_dispatch_allows_network_ingress(&message.payload)
+        if self.fatal_reason.is_some() || self.output_guard.restart_required() {
+            return false;
+        }
+        let retained_dispatch_allows =
+            self.retained_dispatch_allows_network_ingress(&message.payload);
+        let timeout_vote_recovery_episode = !retained_dispatch_allows
+            && self
+                .runtime
+                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership);
+        (retained_dispatch_allows || timeout_vote_recovery_episode)
             && self
                 .runtime
                 .can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
+    }
+
+    /// Whether this fair-ingress head may cross retained reducer debt solely
+    /// to close an absolute-timeout restart cycle.
+    ///
+    /// The runtime predicate accepts only the finite current-view universe of
+    /// pre-cut TimeoutVote owners and one first post-cut owner per roster
+    /// source. This wrapper deliberately skips the retained-dispatch filter but
+    /// grants neither certified capacity nor signature-fence authority; full
+    /// authentication still occurs after the checked dequeue.
+    pub(crate) fn can_admit_timeout_vote_recovery_episode(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        self.fatal_reason.is_none()
+            && !self.output_guard.restart_required()
+            && self
+                .runtime
+                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership)
     }
 
     #[cfg(test)]
@@ -3727,6 +3762,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.ensure_open()?;
         self.runtime
             .set_ingress_physical_cut(physical_cut)
+            .map_err(EffectExecutorError::Runtime)
+    }
+
+    /// Inclusive causal-root cut whose completed work may drain during the
+    /// finite post-timeout replay episode.
+    pub(crate) fn timeout_recovery_lifecycle_cut(
+        &self,
+    ) -> Result<Option<u128>, EffectExecutorError> {
+        self.ensure_open()?;
+        self.runtime
+            .timeout_recovery_lifecycle_cut()
             .map_err(EffectExecutorError::Runtime)
     }
 

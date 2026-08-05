@@ -304,6 +304,33 @@ full unsuccessful scan restores the ready order. The capacity check, fair rotati
 occur under the ingress lock, and the runner is the sole downstream producer, so an admitted head
 cannot become a pop-then-drop race between queues.
 
+Restart keeps a productive leader-wire lifecycle's immutable logical token but not its volatile
+queue position. Its exact retransmission therefore receives a fresh physical carrier after the
+restored admission high-water mark. Equality between token admission and carrier admission
+identifies a fresh lifecycle and receives no recovery authority. A direct authenticated TC or
+CommitQC whose token is strictly older than its carrier may enter the isolated certified prefix;
+the already-frozen absolute timeout still executes first. A Commit-certificate response has no
+productive leader-wire token of its own and follows its ordinary authenticated projected-CommitQC
+path.
+
+TimeoutVote service uses a separate finite producer episode. The absolute timeout first persists
+and dispatches its exact `BeginTimeout` owner `T`, freezing one TimeoutVote slot for every
+authenticated roster source. Every restart-dormant token is restored into the shared ordinal source
+before `T`. A pre-cut owner below `T` is rank descent: its original carrier has token admission equal
+to physical admission and strictly below the frozen physical cut; a restored token remains below
+that cut while its new carrier is at or above it. A first post-cut token above `T` may instead
+increase the collected-vote count once for its frozen source slot; its equal token/carrier admission
+is at or above the cut. This replenishment is not itself protocol progress. Runtime admission
+projects those cases as exact `0→1` first admission, `1→1` same-owner coalescence, or `0→0`
+non-candidate service, and rejects a different token or carrier for an occupied slot before reducer
+refinement. A best-effort retransmit already frozen below `T` is atomically superseded by the
+successful timeout transition. Fresh post-timeout retransmits remain enabled above `T` but cannot
+take precedence over the finite vote episode. TimeoutVotes stay in ordinary Progress capacity,
+receive no certified-fence credit or signature-fence authority, and retained terminals prevent
+resurrection. The inclusive `<= T` completion prefix separately admits the timeout signer's callback
+while an older transport response is retained; completions from fresh roots above `T` remain
+excluded.
+
 The serialized runtime FIFO has physical capacity `C`, Progress reserve `P`, and Completion reserve
 `K`. Ordinary Normal work is bounded by `C-P-K-1`, ordinary non-Completion work by `C-K-1`, and all
 ordinary work by `C-1`. The remaining physical slot is credited to at most one queued authenticated

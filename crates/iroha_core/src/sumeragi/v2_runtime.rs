@@ -57,6 +57,7 @@ use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode as _, Encode as _};
 
 use super::{
+    FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken,
     FairV2IngressOwnershipEvidence,
     serviced_candidate_store::{
         LeaderWireLifecycleRuntimeReceipt, ProducerContinuationHandoffToken,
@@ -741,6 +742,21 @@ impl RuntimeIngressOwnershipEvidence {
             }
         }
         Ok(exact)
+    }
+
+    /// Whether this carrier is a later physical delivery of an already
+    /// reserved productive lifecycle.
+    fn is_physical_leader_wire_replay(&self) -> Result<bool, RuntimeIngressMergeError> {
+        match (
+            self.leader_wire_token()?,
+            self.leader_wire_physical_carrier()?,
+        ) {
+            (Some(token), Some((physical_ordinal, _))) => {
+                Ok(token.admission_ordinal() < physical_ordinal)
+            }
+            (None, None) => Ok(false),
+            (Some(_), None) | (None, Some(_)) => Err(RuntimeIngressMergeError::Conflict),
+        }
     }
 
     /// Earliest receiver-local physical occurrence retained by this exact
@@ -8772,6 +8788,11 @@ pub(crate) trait RuntimeDriver {
 
     /// Current authoritative reducer tag.
     fn current_tag(&self) -> EventTag;
+    /// Frozen current-height TimeoutVote slot universe. Synthetic drivers have
+    /// no network roster and therefore retain the empty default.
+    fn timeout_vote_owner_universe(&self) -> BTreeSet<FairV2IngressLeaderWireSlot> {
+        BTreeSet::new()
+    }
     /// Classify an exact command without mutating reducer, registry, queue, or
     /// ordinal state. Authenticated wire ingress is always admitted here and
     /// remains governed by its dedicated authentication/equivocation seam.
@@ -9034,6 +9055,18 @@ impl RuntimeDriver for SumeragiV2Adapter {
 
     fn current_tag(&self) -> EventTag {
         SumeragiV2Adapter::current_tag(self)
+    }
+
+    fn timeout_vote_owner_universe(&self) -> BTreeSet<FairV2IngressLeaderWireSlot> {
+        self.wire_context()
+            .roster
+            .iter()
+            .map(|entry| FairV2IngressLeaderWireSlot {
+                semantic_origin: entry.validator.clone(),
+                phase: FairV2IngressLeaderWirePhase::TimeoutVote,
+                chunk_index: None,
+            })
+            .collect()
     }
 
     fn preflight_command_admission(
@@ -9758,6 +9791,198 @@ fn deferred_lifecycle_ordinals_are_unique(
         .all(|owner| logical_ordinals.insert(owner.owner().lifecycle_ordinal()))
 }
 
+/// Frozen clock episodes whose immutable physical cuts reject one ingress
+/// occurrence.
+///
+/// Timeout and periodic retransmission have different scheduler authority:
+/// the absolute timeout preempts FIFO debt, while a retransmission does not.
+/// Keeping the two bits separate prevents restart recovery from treating a
+/// periodic cut as timeout authority.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RuntimeClockReservationBlockers {
+    timeout: bool,
+    retransmit: bool,
+}
+
+/// How one authenticated TimeoutVote participates in the finite producer
+/// episode opened by a durable local timeout.
+///
+/// Restored or already-admitted owners below the timeout cut are genuine rank
+/// descent. A first carrier admitted after the cut is finite replenishment:
+/// it may increase the collected-vote count, but admission itself is never
+/// reported as scheduler progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeTimeoutVoteEpisodeDisposition {
+    PreCutDescent,
+    RestoredDescent,
+    FreshReplenishment,
+}
+
+/// Immutable owner retained for one roster source in a timeout-recovery
+/// episode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeTimeoutVoteEpisodeOwner {
+    token: FairV2IngressLeaderWireToken,
+    carrier_physical_ordinal: u64,
+    disposition: RuntimeTimeoutVoteEpisodeDisposition,
+}
+
+impl RuntimeTimeoutVoteEpisodeOwner {
+    fn validate_against(&self, timeout_ordinal: u128, physical_cut: u128) -> bool {
+        let admission_ordinal = u128::from(self.token.admission_ordinal());
+        let carrier_physical_ordinal = u128::from(self.carrier_physical_ordinal);
+        self.carrier_physical_ordinal != 0
+            && self.token.admission_ordinal() != 0
+            && self.token.scheduler_ordinal() != 0
+            && self.token.scheduler_ordinal() != timeout_ordinal
+            && physical_cut != 0
+            && match self.disposition {
+                RuntimeTimeoutVoteEpisodeDisposition::PreCutDescent => {
+                    self.token.scheduler_ordinal() < timeout_ordinal
+                        && self.token.admission_ordinal() == self.carrier_physical_ordinal
+                        && carrier_physical_ordinal < physical_cut
+                }
+                RuntimeTimeoutVoteEpisodeDisposition::RestoredDescent => {
+                    self.token.scheduler_ordinal() < timeout_ordinal
+                        && self.token.admission_ordinal() < self.carrier_physical_ordinal
+                        && admission_ordinal < physical_cut
+                        && carrier_physical_ordinal >= physical_cut
+                }
+                RuntimeTimeoutVoteEpisodeDisposition::FreshReplenishment => {
+                    self.token.scheduler_ordinal() > timeout_ordinal
+                        && self.token.admission_ordinal() == self.carrier_physical_ordinal
+                        && carrier_physical_ordinal >= physical_cut
+                }
+            }
+    }
+}
+
+/// Exact source/slot candidate checked before authentication mutates runtime
+/// ownership.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeTimeoutVoteEpisodeCandidate {
+    slot: FairV2IngressLeaderWireSlot,
+    owner: RuntimeTimeoutVoteEpisodeOwner,
+}
+
+/// Exact 0→0, 0→1, or 1→1 admission projection for one timeout-vote producer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RuntimeTimeoutVoteEpisodeAdmissionPlan {
+    NonCandidate,
+    FirstAdmission {
+        candidate: RuntimeTimeoutVoteEpisodeCandidate,
+        prospective: BTreeMap<FairV2IngressLeaderWireSlot, RuntimeTimeoutVoteEpisodeOwner>,
+    },
+    CoalescedRetry {
+        candidate: RuntimeTimeoutVoteEpisodeCandidate,
+        prospective: BTreeMap<FairV2IngressLeaderWireSlot, RuntimeTimeoutVoteEpisodeOwner>,
+    },
+}
+
+impl RuntimeTimeoutVoteEpisodeAdmissionPlan {
+    const fn is_candidate(&self) -> bool {
+        !matches!(self, Self::NonCandidate)
+    }
+
+    fn count_transition(&self) -> (u8, u8) {
+        match self {
+            Self::NonCandidate => (0, 0),
+            Self::FirstAdmission {
+                candidate,
+                prospective,
+            } => {
+                debug_assert_eq!(prospective.get(&candidate.slot), Some(&candidate.owner));
+                (0, 1)
+            }
+            Self::CoalescedRetry {
+                candidate,
+                prospective,
+            } => {
+                debug_assert_eq!(prospective.get(&candidate.slot), Some(&candidate.owner));
+                (1, 1)
+            }
+        }
+    }
+
+    fn prospective(
+        self,
+    ) -> Option<BTreeMap<FairV2IngressLeaderWireSlot, RuntimeTimeoutVoteEpisodeOwner>> {
+        match self {
+            Self::NonCandidate => None,
+            Self::FirstAdmission { prospective, .. } | Self::CoalescedRetry { prospective, .. } => {
+                Some(prospective)
+            }
+        }
+    }
+}
+
+impl RuntimeClockReservationBlockers {
+    const fn any(self) -> bool {
+        self.timeout || self.retransmit
+    }
+
+    const fn timeout_only(self) -> bool {
+        self.timeout && !self.retransmit
+    }
+}
+
+/// Finite current-view producer prefix opened by one durable timeout.
+///
+/// The inclusive lifecycle cut is the exact `BeginTimeout` owner. Every
+/// restart-dormant leader-wire token is restored into the shared ordinal
+/// source before this owner is minted, while every fresh producer after the
+/// cut receives a larger ordinal. The physical cut independently prevents a
+/// pre-crash token from claiming a carrier which was never actually replayed
+/// after the timeout boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeTimeoutRecoveryEpisode {
+    tag: EventTag,
+    timeout_owner: RuntimeLifecycleOwner,
+    physical_cut: u128,
+    pre_frozen_retransmit: Option<(RuntimeLifecycleOwner, u128)>,
+    timeout_vote_owner_universe: BTreeSet<FairV2IngressLeaderWireSlot>,
+    admitted_timeout_vote_owners:
+        BTreeMap<FairV2IngressLeaderWireSlot, RuntimeTimeoutVoteEpisodeOwner>,
+}
+
+impl RuntimeTimeoutRecoveryEpisode {
+    fn validate_exact(&self) -> bool {
+        self.timeout_owner.validate_exact()
+            && self.timeout_owner.causal_origin().root_tag == self.tag
+            && self.timeout_owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS
+            && self.physical_cut != 0
+            && self
+                .pre_frozen_retransmit
+                .as_ref()
+                .is_none_or(|(owner, cut)| {
+                    owner.validate_exact()
+                        && owner.causal_origin().root_tag == self.tag
+                        && owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS
+                        && owner.lifecycle_ordinal() < self.timeout_owner.lifecycle_ordinal()
+                        && *cut != 0
+                        && *cut <= self.physical_cut
+                })
+            && self.timeout_vote_owner_universe.iter().all(|slot| {
+                slot.phase == FairV2IngressLeaderWirePhase::TimeoutVote
+                    && slot.chunk_index.is_none()
+            })
+            && self.admitted_timeout_vote_owners.len() <= self.timeout_vote_owner_universe.len()
+            && self
+                .admitted_timeout_vote_owners
+                .iter()
+                .all(|(slot, owner)| {
+                    self.timeout_vote_owner_universe.contains(slot)
+                        && slot == &owner.token.slot
+                        && slot.phase == FairV2IngressLeaderWirePhase::TimeoutVote
+                        && slot.chunk_index.is_none()
+                        && owner.validate_against(
+                            self.timeout_owner.lifecycle_ordinal(),
+                            self.physical_cut,
+                        )
+                })
+    }
+}
+
 /// One-owner, class-aware scheduling shell for Sumeragi v2.
 pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     driver: D,
@@ -9793,6 +10018,10 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     /// current timeout owner. A dormant wire replay admitted at or beyond
     /// this cut cannot resurrect an older logical ordinal ahead of timeout.
     timeout_owner_physical_cut: Option<u128>,
+    /// Restart-recovery authority retained after the timeout owner transfers.
+    /// This is process-local scheduling evidence, never wire or configuration
+    /// state.
+    timeout_recovery_episode: Option<RuntimeTimeoutRecoveryEpisode>,
     retransmit_owner: Option<RuntimeLifecycleOwner>,
     /// Receiver-local ingress high-watermark frozen atomically with the
     /// current periodic owner. Retries of the same clock episode retain this
@@ -9892,6 +10121,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             timeout_emitted: false,
             timeout_owner: None,
             timeout_owner_physical_cut: None,
+            timeout_recovery_episode: None,
             retransmit_owner: None,
             retransmit_owner_physical_cut: None,
             dormant_fresh_lifecycle_owners: BTreeMap::new(),
@@ -10183,7 +10413,18 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .into_iter()
             .chain(self.retransmit_owner_physical_cut)
             .all(|cut| cut != 0 && cut <= self.ingress_physical_cut);
-        if timeout_is_paired && retransmit_is_paired && cuts_are_valid {
+        let recovery_episode_is_valid =
+            self.timeout_recovery_episode
+                .as_ref()
+                .is_none_or(|episode| {
+                    episode.validate_exact()
+                        && episode.tag == self.round_tag
+                        && episode.physical_cut <= self.ingress_physical_cut
+                        && episode.timeout_vote_owner_universe
+                            == self.driver.timeout_vote_owner_universe()
+                });
+        if timeout_is_paired && retransmit_is_paired && cuts_are_valid && recovery_episode_is_valid
+        {
             Ok(())
         } else {
             Err(EnqueueError::FailClosed)
@@ -10211,18 +10452,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
     }
 
-    /// Whether one physically later occurrence would resurrect a logical
-    /// position at or ahead of an already-frozen clock owner.
+    /// Frozen clock episodes which one physically later occurrence would
+    /// overtake by resurrecting an older logical position.
     ///
-    /// The occurrence stays in its existing fair-ingress or executor owner
-    /// and is retried after the clock episode transfers.  It must not enter
-    /// the FIFO, where the persistent `fifo_owed` bit could otherwise let a
-    /// different, post-cut identity inherit an earlier command's debt.
-    fn clock_owner_reservation_blocks_occurrence(
+    /// The two clock classes remain distinct because only timeout has
+    /// absolute priority over FIFO debt. A periodic reservation can never be
+    /// used as authority for a restart-recovery ingress exception.
+    fn clock_owner_reservation_blockers_occurrence(
         &self,
         lifecycle_ordinal: u128,
         source_physical_ordinal: u64,
-    ) -> Result<bool, EnqueueError> {
+    ) -> Result<RuntimeClockReservationBlockers, EnqueueError> {
         if lifecycle_ordinal == 0 || source_physical_ordinal == 0 {
             return Err(EnqueueError::FailClosed);
         }
@@ -10231,16 +10471,34 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             u128::from(source_physical_ordinal) >= physical_cut
                 && lifecycle_ordinal <= owner.lifecycle_ordinal()
         };
-        Ok(self
-            .timeout_owner
-            .as_ref()
-            .zip(self.timeout_owner_physical_cut)
-            .is_some_and(|(owner, physical_cut)| occurrence_is_blocked(owner, physical_cut))
-            || self
+        Ok(RuntimeClockReservationBlockers {
+            timeout: self
+                .timeout_owner
+                .as_ref()
+                .zip(self.timeout_owner_physical_cut)
+                .is_some_and(|(owner, physical_cut)| occurrence_is_blocked(owner, physical_cut)),
+            retransmit: self
                 .retransmit_owner
                 .as_ref()
                 .zip(self.retransmit_owner_physical_cut)
-                .is_some_and(|(owner, physical_cut)| occurrence_is_blocked(owner, physical_cut)))
+                .is_some_and(|(owner, physical_cut)| occurrence_is_blocked(owner, physical_cut)),
+        })
+    }
+
+    /// Whether one physically later occurrence would resurrect a logical
+    /// position at or ahead of any already-frozen clock owner.
+    ///
+    /// Ordinary occurrences stay in their existing fair-ingress or executor
+    /// owner and retry after the clock episode transfers. They must not enter
+    /// the FIFO, where persistent `fifo_owed` debt could otherwise let a
+    /// post-cut identity overtake a periodic reservation.
+    fn clock_owner_reservation_blocks_occurrence(
+        &self,
+        lifecycle_ordinal: u128,
+        source_physical_ordinal: u64,
+    ) -> Result<bool, EnqueueError> {
+        self.clock_owner_reservation_blockers_occurrence(lifecycle_ordinal, source_physical_ordinal)
+            .map(RuntimeClockReservationBlockers::any)
     }
 
     fn clock_owner_reservation_blocks(
@@ -10258,6 +10516,116 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             owner.lifecycle_ordinal(),
             physical.source_ordinal,
         )
+    }
+
+    /// Return the exact timeout root whose durable dispatch opened the
+    /// current view's finite restart-recovery episode.
+    ///
+    /// The root remains in the bounded fresh-owner cache after dispatch so a
+    /// restored leader-wire token can prove that it was admitted before the
+    /// timeout.  `timeout_emitted` alone is insufficient authority: a corrupt
+    /// or missing cached root must fail closed instead of turning every old
+    /// physical replay into retained-debt bypass.
+    fn emitted_timeout_recovery_owner(
+        &self,
+    ) -> Result<Option<RuntimeLifecycleOwner>, EnqueueError> {
+        if !self.timeout_emitted {
+            return Ok(None);
+        }
+        if self.timeout_owner.is_some() || self.timeout_owner_physical_cut.is_some() {
+            return Err(EnqueueError::FailClosed);
+        }
+        let Some(episode) = self.timeout_recovery_episode.as_ref() else {
+            return Err(EnqueueError::FailClosed);
+        };
+        if !episode.validate_exact()
+            || episode.tag != self.round_tag
+            || episode.physical_cut > self.ingress_physical_cut
+            || episode.timeout_vote_owner_universe != self.driver.timeout_vote_owner_universe()
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        Ok(Some(episode.timeout_owner.clone()))
+    }
+
+    /// Whether the current clock owners are outside the frozen timeout
+    /// recovery prefix.
+    ///
+    /// The timeout itself and a retransmit already frozen before it must run
+    /// first. A fresh post-timeout retransmit has an ordinal above the
+    /// inclusive episode cut and cannot acquire precedence over a restored
+    /// vote whose immutable owner is below that cut.
+    fn timeout_recovery_episode_allows_clock_blockers(
+        &self,
+        blockers: RuntimeClockReservationBlockers,
+    ) -> Result<bool, EnqueueError> {
+        let Some(episode) = self.timeout_recovery_episode.as_ref() else {
+            return Ok(false);
+        };
+        if !self.timeout_emitted
+            || !episode.validate_exact()
+            || episode.tag != self.round_tag
+            || episode.pre_frozen_retransmit.is_some()
+            || blockers.timeout
+        {
+            return Ok(false);
+        }
+        if !blockers.retransmit {
+            return Ok(true);
+        }
+        match (
+            self.retransmit_owner.as_ref(),
+            self.retransmit_owner_physical_cut,
+        ) {
+            (Some(owner), Some(cut)) => Ok(owner.validate_exact()
+                && owner.lifecycle_ordinal() > episode.timeout_owner.lifecycle_ordinal()
+                && cut != 0
+                && cut <= self.ingress_physical_cut),
+            (None, None) => Err(EnqueueError::FailClosed),
+            (Some(_), None) | (None, Some(_)) => Err(EnqueueError::FailClosed),
+        }
+    }
+
+    /// Supersede the one best-effort retransmit which was frozen before the
+    /// absolute timeout cut.
+    ///
+    /// This runs inside the successful timeout macro-step. The captured owner
+    /// has never dispatched and therefore has no effects or causal children;
+    /// clearing that exact pair cannot lose protocol state. A later periodic
+    /// tick is a fresh producer above the timeout cut and remains enabled.
+    fn supersede_pre_timeout_retransmit(
+        &mut self,
+        timeout_owner: &RuntimeLifecycleOwner,
+    ) -> Result<(), EnqueueError> {
+        let Some(episode) = self.timeout_recovery_episode.as_ref() else {
+            return Err(EnqueueError::FailClosed);
+        };
+        if !episode.validate_exact()
+            || &episode.timeout_owner != timeout_owner
+            || episode.tag != self.round_tag
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let captured = episode.pre_frozen_retransmit.clone();
+        match (
+            captured.as_ref(),
+            self.retransmit_owner.as_ref(),
+            self.retransmit_owner_physical_cut,
+        ) {
+            (Some((captured_owner, captured_cut)), Some(owner), Some(cut))
+                if captured_owner == owner && *captured_cut == cut =>
+            {
+                self.retransmit_owner = None;
+                self.retransmit_owner_physical_cut = None;
+                self.timeout_recovery_episode
+                    .as_mut()
+                    .expect("validated timeout episode remains installed")
+                    .pre_frozen_retransmit = None;
+                Ok(())
+            }
+            (None, None, None) => Ok(()),
+            _ => Err(EnqueueError::FailClosed),
+        }
     }
 
     fn enqueue_after_clock_reservation(
@@ -11246,7 +11614,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             && now.saturating_duration_since(self.round_started_at)
                 >= round_timeout_for_view(self.base_round_timeout, self.round_tag.view());
         if raw_timeout_due && self.timeout_owner.is_none() {
-            if self.timeout_owner_physical_cut.is_some() {
+            if self.timeout_owner_physical_cut.is_some() || self.timeout_recovery_episode.is_some()
+            {
                 return Err(EnqueueError::FailClosed);
             }
             let owner = self.mint_fresh_lifecycle_owner(
@@ -11255,8 +11624,33 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 RuntimeFreshRootKind::Timeout,
                 b"begin-timeout",
             )?;
+            let pre_frozen_retransmit = match (
+                self.retransmit_owner.clone(),
+                self.retransmit_owner_physical_cut,
+            ) {
+                (Some(retransmit), Some(cut))
+                    if retransmit.lifecycle_ordinal() < owner.lifecycle_ordinal() =>
+                {
+                    Some((retransmit, cut))
+                }
+                (Some(_), Some(_)) => return Err(EnqueueError::FailClosed),
+                (None, None) => None,
+                (Some(_), None) | (None, Some(_)) => return Err(EnqueueError::FailClosed),
+            };
+            let episode = RuntimeTimeoutRecoveryEpisode {
+                tag: self.round_tag,
+                timeout_owner: owner.clone(),
+                physical_cut: self.ingress_physical_cut,
+                pre_frozen_retransmit,
+                timeout_vote_owner_universe: self.driver.timeout_vote_owner_universe(),
+                admitted_timeout_vote_owners: BTreeMap::new(),
+            };
+            if !episode.validate_exact() {
+                return Err(EnqueueError::FailClosed);
+            }
             self.timeout_owner_physical_cut = Some(self.ingress_physical_cut);
             self.timeout_owner = Some(owner);
+            self.timeout_recovery_episode = Some(episode);
         }
         let raw_retransmit_due =
             now.saturating_duration_since(self.retransmit_started_at) >= self.retransmit_interval;
@@ -12144,6 +12538,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     self.latch_fail_closed("timeout lifecycle reservation changed before transfer");
                     return Err(RuntimeError::FailClosed);
                 }
+                if self.supersede_pre_timeout_retransmit(&owner).is_err() {
+                    self.latch_fail_closed(
+                        "timeout recovery changed its captured retransmit before transfer",
+                    );
+                    return Err(RuntimeError::FailClosed);
+                }
                 self.timeout_owner = None;
                 (
                     effects,
@@ -12201,8 +12601,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 {
                     self.latch_fail_closed(
                             "retransmission lifecycle reservation or physical cut changed before transfer",
-                        );
+                    );
                     return Err(RuntimeError::FailClosed);
+                }
+                if let Some(episode) = self.timeout_recovery_episode.as_mut()
+                    && episode.pre_frozen_retransmit.as_ref().is_some_and(
+                        |(captured_owner, captured_cut)| {
+                            captured_owner == &owner && *captured_cut == physical_cut
+                        },
+                    )
+                {
+                    episode.pre_frozen_retransmit = None;
                 }
                 self.retransmit_owner = None;
                 (
@@ -13599,6 +14008,15 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.round_tag
     }
 
+    /// Inclusive root-ordinal cut for the active post-timeout recovery
+    /// episode. Completions at or below this cut may receive one bounded turn
+    /// while a retained transport response owns ordinary service.
+    pub(crate) fn timeout_recovery_lifecycle_cut(&self) -> Result<Option<u128>, String> {
+        self.emitted_timeout_recovery_owner()
+            .map(|owner| owner.map(|owner| owner.lifecycle_ordinal()))
+            .map_err(|_| "timeout recovery episode was invalid".to_owned())
+    }
+
     /// Arm the live clocks after all height constructors and startup effects.
     ///
     /// This one-shot boundary prevents WAL replay, body-store recovery, worker
@@ -13676,6 +14094,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 self.timeout_emitted = false;
                 self.timeout_owner = None;
                 self.timeout_owner_physical_cut = None;
+                self.timeout_recovery_episode = None;
                 self.retransmit_owner = None;
                 self.retransmit_owner_physical_cut = None;
                 self.dormant_fresh_lifecycle_owners.retain(|_, owner| {
@@ -13732,6 +14151,207 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 }
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    fn timeout_vote_recovery_candidate_from_fair(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> Result<Option<RuntimeTimeoutVoteEpisodeCandidate>, EnqueueError> {
+        let Some(token) = ingress_ownership.leader_wire_token() else {
+            return Ok(None);
+        };
+        let Some(physical_ordinal) = ingress_ownership.physical_admission_ordinal() else {
+            return Ok(None);
+        };
+        self.timeout_vote_recovery_candidate(payload, token, physical_ordinal)
+    }
+
+    fn timeout_vote_recovery_candidate_from_runtime(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+        ingress_ownership: &RuntimeIngressOwnershipEvidence,
+    ) -> Result<Option<RuntimeTimeoutVoteEpisodeCandidate>, EnqueueError> {
+        let token = ingress_ownership
+            .leader_wire_token()
+            .map_err(|_| EnqueueError::FailClosed)?;
+        let physical = ingress_ownership
+            .leader_wire_physical_carrier()
+            .map_err(|_| EnqueueError::FailClosed)?;
+        match (token, physical) {
+            (Some(token), Some((physical_ordinal, _))) => {
+                self.timeout_vote_recovery_candidate(payload, token, physical_ordinal)
+            }
+            (None, None) => Ok(None),
+            (Some(_), None) | (None, Some(_)) => Err(EnqueueError::FailClosed),
+        }
+    }
+
+    /// Classify one exact current-view TimeoutVote in the finite episode opened
+    /// by the already-dispatched local timeout.
+    ///
+    /// An owner below the timeout cut is a descent step whether this is its
+    /// original carrier or a post-restart carrier. A first owner above the cut
+    /// is count-increasing replenishment and must own its original physical
+    /// carrier. The fair leader-wire gate supplies one immutable TimeoutVote
+    /// slot per authenticated roster source; this runtime projection retains
+    /// that same owner through authentication and reducer service.
+    fn timeout_vote_recovery_candidate(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+        token: &FairV2IngressLeaderWireToken,
+        physical_ordinal: u64,
+    ) -> Result<Option<RuntimeTimeoutVoteEpisodeCandidate>, EnqueueError> {
+        let wire::ConsensusMessageV2Payload::TimeoutVote(vote) = payload else {
+            return Ok(None);
+        };
+        let context = self.driver.wire_context();
+        if !wire_payload_matches_current_strict_timeout_recovery_round(
+            payload,
+            context,
+            self.round_tag,
+        ) {
+            return Ok(None);
+        }
+        if token.admission_ordinal() > physical_ordinal {
+            return Err(EnqueueError::FailClosed);
+        }
+        let Some(timeout_owner) = self.emitted_timeout_recovery_owner()? else {
+            return Ok(None);
+        };
+        let episode = self
+            .timeout_recovery_episode
+            .as_ref()
+            .ok_or(EnqueueError::FailClosed)?;
+        if episode.pre_frozen_retransmit.is_some() {
+            return Ok(None);
+        }
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        if !token.validate_exact(
+            context.id(),
+            context.height,
+            &roster,
+            context.da_layout.max_chunk_count,
+        ) || token.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
+            || token.identity.context_id != vote.round.context_id
+            || token.identity.height != vote.round.height
+            || token.identity.view != vote.round.view
+            || token.identity.subject_hash != iroha_crypto::Hash::new([])
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let timeout_ordinal = timeout_owner.lifecycle_ordinal();
+        let disposition = if token.scheduler_ordinal() < timeout_ordinal
+            && token.admission_ordinal() == physical_ordinal
+        {
+            RuntimeTimeoutVoteEpisodeDisposition::PreCutDescent
+        } else if token.scheduler_ordinal() < timeout_ordinal
+            && token.admission_ordinal() < physical_ordinal
+        {
+            RuntimeTimeoutVoteEpisodeDisposition::RestoredDescent
+        } else if token.scheduler_ordinal() > timeout_ordinal
+            && token.admission_ordinal() == physical_ordinal
+        {
+            RuntimeTimeoutVoteEpisodeDisposition::FreshReplenishment
+        } else if token.scheduler_ordinal() == timeout_ordinal {
+            return Err(EnqueueError::FailClosed);
+        } else {
+            return Ok(None);
+        };
+        let owner = RuntimeTimeoutVoteEpisodeOwner {
+            token: token.clone(),
+            carrier_physical_ordinal: physical_ordinal,
+            disposition,
+        };
+        if !owner.validate_against(timeout_ordinal, episode.physical_cut) {
+            return Err(EnqueueError::FailClosed);
+        }
+        Ok(Some(RuntimeTimeoutVoteEpisodeCandidate {
+            slot: token.slot.clone(),
+            owner,
+        }))
+    }
+
+    /// Project the exact 0→0, 0→1, or 1→1 owner-count transition before
+    /// authentication can produce reducer refinement evidence.
+    fn timeout_vote_episode_admission_plan(
+        &self,
+        candidate: Option<RuntimeTimeoutVoteEpisodeCandidate>,
+    ) -> Result<RuntimeTimeoutVoteEpisodeAdmissionPlan, EnqueueError> {
+        let Some(candidate) = candidate else {
+            return Ok(RuntimeTimeoutVoteEpisodeAdmissionPlan::NonCandidate);
+        };
+        let Some(_) = self.emitted_timeout_recovery_owner()? else {
+            return Err(EnqueueError::FailClosed);
+        };
+        let episode = self
+            .timeout_recovery_episode
+            .as_ref()
+            .ok_or(EnqueueError::FailClosed)?;
+        let roster = self
+            .driver
+            .wire_context()
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        let current_universe = roster
+            .iter()
+            .cloned()
+            .map(|semantic_origin| FairV2IngressLeaderWireSlot {
+                semantic_origin,
+                phase: FairV2IngressLeaderWirePhase::TimeoutVote,
+                chunk_index: None,
+            })
+            .collect::<BTreeSet<_>>();
+        if episode.timeout_vote_owner_universe != current_universe
+            || candidate.slot.phase != FairV2IngressLeaderWirePhase::TimeoutVote
+            || candidate.slot.chunk_index.is_some()
+            || !roster.contains(&candidate.slot.semantic_origin)
+            || candidate.slot != candidate.owner.token.slot
+            || !candidate.owner.validate_against(
+                episode.timeout_owner.lifecycle_ordinal(),
+                episode.physical_cut,
+            )
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let mut prospective = episode.admitted_timeout_vote_owners.clone();
+        let disposition = match prospective.get(&candidate.slot) {
+            Some(incumbent) if incumbent != &candidate.owner => {
+                return Err(EnqueueError::FailClosed);
+            }
+            Some(_) => RuntimeTimeoutVoteEpisodeAdmissionPlan::CoalescedRetry {
+                candidate: candidate.clone(),
+                prospective: prospective.clone(),
+            },
+            None => {
+                prospective.insert(candidate.slot.clone(), candidate.owner.clone());
+                RuntimeTimeoutVoteEpisodeAdmissionPlan::FirstAdmission {
+                    candidate: candidate.clone(),
+                    prospective: prospective.clone(),
+                }
+            }
+        };
+        if prospective.len() > roster.len()
+            || prospective.iter().any(|(slot, owner)| {
+                slot.phase != FairV2IngressLeaderWirePhase::TimeoutVote
+                    || slot.chunk_index.is_some()
+                    || !roster.contains(&slot.semantic_origin)
+                    || slot != &owner.token.slot
+                    || !owner.validate_against(
+                        episode.timeout_owner.lifecycle_ordinal(),
+                        episode.physical_cut,
+                    )
+            })
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        Ok(disposition)
+    }
+
     /// Build the reducer-owned status which the runner will publish at the
     /// one-shot live-height activation boundary.
     ///
@@ -14568,6 +15188,29 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 AdapterError::ConflictingManifest,
             ));
         }
+        let timeout_vote_recovery_candidate = match self
+            .timeout_vote_recovery_candidate_from_runtime(
+                authenticated.payload(),
+                &ingress_ownership,
+            ) {
+            Ok(candidate) => candidate,
+            Err(_) => {
+                self.latch_fail_closed(
+                    "TimeoutVote recovery lost its exact finite episode authority",
+                );
+                return Err(NetworkIngressError::FailClosed);
+            }
+        };
+        let timeout_vote_admission_plan =
+            match self.timeout_vote_episode_admission_plan(timeout_vote_recovery_candidate) {
+                Ok(plan) => plan,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "TimeoutVote recovery attempted to replace a frozen source owner",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            };
         let tag = self.driver.current_tag();
         let command = AdapterCommand::Authenticated(authenticated.clone());
         let preflight = self
@@ -14598,22 +15241,84 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
         };
-        // Ordinary post-cut replays remain on their fair-ingress carrier.
-        // A restored certified escape may enter its reserved prefix because
-        // target-relative arbitration still preserves the already-frozen
-        // clock turn ahead of that physically later occurrence.
-        if let Some((owner, _)) = restored_owner.as_ref()
-            && !wire_payload_is_certified_fence_escape(authenticated.payload())
-        {
-            match self.clock_owner_reservation_blocks(owner) {
-                Ok(true) => {
-                    // Preserve the exact fair-ingress occurrence outside the
-                    // FIFO until the clock target transfers.  Returning
-                    // ordinary backpressure keeps retries coalesced on the
-                    // same transport carrier and allocates no new position.
-                    return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
+        let strict_timeout_recovery_replay = if wire_payload_is_direct_certificate_recovery_shape(
+            authenticated.payload(),
+        )
+            && wire_payload_matches_current_strict_timeout_recovery_round(
+                authenticated.payload(),
+                self.driver.wire_context(),
+                self.round_tag,
+            ) {
+            match ingress_ownership.is_physical_leader_wire_replay() {
+                Ok(is_replay) => is_replay,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "timeout-recovery leader-wire ingress changed its physical replay ownership",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
                 }
-                Ok(false) => {}
+            }
+        } else {
+            false
+        };
+        let clock_occurrence = match (
+            ingress_ownership.earliest_lifecycle_ordinal(),
+            ingress_ownership.earliest_physical_carrier(),
+        ) {
+            (Ok(Some(lifecycle_ordinal)), Ok(Some(physical))) => {
+                Some((lifecycle_ordinal, physical.source_ordinal))
+            }
+            (Ok(None), Ok(Some(_))) => None,
+            (Ok(_), Ok(None)) | (Err(_), _) | (_, Err(_)) => {
+                self.latch_fail_closed(
+                    "network replay observed invalid clock reservation ownership",
+                );
+                return Err(NetworkIngressError::FailClosed);
+            }
+        };
+        // Ordinary post-cut replays and fresh attempts remain on their
+        // fair-ingress carrier. A restored TC or CommitQC may enter the
+        // certified prefix while the absolute timeout still owns the cut;
+        // scheduler arbitration nevertheless runs that timeout first. A
+        // TimeoutVote instead belongs to a separate finite episode: pre-cut
+        // owners descend, while at most one first post-cut owner per frozen
+        // roster slot replenishes the vote count. Neither class gains
+        // certified capacity or signature-fence authority.
+        if let Some((lifecycle_ordinal, source_physical_ordinal)) = clock_occurrence {
+            match self.clock_owner_reservation_blockers_occurrence(
+                lifecycle_ordinal,
+                source_physical_ordinal,
+            ) {
+                Ok(blockers) => {
+                    let certified_timeout_escape = blockers.timeout_only()
+                        && strict_timeout_recovery_replay
+                        && !matches!(
+                            authenticated.payload(),
+                            wire::ConsensusMessageV2Payload::TimeoutVote(_)
+                        );
+                    let timeout_vote_episode_escape = if timeout_vote_admission_plan.is_candidate()
+                    {
+                        match self.timeout_recovery_episode_allows_clock_blockers(blockers) {
+                            Ok(allows) => allows,
+                            Err(_) => {
+                                self.latch_fail_closed(
+                                    "TimeoutVote recovery observed invalid clock-episode ownership",
+                                );
+                                return Err(NetworkIngressError::FailClosed);
+                            }
+                        }
+                    } else {
+                        false
+                    };
+                    if blockers.any() && !certified_timeout_escape && !timeout_vote_episode_escape {
+                        // Preserve the exact fair-ingress occurrence outside
+                        // the FIFO until its frozen predecessor transfers.
+                        // Returning ordinary backpressure keeps retries
+                        // coalesced on the same transport carrier and allocates
+                        // no new position.
+                        return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
+                    }
+                }
                 Err(_) => {
                     self.latch_fail_closed(
                         "network replay observed invalid clock reservation ownership",
@@ -14642,6 +15347,21 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                         "authenticated admission changed its leader-wire runtime receipt",
                     );
                     return Err(NetworkIngressError::FailClosed);
+                }
+                if let Some(prospective) = timeout_vote_admission_plan.prospective() {
+                    let Some(episode) = self.timeout_recovery_episode.as_mut() else {
+                        self.latch_fail_closed(
+                            "TimeoutVote recovery admission lost its finite episode",
+                        );
+                        return Err(NetworkIngressError::FailClosed);
+                    };
+                    episode.admitted_timeout_vote_owners = prospective;
+                    if !episode.validate_exact() {
+                        self.latch_fail_closed(
+                            "TimeoutVote recovery exceeded its frozen roster universe",
+                        );
+                        return Err(NetworkIngressError::FailClosed);
+                    }
                 }
                 Ok(owner)
             }
@@ -14755,32 +15475,52 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let Some(source_physical_ordinal) = ownership.physical_admission_ordinal() else {
             return Some(true);
         };
-        if wire_payload_is_certified_fence_escape(&runtime_message.payload) {
-            // A restored certificate keeps its immutable pre-crash token even
-            // when its new physical carrier arrives after a freshly frozen
-            // clock owner.  Admit that carrier into the reserved certified
-            // prefix: target-relative arbitration still excludes it from the
-            // clock's predecessor set, so the clock turn runs first and the
-            // certificate remains available as the following escape.  A
-            // genuinely new post-cut token has a later ordinal from the same
-            // actor-global source and cannot use this exception to acquire an
-            // older logical position.
-            if self.validate_clock_owner_physical_cuts().is_err() {
-                // Drain malformed process-local state so the mutating seam can
-                // expose the invariant failure instead of pinning a fair lane.
-                return Some(true);
+        match self.clock_owner_reservation_blockers_occurrence(
+            token.scheduler_ordinal(),
+            source_physical_ordinal,
+        ) {
+            Ok(blockers)
+                if blockers.timeout_only()
+                    && wire_payload_is_direct_certificate_recovery_shape(
+                        &runtime_message.payload,
+                    )
+                    && !matches!(
+                        &runtime_message.payload,
+                        wire::ConsensusMessageV2Payload::TimeoutVote(_)
+                    )
+                    && wire_payload_matches_current_strict_timeout_recovery_round(
+                        &runtime_message.payload,
+                        self.driver.wire_context(),
+                        self.round_tag,
+                    )
+                    && token.admission_ordinal() < source_physical_ordinal =>
+            {
+                // A restored direct certificate keeps its immutable pre-crash
+                // token while its new physical carrier is strictly later.
+                // Admit that exact replay across only the absolute timeout
+                // cut; timeout still runs first.
             }
-        } else {
-            match self.clock_owner_reservation_blocks_occurrence(
-                token.scheduler_ordinal(),
-                source_physical_ordinal,
-            ) {
-                Ok(true) => return Some(false),
-                Ok(false) => {}
-                // Drain malformed process-local state so the mutating seam can
-                // expose the invariant failure instead of pinning a fair lane.
-                Err(_) => return Some(true),
-            }
+            Ok(blockers)
+                if matches!(
+                    &runtime_message.payload,
+                    wire::ConsensusMessageV2Payload::TimeoutVote(_)
+                ) && matches!(
+                    self.timeout_vote_recovery_candidate_from_fair(
+                        &runtime_message.payload,
+                        ownership,
+                    )
+                    .and_then(|candidate| self.timeout_vote_episode_admission_plan(candidate))
+                    .map(|plan| plan.is_candidate()),
+                    Ok(true)
+                ) && matches!(
+                    self.timeout_recovery_episode_allows_clock_blockers(blockers),
+                    Ok(true)
+                ) => {}
+            Ok(blockers) if blockers.any() => return Some(false),
+            Ok(_) => {}
+            // Drain malformed process-local state so the mutating seam can
+            // expose the invariant failure instead of pinning a fair lane.
+            Err(_) => return Some(true),
         }
 
         let may_use_progress = self
@@ -14796,6 +15536,73 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
         };
         Some(capacity.is_ok())
+    }
+
+    /// Whether one pre-runtime fair-ingress head belongs to the finite
+    /// TimeoutVote episode needed to close a timeout cycle.
+    ///
+    /// This predicate is intentionally narrower than ordinary network
+    /// admission. It never authenticates or dequeues the message and never
+    /// consumes certified-fence capacity. It accepts a frozen owner below the
+    /// timeout cut (descent) or the first post-cut owner of one authenticated
+    /// roster source (finite replenishment). The mutating seam still performs
+    /// full authentication after the checked dequeue.
+    pub(crate) fn can_admit_timeout_vote_recovery_episode(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        if !matches!(
+            &message.payload,
+            wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) || !wire_payload_matches_current_strict_timeout_recovery_round(
+            &message.payload,
+            self.driver.wire_context(),
+            self.round_tag,
+        ) {
+            return false;
+        }
+        let Some(token) = ownership.leader_wire_token() else {
+            return false;
+        };
+        let outer = super::message::BlockMessage::V2(message.clone());
+        let Some(source_physical_ordinal) = ownership.physical_admission_ordinal() else {
+            return false;
+        };
+        if ownership.leader_wire_runtime_receipt().is_some()
+            || !ownership.validate_exact()
+            || !ownership.matches_message(&outer)
+            || ownership.runtime_physical_cut().is_some()
+            || ownership.runtime_lifecycle_ordinal() != Some(token.scheduler_ordinal())
+            || !self
+                .ingress
+                .lifecycle_ordinals
+                .recognizes_minted(token.scheduler_ordinal())
+                .unwrap_or(false)
+        {
+            return false;
+        }
+        if !matches!(
+            self.timeout_vote_recovery_candidate_from_fair(&message.payload, ownership)
+                .and_then(|candidate| self.timeout_vote_episode_admission_plan(candidate)),
+            Ok(plan) if plan.count_transition() != (0, 0)
+        ) {
+            return false;
+        }
+        let Ok(blockers) = self.clock_owner_reservation_blockers_occurrence(
+            token.scheduler_ordinal(),
+            source_physical_ordinal,
+        ) else {
+            return false;
+        };
+        if !matches!(
+            self.timeout_recovery_episode_allows_clock_blockers(blockers),
+            Ok(true)
+        ) {
+            return false;
+        }
+        self.can_admit_pre_runtime_leader_wire(message, message, CommandClass::Progress, ownership)
+            == Some(true)
     }
 
     pub(crate) fn can_admit_network_message_with_ingress_ownership(
@@ -16238,6 +17045,54 @@ pub(crate) const fn wire_payload_is_certified_fence_escape(
                 }
             )
     )
+}
+
+/// Whether a direct productive certificate can cross the absolute timeout cut
+/// after retaining an older durable leader-wire owner.
+///
+/// TimeoutVotes use their separate finite producer episode and gain neither
+/// certified capacity nor signature-fence authority. Commit-certificate
+/// discovery responses own no productive leader-wire token and therefore use
+/// their ordinary projected CommitQC lifecycle instead.
+const fn wire_payload_is_direct_certificate_recovery_shape(
+    payload: &wire::ConsensusMessageV2Payload,
+) -> bool {
+    matches!(
+        payload,
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+                phase: wire::GlobalPhase::Commit,
+                ..
+            })
+    )
+}
+
+fn wire_payload_matches_current_strict_timeout_recovery_round(
+    payload: &wire::ConsensusMessageV2Payload,
+    context: &wire::HeightContext,
+    tag: EventTag,
+) -> bool {
+    let round = match payload {
+        wire::ConsensusMessageV2Payload::TimeoutVote(vote) => vote.round,
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => certificate.round,
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+            if certificate.phase == wire::GlobalPhase::Commit =>
+        {
+            certificate.round
+        }
+        wire::ConsensusMessageV2Payload::Proposal(_)
+        | wire::ConsensusMessageV2Payload::Vote(_)
+        | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => return false,
+    };
+    round.context_id == context.id() && round.height == tag.height() && round.view == tag.view()
 }
 
 fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<CommandClass> {
@@ -25634,12 +26489,15 @@ mod tests {
                 signed_runtime_timeout_certificate(&context, &keys),
             ));
         let source = context.roster[1].validator.clone();
-        let (_leader_wire_directory, _leader_wire_ingress, ownerships) =
+        let (_leader_wire_directory, leader_wire_ingress, ownerships) =
             preowned_leader_wire_ownerships(
                 &context,
                 &[(message.clone(), source)],
                 runtime.ingress.lifecycle_ordinals.clone(),
             );
+        runtime
+            .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
+            .expect("publish the pre-timeout carrier high-water mark");
         let [runtime_owned]: [FairV2IngressOwnershipEvidence; 1] = ownerships
             .try_into()
             .expect("fixture creates one exact durable Runtime owner");
@@ -25661,6 +26519,14 @@ mod tests {
             restored_pre_runtime.leader_wire_token(),
             Some(restored_receipt.token())
         );
+        let fresh_physical_ordinal = restored_pre_runtime
+            .physical_admission_ordinal()
+            .expect("the first delivery owns one physical occurrence");
+        assert_eq!(
+            restored_receipt.token().admission_ordinal(),
+            fresh_physical_ordinal,
+            "the first physical delivery is not a replay"
+        );
 
         let deadline = started_at + runtime.round_timeout();
         let timeout_owner = runtime
@@ -25673,15 +26539,76 @@ mod tests {
             restored_receipt.owner().admission_ordinal() < timeout_owner.lifecycle_ordinal(),
             "the durable replay must retain its pre-restart scheduler position"
         );
+        assert_eq!(
+            runtime.clock_owner_reservation_blocks_occurrence(
+                restored_receipt.token().scheduler_ordinal(),
+                fresh_physical_ordinal,
+            ),
+            Ok(true),
+            "the fresh carrier must exercise the active timeout reservation"
+        );
+        assert!(
+            !runtime
+                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),
+            "a fresh certified post-cut carrier cannot impersonate a durable replay"
+        );
+        let mut fresh_runtime = restored_pre_runtime.clone();
+        fresh_runtime.runtime_physical_cut = u128::from(fresh_physical_ordinal).checked_add(1);
+        fresh_runtime.leader_wire_runtime_receipt = Some(restored_receipt.clone());
+        assert!(fresh_runtime.validate_exact());
+        let fresh_runtime_projection =
+            RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, fresh_runtime.clone())
+                .expect("fresh carrier projects exact runtime ingress ownership");
+        assert_eq!(
+            fresh_runtime_projection.is_physical_leader_wire_replay(),
+            Ok(false),
+            "equal token and carrier ordinals identify a fresh delivery"
+        );
+        let queued_before_fresh = runtime.queued_commands();
+        let receipts_before_fresh = runtime.leader_wire_runtime_receipts.len();
+        let terminals_before_fresh = runtime.pending_leader_wire_terminals.len();
+        assert!(matches!(
+            runtime.enqueue_network_with_ingress_ownership(message.clone(), fresh_runtime),
+            Err(NetworkIngressError::Backpressure(EnqueueError::Full))
+        ));
+        assert_eq!(runtime.queued_commands(), queued_before_fresh);
+        assert_eq!(
+            runtime.leader_wire_runtime_receipts.len(),
+            receipts_before_fresh
+        );
+        assert_eq!(
+            runtime.pending_leader_wire_terminals.len(),
+            terminals_before_fresh
+        );
+        assert!(
+            !runtime.fail_closed,
+            "rejecting the fresh carrier is retryable backpressure"
+        );
 
         // The retransmitted carrier is physically new even though its durable
         // leader-wire token is logically older.  Recreate the dequeue-time
         // projection on the far side of the frozen timeout cut.
-        let restored_physical_ordinal = u64::try_from(timeout_physical_cut)
+        let timeout_cut_ordinal = u64::try_from(timeout_physical_cut)
             .expect("the small test receiver cut fits its physical ordinal");
+        let restored_physical_ordinal = timeout_cut_ordinal
+            .max(restored_receipt.token().admission_ordinal())
+            .checked_add(1)
+            .expect("the small replay ordinal has a successor");
         restored_pre_runtime.first.physical_admission_ordinal = restored_physical_ordinal;
         restored_pre_runtime.latest.physical_admission_ordinal = restored_physical_ordinal;
         assert!(restored_pre_runtime.validate_exact());
+        assert!(
+            restored_receipt.token().admission_ordinal() < restored_physical_ordinal,
+            "the admitted carrier must be an exact physical replay"
+        );
+        assert_eq!(
+            runtime.clock_owner_reservation_blocks_occurrence(
+                restored_receipt.token().scheduler_ordinal(),
+                restored_physical_ordinal,
+            ),
+            Ok(true),
+            "the restored carrier must exercise the narrow replay exception"
+        );
         assert!(
             runtime
                 .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),
@@ -25692,12 +26619,31 @@ mod tests {
         // mutating seam must agree with the read-only predicate and still
         // authenticate the TC before it owns reducer capacity.
         let mut restored_runtime = restored_pre_runtime;
-        restored_runtime.runtime_physical_cut = timeout_physical_cut.checked_add(1);
+        restored_runtime.runtime_physical_cut =
+            u128::from(restored_physical_ordinal).checked_add(1);
         restored_runtime.leader_wire_runtime_receipt = Some(restored_receipt);
         assert!(restored_runtime.validate_exact());
+        let restored_runtime_projection =
+            RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, restored_runtime.clone())
+                .expect("restored carrier projects exact runtime ingress ownership");
+        assert_eq!(
+            restored_runtime_projection.is_physical_leader_wire_replay(),
+            Ok(true),
+            "a strictly later carrier identifies the retained physical replay"
+        );
         runtime
             .enqueue_network_with_ingress_ownership(message, restored_runtime)
             .expect("authenticate and enqueue the restored TC under its old owner");
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(runtime.leader_wire_runtime_receipts.len(), 1);
+        assert!(
+            runtime
+                .ingress
+                .commands
+                .front()
+                .is_some_and(|queued| queued.restored_producer_stage.is_none()),
+            "authenticated replay must use the ordinary Admit path"
+        );
 
         let timeout_step = runtime
             .step(deadline)
@@ -25751,6 +26697,761 @@ mod tests {
             1,
             "the restored TC terminalizes exactly once"
         );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
+        let directory = TempDir::new().expect("temporary restored-TV runtime directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 2, 2),
+            Some(0),
+        );
+        let started_at = Instant::now();
+        runtime
+            .arm_live_clocks(started_at)
+            .expect("arm the restarted runtime before freezing its clock owner");
+
+        let message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
+        let source = context.roster[1].validator.clone();
+        let (_leader_wire_directory, leader_wire_ingress, ownerships) =
+            preowned_leader_wire_ownerships(
+                &context,
+                &[(message.clone(), source)],
+                runtime.ingress.lifecycle_ordinals.clone(),
+            );
+        runtime
+            .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
+            .expect("publish the pre-timeout carrier high-water mark");
+        let [runtime_owned]: [FairV2IngressOwnershipEvidence; 1] = ownerships
+            .try_into()
+            .expect("fixture creates one exact durable Runtime owner");
+        let receipt = runtime_owned
+            .leader_wire_runtime_receipt()
+            .expect("pre-crash TimeoutVote owns one exact runtime receipt")
+            .clone();
+        let mut restored_pre_runtime = runtime_owned;
+        restored_pre_runtime.runtime_physical_cut = None;
+        restored_pre_runtime.leader_wire_runtime_receipt = None;
+        let pre_cut_original = restored_pre_runtime.clone();
+        let non_candidate = runtime
+            .timeout_vote_episode_admission_plan(None)
+            .expect("unrelated ingress projects without changing TV ownership");
+        assert!(matches!(
+            &non_candidate,
+            RuntimeTimeoutVoteEpisodeAdmissionPlan::NonCandidate
+        ));
+        assert_eq!(non_candidate.count_transition(), (0, 0));
+
+        let deadline = started_at + runtime.round_timeout();
+        let periodic_owner = runtime
+            .mint_fresh_lifecycle_owner(
+                runtime.round_tag(),
+                CommandClass::Progress,
+                RuntimeFreshRootKind::Retransmit,
+                b"periodic-retransmit",
+            )
+            .expect("freeze one exact pre-timeout retransmit owner");
+        runtime.retransmit_owner = Some(periodic_owner.clone());
+        runtime.retransmit_owner_physical_cut = Some(runtime.ingress_physical_cut);
+        let timeout_owner = runtime
+            .frozen_timeout_owner_for_test(deadline)
+            .expect("freeze the new process's absolute-timeout owner");
+        let timeout_physical_cut = runtime
+            .timeout_owner_physical_cut
+            .expect("the frozen timeout owns one immutable receiver cut");
+        assert!(periodic_owner.lifecycle_ordinal() < timeout_owner.lifecycle_ordinal());
+        assert!(receipt.token().scheduler_ordinal() < timeout_owner.lifecycle_ordinal());
+
+        let timeout_cut_ordinal = u64::try_from(timeout_physical_cut)
+            .expect("the small test receiver cut fits its physical ordinal");
+        let replay_physical_ordinal = timeout_cut_ordinal
+            .max(receipt.token().admission_ordinal())
+            .checked_add(1)
+            .expect("the small replay ordinal has a successor");
+        restored_pre_runtime.first.physical_admission_ordinal = replay_physical_ordinal;
+        restored_pre_runtime.latest.physical_admission_ordinal = replay_physical_ordinal;
+        assert!(restored_pre_runtime.validate_exact());
+        assert_eq!(
+            runtime.clock_owner_reservation_blockers_occurrence(
+                receipt.token().scheduler_ordinal(),
+                replay_physical_ordinal,
+            ),
+            Ok(RuntimeClockReservationBlockers {
+                timeout: true,
+                retransmit: true,
+            })
+        );
+        assert!(
+            !runtime.can_admit_timeout_vote_recovery_episode(&message, &restored_pre_runtime,),
+            "the durable TimeoutIntent must execute before a restored vote can cross retained debt"
+        );
+
+        let timeout_step = runtime
+            .step(deadline)
+            .expect("the frozen absolute timeout runs before the restored replay");
+        let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
+            panic!("frozen timeout unexpectedly idled")
+        };
+        assert!(matches!(
+            timeout_effects.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("timeout publishes exact scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::Timeout
+        );
+        let timeout_effect_ownership = runtime
+            .take_effect_ownership(timeout_effects.len())
+            .expect("persisted TimeoutIntent transfers one signer owner");
+        runtime
+            .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
+            .expect("publish the pending timeout signer owner");
+        assert!(runtime.retransmit_owner.is_none());
+        assert!(runtime.retransmit_owner_physical_cut.is_none());
+        assert!(
+            runtime
+                .timeout_recovery_episode
+                .as_ref()
+                .is_some_and(|episode| episode.pre_frozen_retransmit.is_none())
+        );
+
+        runtime
+            .freeze_due_clock_owners(deadline)
+            .expect("a fresh post-timeout periodic episode remains enabled");
+        let post_timeout_retransmit = runtime
+            .retransmit_owner
+            .as_ref()
+            .expect("post-timeout retransmit owns one fresh episode");
+        assert!(
+            post_timeout_retransmit.lifecycle_ordinal() > timeout_owner.lifecycle_ordinal(),
+            "periodic replenishment must remain outside the frozen recovery prefix"
+        );
+
+        assert_eq!(
+            runtime.clock_owner_reservation_blockers_occurrence(
+                receipt.token().scheduler_ordinal(),
+                replay_physical_ordinal,
+            ),
+            Ok(RuntimeClockReservationBlockers {
+                timeout: false,
+                retransmit: true,
+            }),
+            "fresh periodic work remains a physical blocker but is above the recovery cut"
+        );
+        assert_eq!(
+            runtime
+                .timeout_vote_recovery_candidate_from_fair(&message.payload, &pre_cut_original,)
+                .expect("pre-cut TimeoutVote classification is exact")
+                .expect("the original pre-cut carrier belongs to the finite episode")
+                .owner
+                .disposition,
+            RuntimeTimeoutVoteEpisodeDisposition::PreCutDescent
+        );
+        assert!(
+            runtime.can_admit_timeout_vote_recovery_episode(&message, &restored_pre_runtime,),
+            "the exact current-view replay predates the dispatched timeout owner"
+        );
+
+        let mut restored_runtime = restored_pre_runtime;
+        restored_runtime.runtime_physical_cut = u128::from(replay_physical_ordinal).checked_add(1);
+        restored_runtime.leader_wire_runtime_receipt = Some(receipt.clone());
+        let restored_candidate = runtime
+            .timeout_vote_recovery_candidate_from_fair(&message.payload, &restored_runtime)
+            .expect("restored TimeoutVote classification is exact")
+            .expect("the pre-timeout owner belongs to the finite episode");
+        assert_eq!(
+            restored_candidate.owner.disposition,
+            RuntimeTimeoutVoteEpisodeDisposition::RestoredDescent
+        );
+        let restored_plan = runtime
+            .timeout_vote_episode_admission_plan(Some(restored_candidate))
+            .expect("restored source-slot admission is valid");
+        assert!(matches!(
+            &restored_plan,
+            RuntimeTimeoutVoteEpisodeAdmissionPlan::FirstAdmission { .. }
+        ));
+        assert_eq!(restored_plan.count_transition(), (0, 1));
+        runtime
+            .enqueue_network_with_ingress_ownership(message, restored_runtime)
+            .expect("authenticate and enqueue the retained TimeoutVote");
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(runtime.ingress.certified_fence_escape_credit(), 0);
+        assert!(
+            runtime.ingress.commands.front().is_some_and(|queued| {
+                queued.class == CommandClass::Progress
+                    && !queued.command.is_certified_fence_escape()
+            }),
+            "TimeoutVote recovery remains ordinary Progress rather than certificate authority"
+        );
+
+        let replay_step = runtime
+            .try_step_pacemaker_escape(deadline)
+            .expect("ordinary Progress replay preserves the live pacemaker")
+            .expect("the retained TimeoutVote receives one bounded turn");
+        assert!(matches!(
+            replay_step,
+            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+        ));
+        let replay_scheduler = runtime
+            .take_last_scheduler_ownership()
+            .expect("TimeoutVote replay publishes scheduler ownership");
+        assert_eq!(
+            replay_scheduler.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
+        );
+        assert!(matches!(
+            replay_scheduler.candidate,
+            RuntimeSelectedCandidateOwnership::Exact(ref candidate)
+                if candidate.selection_seal.kind
+                    == RuntimeQueueSelectionKind::PacemakerProgress
+        ));
+        assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+        assert_eq!(runtime.ingress.certified_fence_escape_credit(), 0);
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
+        assert_eq!(
+            runtime.leader_wire_runtime_receipts,
+            BTreeMap::from([(receipt.token().scheduler_ordinal(), receipt)])
+        );
+        assert_eq!(runtime.round_tag().view(), 0);
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view() {
+        let directory = TempDir::new().expect("temporary fresh-TV runtime directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(4, 1, 1),
+            Some(0),
+        );
+        let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+        let (_leader_wire_directory, leader_wire_ingress, ownerships) =
+            preowned_leader_wire_ownerships(&context, &[], lifecycle_ordinals);
+        assert!(ownerships.is_empty());
+
+        let started_at = Instant::now();
+        runtime
+            .arm_live_clocks(started_at)
+            .expect("arm the four-validator runtime");
+        runtime
+            .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
+            .expect("publish the empty fair-ingress cut before timeout");
+        let deadline = started_at + runtime.round_timeout();
+        let timeout_step = runtime
+            .step(deadline)
+            .expect("the local absolute timeout opens its finite TV episode");
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("timeout publishes scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::Timeout
+        );
+        let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
+            panic!("absolute timeout unexpectedly idled")
+        };
+        let timeout_effect_ownership = runtime
+            .take_effect_ownership(timeout_effects.len())
+            .expect("timeout Sign retains its exact lifecycle owner");
+        let [timeout_effect_owner] = timeout_effect_ownership.as_slice() else {
+            panic!("timeout emits one exact signing effect")
+        };
+        let (signature_tag, signature_preimage) = match timeout_effects.as_slice() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(vote),
+                },
+            ] => (*tag, vote.signature_preimage()),
+            effects => panic!("unexpected timeout effects: {effects:?}"),
+        };
+        runtime
+            .set_external_lifecycle_owners(vec![timeout_effect_owner.owner().clone()])
+            .expect("publish the pending local timeout signer");
+        let timeout_ordinal = runtime
+            .timeout_recovery_episode
+            .as_ref()
+            .expect("durable timeout retains its finite episode")
+            .timeout_owner
+            .lifecycle_ordinal();
+        assert_eq!(
+            runtime
+                .timeout_recovery_episode
+                .as_ref()
+                .expect("timeout episode remains active")
+                .timeout_vote_owner_universe
+                .len(),
+            context.roster.len(),
+            "the frozen producer universe has one TimeoutVote slot per roster source"
+        );
+        let frozen_universe = runtime
+            .timeout_recovery_episode
+            .as_ref()
+            .expect("timeout episode retains its roster universe")
+            .timeout_vote_owner_universe
+            .clone();
+        let _removed_slot = runtime
+            .timeout_recovery_episode
+            .as_mut()
+            .expect("timeout episode remains mutable only inside this negative test")
+            .timeout_vote_owner_universe
+            .pop_first()
+            .expect("four-validator universe is non-empty");
+        assert!(
+            runtime.timeout_recovery_lifecycle_cut().is_err(),
+            "a changed frozen roster universe must invalidate the episode"
+        );
+        runtime
+            .timeout_recovery_episode
+            .as_mut()
+            .expect("restore the exact test episode")
+            .timeout_vote_owner_universe = frozen_universe;
+        assert_eq!(
+            runtime
+                .timeout_recovery_lifecycle_cut()
+                .expect("the restored roster universe validates"),
+            Some(timeout_ordinal)
+        );
+
+        for signer in [1_u32, 2_u32] {
+            let message = signed_runtime_timeout_vote(&context, &keys, 0, signer);
+            let source = context.roster[usize::try_from(signer).expect("small signer index")]
+                .validator
+                .clone();
+            assert!(matches!(
+                leader_wire_ingress.try_push(InboundBlockMessage::new(
+                    BlockMessage::V2(message.clone()),
+                    Some(source.clone()),
+                )),
+                Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let mut inbound = leader_wire_ingress
+                .try_recv_if(|inbound| {
+                    let BlockMessage::V2(candidate) = inbound.message() else {
+                        return false;
+                    };
+                    inbound.ingress_ownership().is_some_and(|ownership| {
+                        runtime.can_admit_timeout_vote_recovery_episode(candidate, ownership)
+                    })
+                })
+                .expect("one fresh roster slot crosses the finite TV episode");
+            let ownership = inbound
+                .take_ingress_ownership()
+                .expect("checked dequeue retains exact fresh-TV ownership");
+            let token = ownership
+                .leader_wire_token()
+                .expect("fresh TimeoutVote owns one productive token")
+                .clone();
+            let physical_ordinal = ownership
+                .physical_admission_ordinal()
+                .expect("fresh TimeoutVote owns its first physical carrier");
+            assert_eq!(token.admission_ordinal(), physical_ordinal);
+            assert!(token.scheduler_ordinal() > timeout_ordinal);
+            let candidate = runtime
+                .timeout_vote_recovery_candidate_from_fair(&message.payload, &ownership)
+                .expect("fresh candidate classification is exact")
+                .expect("fresh current-view TV belongs to the episode");
+            let first_plan = runtime
+                .timeout_vote_episode_admission_plan(Some(candidate.clone()))
+                .expect("first source-slot plan is valid");
+            assert!(matches!(
+                &first_plan,
+                RuntimeTimeoutVoteEpisodeAdmissionPlan::FirstAdmission { .. }
+            ));
+            assert_eq!(first_plan.count_transition(), (0, 1));
+
+            runtime
+                .enqueue_network_with_ingress_ownership(message.clone(), ownership)
+                .expect("authenticate and admit the fresh TimeoutVote");
+            let coalesced_plan = runtime
+                .timeout_vote_episode_admission_plan(Some(candidate.clone()))
+                .expect("the exact incumbent slot remains valid");
+            assert!(matches!(
+                &coalesced_plan,
+                RuntimeTimeoutVoteEpisodeAdmissionPlan::CoalescedRetry { .. }
+            ));
+            assert_eq!(coalesced_plan.count_transition(), (1, 1));
+            let episode = runtime
+                .timeout_recovery_episode
+                .as_ref()
+                .expect("fresh admission keeps the episode active");
+            assert_eq!(
+                episode.admitted_timeout_vote_owners[&token.slot].disposition,
+                RuntimeTimeoutVoteEpisodeDisposition::FreshReplenishment
+            );
+            assert_eq!(
+                episode.admitted_timeout_vote_owners.len(),
+                usize::try_from(signer).expect("small signer count"),
+                "each distinct roster source increases the finite count once"
+            );
+            assert!(matches!(
+                leader_wire_ingress.try_push(InboundBlockMessage::new(
+                    BlockMessage::V2(message),
+                    Some(source),
+                )),
+                Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+            ));
+            assert_eq!(
+                runtime
+                    .timeout_recovery_episode
+                    .as_ref()
+                    .expect("exact retry cannot retire the episode")
+                    .admitted_timeout_vote_owners
+                    .len(),
+                usize::try_from(signer).expect("small signer count"),
+                "an exact retry is 1→1 rather than replenishment"
+            );
+
+            let queue_len_before_replacement = runtime.queued_commands();
+            let owners_before_replacement = runtime
+                .timeout_recovery_episode
+                .as_ref()
+                .expect("episode retains its exact source map")
+                .admitted_timeout_vote_owners
+                .clone();
+            let mut replaced_token = candidate.clone();
+            replaced_token.owner.token.identity.canonical_wire_hash =
+                Hash::new([0xA0, u8::try_from(signer).expect("small signer marker")]);
+            assert_eq!(
+                runtime.timeout_vote_episode_admission_plan(Some(replaced_token)),
+                Err(EnqueueError::FailClosed),
+                "a different token cannot replace the occupied source slot"
+            );
+            let mut replaced_carrier = candidate.clone();
+            replaced_carrier.owner.carrier_physical_ordinal = replaced_carrier
+                .owner
+                .carrier_physical_ordinal
+                .checked_add(1)
+                .expect("small physical carrier has a successor");
+            assert_eq!(
+                runtime.timeout_vote_episode_admission_plan(Some(replaced_carrier)),
+                Err(EnqueueError::FailClosed),
+                "a same-token retry cannot substitute a different physical carrier"
+            );
+            assert_eq!(runtime.queued_commands(), queue_len_before_replacement);
+            assert_eq!(
+                runtime
+                    .timeout_recovery_episode
+                    .as_ref()
+                    .expect("rejected replacement cannot retire the episode")
+                    .admitted_timeout_vote_owners,
+                owners_before_replacement,
+                "replacement is rejected before queue or episode refinement"
+            );
+        }
+        assert_eq!(runtime.ingress.certified_fence_escape_credit(), 0);
+        let third_message = signed_runtime_timeout_vote(&context, &keys, 0, 3);
+        let third_source = context.roster[3].validator.clone();
+        assert!(matches!(
+            leader_wire_ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(third_message),
+                Some(third_source),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let owners_before_full = runtime
+            .timeout_recovery_episode
+            .as_ref()
+            .expect("episode remains active at Progress capacity")
+            .admitted_timeout_vote_owners
+            .clone();
+        assert!(
+            leader_wire_ingress
+                .try_recv_if(|inbound| {
+                    let BlockMessage::V2(candidate) = inbound.message() else {
+                        return false;
+                    };
+                    inbound.ingress_ownership().is_some_and(|ownership| {
+                        runtime.can_admit_timeout_vote_recovery_episode(candidate, ownership)
+                    })
+                })
+                .is_none(),
+            "a third fresh source remains physically owned while Progress capacity is full"
+        );
+        assert_eq!(
+            runtime
+                .timeout_recovery_episode
+                .as_ref()
+                .expect("capacity backpressure cannot retire the episode")
+                .admitted_timeout_vote_owners,
+            owners_before_full,
+            "queue-full preflight cannot publish a 0→1 episode refinement"
+        );
+
+        let local_signature = Signature::new(keys[0].private_key(), &signature_preimage)
+            .payload()
+            .to_vec();
+        runtime
+            .enqueue_signature_with_owner(signature_tag, local_signature, timeout_effect_owner)
+            .expect("enqueue the local timeout signature at the inclusive timeout cut");
+        runtime
+            .set_external_lifecycle_owners(Vec::new())
+            .expect("retire the external signer after queuing its completion");
+
+        let mut saw_local_timeout_vote = false;
+        let mut saw_timeout_certificate = false;
+        let mut saw_enter_view = false;
+        for _ in 0..12 {
+            let step = runtime
+                .try_step_pacemaker_escape(deadline)
+                .expect("finite TV episode keeps the typed pacemaker live")
+                .expect("local completion or one admitted TV remains runnable");
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("every pacemaker step publishes exact scheduler ownership");
+            let RuntimeStep::Advanced(effects) = step else {
+                panic!("typed pacemaker episode unexpectedly idled")
+            };
+            saw_local_timeout_vote |= effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    AdapterEffect::Broadcast(message)
+                        if matches!(
+                            &message.payload,
+                            wire::ConsensusMessageV2Payload::TimeoutVote(_)
+                        )
+                )
+            });
+            saw_timeout_certificate |= effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    AdapterEffect::Broadcast(message)
+                        if matches!(
+                            &message.payload,
+                            wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+                        )
+                )
+            });
+            saw_enter_view |= effects.iter().any(
+                |effect| matches!(effect, AdapterEffect::EnterView { tag, .. } if tag.view() == 1),
+            );
+            runtime
+                .take_effect_ownership(effects.len())
+                .expect("consume the exact effect ownership for this macro-step");
+            let _ = runtime.take_leader_wire_runtime_terminals();
+            if runtime.round_tag().view() == 1 {
+                break;
+            }
+        }
+        assert!(saw_local_timeout_vote);
+        assert!(saw_timeout_certificate);
+        assert!(saw_enter_view);
+        assert_eq!(runtime.round_tag().view(), 1);
+        assert!(runtime.timeout_recovery_episode.is_none());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission() {
+        let runtime_directory = TempDir::new().expect("temporary restored-TV runtime directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &runtime_directory,
+            RuntimeQueueConfig::new(8, 2, 2),
+            Some(0),
+        );
+        let message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
+        let source = context.roster[1].validator.clone();
+        let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+        let (leader_wire_directory, first_ingress, ownerships) = preowned_leader_wire_ownerships(
+            &context,
+            &[(message.clone(), source.clone())],
+            lifecycle_ordinals.clone(),
+        );
+        let [first_runtime_ownership]: [FairV2IngressOwnershipEvidence; 1] = ownerships
+            .try_into()
+            .expect("first process creates one exact Runtime owner");
+        let first_receipt = first_runtime_ownership
+            .leader_wire_runtime_receipt()
+            .expect("first process durably binds Runtime ownership")
+            .clone();
+        let token = first_receipt.token().clone();
+        first_ingress.close();
+        drop(first_ingress);
+
+        let restored_ingress = Arc::new(
+            super::super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                64,
+                512 * 1024 * 1024,
+                64 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            ),
+        );
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        restored_ingress
+            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .expect("restored leader-wire geometry");
+        restored_ingress.require_leader_wire_lifecycle_gate();
+        let capacity =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                context.da_layout.max_chunk_count,
+            )
+            .expect("finite restored leader-wire capacity");
+        let recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                context.id(),
+                context.height,
+                [0xE7; 32],
+                0,
+                false,
+            );
+        let (gate, restore) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &leader_wire_directory
+                    .path()
+                    .join("leader-wire-preowned.wal"),
+                context.id(),
+                context.height,
+                [0xE7; 32],
+                roster.iter().cloned().collect(),
+                capacity,
+                context.da_layout.max_chunk_count,
+                recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("reopen the same durable leader-wire lifecycle");
+        assert_eq!(restore.records().len(), 1);
+        assert_eq!(restore.records()[0].token(), &token);
+        assert_eq!(
+            restore.records()[0].status(),
+            super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
+        );
+        assert_eq!(
+            restore.scheduler_ordinal_high_watermark(),
+            token.scheduler_ordinal()
+        );
+        restored_ingress
+            .bind_leader_wire_lifecycle_gate(
+                Arc::clone(&gate),
+                restore,
+                lifecycle_ordinals,
+                context.id(),
+                context.height,
+            )
+            .expect("bind restored leader-wire state and advance shared high-watermark");
+        restored_ingress
+            .open()
+            .expect("open restored fair ingress only after binding");
+
+        let started_at = Instant::now();
+        runtime
+            .arm_live_clocks(started_at)
+            .expect("arm the restarted runtime");
+        runtime
+            .set_ingress_physical_cut(restored_ingress.next_physical_admission_ordinal())
+            .expect("publish the restored selector high-watermark before freezing timeout");
+        let deadline = started_at + runtime.round_timeout();
+        let timeout_owner = runtime
+            .frozen_timeout_owner_for_test(deadline)
+            .expect("freeze the post-restart absolute timeout owner");
+        assert!(token.scheduler_ordinal() < timeout_owner.lifecycle_ordinal());
+        let timeout_cut = runtime
+            .timeout_owner_physical_cut
+            .expect("timeout freezes the restored receiver cut");
+
+        assert!(matches!(
+            restored_ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(message.clone()),
+                Some(source),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(
+            restored_ingress
+                .try_recv_if(|inbound| {
+                    let BlockMessage::V2(candidate) = inbound.message() else {
+                        return false;
+                    };
+                    inbound.ingress_ownership().is_some_and(|ownership| {
+                        runtime.can_admit_timeout_vote_recovery_episode(candidate, ownership)
+                    })
+                })
+                .is_none(),
+            "the restored carrier remains queued until TimeoutIntent is durable"
+        );
+
+        let timeout_step = runtime
+            .step(deadline)
+            .expect("absolute timeout dispatches before the restored handoff");
+        let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
+            panic!("frozen timeout unexpectedly idled")
+        };
+        assert!(matches!(
+            timeout_effects.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("timeout publishes exact scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::Timeout
+        );
+        let timeout_effect_ownership = runtime
+            .take_effect_ownership(timeout_effects.len())
+            .expect("persisted TimeoutIntent transfers one signer owner");
+        runtime
+            .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
+            .expect("publish the pending timeout signer owner");
+
+        let mut replay = restored_ingress
+            .try_recv_if(|inbound| {
+                let BlockMessage::V2(candidate) = inbound.message() else {
+                    return false;
+                };
+                inbound.ingress_ownership().is_some_and(|ownership| {
+                    runtime.can_admit_timeout_vote_recovery_episode(candidate, ownership)
+                })
+            })
+            .expect("checked dequeue admits the exact strict TimeoutVote replay");
+        let replay_ownership = replay
+            .take_ingress_ownership()
+            .expect("checked dequeue retains exact ownership");
+        assert_eq!(replay_ownership.leader_wire_token(), Some(&token));
+        assert_eq!(
+            replay_ownership.leader_wire_runtime_receipt(),
+            Some(&first_receipt),
+            "restart reuses the immutable Runtime owner rather than replacing it"
+        );
+        let replay_physical_ordinal = replay_ownership
+            .physical_admission_ordinal()
+            .expect("reactivation owns one fresh physical carrier");
+        assert!(token.admission_ordinal() < replay_physical_ordinal);
+        assert!(u128::from(replay_physical_ordinal) >= timeout_cut);
+        assert!(
+            replay_ownership
+                .runtime_physical_cut()
+                .is_some_and(|cut| cut > u128::from(replay_physical_ordinal))
+        );
+        runtime
+            .enqueue_network_with_ingress_ownership(message, replay_ownership)
+            .expect("authenticated atomic handoff enters ordinary Progress capacity");
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(runtime.ingress.certified_fence_escape_credit(), 0);
         assert!(!runtime.fail_closed);
     }
 

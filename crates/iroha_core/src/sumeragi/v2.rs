@@ -4130,6 +4130,12 @@ impl SumeragiV2Adapter {
         self.reducer.current_tag()
     }
 
+    /// Borrow the immutable wire context authenticated by this height's
+    /// reducer adapter.
+    pub(crate) const fn wire_context(&self) -> &wire::HeightContext {
+        &self.wire_context
+    }
+
     /// Return the reducer body state for one wire identity in seam tests.
     #[cfg(test)]
     pub(crate) fn body_state_for_test(

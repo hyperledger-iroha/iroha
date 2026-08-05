@@ -58881,7 +58881,7 @@ def _retained_response_escape_latch_formal_source_fidelity_errors(
 def _runtime_clock_reservation_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
-    """Pin the Rust boundary which keeps post-cut replays outside FIFO."""
+    """Pin the Rust boundary which orders clocks before physical replays."""
 
     errors: list[str] = []
     runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
@@ -58974,6 +58974,48 @@ self.ingress.enqueue(command)
         errors,
     )
 
+    replay_helper = _require_rust_item(
+        runtime_path,
+        source,
+        "is_physical_leader_wire_replay",
+        errors,
+    )
+    _require_rust_item_context(
+        runtime_path,
+        replay_helper,
+        (("impl", "RuntimeIngressOwnershipEvidence"),),
+        "strict retained-token physical-replay classifier",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        runtime_path,
+        replay_helper,
+        _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
+            "runtime_ingress_is_physical_leader_wire_replay"
+        ],
+        "strict retained-token physical-replay classifier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        replay_helper,
+        """
+match (
+    self.leader_wire_token()?,
+    self.leader_wire_physical_carrier()?,
+) {
+    (Some(token), Some((physical_ordinal, _))) => {
+        Ok(token.admission_ordinal() < physical_ordinal)
+    }
+    (None, None) => Ok(false),
+    (Some(_), None) | (None, Some(_)) => Err(RuntimeIngressMergeError::Conflict),
+}
+""",
+        "physical replay classification must require a strictly older durable "
+        "admission token and reject partial ownership",
+        errors,
+    )
+
     concrete_context = (
         (
             "impl",
@@ -58994,6 +59036,11 @@ match self.clock_owner_reservation_blocks_occurrence(
     token.scheduler_ordinal(),
     source_physical_ordinal,
 ) {
+    Ok(true)
+        if wire_payload_is_certified_fence_escape(&runtime_message.payload)
+            && token.admission_ordinal() < source_physical_ordinal =>
+    {
+    }
     Ok(true) => return Some(false),
     Ok(false) => {}
     Err(_) => return Some(true),
@@ -59004,8 +59051,42 @@ match self.clock_owner_reservation_blocks_occurrence(
         (
             "enqueue_network_with_ingress_ownership",
             """
-if let Some((owner, _)) = restored_owner.as_ref() {
-    match self.clock_owner_reservation_blocks(owner) {
+let certified_physical_replay = if wire_payload_is_certified_fence_escape(
+    authenticated.payload(),
+) {
+    match ingress_ownership.is_physical_leader_wire_replay() {
+        Ok(is_replay) => is_replay,
+        Err(_) => {
+            self.latch_fail_closed(
+                "certified leader-wire ingress changed its physical replay ownership",
+            );
+            return Err(NetworkIngressError::FailClosed);
+        }
+    }
+} else {
+    false
+};
+let clock_occurrence = match (
+    ingress_ownership.earliest_lifecycle_ordinal(),
+    ingress_ownership.earliest_physical_carrier(),
+) {
+    (Ok(Some(lifecycle_ordinal)), Ok(Some(physical))) => {
+        Some((lifecycle_ordinal, physical.source_ordinal))
+    }
+    (Ok(None), Ok(Some(_))) => None,
+    (Ok(_), Ok(None)) | (Err(_), _) | (_, Err(_)) => {
+        self.latch_fail_closed(
+            "network replay observed invalid clock reservation ownership",
+        );
+        return Err(NetworkIngressError::FailClosed);
+    }
+};
+if let Some((lifecycle_ordinal, source_physical_ordinal)) = clock_occurrence {
+    match self.clock_owner_reservation_blocks_occurrence(
+        lifecycle_ordinal,
+        source_physical_ordinal,
+    ) {
+        Ok(true) if certified_physical_replay => {}
         Ok(true) => {
             return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
         }
@@ -59019,7 +59100,7 @@ if let Some((owner, _)) = restored_owner.as_ref() {
     }
 }
 """,
-            "authenticated post-cut replay admission gate",
+            "authenticated strict physical-replay admission gate",
         ),
         (
             "can_admit_network_message_with_ingress_ownership",
@@ -59138,6 +59219,218 @@ runtime
         "the first ownership enters runtime",
         errors,
     )
+
+    restored_tc_regression_name = (
+        "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner"
+    )
+    restored_tc_regression = _require_rust_item(
+        runtime_path,
+        source,
+        restored_tc_regression_name,
+        errors,
+    )
+    _require_rust_item_context(
+        runtime_path,
+        restored_tc_regression,
+        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+        "restart-restored TC versus frozen timeout regression",
+        errors,
+        expected_attributes=("#[test]",),
+    )
+    _require_rust_item_token_sha256(
+        runtime_path,
+        restored_tc_regression,
+        _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256[
+            restored_tc_regression_name
+        ],
+        "restart-restored TC versus frozen timeout regression",
+        errors,
+    )
+    for required, description in (
+        (
+            """
+assert_eq!(
+    restored_receipt.token().admission_ordinal(),
+    fresh_physical_ordinal,
+    "the first physical delivery is not a replay"
+);
+""",
+            "the regression must reject equality as a fresh certified carrier",
+        ),
+        (
+            """
+assert!(
+    !runtime.can_admit_network_message_with_ingress_ownership(
+        &message,
+        &restored_pre_runtime,
+    ),
+    "a fresh certified post-cut carrier cannot impersonate a durable replay"
+);
+""",
+            "the regression must reject the fresh certified carrier",
+        ),
+        (
+            """
+assert_eq!(
+    runtime.clock_owner_reservation_blocks_occurrence(
+        restored_receipt.token().scheduler_ordinal(),
+        fresh_physical_ordinal,
+    ),
+    Ok(true),
+    "the fresh carrier must exercise the active timeout reservation"
+);
+""",
+            "the fresh negative case must exercise an active clock reservation",
+        ),
+        (
+            """
+assert_eq!(
+    fresh_runtime.is_physical_leader_wire_replay(),
+    Ok(false),
+    "equal token and carrier ordinals identify a fresh delivery"
+);
+""",
+            "the fresh case must exercise the strict physical-replay helper",
+        ),
+        (
+            """
+assert!(matches!(
+    runtime.enqueue_network_with_ingress_ownership(message.clone(), fresh_runtime),
+    Err(NetworkIngressError::Backpressure(EnqueueError::Full))
+));
+""",
+            "the mutating seam must backpressure a fresh certified carrier",
+        ),
+        (
+            """
+assert!(
+    !runtime.fail_closed,
+    "rejecting the fresh carrier is retryable backpressure"
+);
+""",
+            "fresh certified backpressure must remain recoverable",
+        ),
+        (
+            """
+assert_eq!(runtime.queued_commands(), queued_before_fresh);
+assert_eq!(
+    runtime.leader_wire_runtime_receipts.len(),
+    receipts_before_fresh
+);
+assert_eq!(
+    runtime.pending_leader_wire_terminals.len(),
+    terminals_before_fresh
+);
+""",
+            "fresh backpressure must publish no queue, receipt, or terminal state",
+        ),
+        (
+            """
+assert!(
+    restored_receipt.token().admission_ordinal() < restored_physical_ordinal,
+    "the admitted carrier must be an exact physical replay"
+);
+""",
+            "the regression must admit only a strictly later retained replay",
+        ),
+        (
+            """
+assert!(
+    runtime.can_admit_network_message_with_ingress_ownership(
+        &message,
+        &restored_pre_runtime,
+    ),
+    "a later clock reservation cannot pin an older durable replay at fair ingress"
+);
+""",
+            "the regression must admit the retained replay through fair ingress",
+        ),
+        (
+            """
+assert_eq!(
+    runtime.clock_owner_reservation_blocks_occurrence(
+        restored_receipt.token().scheduler_ordinal(),
+        restored_physical_ordinal,
+    ),
+    Ok(true),
+    "the restored carrier must exercise the narrow replay exception"
+);
+""",
+            "the positive replay case must exercise the active reservation exception",
+        ),
+        (
+            """
+assert_eq!(
+    restored_runtime.is_physical_leader_wire_replay(),
+    Ok(true),
+    "a strictly later carrier identifies the retained physical replay"
+);
+""",
+            "the retained case must exercise the strict physical-replay helper",
+        ),
+        (
+            """
+assert_eq!(runtime.queued_commands(), 1);
+assert_eq!(runtime.leader_wire_runtime_receipts.len(), 1);
+assert!(
+    runtime
+        .ingress
+        .commands
+        .front()
+        .is_some_and(|queued| queued.restored_producer_stage.is_none()),
+    "authenticated replay must use the ordinary Admit path"
+);
+""",
+            "the replay must publish exactly one ordinary authenticated Admit owner",
+        ),
+        (
+            """
+assert!(matches!(
+    timeout_effects.as_slice(),
+    [AdapterEffect::Sign {
+        request: SignRequest::TimeoutVote(_),
+        ..
+    }]
+));
+assert_eq!(
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("timeout publishes exact scheduler ownership")
+        .selected,
+    RuntimeSelectedOwnerKind::Timeout
+);
+""",
+            "the frozen timeout must retain the first serialized turn",
+        ),
+        (
+            """
+assert!(matches!(
+    tc_effects.as_slice(),
+    [AdapterEffect::EnterView { tag, .. }] if tag.view() == 1
+));
+assert_eq!(runtime.round_tag().view(), 1);
+""",
+            "the restored TC must advance the view after the timeout turn",
+        ),
+        (
+            """
+let terminals = runtime.take_leader_wire_runtime_terminals();
+assert_eq!(
+    terminals.len(),
+    1,
+    "the restored TC terminalizes exactly once"
+);
+""",
+            "the restored TC lifecycle must terminalize exactly once",
+        ),
+    ):
+        _require_rust_token_sequence(
+            runtime_path,
+            restored_tc_regression,
+            required,
+            description,
+            errors,
+        )
     return errors
 
 
@@ -60502,6 +60795,11 @@ projection.push(u8::from(evidence.fence_retry_marker_required));
                 "exact leader-wire physical occurrence and cut projection",
             ),
             (
+                "is_physical_leader_wire_replay",
+                "runtime_ingress_is_physical_leader_wire_replay",
+                "strict retained-token physical-replay classifier",
+            ),
+            (
                 "earliest_physical_carrier",
                 "runtime_ingress_earliest_physical_carrier",
                 "earliest retained physical occurrence projection",
@@ -60592,6 +60890,25 @@ self.validate_exact()
 """,
             "post-dequeue ownership validation must require a physical carrier "
             "and an exact token/physical-occurrence/runtime-receipt triple",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_ingress_items.get("is_physical_leader_wire_replay"),
+            """
+match (
+    self.leader_wire_token()?,
+    self.leader_wire_physical_carrier()?,
+) {
+    (Some(token), Some((physical_ordinal, _))) => {
+        Ok(token.admission_ordinal() < physical_ordinal)
+    }
+    (None, None) => Ok(false),
+    (Some(_), None) | (None, Some(_)) => Err(RuntimeIngressMergeError::Conflict),
+}
+""",
+            "physical replay classification must require a strictly older "
+            "durable admission token and reject partial ownership",
             errors,
         )
         _require_rust_token_sequence(
@@ -60874,8 +61191,11 @@ return Ok(owner_tag);
                 "let preflight = self.command_admission_preflight",
                 "let preflight = self.reject_authenticated_preflight_coalescence(preflight)?;",
                 "let restored_owner = match preflight",
-                "if let Some((owner, _)) = restored_owner.as_ref()",
-                "match self.clock_owner_reservation_blocks(owner)",
+                "let certified_physical_replay = if wire_payload_is_certified_fence_escape",
+                "match ingress_ownership.is_physical_leader_wire_replay()",
+                "let clock_occurrence = match",
+                "if let Some((lifecycle_ordinal, source_physical_ordinal)) = clock_occurrence",
+                "match self.clock_owner_reservation_blocks_occurrence",
                 """
 .enqueue_authenticated_with_ingress_ownership_and_owner(
 """,
@@ -60895,8 +61215,42 @@ Ok(owner) => {
             runtime_path,
             enqueue_with_ownership,
             """
-if let Some((owner, _)) = restored_owner.as_ref() {
-    match self.clock_owner_reservation_blocks(owner) {
+let certified_physical_replay = if wire_payload_is_certified_fence_escape(
+    authenticated.payload(),
+) {
+    match ingress_ownership.is_physical_leader_wire_replay() {
+        Ok(is_replay) => is_replay,
+        Err(_) => {
+            self.latch_fail_closed(
+                "certified leader-wire ingress changed its physical replay ownership",
+            );
+            return Err(NetworkIngressError::FailClosed);
+        }
+    }
+} else {
+    false
+};
+let clock_occurrence = match (
+    ingress_ownership.earliest_lifecycle_ordinal(),
+    ingress_ownership.earliest_physical_carrier(),
+) {
+    (Ok(Some(lifecycle_ordinal)), Ok(Some(physical))) => {
+        Some((lifecycle_ordinal, physical.source_ordinal))
+    }
+    (Ok(None), Ok(Some(_))) => None,
+    (Ok(_), Ok(None)) | (Err(_), _) | (_, Err(_)) => {
+        self.latch_fail_closed(
+            "network replay observed invalid clock reservation ownership",
+        );
+        return Err(NetworkIngressError::FailClosed);
+    }
+};
+if let Some((lifecycle_ordinal, source_physical_ordinal)) = clock_occurrence {
+    match self.clock_owner_reservation_blocks_occurrence(
+        lifecycle_ordinal,
+        source_physical_ordinal,
+    ) {
+        Ok(true) if certified_physical_replay => {}
         Ok(true) => {
             return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
         }
@@ -60910,8 +61264,33 @@ if let Some((owner, _)) = restored_owner.as_ref() {
     }
 }
 """,
-            "a restored post-cut replay must retain fair-ingress ownership and "
-            "receive recoverable backpressure before FIFO admission",
+            "only a strictly later authenticated certified replay may cross a "
+            "clock reservation before FIFO admission",
+            errors,
+        )
+        pre_runtime_admission = observed_concrete_runtime_items.get(
+            "can_admit_pre_runtime_leader_wire"
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            pre_runtime_admission,
+            """
+match self.clock_owner_reservation_blocks_occurrence(
+    token.scheduler_ordinal(),
+    source_physical_ordinal,
+) {
+    Ok(true)
+        if wire_payload_is_certified_fence_escape(&runtime_message.payload)
+            && token.admission_ordinal() < source_physical_ordinal =>
+    {
+    }
+    Ok(true) => return Some(false),
+    Ok(false) => {}
+    Err(_) => return Some(true),
+}
+""",
+            "pre-runtime admission must use the same strict certified physical "
+            "replay exception as the mutating gate",
             errors,
         )
         can_admit_with_ownership = observed_concrete_runtime_items.get(
@@ -86470,6 +86849,89 @@ state
         errors,
     )
 
+    gate_bind = _require_rust_item(
+        ingress_path,
+        ingress_source,
+        "bind_leader_wire_lifecycle_gate",
+        errors,
+    )
+    _require_rust_item_context(
+        ingress_path,
+        gate_bind,
+        (("impl", "FairV2Ingress"),),
+        "restart-restored leader-wire physical high-water binding",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        ingress_path,
+        gate_bind,
+        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+            "bind_leader_wire_lifecycle_gate"
+        ],
+        "restart-restored leader-wire physical high-water binding",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        gate_bind,
+        """
+!token.validate_exact(
+    context_id,
+    height,
+    &state.roster,
+    state.leader_wire_max_chunk_count,
+) || token.admission_ordinal > restore.last_admission_ordinal()
+""",
+        "every restored durable token must remain at or below the restored "
+        "physical admission high-watermark",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        gate_bind,
+        """
+state.last_admission_ordinal = state
+    .last_admission_ordinal
+    .max(restore.last_admission_ordinal());
+""",
+        "restart binding must preserve the durable physical admission "
+        "high-watermark before any fresh carrier allocation",
+        errors,
+    )
+    if gate_bind is not None:
+        gate_bind_tokens = rust_code_tokens(gate_bind.body)
+        gate_bind_sequences = (
+            "token.admission_ordinal > restore.last_admission_ordinal()",
+            "lifecycle_ordinals.advance_past(restore.scheduler_ordinal_high_watermark())?;",
+            """
+state.last_admission_ordinal = state
+    .last_admission_ordinal
+    .max(restore.last_admission_ordinal());
+""",
+            "state.leader_wire_lifecycles = records;",
+        )
+        gate_bind_positions = [
+            _token_sequence_positions(
+                gate_bind_tokens,
+                rust_code_tokens(sequence),
+            )
+            for sequence in gate_bind_sequences
+        ]
+        if any(len(found) != 1 for found in gate_bind_positions) or any(
+            left[0] >= right[0]
+            for left, right in zip(
+                gate_bind_positions,
+                gate_bind_positions[1:],
+            )
+            if left and right
+        ):
+            errors.append(
+                f"{ingress_path}:{gate_bind.line}: restart binding must "
+                "validate every durable token before publishing the restored "
+                "physical high-watermark and lifecycle map in the exact "
+                "reviewed order"
+            )
+
     dormant_admission = _require_rust_item(
         ingress_path,
         ingress_source,
@@ -86507,6 +86969,35 @@ if incumbent_status == FairV2IngressLeaderWireStatus::Dormant && publish_ingress
 """,
         "Dormant replay must freeze the complete current physical source prefix "
         "before durable reactivation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        dormant_admission,
+        """
+let admission_ordinal = state
+    .last_admission_ordinal
+    .checked_add(1)
+    .ok_or(FairV2IngressLeaderWireAdmissionError::Exhausted)?;
+""",
+        "fresh leader-wire lifecycle admission must use the next physical "
+        "high-watermark ordinal",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        dormant_admission,
+        """
+let token = FairV2IngressLeaderWireToken {
+    source_class: identity.phase.source_class(),
+    identity,
+    slot: slot.clone(),
+    admission_ordinal,
+    scheduler_ordinal,
+};
+""",
+        "fresh leader-wire tokens must retain the exact next physical "
+        "admission ordinal separately from their scheduler ordinal",
         errors,
     )
     _require_rust_token_sequence(
