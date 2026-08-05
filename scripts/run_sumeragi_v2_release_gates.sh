@@ -1466,7 +1466,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically
   sumeragi::v2_runtime::tests::runtime_ingress_carrier_capacity_returns_backpressure_atomically
   sumeragi::v2_runtime::tests::exact_authenticated_progress_retransmission_is_queue_coalesced
-  sumeragi::v2_runtime::tests::certified_tc_crosses_full_retry_retained_prepare_prefix
+  sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix
   sumeragi::v2_runtime::tests::completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
   sumeragi::v2_runtime::tests::body_available_rebind_accepts_same_view_higher_generation
   sumeragi::v2_runtime::tests::body_available_rebind_rejects_uninstalled_destination_without_mutation

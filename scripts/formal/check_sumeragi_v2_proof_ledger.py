@@ -61386,7 +61386,7 @@ if matches!(
             errors,
         )
         busy_regression_name = (
-            "certified_tc_crosses_full_retry_retained_prepare_prefix"
+            "certified_tc_crosses_full_fence_blocked_prepare_prefix"
         )
         busy_regression = _require_rust_item(
             runtime_path, runtime_source, busy_regression_name, errors
@@ -61395,7 +61395,7 @@ if matches!(
             runtime_path,
             busy_regression,
             (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
-            "certified TC retry-retained Prepare-prefix regression",
+            "certified TC fence-blocked Prepare-prefix regression",
             errors,
             expected_attributes=("#[test]",),
         )
@@ -61405,7 +61405,7 @@ if matches!(
             _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
                 busy_regression_name
             ],
-            "certified TC retry-retained Prepare-prefix regression",
+            "certified TC fence-blocked Prepare-prefix regression",
             errors,
         )
         causal_runtime_regressions: dict[str, RustItem | None] = {}

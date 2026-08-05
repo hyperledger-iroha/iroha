@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 826
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "07b5827f8a9203fcf7a8bd7ffe5aafe03da92436c2b7a0c577b364a78a802165"
+        "4feda6be5196d970ff4a0a114bca7f302c96fa967845a965bcdbe11a2978906f"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "0e19123b8a7803f222a329e135f635321332801e440c86bbb3f9f2d6bc5549fd"
+        "c7e5a3524b71d7fb6097dee0d51d0e23387d0c004f4278165d0bb55f1242e671"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
@@ -937,7 +937,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
         (
             "sumeragi::v2_runtime::tests::",
-            "certified_tc_crosses_full_retry_retained_prepare_prefix",
+            "certified_tc_crosses_full_fence_blocked_prepare_prefix",
             runtime_source,
         ),
         (
@@ -2457,7 +2457,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "07b5827f8a9203fcf7a8bd7ffe5aafe0"',
+            '    "4feda6be5196d970ff4a0a114bca7f30"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),

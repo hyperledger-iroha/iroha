@@ -434,8 +434,8 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "network_admission_uses_exact_normal_and_progress_reservations": (
         "df256be7d1e1d89c254cb75c6e8a064157b9d584c4c095c73f7253917520703d"
     ),
-    "certified_tc_crosses_full_retry_retained_prepare_prefix": (
-        "dc3c5bc86902879b86abe510d87f954c8c063f62a8f37843aea11ad51ff5b26b"
+    "certified_tc_crosses_full_fence_blocked_prepare_prefix": (
+        "29ebc77b51093846ae475e65aeb5f1337ccb3894724f2dc234e15cfac6af06a6"
     ),
 }
 
@@ -558,10 +558,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 826
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 81
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "07b5827f8a9203fcf7a8bd7ffe5aafe03da92436c2b7a0c577b364a78a802165"
+    "4feda6be5196d970ff4a0a114bca7f302c96fa967845a965bcdbe11a2978906f"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "0e19123b8a7803f222a329e135f635321332801e440c86bbb3f9f2d6bc5549fd"
+    "c7e5a3524b71d7fb6097dee0d51d0e23387d0c004f4278165d0bb55f1242e671"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
@@ -849,8 +849,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_lane_work::tests::duplicate_reply_effect_retains_alternate_sources_across_source_update",
     "sumeragi::v2_lane_work::tests::temporarily_unserviceable_effect_requeues_behind_later_reserved_work",
     "sumeragi::v2_lane_work::tests::retired_sidecar_route_between_drain_and_lane_queue_preserves_live_sibling",
-    "sumeragi::v2_runtime::tests::commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
-    "sumeragi::v2_runtime::tests::certified_tc_crosses_full_retry_retained_prepare_prefix",
+    "sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix",
     "peer::run::tests::authenticated_source_credit_precedes_network_and_subscriber_backlogs",
     "peer::run::tests::recoverable_post_acknowledges_only_after_full_write_and_flush",
     "peer::run::tests::partial_write_error_closes_ack_without_false_completion",

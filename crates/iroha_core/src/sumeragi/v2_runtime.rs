@@ -34391,7 +34391,7 @@ mod tests {
     }
 
     #[test]
-    fn certified_tc_crosses_full_retry_retained_prepare_prefix() {
+    fn certified_tc_crosses_full_fence_blocked_prepare_prefix() {
         let directory = TempDir::new().expect("temporary certified-prefix directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
             &directory,
@@ -34446,18 +34446,14 @@ mod tests {
         runtime
             .enqueue_network(prepare(0xE2))
             .expect("admit the second PrepareQC");
-        let retry = runtime
-            .try_step_pacemaker_escape(now)
-            .expect("retry-retained PrepareQC scheduling is valid")
-            .expect("the second PrepareQC owns one bounded retry");
-        assert!(matches!(retry, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
-        let retry_owner = runtime
-            .take_last_scheduler_ownership()
-            .expect("retry-retained PrepareQC keeps exact scheduler ownership");
-        assert_eq!(
-            retry_owner.selected,
-            RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
+        assert!(
+            runtime
+                .try_step_pacemaker_escape(now)
+                .expect("blocked PrepareQC classification is valid")
+                .is_none(),
+            "pacemaker escape cannot repeatedly redispatch a fence-blocked PrepareQC"
         );
+        assert!(runtime.last_scheduler_ownership().is_none());
         assert_eq!(runtime.queued_commands(), 1);
 
         runtime

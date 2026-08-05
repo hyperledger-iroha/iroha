@@ -36864,10 +36864,10 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "unminted fair ownership must fail closed without a physical queue position",
         ),
         (
-            "certified_tc_crosses_full_retry_retained_prepare_prefix",
+            "certified_tc_crosses_full_fence_blocked_prepare_prefix",
             "            Some(0),",
             "            None,",
-            "Busy-deferred authenticated response coalescing regression declaration and complete control flow must match",
+            "certified TC fence-blocked Prepare-prefix regression declaration and complete control flow must match",
         ),
     )
     for item_name, old, new, expected_error in deferred_owner_runtime_mutations:
