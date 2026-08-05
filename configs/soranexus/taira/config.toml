@@ -91,6 +91,7 @@ enabled = true
 allowed_origins = [
   "http://127.0.0.1:3000",
   "http://localhost:3000",
+  "https://taira-explorer.sora.org",
   "https://test.soraswap.org",
   "https://dweb.link",
   "https://ipfs.io",
@@ -121,6 +122,7 @@ allowed_headers = [
   "x-iroha-signature",
   "x-iroha-timestamp-ms",
   "x-iroha-nonce",
+  "x-iroha-witness",
 ]
 exposed_headers = ["etag", "location", "retry-after"]
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -16,6 +17,7 @@ SPEC.loader.exec_module(MODULE)
 REPO_ROOT = MODULE_PATH.parents[1]
 EXAMPLE_ROSTER_PATH = REPO_ROOT / "configs/soranexus/taira/validator_roster.example.toml"
 CHECKED_IN_EXAMPLE_PATH = REPO_ROOT / "configs/soranexus/taira/taira-explorer.nginx.conf"
+TAIRA_CONFIG_PATH = REPO_ROOT / "configs/soranexus/taira/config.toml"
 
 
 def _location_block(server: str, marker: str) -> str:
@@ -175,17 +177,31 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     explorer_server = rendered.split("server_name taira-explorer.sora.org;", 1)[1].split(
         "server_name taira-validator-1.sora.org;", 1
     )[0]
-    for server in (public_server, explorer_server):
-        for marker in (
-            "location = /v1/connect/session",
-            "location ^~ /v1/connect/session/",
-            "location = /v1/connect/status",
-            "location = /v1/connect/ws",
-            "location = /v1/mcp",
-        ):
-            block = _location_block(server, marker)
-            assert "proxy_pass http://taira_validator_1_upstream;" in block
-            assert "proxy_next_upstream" not in block
+    for marker in (
+        "location = /v1/connect/session",
+        "location ^~ /v1/connect/session/",
+        "location = /v1/connect/status",
+        "location = /v1/connect/ws",
+        "location = /v1/mcp",
+    ):
+        block = _location_block(public_server, marker)
+        assert "proxy_pass http://taira_validator_1_upstream;" in block
+        assert "proxy_next_upstream" not in block
+    assert "root /var/www/iroha2-block-explorer-web/dist;" in explorer_server
+    assert "index index.html;" in explorer_server
+    assert "try_files $uri $uri/ /index.html;" in explorer_server
+    assert "proxy_pass" not in explorer_server
+    assert "location = /status" not in explorer_server
+    assert "location ^~ /v1/" not in explorer_server
+    assert "include /etc/letsencrypt/options-ssl-nginx.conf;" not in explorer_server
+    assert rendered.count("include /etc/letsencrypt/options-ssl-nginx.conf;") == 1
+    assert '"https://taira-explorer.sora.org" $http_origin;' in rendered
+    assert (
+        'add_header Access-Control-Allow-Headers "accept, authorization, content-type, '
+        'x-iroha-account, x-iroha-signature, x-iroha-timestamp-ms, x-iroha-nonce, '
+        'x-iroha-witness" always;'
+        in rendered
+    )
     assert "location = /v1/mcp" in rendered
     assert "location ^~ /v1/app-api/" in rendered
     assert "client_max_body_size 1g;" in rendered
@@ -217,6 +233,41 @@ def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> No
     )[0]
     assert "proxy_set_header Host taira-validator-3.sora.org;" in public_server
     assert "proxy_pass http://taira_validator_3_upstream;" in public_server
+
+
+def test_render_edge_nginx_conf_authorizes_the_exact_explorer_origin() -> None:
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+
+    rendered = MODULE.render_edge_nginx_conf(
+        validators,
+        explorer_host="reviewed-explorer.example.org",
+    )
+
+    assert '"https://reviewed-explorer.example.org" $http_origin;' in rendered
+    assert '"https://taira-explorer.sora.org" $http_origin;' not in rendered
+
+
+def test_taira_torii_cors_authorizes_explorer_canonical_requests() -> None:
+    with TAIRA_CONFIG_PATH.open("rb") as handle:
+        cors = tomllib.load(handle)["torii"]["cors"]
+
+    assert "https://taira-explorer.sora.org" in cors["allowed_origins"]
+    assert {
+        "content-type",
+        "x-iroha-account",
+        "x-iroha-signature",
+        "x-iroha-timestamp-ms",
+        "x-iroha-nonce",
+        "x-iroha-witness",
+    }.issubset(cors["allowed_headers"])
 
 
 def test_render_edge_nginx_conf_rejects_unknown_public_validator() -> None:

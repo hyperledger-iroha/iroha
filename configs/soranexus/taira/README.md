@@ -1756,7 +1756,9 @@ From `../iroha2-block-explorer-web`:
    - update `toriiBaseUrl` if you want the explorer to query a different
      public node than the checked-in example
 2. Build and deploy static assets:
-   - `corepack enable && pnpm i && pnpm build`
+   - follow `ops/taira/README.md` in the Explorer repository; its signed,
+     manifest-bound release tool owns baseline import, immutable publication,
+     cutover, public smoke, and rollback
 3. Render and install the nginx snippet from the same validator roster you use
    for the validator configs:
    - preferred edge-host helper for the Solswap indexer binding:
@@ -1799,6 +1801,16 @@ From `../iroha2-block-explorer-web`:
     public locations only. Do not add upstream failover to the pinned
     Connect/MCP locations until Connect session state is shared across
     validators.
+  - keep the `taira-explorer.sora.org` TLS block static-only: it contains the
+    reviewed Explorer root, `index index.html`, and
+    `try_files $uri $uri/ /index.html`, with no `/status`, `/v1/`, Connect,
+    MCP, or other proxy locations. Explorer browsers call
+    `https://taira.sora.org` directly, so deploy both Torii and edge CORS for
+    the exact Explorer origin and canonical `X-Iroha-*` auth headers before
+    switching away from the historical same-origin proxy.
+  - keep `/etc/letsencrypt/options-ssl-nginx.conf` at HTTP scope. The Explorer
+    release gate rejects server-local includes because they can obscure the
+    effective content route.
   - keep the shared convenience host on the same canonical
     `taira_public_edge_upstream` for the public SoraFS and app-api surface as
     well. The checked-in nginx example keeps these paths symmetric with the
@@ -1938,12 +1950,11 @@ From `../iroha2-block-explorer-web`:
      `/v1/sumeragi/status` `height_context.validator_count` and
      `last_commit_qc.validator_count`, or
      `/v1/sumeragi/validator-sets` for validator-set visibility.
-   - create a Connect session through the proxy and ask explicitly for JSON:
+   - create a Connect session through the Torii public proxy and ask explicitly for JSON:
      `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`
-   - verify Connect websocket upgrades on both public hostnames with the
+   - verify Connect websocket upgrades on the Torii public hostname with the
      returned `sid` and app token:
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' "${PUBLIC_TORII_ROOT}/v1/connect/ws?sid=<sid>&role=app"`
-     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira-explorer.sora.org/v1/connect/ws?sid=<sid>&role=app'`
    - verify CID-host origin isolation with a known site CID:
      `curl -vkI "https://<cid>.sorafs.taira.sora.org/"`
      `curl -vkI "https://taira.sora.org/sorafs/cid/<cid>/swap/ton/usdt" -H 'accept: text/html'`
