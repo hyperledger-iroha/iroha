@@ -41,16 +41,16 @@ Init ==
   /\ phase = "Fresh"
   /\ currentView = 1
   /\ currentGeneration = 0
-  /\ ~tcReceipt
-  /\ ~installTailOwner
-  /\ ~targetInstalled
+  /\ tcReceipt = FALSE
+  /\ installTailOwner = FALSE
+  /\ targetInstalled = FALSE
 
 AdmitTargetTimeoutCertificate ==
   /\ phase = "Fresh"
   /\ phase' = "Admitted"
-  /\ tcReceipt'
-  /\ installTailOwner'
-  /\ ~targetInstalled'
+  /\ tcReceipt' = TRUE
+  /\ installTailOwner' = TRUE
+  /\ targetInstalled' = FALSE
   /\ UNCHANGED <<currentView, currentGeneration>>
 
 InstallCompetingSameRoundUpgrade ==
@@ -68,8 +68,8 @@ ServiceImportedInstallTail ==
   /\ installTailOwner
   /\ phase' = "Installed"
   /\ currentView' = 2
-  /\ targetInstalled'
-  /\ ~installTailOwner'
+  /\ targetInstalled' = TRUE
+  /\ installTailOwner' = FALSE
   /\ UNCHANGED <<currentGeneration, tcReceipt>>
 
 Next ==
@@ -80,6 +80,7 @@ Next ==
 Spec ==
   Init
     /\ [][Next]_vars
+    /\ WF_vars(InstallCompetingSameRoundUpgrade)
     /\ WF_vars(ServiceImportedInstallTail)
 
 TcReceiptEventuallyInstalls == tcReceipt ~> targetInstalled

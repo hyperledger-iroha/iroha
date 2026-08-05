@@ -1661,9 +1661,13 @@ persistent producer and rejects two persistent roots before mutation. The
 generic productive-wire cut is monotone at certified EnterView and durable
 Decision: the durable gate prunes exactly obsolete Dormant records before the
 fair-ingress mirror, preserves ordinal high-waters, rolls back on store failure,
-and rejects below-cut admission. These are source-bound production-refinement
-contracts; the existing deductive asynchronous proof does not by itself prove
-their Rust persistence ordering. The executor then retries the
+and rejects below-cut view-scoped admission. A `CertifiedResponse` is not
+view-scoped at this boundary: durable Decision may precede recovery of its exact
+body, so both cuts preserve the bounded response owner and defer authority to
+the outstanding signed request, QC, responder signature, canonical body, and
+manifest checks. Proposal chunks remain cut-scoped. These are source-bound
+production-refinement contracts; the existing deductive asynchronous proof
+does not by itself prove their Rust persistence ordering. The executor then retries the
 same retained FIFO occurrence and acquires pending-work and request ownership
 atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The

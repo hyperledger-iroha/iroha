@@ -3991,7 +3991,7 @@
             "install_plan_journal(",
             "replay_plan_journal(&state)",
             "finalize_plan_journal_startup_recovery()",
-            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources("
+            "IrohaNetwork::start_with_crypto_and_initial_authorities("
           ]
         },
         {

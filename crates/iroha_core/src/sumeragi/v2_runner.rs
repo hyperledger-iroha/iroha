@@ -40,8 +40,8 @@ use iroha_data_model::{
 use thiserror::Error;
 
 use super::{
-    FairV2Ingress, FairV2IngressCapacityError, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
-    InboundBlockMessage, SumeragiWorker,
+    FairV2Ingress, FairV2IngressCapacityError, FairV2IngressDequeueDisposition,
+    FairV2IngressOwnershipEvidence, GenesisWithPubKey, InboundBlockMessage, SumeragiWorker,
     message::BlockMessage,
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     serviced_candidate_store::LeaderWireLifecycleStoreGate,
@@ -1695,10 +1695,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 // enter the frozen prefix, and exact carrier retry retains the
                 // same episode state and ticket identity.
                 let mut older_predecessor_remains = false;
-                if services
+                let claimed_older_runtime_episode = services
                     .claim_certified_serve_runtime_episode(serve_barrier)
-                    .map_err(V2RunnerError::Service)?
-                {
+                    .map_err(V2RunnerError::Service)?;
+                if claimed_older_runtime_episode {
                     services.drain_exact_serve_runtime_predecessor(
                         &mut executor,
                         serve_barrier.scheduler_ordinal(),
@@ -1733,8 +1733,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     if !recovering_interrupted_tip {
                         // A backpressured Serve ticket may retain the sole I/O
                         // unit indefinitely. It cannot suppress authenticated
-                        // certified progress admission, the absolute timeout,
-                        // or an already-admitted certificate root.
+                        // certified progress admission or an already-admitted
+                        // certificate root.
                         drain_v2_ingress(
                             &block_rx,
                             &mut executor,
@@ -1752,7 +1752,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             V2IngressDrainMode::CertifiedFenceEscape,
                             1,
                         )?;
-                        advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;
                     }
                     older_predecessor_remains = executor
                         .older_runtime_lifecycle_predates_exact_serve(
@@ -1766,6 +1765,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         )
                         .map_err(V2RunnerError::Service)?;
                 }
+                service_certified_serve_barrier_pacemaker_turn(
+                    recovering_interrupted_tip,
+                    claimed_older_runtime_episode,
+                    || advance_pacemaker_once(&block_rx, &mut executor, &mut services),
+                )?;
                 if !older_predecessor_remains {
                     // A full prefix may include an earlier Serve lifecycle whose
                     // auxiliary unit is released only after its sealed response is
@@ -3109,8 +3113,8 @@ fn drain_v2_ingress(
         let terminal_subject = executor.local_proposal_directive()?.decided_subject();
         let terminal_decision = terminal_subject.is_some();
         let mut prepared_serve = None;
-        let Some(mut inbound) = receiver
-            .try_recv_if_checked(|inbound| {
+        let Some((mut inbound, dequeue_disposition)) = receiver
+            .try_recv_if_checked_retiring_obsolete(|inbound| {
                 if mode == V2IngressDrainMode::CertifiedFenceEscape {
                     let BlockMessage::V2(message) = inbound.message() else {
                         return false;
@@ -3264,6 +3268,28 @@ fn drain_v2_ingress(
         receiver
             .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
             .map_err(V2RunnerError::Service)?;
+        if dequeue_disposition == FairV2IngressDequeueDisposition::RetireObsolete {
+            let receipt = ingress_ownership
+                .leader_wire_runtime_receipt()
+                .ok_or_else(|| {
+                    V2RunnerError::Service(
+                        "obsolete leader-wire dequeue lost its runtime receipt".to_owned(),
+                    )
+                })?;
+            let token = receipt.token();
+            iroha_logger::debug!(
+                message_kind = ?super::FairV2IngressMessageKind::classify(inbound.message()),
+                semantic_origin = ?inbound.sender(),
+                authenticated_via = ?inbound.via(),
+                obsolete_view = token.view(),
+                active_view = executor.current_tag().view(),
+                "retired WAL-obsolete Sumeragi v2 leader-wire carrier"
+            );
+            receiver
+                .mark_obsolete_leader_wire_volatile_terminal(receipt)
+                .map_err(V2RunnerError::Service)?;
+            continue;
+        }
         let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
         if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
             return Err(V2RunnerError::Service(
@@ -4234,6 +4260,23 @@ fn advance_executor_once_before_exact_serve(
     executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
     let _ = executor.step(Instant::now(), services)?;
     Ok(())
+}
+
+/// Keep the pacemaker live for the full lifetime of a certified Serve barrier.
+///
+/// `older_runtime_episode_claimed` deliberately does not gate service. The
+/// finite predecessor episode becomes Complete before a backpressured target
+/// necessarily leaves fair ingress, while the absolute timeout and certified
+/// progress roots remain independently live.
+fn service_certified_serve_barrier_pacemaker_turn<E>(
+    recovering_interrupted_tip: bool,
+    _older_runtime_episode_claimed: bool,
+    service: impl FnOnce() -> Result<(), E>,
+) -> Result<(), E> {
+    if recovering_interrupted_tip {
+        return Ok(());
+    }
+    service()
 }
 
 /// Execute at most one typed timeout/Progress-root transition while an exact
@@ -5286,6 +5329,41 @@ mod tests {
         },
         sumeragi::LaneRelayMessage,
     };
+
+    #[test]
+    fn complete_certified_serve_episode_cannot_veto_pacemaker() {
+        let calls = Cell::new(0_u8);
+        for older_runtime_episode_claimed in [true, false] {
+            service_certified_serve_barrier_pacemaker_turn(
+                false,
+                older_runtime_episode_claimed,
+                || {
+                    calls.set(calls.get().saturating_add(1));
+                    Ok::<(), ()>(())
+                },
+            )
+            .expect("live certified Serve barrier services one pacemaker turn");
+        }
+        assert_eq!(
+            calls.get(),
+            2,
+            "a Complete predecessor episode must service the pacemaker exactly like a newly claimed episode"
+        );
+
+        service_certified_serve_barrier_pacemaker_turn(false, false, || {
+            calls.set(calls.get().saturating_add(1));
+            Err::<(), _>("typed pacemaker failure")
+        })
+        .expect_err("live runner propagates a typed pacemaker failure");
+        assert_eq!(calls.get(), 3);
+
+        service_certified_serve_barrier_pacemaker_turn(true, false, || {
+            calls.set(calls.get().saturating_add(1));
+            Ok::<(), ()>(())
+        })
+        .expect("interrupted-tip recovery does not arm a fresh pacemaker");
+        assert_eq!(calls.get(), 3);
+    }
 
     #[test]
     fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {

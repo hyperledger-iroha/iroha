@@ -10349,11 +10349,14 @@ IngressPacketPolicyRejected(item) ==
 Atomic local Fair-ingress acceptance cut.
 
 The in-flight packet has only a route-neutral retry identity.  The first due,
-authenticated, current leader wire may mint its receiver-local ingress and
-shared scheduler ordinals only after every physical Fair-ingress gate below
-has succeeded.  `AdmitHiddenPacket` is that single locked operation: it removes
-the exact transport packet, installs the queue occurrence, freezes the current
-prefix and immutable ordinals, and publishes the Ingress lifecycle together.
+authenticated leader wire may mint its receiver-local ingress and shared
+scheduler ordinals only after every physical Fair-ingress gate below has
+succeeded.  View-scoped wires must be current.  A CertifiedResponse is instead
+an exact request-bound historical completion: neither a later local view nor
+Decision can retire it because Decision may precede recovery of its body.
+`AdmitHiddenPacket` is the single locked operation: it removes the exact
+transport packet, installs the queue occurrence, freezes the current prefix and
+immutable ordinals, and publishes the Ingress lifecycle together.
 There is no visible reservation worker or intermediate lifecycle state.  Exact
 retries coalesce against the same active record, and a Terminal record admits
 only a strictly newer-view owner in the same finite slot.  After a crash the
@@ -10384,6 +10387,7 @@ AsyncLeaderWireAdmissionAuthenticated(item) ==
 
 AsyncLeaderWireRecoveryCutObsoletesItem(item) ==
   /\ item.kind \in AsyncLeaderWireKinds
+  /\ item.kind # "CertifiedResponse"
   /\ item.envelope.recipient \in ValidatorIds
   /\ DeliveryHeight(item) = context.height
   /\ \/ DeliveryView(item) < nodeView[item.envelope.recipient]
@@ -16828,13 +16832,15 @@ AsyncLeaderWireLifecycleCertifiedBodyReceipt(record) ==
 AsyncLeaderWireLifecycleStaleOrDecision(record) ==
   \/ record.context # context
   \/ record.height # height
-  \/ record.view < nodeView[record.recipient]
-  \/ NodeHasDecision(record.recipient)
+  \/ /\ record.item.kind # "CertifiedResponse"
+     /\ \/ record.view < nodeView[record.recipient]
+        \/ NodeHasDecision(record.recipient)
   \/ /\ record.status = "Ingress"
      /\ AsyncCandidateStageRetired(record.item)
 
 AsyncLeaderWireLifecycleRecoveryCutObsolete(record) ==
   /\ AsyncLeaderWireLifecycleDormant(record)
+  /\ record.item.kind # "CertifiedResponse"
   /\ record.context = context
   /\ record.height = height
   /\ \/ record.view < nodeView[record.recipient]

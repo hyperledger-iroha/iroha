@@ -333,6 +333,11 @@ RepairFinalizedOutput ==
                    honestCommittedBody, fallback, timeoutVotes,
                    timeoutVoteRoutes, decisions, applied, successorActive>>
 
+TerminalComplete ==
+    /\ successorActive
+    /\ ~finalizedOutputDebt
+    /\ UNCHANGED vars
+
 ProgressNext ==
     \/ \E body \in Bodies : Propose(body)
     \/ \E validator \in Validators : CompleteFullBody(validator)
@@ -346,6 +351,7 @@ ProgressNext ==
     \/ \E body \in Bodies : ApplyDecision(body)
     \/ ActivateSuccessor
     \/ RepairFinalizedOutput
+    \/ TerminalComplete
 
 Next ==
     \/ ProgressNext

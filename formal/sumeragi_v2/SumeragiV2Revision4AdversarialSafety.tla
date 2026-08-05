@@ -97,7 +97,7 @@ Decide(body) ==
     /\ decisions' = decisions \cup {body}
     /\ UNCHANGED <<fullBodies, commitVotes, commitQCs>>
 
-Next ==
+ProtocolNext ==
     \/ \E validator \in Honest, body \in Bodies :
           DeliverFullBody(validator, body)
     \/ \E validator \in Honest, body \in Bodies :
@@ -106,6 +106,16 @@ Next ==
           ByzantineCommitVote(validator, body)
     \/ \E body \in Bodies : FormCommitQC(body)
     \/ \E body \in Bodies : Decide(body)
+
+\* Once a decision exists and every locally enabled adversarial action has
+\* been exhausted, the bounded one-round kernel is complete.  The absorbing
+\* action keeps TLC deadlock checking active for every earlier state.
+TerminalComplete ==
+    /\ decisions /= {}
+    /\ ~ENABLED ProtocolNext
+    /\ UNCHANGED vars
+
+Next == ProtocolNext \/ TerminalComplete
 
 Spec == Init /\ [][Next]_vars
 

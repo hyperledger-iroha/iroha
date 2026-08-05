@@ -51,7 +51,7 @@ _PRODUCTION_EFFECT_CANDIDATE_TLA_OPERATOR_SHA256 = {
         "00a780f6b919c66fc03507311341ff7590f4d37cba9bc4711ee73ec29e23eeef"
     ),
     "ExactAsyncCandidateIdentity": (
-        "ea61970ab14753196453163eb63728d5d84bcd2b79ddc6a2dd3668279730ebbf"
+        "ceeaebbac450ef309c949f0fc399393ea441763fbb91948bdd5bb8c89f9a165f"
     ),
     "FreshCommandSuccessors": (
         "387d64f773b0d6df95e41ce65e108bd37e23c6b3574ecdd0f049b242b2235997"
@@ -63,7 +63,7 @@ _PRODUCTION_EFFECT_CANDIDATE_TLA_OPERATOR_SHA256 = {
 
 _PRODUCTION_EFFECT_CANDIDATE_TLA_THEOREM_SHA256 = {
     "CommandSuccessorsRetainCausalOrigin": (
-        "2ea1ea72d3500d58aa8cd88b242a05182fcd717d9fab0c513931cd1bbdf3ca25"
+        "cf52b0688a75691dc706a787f2f776f71d929013d82566ddaead6cfb36602247"
     ),
 }
 
@@ -98,7 +98,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "0964e3e5d76ef3f72a240c03c46c3c15a71c52572acaa34784276c97858d3ab7"
     ),
     "command_is_blocked_by_deferred_fence": (
-        "05f8139fb6d9566a2749cc01e8e906c180ebca304448d635f2d276a5935f3757"
+        "069222d7ba0857ef873a6784ccd4cbc8ecd38882a7914a1cb7d87d27ec5ec7d6"
     ),
     "authenticated_command_reaches_fenced_reducer": (
         "75b1f243e311b75994e8caf13f64192a4672359b9a7daff0c7d48f674e7f66b9"
@@ -117,11 +117,11 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "drive_effects": (
         "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
     ),
-    "pop_fence_completion_with_ownership": (
-        "615fbf207bf034f1660f2f42e0434e10fd070f57407a3e90e6bbc9055de5e0b9"
+    "pop_fence_dependency_with_ownership": (
+        "cf5a9312b16db72176857a1dfad4e7b64636f7bebd7edc7142f052ec3a2e567b"
     ),
-    "fence_blocked_lifecycle_owners": (
-        "da537a5b598d706a2d6a4386942bff6d8360d226be5649dbce34dd8f136fc5bd"
+    "fence_blocked_occurrence_owners": (
+        "45b2891248d62b2a998ebcaf2e29d35bfeb1687a8869a0b27776904ee6b3f778"
     ),
     "freeze_due_clock_owners": (
         "72400e4f0322887b55caf39ccb20693960aaf607db8c5a36ec393014adef01cd"
@@ -139,7 +139,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "d71a57ec0eb41724bb65040a35e9d0ac308a2ef387868c207070add6e02be541"
     ),
     "scheduler_arbitration_inputs": (
-        "202321cef369cb9c0f64e6ea8cdff757cd769133edebe21619561426103f9929"
+        "926499ad5bca5e49d512774f85206ab108748834ee27f4864cb88b081d7fdc36"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -151,31 +151,171 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "1d27b616e3804e98006a4353d9c7d1e03005ce9299c2e0b0ccbb7782209210df"
     ),
     "minimum_active_lifecycle_ordinal_for_deferred_excluding": (
-        "9189ca5abc49100c87ab18d5cbbcd33a31e85f60a306d02cff487c61be750b6b"
+        "eca0b361eb0d72cf5e92e3d38563e04efe062ccde0ffd0db0d75942a40e12505"
     ),
     "eligible_deferred_admission_ordinals": (
-        "80c315add06cdc5b0a18d672ff0f3f6c114bb8f81ecd9f8303ff0b78bce6cfe6"
+        "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
     "runtime_step": (
-        "5054f687f343932ca8be815fc7690d0a0bb2e6490af8ad97ec5f7dacb0c36ac1"
+        "07f2cca3bebd7dc32b9f4a4eb969a66d028d09504bdde4dceba8fd15cb4db1a3"
     ),
     "runtime_step_recovery": (
-        "6237cbe71023254491c5cfa8024f57bb71183da8dc8ed557a9b06776de33ceed"
+        "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
     "dispatch_one_adapter_deferred": (
         "d87f6e86b65a0b37be7198f880ad2103a4e99c7eb72d2ad32b376865c40d45da"
     ),
     "dispatch_one_fence_dependency": (
-        "c25a89ae60772980c7e4ea2eed0543b8e2d06c24e5f5753f6ca0e52b77ec4bcf"
+        "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
     ),
     "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo": (
-        "fd73f3acdd805bc9f4f34b6f660e49ef8a3b1b3327589e40d745770abd5ace12"
+        "ff24e1cb542c713b888110865eb7e976ab71f6e00aaa2739230d8df29d8f9ddb"
     ),
     "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers": (
         "93f8290d3a87f463bc2b99d13a9585edc988794ce18f5d2a2e3d80282a79e2ca"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
         "0fc1c6de5c9da37a971aa56a6da9120bd590996060ee2a3e8b83f5bb087f9fb0"
+    ),
+}
+
+# Structural inventory for the process-local capability chain which binds an
+# exceptional fence/pacemaker selection to one immutable physical queue
+# occurrence and one exact signer incarnation. Exact token digests are kept in
+# the reviewed SHA-256 tables once refreshed; this inventory independently
+# prevents a helper from disappearing from the proof-ledger fidelity pass.
+_PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN = (
+    "cached_queue_occurrence_owner",
+    "ownership_snapshot",
+    "mint_selection_seal",
+    "contains_queue_occurrence_owner",
+    "restore_selected_command",
+    "oldest_active_lifecycle_ordinal_before_physical_cut_excluding",
+    "physically_eligible_deferred_admission_ordinals",
+    "pop_pacemaker_progress_with_ownership",
+    "runtime_queue_occurrence_owner_projection_hash",
+    "runtime_queue_ownership_snapshot_projection_hash",
+    "runtime_queue_occurrence_set_matches_snapshot",
+    "runtime_queue_selection_seal_projection_hash",
+    "matches_scheduler_occurrence",
+    "runtime_scheduler_projection_hash",
+    "current_signature_fence_identity",
+    "clear_fence_retry_blocked_fifo_owners",
+    "reconcile_fence_retry_blocked_fifo_owners",
+    "retain_fence_retry_blocked_fifo_owner",
+    "retain_scheduler_ownership",
+    "try_step_pacemaker_escape",
+    "dispatch_one_pacemaker_progress",
+)
+
+_PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
+    "cached_queue_occurrence_owner": (
+        "a113678ffffef7c7bfae9ba827bfddff80e069dd1c1e84d9dbb5525e99138103"
+    ),
+    "ownership_snapshot": (
+        "b46fe089ce520f215926646c49fb991755ae3e2ba6b4dda5242808df6f8d0645"
+    ),
+    "mint_selection_seal": (
+        "981e90ec1cfb8388e1e6058874ecab69d8e415b7319890c5587c683e4dec7568"
+    ),
+    "contains_queue_occurrence_owner": (
+        "c116a2a5423be69a43d6dbf13c00525a416f974020cd96ad7f55282a27293a98"
+    ),
+    "restore_selected_command": (
+        "af1497f566c0c9547983f23469490478ecb322286899a44d7f2761dd668af3a4"
+    ),
+    "oldest_active_lifecycle_ordinal_before_physical_cut_excluding": (
+        "469e352d63c31ef4776fa31bfce7484c16a33f00982058005317494fd87f9e17"
+    ),
+    "physically_eligible_deferred_admission_ordinals": (
+        "0b51819b618a5d50f632ffb772a94be1560e960b57746c10ba3e077aa97b60d3"
+    ),
+    "pop_pacemaker_progress_with_ownership": (
+        "10beefbc980f21e6eb3e07de7153be4e72568a323908211afe1042335125eca9"
+    ),
+    "runtime_queue_occurrence_owner_projection_hash": (
+        "c220a852adcdb9e7a2a20cec297ee79a87cf5b88acac55410eac3c824614d1a6"
+    ),
+    "runtime_queue_ownership_snapshot_projection_hash": (
+        "bb6d0062be867b73c5269979c4f850bc9614e8f15c76f65c60dbc9e44d497eb9"
+    ),
+    "runtime_queue_occurrence_set_matches_snapshot": (
+        "c89fd5e9e3df83fb51e201555e53799c625c9978932fb61be844476ad2c977be"
+    ),
+    "runtime_queue_selection_seal_projection_hash": (
+        "b9036732219388125a51d4652ce4143aaefe00574d7f9f9f359cc90b76b56368"
+    ),
+    "matches_scheduler_occurrence": (
+        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+    ),
+    "runtime_scheduler_projection_hash": (
+        "bcee96f000cf6652240fe9dbfa5411f667e3979dc156710e3b1803bc88c63e08"
+    ),
+    "current_signature_fence_identity": (
+        "d3e7b714af5442d66ec2e8f4e1c57bfe649c5b8f41b310d71929fa6586baf0ed"
+    ),
+    "clear_fence_retry_blocked_fifo_owners": (
+        "2ce5c0a06b37a5342eaa297e3fef4ae70ea0856344f03c8eaaf08fe5488097ae"
+    ),
+    "reconcile_fence_retry_blocked_fifo_owners": (
+        "d603d692ea6053b116efce0eb77fb0872e2f0277480239a5a4183583015de370"
+    ),
+    "retain_fence_retry_blocked_fifo_owner": (
+        "f6c5e5ac82dfda26d972715a073a2ddb7a41135ef9be0ee02ed77944f9e186f8"
+    ),
+    "retain_scheduler_ownership": (
+        "4addd609c67402a1a5de9704e093e23bb8a7ea6cef2c2477a9adb6e2aedc5cb6"
+    ),
+    "try_step_pacemaker_escape": (
+        "aa0a41501d13d502e119566bb4fc55e202f820ece97cf66e486ac851b458c64d"
+    ),
+    "dispatch_one_pacemaker_progress": (
+        "54493a9c9ee90735c473e7a11b8abcb171be883e0b4d708256b297b98793de4e"
+    ),
+    "occurrence_owner_validate_exact": (
+        "0f018cbe8ab36b2a5e1f3aa128d7c22c367083b399184aedc8c829f9228db8e3"
+    ),
+    "occurrence_owner_matches_queued": (
+        "e8544136325028c614b22287649c3e7af5779669328b0b64918093edabb8302a"
+    ),
+    "queue_snapshot_validate_identity": (
+        "9ee5bf23ffa531c168a3722a216ef32a9c2cf83f4265e25dde0fe750b4fa890f"
+    ),
+    "queue_selection_validate_identity": (
+        "18019651786d6151ee975cc68de9f43f2e9ece72e979d3957fb67acbb7c09774"
+    ),
+    "queue_selection_matches_scheduler_occurrence": (
+        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+    ),
+    "scheduler_evidence_validate_exact": (
+        "04da1f906e4e197bad4e49e962a92ae7d99c2749f6aecfdfe28f256c4426a188"
+    ),
+    "adapter_pacemaker_escape_is_parked": (
+        "5513bb3477396c268d3dc7ed75ded1d6c027bc5780c5f129b53920720c498d86"
+    ),
+    "adapter_signature_fence_is_active": (
+        "2012f7befb770adf8ab34a94452c592836dc3ae6c8e4e8ca4c3148f745e4db38"
+    ),
+    "adapter_signature_fence_identity": (
+        "3bfa48370472e85c7727695165fae3c6758a4a9ff228111c806e558929f7faad"
+    ),
+    "runtime_driver_certified_progress_bypasses_signature_fence": (
+        "6c6761d3f63a292cf04fd123fc055891200081b7dda8f211482f58cfef7b385d"
+    ),
+    "runtime_driver_completion_unblocks_deferred_fence": (
+        "1379d6ae2714aa4bfc2b02cec74611a0f65799319ab94b8fc37b04ef0fec62a5"
+    ),
+    "runtime_driver_command_is_blocked_by_deferred_fence": (
+        "63b773eb42e48fc13be96b5aecd992d9e23a264ba28d0720e450eace4578dc5d"
+    ),
+    "runtime_driver_pacemaker_escape_is_parked": (
+        "4ed5db3024338e14145b7186c4392feb1c14348e887f3695d813f980ad6680e7"
+    ),
+    "runtime_driver_signature_fence_is_active": (
+        "34aa7d6b66cf8ad39f348f2b0ebecd773f4c771867951769222215f5ab877294"
+    ),
+    "runtime_driver_signature_fence_identity": (
+        "135fcb20dbb91a2adfa807031ee70a6b11e396b8369959dbeca22a8aba2718f7"
     ),
 }
 
@@ -280,7 +420,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "552da003386e22bf9d0a44fbba0384b46ef0ad3f47123dd0b563b16dc9435ed9"
     ),
     "can_admit_pre_runtime_leader_wire": (
-        "3e049b47299eba83b510bb0bcbba25a48cd5614a77dbbd8189ebbb83b42ac6f7"
+        "4e47e7139d509949b21629d6947976a42243945e8fb6c414899a813b0c1a8a9f"
     ),
     "can_admit_network_message_with_ingress_ownership": (
         "338ddd65e84755b37a84a618375f27631ddabc72e478b2405ee7f9904b5ecad3"
@@ -288,8 +428,8 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
     ),
-    "commit_certificate_response_coalesces_with_exact_busy_deferred_qc": (
-        "29cc0769d5f9224ea11e10410b05b97a4e33fb75b9327ee4a18f19e12babbfe9"
+    "network_admission_uses_exact_normal_and_progress_reservations": (
+        "df256be7d1e1d89c254cb75c6e8a064157b9d584c4c095c73f7253917520703d"
     ),
 }
 
@@ -310,7 +450,7 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
         "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
     ),
     "distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner": (
-        "1cbfe8b5786abec4911f1846e7ca3338441ff1bbd60c4cb0af42e167683e7924"
+        "9fd964c7159754e3a01d6d905f40423fb1fb4d573f033f031b3497b02969c1d4"
     ),
 }
 
@@ -1083,7 +1223,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "b7fbdd5ae5da857c63f2a5adbea69698c4b1f76bca99649d1ff7cf7674eb7535"
     ),
     "preflight_effect_batch_frontier": (
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "6845921d95bbe60c8e0cd303a30bff4d8dd3aaee120dda41fc93546f932a581f"
     ),
     "prepare_parked_effects_for_frontier": (
         "2311f641861b3fafe8f90c34a7824596287bf1d6d8e791e30ba7b59438c178db"
@@ -1098,7 +1238,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "f9675525191cc1f949cdd7fef4d86facf0a974f8c96c627eba96123246e738db"
     ),
     "consume_pending_tip_recovery_effects": (
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "275bb4749f89c76810b7154c1eca151f2c85e970c162fb3f737034870520578b"
     ),
     "step_pacemaker_once": (
         "09140d1b32a493a591303e376d5ed642ea1479cb2fddae358d8d4d9b5b2a7df5"

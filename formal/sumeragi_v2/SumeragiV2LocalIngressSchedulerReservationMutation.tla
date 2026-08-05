@@ -100,6 +100,10 @@ CompleteTarget ==
        <<nextSchedulerOrdinal, acceptedOrdinal,
          retainedLocalOrdinal, retryOrdinal, runtimeOrdinal>>
 
+TerminalDone ==
+  /\ phase = "Done"
+  /\ UNCHANGED mutationVars
+
 Next ==
   \/ ConsumeFinitePreAcceptanceEpisode
   \/ AcceptAtFairIngress
@@ -107,6 +111,7 @@ Next ==
   \/ RetransmitExactTarget
   \/ EnterRuntime
   \/ CompleteTarget
+  \/ TerminalDone
 
 Spec == Init /\ [][Next]_mutationVars
 

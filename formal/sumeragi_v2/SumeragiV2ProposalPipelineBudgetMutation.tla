@@ -60,7 +60,7 @@ Init ==
   /\ semanticOrigin = 0
   /\ originSlot = 0
   /\ physicalEpisode = 0
-  /\ ~done
+  /\ done = FALSE
 
 AdvancePhysicalEpisode ==
   /\ ~done
@@ -104,7 +104,7 @@ FinishPipeline ==
   /\ originSlot = SlotCapacity - 1
   /\ semanticOrigin = ValidatorCount - 1
   /\ pipelinePhase = 3
-  /\ done'
+  /\ done' = TRUE
   /\ UNCHANGED <<pipelinePhase, semanticOrigin, originSlot, physicalEpisode>>
 
 RemainComplete ==

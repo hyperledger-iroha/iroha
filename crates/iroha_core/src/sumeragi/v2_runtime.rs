@@ -2202,6 +2202,26 @@ impl RuntimeEffectOwnership {
             .and_then(|binding| binding.candidate_statement)
     }
 
+    /// Return whether this exact effect binding carries one durable Decision's
+    /// complete Commit authority statement.
+    pub(crate) fn binds_durable_decision_authority(
+        &self,
+        decision_round: wire::ConsensusRound,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> bool {
+        self.validate_bound_exact()
+            && self.candidate_semantic_statement()
+                == Some(RuntimeCandidateSemanticStatement::new(
+                    decision_round,
+                    proposal_round,
+                    Some(subject),
+                    Some(wire::GlobalPhase::Commit),
+                    Some(execution_commitment),
+                ))
+    }
+
     fn binds_exact_fetch_body_manifest(&self, manifest: &wire::PayloadManifest) -> bool {
         let Some(binding) = self.binding.as_ref() else {
             return false;
@@ -2212,6 +2232,60 @@ impl RuntimeEffectOwnership {
             && binding
                 .candidate_statement
                 .is_some_and(|statement| statement.binds_exact_body_manifest(manifest))
+    }
+
+    fn binds_body_pipeline_completion_predecessor(
+        &self,
+        completion: &BodyPipelineCompletionEvidence,
+    ) -> bool {
+        let Some(binding) = self.binding.as_ref() else {
+            return false;
+        };
+        let (effect_kind, candidate_kind, round, subject) = match completion {
+            BodyPipelineCompletionEvidence::LocalProposalReady { manifest, .. } => (
+                RUNTIME_EFFECT_KIND_STORE_BODY,
+                RUNTIME_CANDIDATE_KIND_STORE_BODY,
+                manifest.round,
+                manifest.subject,
+            ),
+            BodyPipelineCompletionEvidence::BodyAvailable { manifest } => (
+                RUNTIME_EFFECT_KIND_FETCH_BODY,
+                RUNTIME_CANDIDATE_KIND_FETCH_BODY,
+                manifest.round,
+                manifest.subject,
+            ),
+            BodyPipelineCompletionEvidence::BodyStored { round, subject, .. } => (
+                RUNTIME_EFFECT_KIND_STORE_BODY,
+                RUNTIME_CANDIDATE_KIND_STORE_BODY,
+                *round,
+                *subject,
+            ),
+            BodyPipelineCompletionEvidence::ValidationSucceeded { round, subject, .. }
+            | BodyPipelineCompletionEvidence::ValidationFailed { round, subject } => (
+                RUNTIME_EFFECT_KIND_VALIDATE_BODY,
+                RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
+                *round,
+                *subject,
+            ),
+        };
+        self.validate_bound_exact()
+            && binding.effect_kind == effect_kind
+            && binding.candidate_kind == candidate_kind
+            && binding.candidate_statement.is_some_and(|statement| {
+                statement.validate_exact()
+                    && statement.context_id == round.context_id
+                    && statement.proposal_round == round
+                    && statement.subject == Some(subject)
+            })
+            && match completion {
+                BodyPipelineCompletionEvidence::BodyAvailable { manifest } => {
+                    self.binds_exact_fetch_body_manifest(manifest)
+                }
+                BodyPipelineCompletionEvidence::LocalProposalReady { .. }
+                | BodyPipelineCompletionEvidence::BodyStored { .. }
+                | BodyPipelineCompletionEvidence::ValidationSucceeded { .. }
+                | BodyPipelineCompletionEvidence::ValidationFailed { .. } => true,
+            }
     }
 
     /// Immutable owner carried into an asynchronous task or completion.
@@ -2912,6 +2986,142 @@ impl RuntimeEffectOwnership {
             })?;
         Ok((adopted, relation))
     }
+
+    /// Bind a durable-Decision body-stage retry under its incumbent task owner.
+    ///
+    /// Storage and validation are physical work for one exact durable body. A
+    /// CommitQC can arrive after an ordinary or Prepare-authorized stage has
+    /// already started, so the reducer's Decision recovery emits a
+    /// Commit-authorized `StoreBody` or `ValidateBody` with a different causal
+    /// root. The physical task must not be duplicated or abandoned: validate
+    /// the exact monotonic authority transition, retain the incumbent
+    /// lifecycle root, and install the incoming Commit binding for the
+    /// eventual reducer completion.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn adopt_incumbent_body_stage_for_durable_decision(
+        &self,
+        incoming: &Self,
+        effect: &AdapterEffect,
+        decision_round: wire::ConsensusRound,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> Result<Self, String> {
+        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+            return Err(
+                "Sumeragi v2 Decision body stage omitted an exact ownership binding".to_owned(),
+            );
+        }
+        let incumbent_binding = self
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let incoming_binding = incoming
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let (expected_effect_kind, expected_candidate_kind, effect_round, effect_subject) =
+            match effect {
+                AdapterEffect::StoreBody { round, subject, .. } => (
+                    RUNTIME_EFFECT_KIND_STORE_BODY,
+                    RUNTIME_CANDIDATE_KIND_STORE_BODY,
+                    *round,
+                    *subject,
+                ),
+                AdapterEffect::ValidateBody { round, subject, .. } => (
+                    RUNTIME_EFFECT_KIND_VALIDATE_BODY,
+                    RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
+                    *round,
+                    *subject,
+                ),
+                _ => {
+                    return Err(
+                        "Sumeragi v2 Decision body stage rebound to a different effect kind"
+                            .to_owned(),
+                    );
+                }
+            };
+        if incumbent_binding.effect_kind != expected_effect_kind
+            || incoming_binding.effect_kind != expected_effect_kind
+            || incumbent_binding.candidate_kind != expected_candidate_kind
+            || incoming_binding.candidate_kind != expected_candidate_kind
+        {
+            return Err(
+                "Sumeragi v2 Decision body stage changed its effect or candidate kind".to_owned(),
+            );
+        }
+        let incumbent_statement = incumbent_binding.candidate_statement.ok_or_else(|| {
+            "Sumeragi v2 incumbent body stage omitted its authority statement".to_owned()
+        })?;
+        let incoming_statement = incoming_binding.candidate_statement.ok_or_else(|| {
+            "Sumeragi v2 Decision body stage omitted its authority statement".to_owned()
+        })?;
+        if !incoming.binds_durable_decision_authority(
+            decision_round,
+            proposal_round,
+            subject,
+            execution_commitment,
+        ) || incumbent_statement
+            .commit_refinement_to(incoming_statement)
+            .is_none()
+        {
+            return Err(
+                "Sumeragi v2 Decision body stage changed its proposal or quorum authority"
+                    .to_owned(),
+            );
+        }
+        if effect_round != proposal_round || effect_subject != subject {
+            return Err(
+                "Sumeragi v2 Decision body stage changed its exact body coordinates".to_owned(),
+            );
+        }
+        let effect_kind = production_adapter_effect_kind(effect);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+        );
+        if incoming_binding.effect_identity != effect_identity {
+            return Err(
+                "Sumeragi v2 Decision body stage changed its exact incoming effect".to_owned(),
+            );
+        }
+        let candidate =
+            production_adapter_effect_candidate_binding(effect, Some(&incoming_statement))?
+                .filter(|candidate| candidate.kind == expected_candidate_kind)
+                .ok_or_else(|| {
+                    "Sumeragi v2 Decision body stage lost its exact candidate".to_owned()
+                })?;
+        if candidate.statement != Some(incoming_statement) {
+            return Err(
+                "Sumeragi v2 Decision body stage disagreed with its Commit binding".to_owned(),
+            );
+        }
+
+        let ownership = match self.causality {
+            RuntimeEffectCausality::Inherit => {
+                RuntimeEffectOwnership::inherited(self.owner.clone())
+            }
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
+            }
+        };
+        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
+            .then(|| ownership.owner.clone());
+        ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                effect_kind,
+                &production_adapter_effect_semantic_identity(effect),
+                Some(&candidate),
+                incoming_binding.effect_position,
+                incoming_binding.effect_count,
+                incoming_binding.candidate_position,
+                incoming_binding.candidate_count,
+            )
+            .map_err(|_| {
+                "Sumeragi v2 Decision body stage could not retain its incumbent owner".to_owned()
+            })
+    }
 }
 
 /// Recompute one total effect/candidate gate projection from concrete effect
@@ -3060,6 +3270,87 @@ pub(crate) struct RuntimeFifoCandidateOwnership {
     selection_seal: RuntimeQueueSelectionSeal,
 }
 
+/// Exact physical FIFO occurrence granted one retryable fence-predecessor
+/// attempt. Causal siblings may share a logical lifecycle owner, so the
+/// admission ordinal and immutable command identity are both required.
+#[derive(Clone, Debug)]
+struct RuntimeQueueOccurrenceOwner {
+    source_identity: Arc<()>,
+    admission_ordinal: u128,
+    identity: RuntimeCommandIdentityDigest,
+    projection_hash: iroha_crypto::Hash,
+}
+
+impl PartialEq for RuntimeQueueOccurrenceOwner {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.source_identity, &other.source_identity)
+            && self.admission_ordinal == other.admission_ordinal
+            && self.identity == other.identity
+            && self.projection_hash == other.projection_hash
+    }
+}
+
+impl Eq for RuntimeQueueOccurrenceOwner {}
+
+fn runtime_queue_occurrence_owner_projection_hash(
+    owner: &RuntimeQueueOccurrenceOwner,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-occurrence-owner:v1");
+    append_runtime_identity_field(
+        &mut projection,
+        &(Arc::as_ptr(&owner.source_identity) as usize).to_le_bytes(),
+    );
+    append_runtime_identity_field(&mut projection, &owner.admission_ordinal.to_le_bytes());
+    append_runtime_identity_field(&mut projection, owner.identity.projection_hash.as_ref());
+    iroha_crypto::Hash::new(projection)
+}
+
+impl RuntimeQueueOccurrenceOwner {
+    fn from_queued<C: ExactRuntimeCommandIdentity>(
+        source_identity: &Arc<()>,
+        queued: &TaggedCommand<C>,
+    ) -> Option<Self> {
+        if !queued.validate_admission_identity() {
+            return None;
+        }
+        let mut owner = Self {
+            source_identity: Arc::clone(source_identity),
+            admission_ordinal: queued.admission_ordinal?,
+            identity: queued.identity,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        owner.projection_hash = runtime_queue_occurrence_owner_projection_hash(&owner);
+        owner.validate_exact().then_some(owner)
+    }
+
+    fn from_candidate(candidate: &RuntimeFifoCandidateOwnership) -> Option<Self> {
+        let mut owner = Self {
+            source_identity: Arc::clone(&candidate.selection_seal.source_identity),
+            admission_ordinal: candidate.admission_ordinal,
+            identity: candidate.identity,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        owner.projection_hash = runtime_queue_occurrence_owner_projection_hash(&owner);
+        owner.validate_exact().then_some(owner)
+    }
+
+    fn validate_exact(&self) -> bool {
+        self.admission_ordinal != 0
+            && self.identity.validate_exact()
+            && self.projection_hash == runtime_queue_occurrence_owner_projection_hash(self)
+    }
+
+    fn matches_queued<C: ExactRuntimeCommandIdentity>(
+        &self,
+        source_identity: &Arc<()>,
+        queued: &TaggedCommand<C>,
+    ) -> bool {
+        Arc::ptr_eq(&self.source_identity, source_identity)
+            && queued.cached_queue_occurrence_owner(source_identity) == Some(self)
+    }
+}
+
 /// Queue rank observed immediately before or after one scheduler decision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeQueueOwnershipProjection {
@@ -3082,6 +3373,9 @@ pub(crate) struct RuntimeQueueOwnershipProjection {
 struct RuntimeQueueOwnershipSnapshot {
     source_identity: Arc<()>,
     projection: RuntimeQueueOwnershipProjection,
+    occurrence_scan_complete: bool,
+    occurrence_owners: Vec<RuntimeQueueOccurrenceOwner>,
+    occurrence_index: BTreeMap<u128, usize>,
     minimum_lifecycle_ordinal: Option<u128>,
     completion_minimum_lifecycle_ordinal: Option<u128>,
     progress_minimum_lifecycle_ordinal: Option<u128>,
@@ -3096,6 +3390,9 @@ impl PartialEq for RuntimeQueueOwnershipSnapshot {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.source_identity, &other.source_identity)
             && self.projection == other.projection
+            && self.occurrence_scan_complete == other.occurrence_scan_complete
+            && self.occurrence_owners == other.occurrence_owners
+            && self.occurrence_index == other.occurrence_index
             && self.minimum_lifecycle_ordinal == other.minimum_lifecycle_ordinal
             && self.completion_minimum_lifecycle_ordinal
                 == other.completion_minimum_lifecycle_ordinal
@@ -3114,6 +3411,7 @@ impl Eq for RuntimeQueueOwnershipSnapshot {}
 enum RuntimeQueueSelectionKind {
     Ordinary,
     FenceCompletion,
+    FencePredecessor,
     PacemakerProgress,
     PacemakerCertifiedProgress,
 }
@@ -3125,6 +3423,7 @@ impl RuntimeQueueSelectionKind {
             Self::FenceCompletion => 2,
             Self::PacemakerProgress => 3,
             Self::PacemakerCertifiedProgress => 4,
+            Self::FencePredecessor => 5,
         }
     }
 }
@@ -3141,6 +3440,7 @@ struct RuntimeQueueSelectionSeal {
     scheduler_handoff_claimed: Arc<AtomicBool>,
     kind: RuntimeQueueSelectionKind,
     queue_before: RuntimeQueueOwnershipProjection,
+    queue_before_snapshot_hash: iroha_crypto::Hash,
     oldest_lifecycle_ordinal: u128,
     completion_minimum_lifecycle_ordinal: Option<u128>,
     progress_minimum_lifecycle_ordinal: Option<u128>,
@@ -3171,6 +3471,7 @@ impl PartialEq for RuntimeQueueSelectionSeal {
             )
             && self.kind == other.kind
             && self.queue_before == other.queue_before
+            && self.queue_before_snapshot_hash == other.queue_before_snapshot_hash
             && self.oldest_lifecycle_ordinal == other.oldest_lifecycle_ordinal
             && self.completion_minimum_lifecycle_ordinal
                 == other.completion_minimum_lifecycle_ordinal
@@ -3216,16 +3517,35 @@ fn append_runtime_optional_ordinal(projection: &mut Vec<u8>, ordinal: Option<u12
     }
 }
 
+fn append_runtime_optional_u64(projection: &mut Vec<u8>, value: Option<u64>) {
+    match value {
+        None => projection.push(0),
+        Some(value) => {
+            projection.push(1);
+            append_runtime_identity_u64(projection, value);
+        }
+    }
+}
+
 fn runtime_queue_ownership_snapshot_projection_hash(
     snapshot: &RuntimeQueueOwnershipSnapshot,
 ) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
-    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-snapshot:v2");
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-snapshot:v3");
     append_runtime_identity_field(
         &mut projection,
         &(Arc::as_ptr(&snapshot.source_identity) as usize).to_le_bytes(),
     );
     append_runtime_queue_projection(&mut projection, snapshot.projection);
+    projection.push(u8::from(snapshot.occurrence_scan_complete));
+    append_runtime_identity_u64(
+        &mut projection,
+        u64::try_from(snapshot.occurrence_owners.len())
+            .expect("bounded runtime occurrence count is representable as u64"),
+    );
+    for owner in &snapshot.occurrence_owners {
+        append_runtime_identity_field(&mut projection, owner.projection_hash.as_ref());
+    }
     append_runtime_optional_ordinal(&mut projection, snapshot.minimum_lifecycle_ordinal);
     append_runtime_optional_ordinal(
         &mut projection,
@@ -3259,11 +3579,24 @@ impl RuntimeQueueOwnershipSnapshot {
             (Some(ordinal), count) => ordinal != 0 && count != 0,
             _ => false,
         });
+        let occurrences_are_exact = self.occurrence_scan_complete
+            && u64::try_from(self.occurrence_owners.len()) == Ok(self.projection.len)
+            && self.occurrence_index.len() == self.occurrence_owners.len()
+            && self.occurrence_owners.iter().all(|owner| {
+                owner.admission_ordinal != 0
+                    && Arc::ptr_eq(&owner.source_identity, &self.source_identity)
+                    && self
+                        .occurrence_index
+                        .get(&owner.admission_ordinal)
+                        .and_then(|index| self.occurrence_owners.get(*index))
+                        == Some(owner)
+            });
         self.projection_hash == runtime_queue_ownership_snapshot_projection_hash(self)
             && self.projection.len <= self.projection.capacity
             && CommandClass::from_service_code(self.projection.service_cursor).is_some()
             && (self.projection.len != 0 || self.projection.max_service_debt == 0)
             && class_minima_are_exact
+            && occurrences_are_exact
             && match (self.minimum_lifecycle_ordinal, total_count) {
                 (None, Some(0)) => self.projection.len == 0,
                 (Some(ordinal), Some(count)) => ordinal != 0 && count == self.projection.len,
@@ -3280,11 +3613,30 @@ impl RuntimeQueueOwnershipSnapshot {
     }
 }
 
+fn runtime_queue_occurrence_set_matches_snapshot(
+    owners: &[RuntimeQueueOccurrenceOwner],
+    snapshot: &RuntimeQueueOwnershipSnapshot,
+) -> bool {
+    if !u64::try_from(owners.len()).is_ok_and(|len| len <= snapshot.projection.len) {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    owners.iter().all(|owner| {
+        Arc::ptr_eq(&owner.source_identity, &snapshot.source_identity)
+            && seen.insert(owner.admission_ordinal)
+            && snapshot
+                .occurrence_index
+                .get(&owner.admission_ordinal)
+                .and_then(|index| snapshot.occurrence_owners.get(*index))
+                == Some(owner)
+    })
+}
+
 fn runtime_queue_selection_seal_projection_hash(
     seal: &RuntimeQueueSelectionSeal,
 ) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
-    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-selection:v2");
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-selection:v3");
     append_runtime_identity_field(
         &mut projection,
         &(Arc::as_ptr(&seal.source_identity) as usize).to_le_bytes(),
@@ -3295,6 +3647,7 @@ fn runtime_queue_selection_seal_projection_hash(
     );
     projection.push(seal.kind.code());
     append_runtime_queue_projection(&mut projection, seal.queue_before);
+    append_runtime_identity_field(&mut projection, seal.queue_before_snapshot_hash.as_ref());
     append_runtime_identity_field(
         &mut projection,
         &seal.oldest_lifecycle_ordinal.to_le_bytes(),
@@ -3393,6 +3746,10 @@ impl RuntimeQueueSelectionSeal {
                         && self.cursor_after_removal == self.queue_before.service_cursor
                         && self.max_debt_after_upper_bound == self.queue_before.max_service_debt
                 }
+                RuntimeQueueSelectionKind::FencePredecessor => {
+                    self.cursor_after_removal == self.queue_before.service_cursor
+                        && self.max_debt_after_upper_bound == self.queue_before.max_service_debt
+                }
                 RuntimeQueueSelectionKind::PacemakerProgress => {
                     matches!(
                         CommandClass::from_service_code(self.selected_class),
@@ -3432,12 +3789,11 @@ impl RuntimeQueueSelectionSeal {
     ) -> bool {
         self.validate_identity()
             && self.scheduler_handoff_is_claimed()
-            && before.validate_identity()
-            && after.validate_identity()
             && Arc::ptr_eq(&self.source_identity, &before.source_identity)
             && Arc::ptr_eq(&self.source_identity, &after.source_identity)
             && self.kind == expected_kind
             && self.queue_before == before.projection
+            && self.queue_before_snapshot_hash == before.projection_hash
             && self.oldest_lifecycle_ordinal == before.minimum_lifecycle_ordinal.unwrap_or(0)
             && self.completion_minimum_lifecycle_ordinal
                 == before.completion_minimum_lifecycle_ordinal
@@ -3461,11 +3817,27 @@ impl RuntimeQueueSelectionSeal {
                     .map(|ownership| ownership.projection_hash)
             && self.cursor_after_removal == after.projection.service_cursor
             && after.projection.max_service_debt <= self.max_debt_after_upper_bound
-            && if retry_retained {
-                after.projection.len == before.projection.len
-            } else {
-                after.projection.len.checked_add(1) == Some(before.projection.len)
-            }
+            && RuntimeQueueOccurrenceOwner::from_candidate(candidate).is_some_and(|selected| {
+                usize::try_from(self.selected_position)
+                    .ok()
+                    .and_then(|position| before.occurrence_owners.get(position))
+                    == Some(&selected)
+                    && if retry_retained {
+                        after.projection.len == before.projection.len
+                            && after.occurrence_owners == before.occurrence_owners
+                    } else {
+                        after.projection.len.checked_add(1) == Some(before.projection.len)
+                            && before
+                                .occurrence_owners
+                                .iter()
+                                .enumerate()
+                                .filter(|(position, _)| {
+                                    u64::try_from(*position).ok() != Some(self.selected_position)
+                                })
+                                .map(|(_, owner)| owner)
+                                .eq(after.occurrence_owners.iter())
+                    }
+            })
     }
 }
 
@@ -3479,10 +3851,16 @@ struct RuntimeSchedulerArbitrationInputs {
     progress_ready: bool,
     normal_ready: bool,
     fence_completion_bypass: bool,
+    fence_dependency_minimum_lifecycle_ordinal: Option<u128>,
+    fence_dependency_minimum_admission_ordinal: Option<u128>,
+    fence_dependency_minimum_fifo_position: Option<u64>,
+    fence_dependency_required_root_class: Option<u8>,
     fence_predecessor_lifecycle_ordinal: Option<u128>,
     fence_predecessor_ownership: Option<RuntimeDeferredLifecycleOwnership>,
     fence_predecessor_ingress_ownership: Option<RuntimeIngressOwnershipEvidence>,
     fence_predecessor_occurrence_ownership: Option<DeferredOccurrenceOwnershipEvidence>,
+    fence_retry_blocked_fifo_before: Vec<RuntimeQueueOccurrenceOwner>,
+    fence_retry_marker_required: bool,
 }
 
 /// Exact source selected for one live or recovery scheduler turn.
@@ -3491,8 +3869,14 @@ pub(crate) enum RuntimeSelectedOwnerKind {
     /// One older adapter-owned Busy-deferred occurrence.
     Deferred,
     /// The exact causally owned signature completion which opens an active
-    /// reducer fence for strictly older unserviceable adapter debt.
+    /// reducer fence for target-relative unserviceable adapter debt.
     FenceCompletion,
+    /// The oldest exact unblocked pre-cut FIFO owner which must retire before
+    /// a fenced deferred occurrence can reach its signature completion.
+    FencePredecessor,
+    /// A fence predecessor encountered retryable adapter pressure and kept
+    /// its immutable physical queue owner for a later bounded turn.
+    FencePredecessorRetryRetained,
     /// One authenticated Progress root, or its trusted Completion successor,
     /// selected while ordinary work is unable to release the pacemaker.
     PacemakerProgress,
@@ -3585,6 +3969,15 @@ pub(crate) struct RuntimeSchedulerOwnershipEvidence {
     /// Whether this turn used the narrow dependency edge from older
     /// unserviceable adapter debt to its exact signing completion.
     pub(crate) fence_completion_bypass: bool,
+    /// Exact target-relative unblocked minimum selected by a fence dependency
+    /// turn. Its lifecycle, physical admission, and FIFO position form one
+    /// exact rank and are present for completion and predecessor branches only.
+    fence_dependency_minimum_lifecycle_ordinal: Option<u128>,
+    fence_dependency_minimum_admission_ordinal: Option<u128>,
+    fence_dependency_minimum_fifo_position: Option<u64>,
+    /// Optional causal-root restriction imposed by a typed pacemaker turn.
+    /// Ordinary dependency service leaves this unrestricted.
+    fence_dependency_required_root_class: Option<u8>,
     /// Oldest exact adapter-deferred lifecycle which depended on the selected
     /// fence completion. Present only for the exceptional dependency edge.
     pub(crate) fence_predecessor_lifecycle_ordinal: Option<u128>,
@@ -3599,6 +3992,13 @@ pub(crate) struct RuntimeSchedulerOwnershipEvidence {
     /// Adapter-issued unclaimed Busy capability which independently binds the
     /// target ordinal and its direct-authenticated vs local/causal provenance.
     fence_predecessor_occurrence_ownership: Option<DeferredOccurrenceOwnershipEvidence>,
+    /// Exact retry-excluded physical FIFO occurrences before this turn.
+    fence_retry_blocked_fifo_before: Vec<RuntimeQueueOccurrenceOwner>,
+    /// Exact retry-excluded physical FIFO occurrences after this turn.
+    fence_retry_blocked_fifo_after: Vec<RuntimeQueueOccurrenceOwner>,
+    /// Whether this retry occurred while the same fence remained
+    /// unserviceable and therefore had to add the selected exact occurrence.
+    fence_retry_marker_required: bool,
     /// Scheduler FIFO debt before selection.
     pub(crate) fifo_owed_before: bool,
     /// Scheduler FIFO debt after selection.
@@ -3640,6 +4040,8 @@ impl RuntimeSelectedOwnerKind {
             Self::FenceCompletion => 10,
             Self::PacemakerProgress => 11,
             Self::PacemakerProgressRetryRetained => 12,
+            Self::FencePredecessor => 13,
+            Self::FencePredecessorRetryRetained => 14,
         }
     }
 }
@@ -3727,6 +4129,19 @@ fn append_runtime_deferred_lifecycle_ownership(
     );
 }
 
+fn append_runtime_queue_occurrence_owners(
+    projection: &mut Vec<u8>,
+    owners: &[RuntimeQueueOccurrenceOwner],
+) {
+    append_runtime_identity_u64(
+        projection,
+        u64::try_from(owners.len()).expect("bounded runtime occurrence set length fits u64"),
+    );
+    for owner in owners {
+        append_runtime_identity_field(projection, owner.projection_hash.as_ref());
+    }
+}
+
 fn runtime_scheduler_projection_hash(
     evidence: &RuntimeSchedulerOwnershipEvidence,
 ) -> iroha_crypto::Hash {
@@ -3779,6 +4194,25 @@ fn runtime_scheduler_projection_hash(
     projection.push(u8::from(evidence.progress_ready));
     projection.push(u8::from(evidence.normal_ready));
     projection.push(u8::from(evidence.fence_completion_bypass));
+    append_runtime_optional_ordinal(
+        &mut projection,
+        evidence.fence_dependency_minimum_lifecycle_ordinal,
+    );
+    append_runtime_optional_ordinal(
+        &mut projection,
+        evidence.fence_dependency_minimum_admission_ordinal,
+    );
+    append_runtime_optional_u64(
+        &mut projection,
+        evidence.fence_dependency_minimum_fifo_position,
+    );
+    match evidence.fence_dependency_required_root_class {
+        None => projection.push(0),
+        Some(class) => {
+            projection.push(1);
+            projection.push(class);
+        }
+    }
     match evidence.fence_predecessor_lifecycle_ordinal {
         None => projection.push(0),
         Some(ordinal) => {
@@ -3807,6 +4241,15 @@ fn runtime_scheduler_projection_hash(
             append_runtime_identity_field(&mut projection, ownership.projection_hash().as_ref());
         }
     }
+    append_runtime_queue_occurrence_owners(
+        &mut projection,
+        &evidence.fence_retry_blocked_fifo_before,
+    );
+    append_runtime_queue_occurrence_owners(
+        &mut projection,
+        &evidence.fence_retry_blocked_fifo_after,
+    );
+    projection.push(u8::from(evidence.fence_retry_marker_required));
     projection.push(u8::from(evidence.live_mode));
     projection.push(u8::from(evidence.fifo_owed_before));
     projection.push(u8::from(evidence.fifo_owed_after));
@@ -3872,6 +4315,87 @@ impl RuntimeSchedulerOwnershipEvidence {
             }
             _ => false,
         };
+        let fence_dependency_target_expected = matches!(
+            self.selected,
+            RuntimeSelectedOwnerKind::FenceCompletion
+                | RuntimeSelectedOwnerKind::FencePredecessor
+                | RuntimeSelectedOwnerKind::FencePredecessorRetryRetained
+        );
+        let fence_dependency_rank_is_exact = match (
+            self.fence_dependency_minimum_lifecycle_ordinal,
+            self.fence_dependency_minimum_admission_ordinal,
+            self.fence_dependency_minimum_fifo_position,
+        ) {
+            (Some(lifecycle), Some(admission), Some(position)) => {
+                fence_dependency_target_expected
+                    && lifecycle != 0
+                    && admission != 0
+                    && lifecycle <= admission
+                    && position < self.queue_before.len
+            }
+            (None, None, None) => !fence_dependency_target_expected,
+            _ => false,
+        };
+        let fence_dependency_root_restriction_is_exact = self
+            .fence_dependency_required_root_class
+            .is_none_or(|class| {
+                fence_dependency_target_expected && class == SERVICE_CLASS_PROGRESS
+            });
+        let fence_retry_sets_are_exact = runtime_queue_occurrence_set_matches_snapshot(
+            &self.fence_retry_blocked_fifo_before,
+            &self.queue_before_snapshot,
+        ) && runtime_queue_occurrence_set_matches_snapshot(
+            &self.fence_retry_blocked_fifo_after,
+            &self.queue_after_snapshot,
+        );
+        let fence_retry_before_by_admission = self
+            .fence_retry_blocked_fifo_before
+            .iter()
+            .map(|owner| (owner.admission_ordinal, owner))
+            .collect::<BTreeMap<_, _>>();
+        let fence_retry_after_by_admission = self
+            .fence_retry_blocked_fifo_after
+            .iter()
+            .map(|owner| (owner.admission_ordinal, owner))
+            .collect::<BTreeMap<_, _>>();
+        let fence_retry_clear_is_required =
+            self.selected == RuntimeSelectedOwnerKind::FenceCompletion;
+        let fence_retry_transition_is_exact = if fence_retry_clear_is_required {
+            !self.fence_retry_marker_required && self.fence_retry_blocked_fifo_after.is_empty()
+        } else if matches!(
+            self.selected,
+            RuntimeSelectedOwnerKind::FencePredecessorRetryRetained
+                | RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
+        ) {
+            let selected_retry_owner = match &self.candidate {
+                RuntimeSelectedCandidateOwnership::Exact(candidate) => {
+                    RuntimeQueueOccurrenceOwner::from_candidate(candidate)
+                }
+                RuntimeSelectedCandidateOwnership::NotApplicable
+                | RuntimeSelectedCandidateOwnership::ExactDeferred(_) => None,
+            };
+            let added_selected_owner = selected_retry_owner.is_some_and(|selected| {
+                !fence_retry_before_by_admission.contains_key(&selected.admission_ordinal)
+                    && fence_retry_after_by_admission.get(&selected.admission_ordinal)
+                        == Some(&&selected)
+                    && self.fence_retry_blocked_fifo_after.len()
+                        == self.fence_retry_blocked_fifo_before.len().saturating_add(1)
+                    && fence_retry_before_by_admission
+                        .iter()
+                        .all(|(ordinal, owner)| {
+                            fence_retry_after_by_admission.get(ordinal) == Some(owner)
+                        })
+            });
+            if self.fence_retry_marker_required {
+                added_selected_owner
+            } else {
+                self.selected == RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
+                    && self.fence_retry_blocked_fifo_before == self.fence_retry_blocked_fifo_after
+            }
+        } else {
+            !self.fence_retry_marker_required
+                && self.fence_retry_blocked_fifo_before == self.fence_retry_blocked_fifo_after
+        };
         if self.projection_hash != runtime_scheduler_projection_hash(self)
             || !queue_snapshots_are_exact
             || !ready_classes_match_snapshot
@@ -3888,7 +4412,11 @@ impl RuntimeSchedulerOwnershipEvidence {
             || (!self.live_mode && (self.timeout_due || self.periodic_timer_due))
             || (self.fence_completion_bypass
                 != matches!(self.selected, RuntimeSelectedOwnerKind::FenceCompletion))
-            || (self.fence_completion_bypass != self.fence_predecessor_ownership.is_some())
+            || (fence_dependency_target_expected != self.fence_predecessor_ownership.is_some())
+            || !fence_dependency_rank_is_exact
+            || !fence_dependency_root_restriction_is_exact
+            || !fence_retry_sets_are_exact
+            || !fence_retry_transition_is_exact
             || !fence_predecessor_is_exact
         {
             return Err(RuntimeSchedulerEvidenceError::InvalidProjection);
@@ -3964,6 +4492,18 @@ impl RuntimeSchedulerOwnershipEvidence {
             RuntimeSelectedCandidateOwnership::Exact(candidate),
         ) = (&self.selected, &self.candidate)
         {
+            let target_cut = self
+                .fence_predecessor_ownership
+                .as_ref()
+                .map(|ownership| ownership.physical_cut);
+            let candidate_precedes_target_cut = match (
+                candidate.causal_origin.root_ingress_physical_ownership,
+                target_cut,
+            ) {
+                (None, Some(_)) => true,
+                (Some(physical), Some(cut)) => u128::from(physical.source_ordinal) < cut,
+                _ => false,
+            };
             let exact = self.live_mode
                 && self.fence_completion_bypass
                 && self.round_tag == candidate.tag
@@ -3988,14 +4528,18 @@ impl RuntimeSchedulerOwnershipEvidence {
                 && candidate.causal_origin.validate_exact()
                 && candidate.causal_origin.root_lifecycle_ordinal
                     == Some(candidate.lifecycle_ordinal)
+                && self.fence_dependency_minimum_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                && self.fence_dependency_minimum_admission_ordinal
+                    == Some(candidate.admission_ordinal)
+                && self.fence_dependency_minimum_fifo_position == Some(candidate.fifo_position)
+                && self.fence_dependency_required_root_class.is_none()
+                && candidate_precedes_target_cut
                 // A callback minted as an independent SignatureCompleted root
                 // did not inherit the Sign effect and cannot bypass lifecycle
                 // order even if its bytes happen to clear the reducer fence.
                 && candidate.causal_origin.root_identity.kind
                     != RuntimeCommandKind::SignatureCompleted
-                && self
-                    .fence_predecessor_lifecycle_ordinal
-                    .is_some_and(|predecessor| predecessor < candidate.lifecycle_ordinal)
                 && candidate.fifo_position < self.queue_before.len
                 && candidate.eligible_skips_before <= self.queue_before.max_service_debt
                 && candidate.eligible_skips_after == 0
@@ -4009,6 +4553,76 @@ impl RuntimeSchedulerOwnershipEvidence {
                     &self.queue_after_snapshot,
                     RuntimeQueueSelectionKind::FenceCompletion,
                     false,
+                );
+            return exact
+                .then_some(())
+                .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection);
+        }
+        if let (
+            RuntimeSelectedOwnerKind::FencePredecessor
+            | RuntimeSelectedOwnerKind::FencePredecessorRetryRetained,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+        ) = (&self.selected, &self.candidate)
+        {
+            let retry_retained =
+                self.selected == RuntimeSelectedOwnerKind::FencePredecessorRetryRetained;
+            let target_cut = self
+                .fence_predecessor_ownership
+                .as_ref()
+                .map(|ownership| ownership.physical_cut);
+            let candidate_precedes_target_cut = match (
+                candidate.causal_origin.root_ingress_physical_ownership,
+                target_cut,
+            ) {
+                (None, Some(_)) => true,
+                (Some(physical), Some(cut)) => u128::from(physical.source_ordinal) < cut,
+                _ => false,
+            };
+            let exact = self.live_mode
+                && !self.fence_completion_bypass
+                && !self.timeout_due
+                && !self.periodic_timer_due
+                && !self.fifo_ready
+                && !self.completion_ready
+                && !self.progress_ready
+                && !self.normal_ready
+                && candidate.identity.validate_exact()
+                && candidate.kind == candidate.identity.kind
+                && candidate.admission_ordinal != 0
+                && candidate.lifecycle_ordinal != 0
+                && candidate.lifecycle_ordinal <= candidate.admission_ordinal
+                && runtime_fifo_candidate_ingress_is_exact(candidate)
+                && candidate.projection_hash == runtime_fifo_candidate_projection_hash(candidate)
+                && candidate.causal_origin.validate_exact()
+                && candidate.causal_origin.root_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                && self.fence_dependency_minimum_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                && self.fence_dependency_minimum_admission_ordinal
+                    == Some(candidate.admission_ordinal)
+                && self.fence_dependency_minimum_fifo_position == Some(candidate.fifo_position)
+                && self
+                    .fence_dependency_required_root_class
+                    .is_none_or(|class| candidate.causal_origin.root_class == class)
+                && candidate_precedes_target_cut
+                && candidate.class != SERVICE_CLASS_NONE
+                && candidate.fifo_position < self.queue_before.len
+                && candidate.eligible_skips_before <= self.queue_before.max_service_debt
+                && candidate.eligible_skips_after == 0
+                && self.queue_before.service_cursor == self.queue_after.service_cursor
+                && self.queue_after.max_service_debt <= self.queue_before.max_service_debt
+                && self.fifo_owed_before == self.fifo_owed_after
+                && if retry_retained {
+                    self.queue_after.len == self.queue_before.len
+                } else {
+                    self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
+                }
+                && candidate.selection_seal.matches_scheduler_occurrence(
+                    candidate,
+                    &self.queue_before_snapshot,
+                    &self.queue_after_snapshot,
+                    RuntimeQueueSelectionKind::FencePredecessor,
+                    retry_retained,
                 );
             return exact
                 .then_some(())
@@ -4034,7 +4648,8 @@ impl RuntimeSchedulerOwnershipEvidence {
                     Some(CommandClass::Completion | CommandClass::Progress)
                 ),
                 RuntimeQueueSelectionKind::Ordinary
-                | RuntimeQueueSelectionKind::FenceCompletion => false,
+                | RuntimeQueueSelectionKind::FenceCompletion
+                | RuntimeQueueSelectionKind::FencePredecessor => false,
             };
             let exact = self.live_mode
                 && !self.fence_completion_bypass
@@ -4196,6 +4811,9 @@ pub(crate) struct TaggedCommand<C> {
     admitted_at: Instant,
     eligible_skips: u64,
     admission_ordinal: Option<u128>,
+    /// Queue-private immutable physical occurrence capability, minted once
+    /// after the admission ordinal is assigned and then cloned into snapshots.
+    queue_occurrence_owner: Option<RuntimeQueueOccurrenceOwner>,
     lifecycle_ordinal: Option<u128>,
     candidate_semantic_statement: Option<RuntimeCandidateSemanticStatement>,
     restored_producer_stage: Option<u8>,
@@ -4218,6 +4836,7 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             admitted_at,
             eligible_skips: 0,
             admission_ordinal: None,
+            queue_occurrence_owner: None,
             lifecycle_ordinal: None,
             candidate_semantic_statement: None,
             restored_producer_stage: None,
@@ -4257,6 +4876,7 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             admitted_at,
             eligible_skips: 0,
             admission_ordinal: None,
+            queue_occurrence_owner: None,
             lifecycle_ordinal,
             candidate_semantic_statement: None,
             restored_producer_stage: None,
@@ -4293,6 +4913,7 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             admitted_at,
             eligible_skips: 0,
             admission_ordinal: None,
+            queue_occurrence_owner: None,
             lifecycle_ordinal: Some(lifecycle_ordinal),
             candidate_semantic_statement: None,
             restored_producer_stage: None,
@@ -4303,6 +4924,30 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
     fn lifecycle_owner(&self) -> Result<RuntimeLifecycleOwner, EnqueueError> {
         let lifecycle_ordinal = self.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
         RuntimeLifecycleOwner::new(self.causal_origin.clone(), lifecycle_ordinal)
+    }
+
+    fn mint_queue_occurrence_owner(
+        &mut self,
+        source_identity: &Arc<()>,
+    ) -> Result<(), EnqueueError> {
+        if self.queue_occurrence_owner.is_some() {
+            return Err(EnqueueError::FailClosed);
+        }
+        let owner = RuntimeQueueOccurrenceOwner::from_queued(source_identity, self)
+            .ok_or(EnqueueError::FailClosed)?;
+        self.queue_occurrence_owner = Some(owner);
+        Ok(())
+    }
+
+    fn cached_queue_occurrence_owner(
+        &self,
+        source_identity: &Arc<()>,
+    ) -> Option<&RuntimeQueueOccurrenceOwner> {
+        self.queue_occurrence_owner.as_ref().filter(|owner| {
+            Arc::ptr_eq(&owner.source_identity, source_identity)
+                && self.admission_ordinal == Some(owner.admission_ordinal)
+                && self.identity == owner.identity
+        })
     }
 
     /// Install a newly reconciled ingress carrier set before this queued
@@ -4590,6 +5235,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 {
                     return Err(EnqueueError::FailClosed);
                 }
+                command.mint_queue_occurrence_owner(&ingress.selection_source_identity)?;
                 let incoming_tag = command.tag;
                 let incoming_class = command.class.service_code();
                 let occupied_before = ingress
@@ -4729,6 +5375,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                     {
                         return Err(EnqueueError::FailClosed);
                     }
+                    command.mint_queue_occurrence_owner(&ingress.selection_source_identity)?;
                 }
 
                 let occupied_at_start = ingress
@@ -5204,6 +5851,24 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     }
 
     fn ownership_snapshot(&self) -> RuntimeQueueOwnershipSnapshot {
+        let occurrence_owners = self
+            .commands
+            .iter()
+            .map(|queued| {
+                queued
+                    .cached_queue_occurrence_owner(&self.selection_source_identity)
+                    .cloned()
+            })
+            .collect::<Option<Vec<_>>>();
+        let occurrence_scan_complete = occurrence_owners.is_some();
+        let occurrence_owners = occurrence_owners.unwrap_or_default();
+        let occurrence_index = occurrence_owners
+            .iter()
+            .enumerate()
+            .map(|(index, owner)| (owner.admission_ordinal, index))
+            .collect::<BTreeMap<_, _>>();
+        let occurrence_scan_complete =
+            occurrence_scan_complete && occurrence_index.len() == occurrence_owners.len();
         let minimum_lifecycle_ordinal = self
             .commands
             .iter()
@@ -5219,6 +5884,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let mut snapshot = RuntimeQueueOwnershipSnapshot {
             source_identity: Arc::clone(&self.selection_source_identity),
             projection: self.ownership_projection(),
+            occurrence_scan_complete,
+            occurrence_owners,
+            occurrence_index,
             minimum_lifecycle_ordinal,
             completion_minimum_lifecycle_ordinal,
             progress_minimum_lifecycle_ordinal,
@@ -5264,6 +5932,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 queue_before.projection.max_service_debt.saturating_add(1)
             }
             RuntimeQueueSelectionKind::FenceCompletion
+            | RuntimeQueueSelectionKind::FencePredecessor
             | RuntimeQueueSelectionKind::PacemakerProgress
             | RuntimeQueueSelectionKind::PacemakerCertifiedProgress => {
                 queue_before.projection.max_service_debt
@@ -5274,6 +5943,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             scheduler_handoff_claimed: Arc::new(AtomicBool::new(false)),
             kind,
             queue_before: queue_before.projection,
+            queue_before_snapshot_hash: queue_before.projection_hash,
             oldest_lifecycle_ordinal,
             completion_minimum_lifecycle_ordinal: queue_before.completion_minimum_lifecycle_ordinal,
             progress_minimum_lifecycle_ordinal: queue_before.progress_minimum_lifecycle_ordinal,
@@ -5321,24 +5991,21 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
 
     fn oldest_active_lifecycle_ordinal(&self) -> Result<Option<u128>, EnqueueError> {
         let command_minimum = self.oldest_lifecycle_ordinal()?;
-        self.dormant_local_fifo_reservations.iter().try_fold(
-            command_minimum,
-            |minimum, reservation| {
-                if reservation.admission_ordinal == 0
-                    || !self
-                        .lifecycle_ordinals
-                        .recognizes_minted(reservation.admission_ordinal)
-                        .map_err(|_| EnqueueError::FailClosed)?
-                {
-                    return Err(EnqueueError::FailClosed);
-                }
-                Ok(Some(
-                    minimum.map_or(reservation.admission_ordinal, |ordinal| {
-                        ordinal.min(reservation.admission_ordinal)
-                    }),
-                ))
-            },
-        )
+        for reservation in &self.dormant_local_fifo_reservations {
+            if reservation.admission_ordinal == 0
+                || !self
+                    .lifecycle_ordinals
+                    .recognizes_minted(reservation.admission_ordinal)
+                    .map_err(|_| EnqueueError::FailClosed)?
+            {
+                return Err(EnqueueError::FailClosed);
+            }
+        }
+        // Dormant replay reservations are passive capacity claims, not
+        // runnable FIFO occurrences. Treating one as the dependency minimum
+        // would let an unmaterialized restart stage permanently suppress the
+        // exact completion which opens the reducer fence.
+        Ok(command_minimum)
     }
 
     /// Oldest owner which is allowed to precede an already-admitted producer
@@ -5350,23 +6017,42 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     fn oldest_active_lifecycle_ordinal_before_physical_cut_excluding(
         &self,
         physical_cut: u128,
-        excluded: &[RuntimeLifecycleOwner],
+        excluded_occurrences: &[RuntimeQueueOccurrenceOwner],
     ) -> Result<Option<u128>, EnqueueError> {
         if physical_cut == 0 {
             return Err(EnqueueError::FailClosed);
+        }
+        let mut excluded_by_admission = BTreeMap::new();
+        for owner in excluded_occurrences {
+            if !owner.validate_exact()
+                || !Arc::ptr_eq(&owner.source_identity, &self.selection_source_identity)
+                || excluded_by_admission
+                    .insert(owner.admission_ordinal, owner)
+                    .is_some()
+            {
+                return Err(EnqueueError::FailClosed);
+            }
         }
         let command_minimum = self.commands.iter().try_fold(
             None,
             |minimum, queued| -> Result<Option<u128>, EnqueueError> {
                 let ordinal = queued.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
-                if !queued.validate_admission_identity()
+                if !queued.validate_cached_admission_identity()
+                    || queued
+                        .cached_queue_occurrence_owner(&self.selection_source_identity)
+                        .is_none()
                     || !queued.causal_origin.validate_exact()
                     || queued.causal_origin.root_lifecycle_ordinal != Some(ordinal)
                 {
                     return Err(EnqueueError::FailClosed);
                 }
-                let owner = queued.lifecycle_owner()?;
-                if excluded.iter().any(|excluded| excluded == &owner) {
+                if let Some(excluded) = queued
+                    .admission_ordinal
+                    .and_then(|ordinal| excluded_by_admission.get(&ordinal))
+                {
+                    if !excluded.matches_queued(&self.selection_source_identity, queued) {
+                        return Err(EnqueueError::FailClosed);
+                    }
                     return Ok(minimum);
                 }
                 let post_cut_ingress = match (
@@ -5392,24 +6078,19 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 ))
             },
         )?;
-        self.dormant_local_fifo_reservations.iter().try_fold(
-            command_minimum,
-            |minimum, reservation| {
-                if reservation.admission_ordinal == 0
-                    || !self
-                        .lifecycle_ordinals
-                        .recognizes_minted(reservation.admission_ordinal)
-                        .map_err(|_| EnqueueError::FailClosed)?
-                {
-                    return Err(EnqueueError::FailClosed);
-                }
-                Ok(Some(
-                    minimum.map_or(reservation.admission_ordinal, |ordinal| {
-                        ordinal.min(reservation.admission_ordinal)
-                    }),
-                ))
-            },
-        )
+        for reservation in &self.dormant_local_fifo_reservations {
+            if reservation.admission_ordinal == 0
+                || !self
+                    .lifecycle_ordinals
+                    .recognizes_minted(reservation.admission_ordinal)
+                    .map_err(|_| EnqueueError::FailClosed)?
+            {
+                return Err(EnqueueError::FailClosed);
+            }
+        }
+        // Dormant replay reservations are validated above but remain passive
+        // until materialized as an actual queue occurrence.
+        Ok(command_minimum)
     }
 
     fn uses_lifecycle_ordinal(&self, lifecycle_ordinal: u128) -> Result<bool, EnqueueError> {
@@ -5444,6 +6125,24 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         Ok(false)
     }
 
+    fn contains_queue_occurrence_owner(
+        &self,
+        owner: &RuntimeQueueOccurrenceOwner,
+    ) -> Result<bool, EnqueueError> {
+        if !owner.validate_exact() {
+            return Err(EnqueueError::FailClosed);
+        }
+        for queued in &self.commands {
+            if queued.admission_ordinal == Some(owner.admission_ordinal) {
+                if !owner.matches_queued(&self.selection_source_identity, queued) {
+                    return Err(EnqueueError::FailClosed);
+                }
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn class_readiness(&self) -> (bool, bool, bool) {
         let class_ready = |class| self.commands.iter().any(|queued| queued.class == class);
         (
@@ -5461,55 +6160,126 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .min()
     }
 
-    /// Remove the first exact Completion command which satisfies a
-    /// runtime-validated dependency predicate without changing class-service
-    /// cursor or debt. This is reserved for the one callback which opens a
-    /// signing fence for strictly older, otherwise unserviceable adapter debt.
-    fn pop_fence_completion_with_ownership(
+    /// Remove the exact target-relative FIFO minimum among the matching fence
+    /// completion and every runnable predecessor at the same lifecycle rank.
+    ///
+    /// Causal siblings may share a lifecycle ordinal. Selection therefore
+    /// compares their immutable physical admission ordinal and FIFO position
+    /// before deciding whether the next owner is the completion or an ordinary
+    /// predecessor. Class cursor and service debt remain unchanged.
+    fn pop_fence_dependency_with_ownership(
         &mut self,
-        mut matches_fence: impl FnMut(&TaggedCommand<C>) -> bool,
-    ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError> {
-        // Validate the complete retained set before a dependency edge can
-        // bypass its ordinary minimum-lifecycle selection.
+        lifecycle_ordinal: u128,
+        physical_cut: u128,
+        mut matches_fence_completion: impl FnMut(&TaggedCommand<C>) -> bool,
+        mut is_unblocked_predecessor: impl FnMut(&TaggedCommand<C>) -> bool,
+    ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership, bool)>, EnqueueError> {
+        if lifecycle_ordinal == 0 || physical_cut == 0 {
+            return Err(EnqueueError::FailClosed);
+        }
+        // Validate the complete retained set before an exceptional dependency
+        // selection may bypass the ordinary class cursor.
         let _ = self.oldest_lifecycle_ordinal()?;
         let queue_before = self.ownership_snapshot();
-        let Some(index) = self
-            .commands
-            .iter()
-            .position(|queued| queued.class == CommandClass::Completion && matches_fence(queued))
-        else {
+        let mut selected_index = None;
+        let mut selected_key = None;
+        let mut selected_is_completion = false;
+        for (index, queued) in self.commands.iter().enumerate() {
+            if !queued.validate_cached_admission_identity()
+                || queued
+                    .cached_queue_occurrence_owner(&self.selection_source_identity)
+                    .is_none()
+            {
+                return Err(EnqueueError::FailClosed);
+            }
+            let queued_lifecycle = queued.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
+            if queued_lifecycle != lifecycle_ordinal {
+                continue;
+            }
+            let before_physical_cut = match (
+                queued.causal_origin.root_ingress_physical_ownership,
+                queued.ingress_ownership.as_ref(),
+            ) {
+                (Some(root), Some(ownership)) => {
+                    if ownership.contains_physical_carrier(root) != Ok(true) {
+                        return Err(EnqueueError::FailClosed);
+                    }
+                    u128::from(root.source_ordinal) < physical_cut
+                }
+                (Some(root), None) => u128::from(root.source_ordinal) < physical_cut,
+                (None, None) => true,
+                (None, Some(_)) => return Err(EnqueueError::FailClosed),
+            };
+            if !before_physical_cut {
+                continue;
+            }
+            let is_completion = queued.class == CommandClass::Completion
+                && queued.identity.kind == RuntimeCommandKind::SignatureCompleted
+                && queued.ingress_ownership.is_none()
+                && queued.causal_origin.root_identity.kind
+                    != RuntimeCommandKind::SignatureCompleted
+                && matches_fence_completion(queued);
+            let is_predecessor = !is_completion && is_unblocked_predecessor(queued);
+            if !is_completion && !is_predecessor {
+                continue;
+            }
+            let admission_ordinal = queued.admission_ordinal.ok_or(EnqueueError::FailClosed)?;
+            let key = (admission_ordinal, index);
+            if selected_key.is_none_or(|current| key < current) {
+                selected_key = Some(key);
+                selected_index = Some(index);
+                selected_is_completion = is_completion;
+            }
+        }
+        let Some(index) = selected_index else {
             return Ok(None);
         };
         let selected = self
             .commands
             .get(index)
-            .expect("selected fence completion remains present");
+            .expect("selected fence dependency remains present");
         let admission_ordinal = selected.admission_ordinal.ok_or(EnqueueError::FailClosed)?;
-        let lifecycle_ordinal = selected.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
+        let selected_lifecycle_ordinal =
+            selected.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
         let identity = selected.identity;
+        let ingress_exact = match identity.kind {
+            RuntimeCommandKind::Authenticated => selected.ingress_ownership.is_some(),
+            _ => selected.ingress_ownership.is_none(),
+        };
         if !selected.identity_deep_validated
             || !identity.validate_exact()
-            || identity.kind != RuntimeCommandKind::SignatureCompleted
-            || selected.ingress_ownership.is_some()
+            || !ingress_exact
             || !selected.causal_origin.validate_exact()
-            || selected.causal_origin.root_lifecycle_ordinal != Some(lifecycle_ordinal)
+            || selected.causal_origin.root_lifecycle_ordinal != Some(selected_lifecycle_ordinal)
+            || (selected_is_completion
+                && (identity.kind != RuntimeCommandKind::SignatureCompleted
+                    || selected.class != CommandClass::Completion
+                    || selected.causal_origin.root_identity.kind
+                        == RuntimeCommandKind::SignatureCompleted))
         {
             return Err(EnqueueError::FailClosed);
         }
         let fifo_position =
             u64::try_from(index).expect("bounded runtime FIFO position is representable as u64");
         let selection_seal = self.mint_selection_seal(
-            RuntimeQueueSelectionKind::FenceCompletion,
+            if selected_is_completion {
+                RuntimeQueueSelectionKind::FenceCompletion
+            } else {
+                RuntimeQueueSelectionKind::FencePredecessor
+            },
             &queue_before,
             selected.class.service_code(),
             fifo_position,
             admission_ordinal,
-            lifecycle_ordinal,
+            selected_lifecycle_ordinal,
             selected.eligible_skips,
             identity,
             selected.tag,
             selected.causal_origin.projection_hash,
-            None,
+            selected
+                .ingress_ownership
+                .as_ref()
+                .map(|ownership| ownership.projection_hash),
             queue_before.projection.service_cursor,
         )?;
         let mut candidate = RuntimeFifoCandidateOwnership {
@@ -5518,9 +6288,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             class: selected.class.service_code(),
             tag: selected.tag,
             admission_ordinal,
-            lifecycle_ordinal,
+            lifecycle_ordinal: selected_lifecycle_ordinal,
             causal_origin: selected.causal_origin.clone(),
-            ingress_ownership: None,
+            ingress_ownership: selected.ingress_ownership.clone(),
             fifo_position,
             eligible_skips_before: selected.eligible_skips,
             eligible_skips_after: 0,
@@ -5534,12 +6304,12 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let command = self
             .commands
             .remove(index)
-            .expect("selected fence completion remains present");
+            .expect("selected fence dependency remains present");
         debug_assert_eq!(
             queue_before.projection.len,
             self.ownership_projection().len + 1
         );
-        Ok(Some((command, candidate)))
+        Ok(Some((command, candidate, selected_is_completion)))
     }
 
     /// Remove one exact authenticated certified fence escape first, otherwise
@@ -5552,6 +6322,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     /// assertions cannot promote Normal work into this path.
     fn pop_pacemaker_progress_with_ownership(
         &mut self,
+        mut is_runnable: impl FnMut(&TaggedCommand<C>) -> bool,
         mut is_certified_fence_escape: impl FnMut(&C) -> bool,
     ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError> {
         let _ = self.oldest_lifecycle_ordinal()?;
@@ -5564,7 +6335,8 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 let eligible = matches!(
                     queued.class,
                     CommandClass::Completion | CommandClass::Progress
-                ) && queued.causal_origin.root_class == SERVICE_CLASS_PROGRESS;
+                ) && queued.causal_origin.root_class == SERVICE_CLASS_PROGRESS
+                    && is_runnable(queued);
                 eligible.then(|| {
                     let certified = queued.class == CommandClass::Progress
                         && queued.identity.kind == RuntimeCommandKind::Authenticated
@@ -5654,22 +6426,70 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         Ok(Some((command, candidate)))
     }
 
-    /// Return exact owners of queued commands which the driver proves cannot
-    /// cross its active reducer fence. The caller may remove only these aliases
-    /// from one dependency-minimum calculation; no queue item is consumed or
-    /// reordered here.
-    fn fence_blocked_lifecycle_owners(
+    /// Return exact physical occurrences of queued commands which the driver
+    /// proves cannot cross its active reducer fence. Causal siblings share a
+    /// logical lifecycle, so excluding only the root owner could accidentally
+    /// hide the matching completion which releases the fence.
+    fn fence_blocked_occurrence_owners(
         &self,
         mut is_blocked: impl FnMut(&TaggedCommand<C>) -> bool,
-    ) -> Result<Vec<RuntimeLifecycleOwner>, EnqueueError> {
+    ) -> Result<Vec<RuntimeQueueOccurrenceOwner>, EnqueueError> {
         // Validate the complete queue before any owner can be excluded from a
         // lifecycle comparison, including entries which do not match.
         let _ = self.oldest_lifecycle_ordinal()?;
         self.commands
             .iter()
             .filter(|queued| is_blocked(queued))
-            .map(|queued| queued.lifecycle_owner())
+            .map(|queued| {
+                queued
+                    .cached_queue_occurrence_owner(&self.selection_source_identity)
+                    .cloned()
+                    .ok_or(EnqueueError::FailClosed)
+            })
             .collect()
+    }
+
+    /// Return whether the exact command ordinary class rotation would select
+    /// is provably blocked by the adapter's active reducer fence.
+    ///
+    /// This does not skip the owner or mutate service debt. The live runtime
+    /// may temporarily report FIFO-not-ready only after adapter-deferred
+    /// ownership already exists; the matching causal completion uses its
+    /// separately sealed dependency edge to release that fence.
+    fn ordinary_candidate_is_fence_blocked(
+        &self,
+        mut is_blocked: impl FnMut(&TaggedCommand<C>) -> bool,
+    ) -> Result<bool, EnqueueError> {
+        if self.oldest_lifecycle_ordinal()?.is_none() {
+            return Ok(false);
+        }
+        let (completion_ready, progress_ready, normal_ready) = self.class_readiness();
+        let selection = select_bounded_service_class(
+            self.next_class.service_code(),
+            completion_ready,
+            progress_ready,
+            normal_ready,
+        );
+        if selection.selected == SERVICE_CLASS_NONE {
+            return Ok(false);
+        }
+        let class =
+            CommandClass::from_service_code(selection.selected).ok_or(EnqueueError::FailClosed)?;
+        let oldest_class_lifecycle_ordinal = self
+            .minimum_lifecycle_for_class(class)
+            .ok_or(EnqueueError::FailClosed)?;
+        let selected = self
+            .commands
+            .iter()
+            .find(|queued| {
+                queued.class == class
+                    && queued.lifecycle_ordinal == Some(oldest_class_lifecycle_ordinal)
+            })
+            .ok_or(EnqueueError::FailClosed)?;
+        if !selected.validate_admission_identity() {
+            return Err(EnqueueError::FailClosed);
+        }
+        Ok(is_blocked(selected))
     }
 
     fn pop_next_with_ownership(
@@ -5864,6 +6684,8 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     ) -> Result<(), EnqueueError> {
         let position =
             usize::try_from(candidate.fifo_position).map_err(|_| EnqueueError::FailClosed)?;
+        let candidate_occurrence = RuntimeQueueOccurrenceOwner::from_candidate(candidate)
+            .ok_or(EnqueueError::FailClosed)?;
         if !command.validate_admission_identity()
             || !candidate.identity.validate_exact()
             || !candidate.selection_seal.validate_identity()
@@ -5880,6 +6702,8 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             || command.causal_origin.root_lifecycle_ordinal != Some(candidate.lifecycle_ordinal)
             || command.ingress_ownership != candidate.ingress_ownership
             || command.eligible_skips != candidate.eligible_skips_before
+            || command.cached_queue_occurrence_owner(&self.selection_source_identity)
+                != Some(&candidate_occurrence)
             || candidate.eligible_skips_after != 0
             || position > self.commands.len()
             || self
@@ -6118,6 +6942,24 @@ impl BodyAvailableReservation {
         reservation.lifecycle_ordinal = Some(ownership.owner().lifecycle_ordinal());
         reservation.causal_origin = Some(ownership.owner().causal_origin().clone());
         reservation.candidate_semantic_statement = ownership.candidate_semantic_statement();
+        Ok(reservation)
+    }
+
+    fn coalesced_with_lifecycle_owner(
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        owner: RuntimeLifecycleOwner,
+        candidate_semantic_statement: Option<RuntimeCandidateSemanticStatement>,
+    ) -> Result<Self, EnqueueError> {
+        if !owner.validate_exact()
+            || candidate_semantic_statement.is_some_and(|statement| !statement.validate_exact())
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let mut reservation = Self::coalesced(tag, manifest);
+        reservation.lifecycle_ordinal = Some(owner.lifecycle_ordinal());
+        reservation.causal_origin = Some(owner.causal_origin().clone());
+        reservation.candidate_semantic_statement = candidate_semantic_statement;
         Ok(reservation)
     }
 
@@ -6605,6 +7447,38 @@ impl ExactRuntimeCommandIdentity for AdapterCommand {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum RuntimeBodyCompletionStorageTarget {
+    Queued(u128),
+    Reserved(u128),
+    Deferred(u128),
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeBodyCompletionOwnershipPlan {
+    tag: EventTag,
+    candidate: BodyPipelineCompletionEvidence,
+    retained_owner: RuntimeLifecycleOwner,
+    retained_statement: Option<RuntimeCandidateSemanticStatement>,
+    target: RuntimeBodyCompletionStorageTarget,
+    replacement_statement: Option<RuntimeCandidateSemanticStatement>,
+}
+
+impl RuntimeBodyCompletionOwnershipPlan {
+    fn effective_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
+        self.replacement_statement.or(self.retained_statement)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct RuntimePreparedBodyCompletionRefinements {
+    ingress: Vec<(
+        RuntimeBodyCompletionStorageTarget,
+        RuntimeCandidateSemanticStatement,
+    )>,
+    deferred: BTreeMap<u128, RuntimeDeferredLifecycleOwnership>,
+}
+
 impl BoundedIngress<AdapterCommand> {
     fn body_pipeline_completion_ownership(
         &self,
@@ -6655,7 +7529,14 @@ impl BoundedIngress<AdapterCommand> {
         &self,
         tag: EventTag,
         candidate: &BodyPipelineCompletionEvidence,
-    ) -> Result<Vec<RuntimeLifecycleOwner>, EnqueueError> {
+    ) -> Result<
+        Vec<(
+            RuntimeLifecycleOwner,
+            Option<RuntimeCandidateSemanticStatement>,
+            RuntimeBodyCompletionStorageTarget,
+        )>,
+        EnqueueError,
+    > {
         let mut owners = self
             .commands
             .iter()
@@ -6663,7 +7544,15 @@ impl BoundedIngress<AdapterCommand> {
                 queued.tag == tag
                     && queued.command.body_pipeline_completion_ownership(candidate) == Some(true)
             })
-            .map(TaggedCommand::lifecycle_owner)
+            .map(|queued| {
+                Ok((
+                    queued.lifecycle_owner()?,
+                    queued.candidate_semantic_statement,
+                    RuntimeBodyCompletionStorageTarget::Queued(
+                        queued.admission_ordinal.ok_or(EnqueueError::FailClosed)?,
+                    ),
+                ))
+            })
             .collect::<Result<Vec<_>, _>>()?;
         if let Some(reservation) = self
             .reserved_body_available
@@ -6674,13 +7563,37 @@ impl BoundedIngress<AdapterCommand> {
             } = candidate
             && reservation.manifest == *candidate_manifest
         {
-            owners.push(
+            owners.push((
                 reservation
                     .lifecycle_owner()
                     .ok_or(EnqueueError::FailClosed)?,
-            );
+                reservation.candidate_semantic_statement,
+                RuntimeBodyCompletionStorageTarget::Reserved(
+                    reservation
+                        .admission_ordinal
+                        .ok_or(EnqueueError::FailClosed)?,
+                ),
+            ));
         }
         Ok(owners)
+    }
+
+    fn exact_body_pipeline_completion_refinement_matches(
+        &self,
+        tag: EventTag,
+        candidate: &BodyPipelineCompletionEvidence,
+        target: RuntimeBodyCompletionStorageTarget,
+        owner: &RuntimeLifecycleOwner,
+        incumbent: RuntimeCandidateSemanticStatement,
+    ) -> Result<bool, EnqueueError> {
+        let retained = self.exact_body_pipeline_completion_owners(tag, candidate)?;
+        Ok(matches!(
+            retained.as_slice(),
+            [(retained_owner, Some(retained_statement), retained_target)]
+                if retained_owner == owner
+                    && *retained_statement == incumbent
+                    && *retained_target == target
+        ))
     }
 
     #[cfg(test)]
@@ -7195,6 +8108,7 @@ impl BoundedIngress<AdapterCommand> {
             let lifecycle_ordinal = reservation
                 .lifecycle_ordinal
                 .ok_or(EnqueueError::FailClosed)?;
+            command.mint_queue_occurrence_owner(&self.selection_source_identity)?;
             let incoming_tag = command.tag;
             let incoming_class = command.class.service_code();
             let retained_len = self
@@ -7723,6 +8637,8 @@ pub(crate) trait RuntimeDriver {
     type Effect;
     /// Fatal transition error.
     type Error: fmt::Display;
+    /// Exact equality identity of one active signer incarnation.
+    type SignatureFenceIdentity: Clone + Eq;
 
     /// Current authoritative reducer tag.
     fn current_tag(&self) -> EventTag;
@@ -7742,6 +8658,26 @@ pub(crate) trait RuntimeDriver {
     /// authenticated command token may opt an exact command into this escape.
     fn certified_progress_bypasses_signature_fence(&self, _command: &Self::Command) -> bool {
         false
+    }
+    /// Return whether a pending replay or persistence acknowledgement forbids
+    /// every pacemaker queue dispatch. The matching asynchronous completion
+    /// owns the only legal next reducer transition.
+    fn pacemaker_escape_is_parked(&self) -> bool {
+        false
+    }
+    /// Return whether the reducer is specifically waiting for a signature and
+    /// has no earlier persistence/replay fence. Only this state authorizes the
+    /// exact fence-dependency selector.
+    fn signature_fence_is_active(&self) -> bool {
+        false
+    }
+    /// Return the exact active signer owner. Runtime retry exclusions are
+    /// scoped to this identity so a successor signer cannot inherit debt from
+    /// the fence it replaced.
+    fn signature_fence_identity(
+        &self,
+    ) -> Result<Option<Self::SignatureFenceIdentity>, Self::Error> {
+        Ok(None)
     }
     /// Prove that a current-tag monotone terminal consumes an exact async
     /// effect owner rather than dropping an unrelated fresh lifecycle.
@@ -7817,7 +8753,7 @@ pub(crate) trait RuntimeDriver {
     /// Return whether this exact causally owned completion is the sole command
     /// which can open the adapter's current Busy-deferred signing fence.
     ///
-    /// The runtime uses this only when strictly older adapter debt is present
+    /// The runtime uses this only when target-relative adapter debt is present
     /// but unserviceable. Ordinary completions and stale or independent
     /// signature callbacks remain governed by immutable FIFO lifecycle order.
     /// Returning `true` also promises that dispatch consumes the signing fence;
@@ -7828,10 +8764,11 @@ pub(crate) trait RuntimeDriver {
     /// Return whether this exact queued command is demonstrably blocked by the
     /// same active fence as [`Self::completion_unblocks_deferred_fence`].
     ///
-    /// The runtime uses this proof only to ignore that command's queue alias
-    /// while locating the exact causal completion. External tasks, producer
-    /// reservations, timers, and commands which can terminate before the
-    /// reducer remain ordered blockers.
+    /// The runtime uses this proof only to ignore that exact physical queue
+    /// occurrence while locating the causal completion or the next runnable
+    /// same-rank predecessor. External tasks, producer reservations, timers,
+    /// and commands which can terminate before the reducer remain ordered
+    /// blockers.
     fn command_is_blocked_by_deferred_fence(
         &self,
         _tag: EventTag,
@@ -7927,6 +8864,7 @@ pub(crate) trait RuntimeDriver {
     /// drivers retain their opaque bytes; the production adapter overrides
     /// this seam to preserve the exact body-pipeline statement.
     fn effect_candidate_semantic_binding(
+        &self,
         effect: &Self::Effect,
         _inherited: Option<&RuntimeCandidateSemanticStatement>,
     ) -> Result<Option<RuntimeEffectCandidateSemantic>, String> {
@@ -7962,6 +8900,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
     type Command = AdapterCommand;
     type Effect = AdapterEffect;
     type Error = AdapterError;
+    type SignatureFenceIdentity = (EventTag, super::v2_core::SignableMessage);
 
     fn current_tag(&self) -> EventTag {
         SumeragiV2Adapter::current_tag(self)
@@ -7976,11 +8915,26 @@ impl RuntimeDriver for SumeragiV2Adapter {
     }
 
     fn certified_progress_bypasses_signature_fence(&self, command: &Self::Command) -> bool {
-        matches!(
-            command,
-            AdapterCommand::Authenticated(authenticated)
-                if wire_payload_is_certified_fence_escape(authenticated.payload())
-        )
+        self.signature_fence_is_active()
+            && matches!(
+                command,
+                AdapterCommand::Authenticated(authenticated)
+                    if wire_payload_is_certified_fence_escape(authenticated.payload())
+            )
+    }
+
+    fn pacemaker_escape_is_parked(&self) -> bool {
+        SumeragiV2Adapter::pacemaker_escape_is_parked(self)
+    }
+
+    fn signature_fence_is_active(&self) -> bool {
+        SumeragiV2Adapter::signature_fence_is_active(self)
+    }
+
+    fn signature_fence_identity(
+        &self,
+    ) -> Result<Option<Self::SignatureFenceIdentity>, Self::Error> {
+        Ok(SumeragiV2Adapter::signature_fence_identity(self))
     }
 
     fn owned_terminal_completion_matches_effect(
@@ -8281,10 +9235,49 @@ impl RuntimeDriver for SumeragiV2Adapter {
     }
 
     fn effect_candidate_semantic_binding(
+        &self,
         effect: &Self::Effect,
         inherited: Option<&RuntimeCandidateSemanticStatement>,
     ) -> Result<Option<RuntimeEffectCandidateSemantic>, String> {
-        production_adapter_effect_candidate_binding(effect, inherited)
+        let effective_inherited = match effect {
+            AdapterEffect::StoreBody { round, subject, .. }
+            | AdapterEffect::ValidateBody { round, subject, .. } => {
+                match self
+                    .replayed_decision_key()
+                    .map_err(|error| error.to_string())?
+                {
+                    Some((decision_round, proposal_round, decision_subject, commitment))
+                        if *round == proposal_round && *subject == decision_subject =>
+                    {
+                        let decision_statement = RuntimeCandidateSemanticStatement::new(
+                            decision_round,
+                            proposal_round,
+                            Some(decision_subject),
+                            Some(wire::GlobalPhase::Commit),
+                            Some(commitment),
+                        );
+                        if inherited.is_some_and(|parent| {
+                            parent.commit_refinement_to(decision_statement).is_none()
+                        }) {
+                            return Err(
+                                "Sumeragi v2 durable Decision body recovery conflicted with its causal authority"
+                                    .to_owned(),
+                            );
+                        }
+                        Some(decision_statement)
+                    }
+                    Some(_) | None => inherited.copied(),
+                }
+            }
+            AdapterEffect::Sign { .. }
+            | AdapterEffect::Broadcast(_)
+            | AdapterEffect::FetchBody { .. }
+            | AdapterEffect::Apply { .. }
+            | AdapterEffect::EnterView { .. }
+            | AdapterEffect::ReportEquivocation { .. }
+            | AdapterEffect::ReportInvalidCertifiedBody { .. } => inherited.copied(),
+        };
+        production_adapter_effect_candidate_binding(effect, effective_inherited.as_ref())
     }
 
     fn fresh_effect_semantic_identity(
@@ -8641,6 +9634,17 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     ingress: BoundedIngress<D::Command>,
     deferred_ingress_ownership: BTreeMap<u128, RuntimeIngressOwnershipEvidence>,
     deferred_lifecycle_ownership: BTreeMap<u128, RuntimeDeferredLifecycleOwnership>,
+    /// FIFO owners which received one exact dependency-predecessor turn but
+    /// hit retryable adapter capacity while the same signing fence remained.
+    /// They are temporarily excluded from that fence's dependency minimum so
+    /// retry cannot become a new cycle ahead of the completion which frees
+    /// the capacity. The set is bounded by the physical FIFO capacity.
+    fence_retry_blocked_fifo_owners: Vec<RuntimeQueueOccurrenceOwner>,
+    /// Exact signer incarnation which minted
+    /// `fence_retry_blocked_fifo_owners`. A duplicate TC/CommitQC preserves
+    /// this identity; a consumed or replaced signer retires the whole set
+    /// before another scheduler owner can observe it.
+    fence_retry_signature_fence_identity: Option<D::SignatureFenceIdentity>,
     /// Latest receiver-local physical high-watermark published by the outer
     /// runner immediately before a serialized runtime turn.
     ingress_physical_cut: u128,
@@ -8743,6 +9747,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             ingress,
             deferred_ingress_ownership: BTreeMap::new(),
             deferred_lifecycle_ownership: BTreeMap::new(),
+            fence_retry_blocked_fifo_owners: Vec::new(),
+            fence_retry_signature_fence_identity: None,
             ingress_physical_cut: 1,
             leader_wire_runtime_receipts: BTreeMap::new(),
             pending_leader_wire_terminals: VecDeque::new(),
@@ -8899,13 +9905,14 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 } else {
                     D::effect_causality(effect, source)
                 };
-                D::effect_candidate_semantic_binding(
-                    effect,
-                    matches!(causality, RuntimeEffectCausality::Inherit)
-                        .then_some(parent_statement)
-                        .flatten(),
-                )
-                .map_err(|_| EnqueueError::FailClosed)
+                self.driver
+                    .effect_candidate_semantic_binding(
+                        effect,
+                        matches!(causality, RuntimeEffectCausality::Inherit)
+                            .then_some(parent_statement)
+                            .flatten(),
+                    )
+                    .map_err(|_| EnqueueError::FailClosed)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let candidate_count_usize = candidate_semantics
@@ -10334,6 +11341,19 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         target: &RuntimeDeferredLifecycleOwnership,
         excluded: &[RuntimeLifecycleOwner],
     ) -> Result<Option<u128>, EnqueueError> {
+        self.minimum_active_lifecycle_ordinal_for_deferred_excluding_occurrences(
+            target,
+            excluded,
+            &[],
+        )
+    }
+
+    fn minimum_active_lifecycle_ordinal_for_deferred_excluding_occurrences(
+        &self,
+        target: &RuntimeDeferredLifecycleOwnership,
+        excluded: &[RuntimeLifecycleOwner],
+        excluded_occurrences: &[RuntimeQueueOccurrenceOwner],
+    ) -> Result<Option<u128>, EnqueueError> {
         if !target.validate_exact() {
             return Err(EnqueueError::FailClosed);
         }
@@ -10341,7 +11361,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .ingress
             .oldest_active_lifecycle_ordinal_before_physical_cut_excluding(
                 target.physical_cut,
-                excluded,
+                excluded_occurrences,
             )?;
         let mut observe = |owner: &RuntimeLifecycleOwner| -> Result<(), EnqueueError> {
             if !owner.validate_exact() {
@@ -10391,13 +11411,20 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(minimum)
     }
 
-    /// Adapter-deferred occurrences which may own the next runner turn under
-    /// every active continuation's immutable physical cut.
-    fn eligible_deferred_admission_ordinals(&self) -> Result<BTreeSet<u128>, EnqueueError> {
+    /// Adapter-deferred occurrences which are not physically behind another
+    /// active continuation or a frozen clock.
+    ///
+    /// This first-stage relation deliberately ignores logical FIFO rank. A
+    /// signing-fenced target can have an older runnable FIFO predecessor; the
+    /// dependency dispatcher must retain that target long enough to service
+    /// the predecessor instead of making the target ineligible because of the
+    /// very dependency which can unblock it.
+    fn physically_eligible_deferred_admission_ordinals(
+        &self,
+    ) -> Result<BTreeSet<u128>, EnqueueError> {
         // Pairwise target-relative precedence is not transitive when several
         // frozen physical intervals overlap.  First remove every occurrence
-        // whose source is physically behind any active target.  Only then may
-        // logical lifecycle rank select from the remaining acyclic pool.
+        // whose source is physically behind any active target or clock.
         if !deferred_lifecycle_ordinals_are_unique(&self.deferred_lifecycle_ownership)
             || self.validate_clock_owner_physical_cuts().is_err()
         {
@@ -10437,6 +11464,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     (!physically_behind_an_active_target).then_some(*admission_ordinal)
                 })
                 .collect::<BTreeSet<_>>();
+        Ok(physically_eligible)
+    }
+
+    /// Adapter-deferred occurrences which may own the next runner turn under
+    /// every active continuation's immutable physical cut and logical rank.
+    fn eligible_deferred_admission_ordinals(&self) -> Result<BTreeSet<u128>, EnqueueError> {
+        let physically_eligible = self.physically_eligible_deferred_admission_ordinals()?;
         let physically_ineligible_owners = self
             .deferred_lifecycle_ownership
             .iter()
@@ -10580,6 +11614,117 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
     }
 
+    fn current_signature_fence_identity(
+        &self,
+    ) -> Result<Option<D::SignatureFenceIdentity>, EnqueueError> {
+        let identity = self
+            .driver
+            .signature_fence_identity()
+            .map_err(|_| EnqueueError::FailClosed)?;
+        if self.driver.signature_fence_is_active() != identity.is_some() {
+            return Err(EnqueueError::FailClosed);
+        }
+        Ok(identity)
+    }
+
+    fn clear_fence_retry_blocked_fifo_owners(&mut self) {
+        self.fence_retry_blocked_fifo_owners.clear();
+        self.fence_retry_signature_fence_identity = None;
+    }
+
+    fn reconcile_fence_retry_blocked_fifo_owners(&mut self) -> Result<(), EnqueueError> {
+        if self.fence_retry_blocked_fifo_owners.is_empty() {
+            return if self.fence_retry_signature_fence_identity.is_none() {
+                Ok(())
+            } else {
+                Err(EnqueueError::FailClosed)
+            };
+        }
+        if self.driver.all_deferred_admission_ordinals().is_empty()
+            || self.driver.deferred_work_is_serviceable()
+            || !self.driver.signature_fence_is_active()
+        {
+            self.clear_fence_retry_blocked_fifo_owners();
+            return Ok(());
+        }
+        let Some(current_fence_identity) = self.current_signature_fence_identity()? else {
+            return Err(EnqueueError::FailClosed);
+        };
+        let Some(marker_fence_identity) = self.fence_retry_signature_fence_identity.as_ref() else {
+            return Err(EnqueueError::FailClosed);
+        };
+        if marker_fence_identity != &current_fence_identity {
+            self.clear_fence_retry_blocked_fifo_owners();
+            return Ok(());
+        }
+        if self.fence_retry_blocked_fifo_owners.len() > self.ingress.config.capacity {
+            return Err(EnqueueError::FailClosed);
+        }
+        let queue_snapshot = self.ingress.ownership_snapshot();
+        if !queue_snapshot.validate_identity() {
+            return Err(EnqueueError::FailClosed);
+        }
+        let mut retained = Vec::with_capacity(self.fence_retry_blocked_fifo_owners.len());
+        let mut seen = BTreeSet::new();
+        for owner in &self.fence_retry_blocked_fifo_owners {
+            if !seen.insert(owner.admission_ordinal) {
+                return Err(EnqueueError::FailClosed);
+            }
+            match queue_snapshot
+                .occurrence_index
+                .get(&owner.admission_ordinal)
+                .and_then(|index| queue_snapshot.occurrence_owners.get(*index))
+            {
+                Some(retained_owner) if retained_owner == owner => retained.push(owner.clone()),
+                Some(_) => return Err(EnqueueError::FailClosed),
+                None => {}
+            }
+        }
+        // A certified transition or pipeline terminal may legitimately retire
+        // a queued occurrence outside scheduler selection. Its obsolete retry
+        // exclusion must disappear with it; a same-ordinal identity mismatch
+        // still fails closed in `contains_queue_occurrence_owner` above.
+        self.fence_retry_blocked_fifo_owners = retained;
+        if self.fence_retry_blocked_fifo_owners.is_empty() {
+            self.fence_retry_signature_fence_identity = None;
+        }
+        Ok(())
+    }
+
+    fn retain_fence_retry_blocked_fifo_owner(
+        &mut self,
+        owner: RuntimeQueueOccurrenceOwner,
+    ) -> Result<(), EnqueueError> {
+        if self.driver.all_deferred_admission_ordinals().is_empty()
+            || self.driver.deferred_work_is_serviceable()
+            || !self.driver.signature_fence_is_active()
+            || !self.ingress.contains_queue_occurrence_owner(&owner)?
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let Some(current_fence_identity) = self.current_signature_fence_identity()? else {
+            return Err(EnqueueError::FailClosed);
+        };
+        match self.fence_retry_signature_fence_identity.as_ref() {
+            Some(marker_fence_identity) if marker_fence_identity != &current_fence_identity => {
+                return Err(EnqueueError::FailClosed);
+            }
+            Some(_) => {}
+            None if self.fence_retry_blocked_fifo_owners.is_empty() => {
+                self.fence_retry_signature_fence_identity = Some(current_fence_identity);
+            }
+            None => return Err(EnqueueError::FailClosed),
+        }
+        if self.fence_retry_blocked_fifo_owners.contains(&owner) {
+            return Ok(());
+        }
+        if self.fence_retry_blocked_fifo_owners.len() >= self.ingress.config.capacity {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.fence_retry_blocked_fifo_owners.push(owner);
+        Ok(())
+    }
+
     fn scheduler_arbitration_inputs(
         &self,
         now: Instant,
@@ -10592,13 +11737,37 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // already-authenticated certificates.
         let _ = self.minimum_active_lifecycle_ordinal()?;
         let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;
-        let fifo_ready = fifo_minimum.is_some();
-        let (completion_ready, progress_ready, normal_ready) = if fifo_ready {
+        let mut fifo_ready = fifo_minimum.is_some();
+        let (mut completion_ready, mut progress_ready, mut normal_ready) = if fifo_ready {
             self.ingress.class_readiness()
         } else {
             (false, false, false)
         };
         let timers_enabled = self.clocks_armed;
+        let queue_source_identity = &self.ingress.selection_source_identity;
+        if timers_enabled
+            && fifo_ready
+            && !self.deferred_lifecycle_ownership.is_empty()
+            && !self.driver.deferred_work_is_serviceable()
+            && self.ingress.ordinary_candidate_is_fence_blocked(|queued| {
+                self.driver
+                    .command_is_blocked_by_deferred_fence(queued.tag, &queued.command)
+                    || self
+                        .fence_retry_blocked_fifo_owners
+                        .iter()
+                        .any(|owner| owner.matches_queued(queue_source_identity, queued))
+            })?
+        {
+            // The command remains at its exact physical position. Reporting
+            // it runnable would merely recreate Busy under another wrapper
+            // (or collide with the producer lifecycle already retained by the
+            // adapter). A matching completion is selected by
+            // `dispatch_one_fence_dependency` before ordinary arbitration.
+            fifo_ready = false;
+            completion_ready = false;
+            progress_ready = false;
+            normal_ready = false;
+        }
         let raw_timeout_due = timers_enabled
             && !self.timeout_emitted
             && now.saturating_duration_since(self.round_started_at)
@@ -10625,10 +11794,16 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             progress_ready,
             normal_ready,
             fence_completion_bypass: false,
+            fence_dependency_minimum_lifecycle_ordinal: None,
+            fence_dependency_minimum_admission_ordinal: None,
+            fence_dependency_minimum_fifo_position: None,
+            fence_dependency_required_root_class: None,
             fence_predecessor_lifecycle_ordinal: None,
             fence_predecessor_ownership: None,
             fence_predecessor_ingress_ownership: None,
             fence_predecessor_occurrence_ownership: None,
+            fence_retry_blocked_fifo_before: self.fence_retry_blocked_fifo_owners.clone(),
+            fence_retry_marker_required: false,
         })
     }
 
@@ -10669,11 +11844,21 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             progress_ready: arbitration.progress_ready,
             normal_ready: arbitration.normal_ready,
             fence_completion_bypass: arbitration.fence_completion_bypass,
+            fence_dependency_minimum_lifecycle_ordinal: arbitration
+                .fence_dependency_minimum_lifecycle_ordinal,
+            fence_dependency_minimum_admission_ordinal: arbitration
+                .fence_dependency_minimum_admission_ordinal,
+            fence_dependency_minimum_fifo_position: arbitration
+                .fence_dependency_minimum_fifo_position,
+            fence_dependency_required_root_class: arbitration.fence_dependency_required_root_class,
             fence_predecessor_lifecycle_ordinal: arbitration.fence_predecessor_lifecycle_ordinal,
             fence_predecessor_ownership: arbitration.fence_predecessor_ownership,
             fence_predecessor_ingress_ownership: arbitration.fence_predecessor_ingress_ownership,
             fence_predecessor_occurrence_ownership: arbitration
                 .fence_predecessor_occurrence_ownership,
+            fence_retry_blocked_fifo_before: arbitration.fence_retry_blocked_fifo_before,
+            fence_retry_blocked_fifo_after: self.fence_retry_blocked_fifo_owners.clone(),
+            fence_retry_marker_required: arbitration.fence_retry_marker_required,
             fifo_owed_before: schedule_before.fifo_owed,
             fifo_owed_after: schedule_after.fifo_owed,
             projection_hash: iroha_crypto::Hash::new([]),
@@ -10723,6 +11908,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if !self.clocks_armed {
             return Err(RuntimeError::ClocksNotArmed);
         }
+        if self.reconcile_fence_retry_blocked_fifo_owners().is_err() {
+            self.latch_fail_closed("fence-predecessor retry ownership was invalid");
+            return Err(RuntimeError::FailClosed);
+        }
         if self.freeze_due_clock_owners(now).is_err() {
             self.latch_fail_closed("clock lifecycle ownership could not be frozen");
             return Err(RuntimeError::FailClosed);
@@ -10747,7 +11936,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // Busy again, and starve its dependency. Give only the exact causally
         // owned fence completion one bounded turn; every frozen timer and
         // scheduler debt remains intact for the immediately following call.
-        if !timeout_preempts && let Some(step) = self.dispatch_one_fence_dependency(now)? {
+        if !timeout_preempts && let Some(step) = self.dispatch_one_fence_dependency(now, None)? {
             return Ok(step);
         }
 
@@ -11099,10 +12288,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     ///
     /// A due absolute timeout is emitted first. Otherwise only a deeply
     /// validated Progress root (TimeoutVote, TC, PrepareQC, CommitQC), one of
-    /// its trusted Completion descendants, or an already-admitted deferred
-    /// continuation of that same root may run. `None` proves that this call
-    /// consumed no scheduler owner and is safe to use inside a retained I/O or
-    /// exact-Serve episode.
+    /// its trusted Completion descendants, an exact dependency which opens an
+    /// older signing fence, or an already-admitted deferred continuation of
+    /// that same root may run. `None` proves that this call consumed no
+    /// scheduler owner and is safe to use inside a retained I/O or exact-Serve
+    /// episode.
     pub(crate) fn try_step_pacemaker_escape(
         &mut self,
         now: Instant,
@@ -11120,6 +12310,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if !self.clocks_armed {
             return Err(RuntimeError::ClocksNotArmed);
         }
+        if self.reconcile_fence_retry_blocked_fifo_owners().is_err() {
+            self.latch_fail_closed("pacemaker fence-retry ownership was invalid");
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.driver.pacemaker_escape_is_parked() {
+            return Ok(None);
+        }
         if self.freeze_due_clock_owners(now).is_err() {
             self.latch_fail_closed("pacemaker escape could not freeze clock ownership");
             return Err(RuntimeError::FailClosed);
@@ -11134,6 +12331,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if timeout_due {
             return self.step(now).map(Some);
         }
+        if let Some(step) = self.dispatch_one_fence_dependency(now, Some(SERVICE_CLASS_PROGRESS))? {
+            return Ok(Some(step));
+        }
         if let Some(step) = self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS))? {
             return Ok(Some(step));
         }
@@ -11144,15 +12344,44 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &mut self,
         now: Instant,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
+        if self.driver.pacemaker_escape_is_parked() {
+            return Ok(None);
+        }
         let selected_round_tag = self.round_tag;
         let schedule = self.schedule;
         let queue_before = self.ingress.ownership_snapshot();
+        let fence_retry_blocked_fifo_before = self.fence_retry_blocked_fifo_owners.clone();
+        let retry_blocked_admissions = self
+            .fence_retry_blocked_fifo_owners
+            .iter()
+            .map(|owner| owner.admission_ordinal)
+            .collect::<BTreeSet<_>>();
+        let active_unserviceable_fence = self.driver.signature_fence_is_active()
+            && !self.driver.deferred_work_is_serviceable()
+            && !self.driver.all_deferred_admission_ordinals().is_empty();
         let driver = &self.driver;
         let selected = self
             .ingress
-            .pop_pacemaker_progress_with_ownership(|command| {
-                driver.certified_progress_bypasses_signature_fence(command)
-            })
+            .pop_pacemaker_progress_with_ownership(
+                |queued| {
+                    if queued
+                        .admission_ordinal
+                        .is_some_and(|ordinal| retry_blocked_admissions.contains(&ordinal))
+                    {
+                        return false;
+                    }
+                    if !active_unserviceable_fence {
+                        return true;
+                    }
+                    let certified = queued.class == CommandClass::Progress
+                        && driver.certified_progress_bypasses_signature_fence(&queued.command);
+                    certified
+                        || (queued.identity.kind != RuntimeCommandKind::SignatureCompleted
+                            && !driver
+                                .command_is_blocked_by_deferred_fence(queued.tag, &queued.command))
+                },
+                |command| driver.certified_progress_bypasses_signature_fence(command),
+            )
             .map_err(|_| {
                 self.latch_fail_closed("pacemaker Progress selection lost exact ownership");
                 RuntimeError::FailClosed
@@ -11203,6 +12432,18 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
             Err(error) => return Err(self.close(error)),
         };
+        if certified_fence_escape && (retry_unadmitted || retained_deferred_ingress) {
+            self.latch_fail_closed(
+                "certified pacemaker escape became retryable or adapter-deferred",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        // Keep retry exclusions through this evidence boundary. A duplicate
+        // but valid certificate leaves the exact signer unchanged and must
+        // not re-enable a retry spin. Before the next scheduling turn,
+        // reconciliation compares the stored signer identity and retires the
+        // exclusions only if certified progress really consumed or replaced
+        // that fence.
         let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
             self.latch_fail_closed("pacemaker Progress scheduler ownership was invalid");
             RuntimeError::FailClosed
@@ -11213,6 +12454,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         arbitration.completion_ready = false;
         arbitration.progress_ready = false;
         arbitration.normal_ready = false;
+        arbitration.fence_retry_blocked_fifo_before = fence_retry_blocked_fifo_before;
         if retry_unadmitted {
             if self
                 .ingress
@@ -11221,6 +12463,28 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             {
                 self.latch_fail_closed("pacemaker Progress retry lost its exact queue owner");
                 return Err(RuntimeError::FailClosed);
+            }
+            if self.driver.signature_fence_is_active()
+                && !self.driver.deferred_work_is_serviceable()
+                && !self.driver.all_deferred_admission_ordinals().is_empty()
+            {
+                arbitration.fence_retry_marker_required = true;
+                let Some(retry_owner) = RuntimeQueueOccurrenceOwner::from_candidate(&candidate)
+                else {
+                    self.latch_fail_closed(
+                        "pacemaker Progress retry lost its exact occurrence identity",
+                    );
+                    return Err(RuntimeError::FailClosed);
+                };
+                if self
+                    .retain_fence_retry_blocked_fifo_owner(retry_owner)
+                    .is_err()
+                {
+                    self.latch_fail_closed(
+                        "pacemaker Progress retry could not retain its bounded bypass owner",
+                    );
+                    return Err(RuntimeError::FailClosed);
+                }
             }
             let queue_after = self.ingress.ownership_snapshot();
             self.retain_scheduler_ownership(
@@ -11258,23 +12522,24 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         .map(Some)
     }
 
-    /// Dispatch the exact owned signature callback required by strictly
-    /// older, currently unserviceable adapter debt.
+    /// Dispatch the exact runnable FIFO dependency required by currently
+    /// unserviceable adapter debt.
     ///
     /// This is not Completion-class priority in general. The production
-    /// driver must prove that the callback matches its active signing fence,
-    /// the command must inherit a non-SignatureCompleted causal root, and at
-    /// least one exact older deferred lifecycle must remain blocked. The
-    /// completion must also be the oldest active lifecycle after excluding
-    /// only queued owners which the adapter proves are blocked by this same
-    /// fence. External tasks, active producers, reservations, and unrelated
-    /// or serviceable FIFO owners cannot be bypassed. The ownership carrier
-    /// records the exceptional dependency edge explicitly.
+    /// driver must prove that a callback matches its active signing fence and
+    /// at least one exact deferred lifecycle remains blocked. The selected
+    /// occurrence is the exact target-relative queue minimum after excluding
+    /// only physical occurrences proved blocked by the same fence. Runnable
+    /// FIFO owners and due clocks cannot be bypassed; passive external tasks,
+    /// producers, and reservations are validated but do not become scheduling
+    /// barriers. The ownership carrier records the exceptional edge and its
+    /// exact lifecycle/admission/position rank explicitly.
     fn dispatch_one_fence_dependency(
         &mut self,
         now: Instant,
+        required_predecessor_root_class: Option<u8>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
-        if self.driver.deferred_work_is_serviceable() {
+        if self.driver.deferred_work_is_serviceable() || !self.driver.signature_fence_is_active() {
             return Ok(None);
         }
         let active_deferred = self.driver.all_deferred_admission_ordinals();
@@ -11299,10 +12564,14 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.latch_fail_closed("unserviceable deferred work lost lifecycle ownership");
             return Err(RuntimeError::FailClosed);
         }
-        let eligible_deferred = self.eligible_deferred_admission_ordinals().map_err(|_| {
-            self.latch_fail_closed("fence-completion deferred physical-cut ownership was invalid");
-            RuntimeError::FailClosed
-        })?;
+        let eligible_deferred = self
+            .physically_eligible_deferred_admission_ordinals()
+            .map_err(|_| {
+                self.latch_fail_closed(
+                    "fence-completion deferred physical-cut ownership was invalid",
+                );
+                RuntimeError::FailClosed
+            })?;
         let Some((target_ordinal, target)) = eligible_deferred
             .iter()
             .filter_map(|ordinal| {
@@ -11346,7 +12615,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .collect::<Vec<_>>();
         let blocked_fifo_owners = self
             .ingress
-            .fence_blocked_lifecycle_owners(|queued| {
+            .fence_blocked_occurrence_owners(|queued| {
                 self.driver
                     .command_is_blocked_by_deferred_fence(queued.tag, &queued.command)
             })
@@ -11354,12 +12623,30 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 self.latch_fail_closed("fence-blocked FIFO ownership was invalid");
                 RuntimeError::FailClosed
             })?;
-        let mut blocked_dependency_owners = blocked_deferred_owners;
-        blocked_dependency_owners.extend(blocked_fifo_owners);
+        let blocked_dependency_owners = blocked_deferred_owners;
+        let mut blocked_by_admission = BTreeMap::new();
+        for owner in blocked_fifo_owners
+            .into_iter()
+            .chain(self.fence_retry_blocked_fifo_owners.iter().cloned())
+        {
+            match blocked_by_admission.insert(owner.admission_ordinal, owner.clone()) {
+                Some(previous) if previous != owner => {
+                    self.latch_fail_closed("fence-blocked FIFO occurrence identity changed");
+                    return Err(RuntimeError::FailClosed);
+                }
+                Some(_) | None => {}
+            }
+        }
+        let blocked_fifo_occurrences = blocked_by_admission.values().cloned().collect::<Vec<_>>();
+        let blocked_admissions = blocked_by_admission
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
         let Some(oldest_unblocked_lifecycle) = self
-            .minimum_active_lifecycle_ordinal_for_deferred_excluding(
+            .minimum_active_lifecycle_ordinal_for_deferred_excluding_occurrences(
                 &target,
                 &blocked_dependency_owners,
+                &blocked_fifo_occurrences,
             )
             .map_err(|_| {
                 self.latch_fail_closed("fence-completion successor ownership was invalid");
@@ -11391,25 +12678,37 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         arbitration.normal_ready = false;
         let selected_result = {
             let driver = &self.driver;
-            self.ingress.pop_fence_completion_with_ownership(|queued| {
-                queued.lifecycle_ordinal.is_some_and(|ordinal| {
-                    ordinal > oldest_deferred_lifecycle && ordinal == oldest_unblocked_lifecycle
-                }) && queued.causal_origin.root_identity.kind
-                    != RuntimeCommandKind::SignatureCompleted
-                    && driver.completion_unblocks_deferred_fence(queued.tag, &queued.command)
-            })
+            self.ingress.pop_fence_dependency_with_ownership(
+                oldest_unblocked_lifecycle,
+                target.physical_cut,
+                |queued| driver.completion_unblocks_deferred_fence(queued.tag, &queued.command),
+                |queued| {
+                    required_predecessor_root_class
+                        .is_none_or(|class| queued.causal_origin.root_class == class)
+                        && queued
+                            .admission_ordinal
+                            .is_some_and(|ordinal| !blocked_admissions.contains(&ordinal))
+                },
+            )
         };
-        let selected = match selected_result {
+        let Some((command, candidate, is_completion)) = (match selected_result {
             Ok(selected) => selected,
             Err(_) => {
-                self.latch_fail_closed("fence completion lost exact FIFO ownership");
+                self.latch_fail_closed("fence dependency lost exact FIFO ownership");
                 return Err(RuntimeError::FailClosed);
             }
-        };
-        let Some((command, candidate)) = selected else {
+        }) else {
+            // The target-relative minimum can instead belong to a due clock
+            // owner. Leave that owner to ordinary timer arbitration.
             return Ok(None);
         };
-        arbitration.fence_completion_bypass = true;
+        arbitration.fence_completion_bypass = is_completion;
+        arbitration.fence_dependency_minimum_lifecycle_ordinal = Some(candidate.lifecycle_ordinal);
+        arbitration.fence_dependency_minimum_admission_ordinal = Some(candidate.admission_ordinal);
+        arbitration.fence_dependency_minimum_fifo_position = Some(candidate.fifo_position);
+        arbitration.fence_dependency_required_root_class = (!is_completion)
+            .then_some(required_predecessor_root_class)
+            .flatten();
         arbitration.fence_predecessor_lifecycle_ordinal = Some(oldest_deferred_lifecycle);
         arbitration.fence_predecessor_ownership = Some(target);
         arbitration.fence_predecessor_ingress_ownership = target_ingress_ownership;
@@ -11424,10 +12723,91 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if owner.lifecycle_ordinal() != candidate.lifecycle_ordinal
             || owner.causal_origin() != &candidate.causal_origin
         {
-            self.latch_fail_closed("selected fence completion changed its lifecycle owner");
+            self.latch_fail_closed("selected fence dependency changed its lifecycle owner");
             return Err(RuntimeError::FailClosed);
         }
         let parent_statement = command.candidate_semantic_statement;
+        if !is_completion {
+            let current_ingress = if command.ingress_ownership.is_some() {
+                RuntimeDispatchIngress::DirectAuthenticated
+            } else {
+                RuntimeDispatchIngress::LocalOrCausal
+            };
+            let retry_command = command.clone();
+            let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
+                match self.driver.dispatch(command) {
+                    Ok(dispatch) => self.accept_driver_dispatch(
+                        dispatch,
+                        &owner,
+                        parent_statement,
+                        current_ingress,
+                    )?,
+                    Err(error) => return Err(self.close(error)),
+                };
+            if retry_unadmitted {
+                if self
+                    .ingress
+                    .restore_selected_command(retry_command, &candidate)
+                    .is_err()
+                {
+                    self.latch_fail_closed(
+                        "retryable fence predecessor lost its exact queue owner",
+                    );
+                    return Err(RuntimeError::FailClosed);
+                }
+                let Some(retry_owner) = RuntimeQueueOccurrenceOwner::from_candidate(&candidate)
+                else {
+                    self.latch_fail_closed(
+                        "retryable fence predecessor lost its exact occurrence identity",
+                    );
+                    return Err(RuntimeError::FailClosed);
+                };
+                if self
+                    .retain_fence_retry_blocked_fifo_owner(retry_owner)
+                    .is_err()
+                {
+                    self.latch_fail_closed(
+                        "retryable fence predecessor could not retain its bounded bypass owner",
+                    );
+                    return Err(RuntimeError::FailClosed);
+                }
+                arbitration.fence_retry_marker_required = true;
+                let queue_after = self.ingress.ownership_snapshot();
+                self.retain_scheduler_ownership(
+                    RuntimeSelectedOwnerKind::FencePredecessorRetryRetained,
+                    round_tag,
+                    RuntimeSelectedCandidateOwnership::Exact(candidate),
+                    queue_before,
+                    queue_after,
+                    arbitration,
+                    schedule,
+                    schedule,
+                )?;
+                return Ok(Some(RuntimeStep::Advanced(Vec::new())));
+            }
+            let queue_after = self.ingress.ownership_snapshot();
+            self.retain_scheduler_ownership(
+                RuntimeSelectedOwnerKind::FencePredecessor,
+                round_tag,
+                RuntimeSelectedCandidateOwnership::Exact(candidate),
+                queue_before,
+                queue_after,
+                arbitration,
+                schedule,
+                schedule,
+            )?;
+            return self
+                .finish_dispatched_step(
+                    now,
+                    effects,
+                    RuntimeEffectSource::Fifo,
+                    owner,
+                    parent_statement,
+                    producer_handoff,
+                    retained_deferred_ingress,
+                )
+                .map(Some);
+        }
         let dispatch = match self.driver.dispatch(command) {
             Ok(dispatch) => dispatch,
             Err(error) => return Err(self.close(error)),
@@ -11454,6 +12834,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.latch_fail_closed("matching fence completion retained retry state");
             return Err(RuntimeError::FailClosed);
         }
+        // Matcher-true consumed the exact signing fence. `Signed` may install
+        // the next queued signable without an observable fence-free interval,
+        // so retire every predecessor retry exclusion at this boundary.
+        self.clear_fence_retry_blocked_fifo_owners();
         let queue_after = self.ingress.ownership_snapshot();
         self.retain_scheduler_ownership(
             RuntimeSelectedOwnerKind::FenceCompletion,
@@ -11552,6 +12936,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         if self.clocks_armed {
             return Err(RuntimeError::RecoveryAfterClocksArmed);
+        }
+        // Interrupted-tip recovery replays an already decided local commit;
+        // it cannot legitimately await a fresh signature callback. Such a
+        // fence would have no live signer after restart, so reject the
+        // impossible ownership state instead of idling forever or retrying a
+        // fenced command under a second producer wrapper.
+        if !self.driver.all_deferred_admission_ordinals().is_empty()
+            && !self.driver.deferred_work_is_serviceable()
+        {
+            self.latch_fail_closed("recovery retained an unserviceable deferred signing fence");
+            return Err(RuntimeError::FailClosed);
         }
         if let Some(step) = self.dispatch_one_adapter_deferred(now, None)? {
             return Ok(step);
@@ -12109,6 +13504,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &self.driver
     }
 
+    /// Mutably borrow the driver for tests which must hold an exact
+    /// persistence crash cut across runtime construction.
+    #[cfg(test)]
+    pub(crate) fn driver_mut_for_test(&mut self) -> &mut D {
+        &mut self.driver
+    }
+
     /// Consume the shell and recover ownership of the adapter.
     pub(crate) fn into_driver(self) -> D {
         self.driver
@@ -12245,35 +13647,308 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
     }
 
+    fn resolve_body_pipeline_completion_owner(
+        &mut self,
+        tag: EventTag,
+        candidate: &BodyPipelineCompletionEvidence,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<Option<RuntimeBodyCompletionOwnershipPlan>, EnqueueError> {
+        if !ownership.validate_exact() {
+            self.latch_fail_closed("body completion retry omitted exact predecessor ownership");
+            return Err(EnqueueError::FailClosed);
+        }
+        if !self.body_pipeline_completion_is_owned(tag, candidate)? {
+            return Ok(None);
+        }
+        let ingress_retained = match self
+            .ingress
+            .exact_body_pipeline_completion_owners(tag, candidate)
+        {
+            Ok(retained) => retained,
+            Err(error) => {
+                self.latch_fail_closed(
+                    "exact ingress body completion lost its runtime lifecycle owner",
+                );
+                return Err(error);
+            }
+        };
+        let deferred_ordinals = self
+            .driver
+            .deferred_body_pipeline_completion_exact_owner_ordinals(tag, candidate);
+        let retained = match (ingress_retained.as_slice(), deferred_ordinals.as_slice()) {
+            ([(owner, statement, target)], []) => (owner.clone(), *statement, *target),
+            ([], [ordinal]) => {
+                let Some(deferred) = self.deferred_lifecycle_ownership.get(ordinal) else {
+                    self.latch_fail_closed(
+                        "exact deferred body completion lost its runtime lifecycle owner",
+                    );
+                    return Err(EnqueueError::FailClosed);
+                };
+                if deferred.deferred_admission_ordinal != *ordinal
+                    || !deferred.validate_active_against_ingress(
+                        self.deferred_ingress_ownership.get(ordinal),
+                        self.driver.deferred_admission_ordinal_source(),
+                    )
+                {
+                    self.latch_fail_closed(
+                        "exact deferred body completion had invalid runtime lifecycle ownership",
+                    );
+                    return Err(EnqueueError::FailClosed);
+                }
+                (
+                    deferred.owner.clone(),
+                    deferred.candidate_semantic_statement,
+                    RuntimeBodyCompletionStorageTarget::Deferred(*ordinal),
+                )
+            }
+            _ => {
+                self.latch_fail_closed(
+                    "coalesced body completion changed its exact lifecycle owner",
+                );
+                return Err(EnqueueError::FailClosed);
+            }
+        };
+        let (retained_owner, retained_statement, target) = retained;
+        // An asynchronous predecessor can publish its terminal completion
+        // before a retransmitted effect or a later Prepare/Commit carrier
+        // reaches the executor. Live Fetch/Store/Validate work already keeps
+        // one physical owner across exact retries; preserve that rule after
+        // the result has crossed into queued or Busy-deferred completion
+        // storage. The complete completion evidence, exact predecessor kind
+        // and body coordinates, and typed authority lattice must all agree,
+        // so an unrelated lifecycle or conflicting certificate still fails
+        // closed below.
+        let incoming_statement = ownership.candidate_semantic_statement();
+        let typed_predecessor_required = ownership.binding().is_some()
+            || retained_statement.is_some()
+            || incoming_statement.is_some();
+        let replacement_statement = if typed_predecessor_required {
+            if !ownership.binds_body_pipeline_completion_predecessor(candidate) {
+                self.latch_fail_closed("body completion retry changed its exact predecessor stage");
+                return Err(EnqueueError::FailClosed);
+            }
+            let Some(relation) = retained_statement
+                .zip(incoming_statement)
+                .and_then(|(incumbent, incoming)| incumbent.fetch_authority_relation_to(incoming))
+            else {
+                self.latch_fail_closed(
+                    "body completion retry changed its exact authority statement",
+                );
+                return Err(EnqueueError::FailClosed);
+            };
+            match relation {
+                RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
+                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => None,
+            }
+        } else {
+            if retained_owner != *ownership.owner() {
+                self.latch_fail_closed(
+                    "coalesced body completion changed its exact lifecycle owner",
+                );
+                return Err(EnqueueError::FailClosed);
+            }
+            None
+        };
+        Ok(Some(RuntimeBodyCompletionOwnershipPlan {
+            tag,
+            candidate: candidate.clone(),
+            retained_owner,
+            retained_statement,
+            target,
+            replacement_statement,
+        }))
+    }
+
+    fn prepare_body_pipeline_completion_refinements(
+        &mut self,
+        plans: &[RuntimeBodyCompletionOwnershipPlan],
+    ) -> Result<RuntimePreparedBodyCompletionRefinements, EnqueueError> {
+        let mut prepared = RuntimePreparedBodyCompletionRefinements::default();
+        let mut targets = BTreeSet::new();
+        for plan in plans {
+            let Some(replacement) = plan.replacement_statement else {
+                continue;
+            };
+            let Some(incumbent) = plan.retained_statement else {
+                self.latch_fail_closed(
+                    "authority upgrade omitted its incumbent body completion statement",
+                );
+                return Err(EnqueueError::FailClosed);
+            };
+            if !replacement.validate_exact() || !targets.insert(plan.target) {
+                self.latch_fail_closed(
+                    "authority upgrade had invalid or duplicate body completion targets",
+                );
+                return Err(EnqueueError::FailClosed);
+            }
+            match plan.target {
+                RuntimeBodyCompletionStorageTarget::Queued(_)
+                | RuntimeBodyCompletionStorageTarget::Reserved(_) => {
+                    let matches = match self
+                        .ingress
+                        .exact_body_pipeline_completion_refinement_matches(
+                            plan.tag,
+                            &plan.candidate,
+                            plan.target,
+                            &plan.retained_owner,
+                            incumbent,
+                        ) {
+                        Ok(matches) => matches,
+                        Err(error) => {
+                            self.latch_fail_closed(
+                                "authority upgrade could not validate its ingress completion owner",
+                            );
+                            return Err(error);
+                        }
+                    };
+                    if !matches {
+                        self.latch_fail_closed(
+                            "authority upgrade changed its ingress body completion owner",
+                        );
+                        return Err(EnqueueError::FailClosed);
+                    }
+                    prepared.ingress.push((plan.target, replacement));
+                }
+                RuntimeBodyCompletionStorageTarget::Deferred(ordinal) => {
+                    if self
+                        .driver
+                        .deferred_body_pipeline_completion_exact_owner_ordinals(
+                            plan.tag,
+                            &plan.candidate,
+                        )
+                        != vec![ordinal]
+                    {
+                        self.latch_fail_closed(
+                            "authority upgrade changed its deferred body completion target",
+                        );
+                        return Err(EnqueueError::FailClosed);
+                    }
+                    let Some(existing) = self.deferred_lifecycle_ownership.get(&ordinal) else {
+                        self.latch_fail_closed(
+                            "authority upgrade lost its deferred body completion owner",
+                        );
+                        return Err(EnqueueError::FailClosed);
+                    };
+                    if existing.owner != plan.retained_owner
+                        || existing.candidate_semantic_statement != Some(incumbent)
+                    {
+                        self.latch_fail_closed(
+                            "authority upgrade changed its deferred body completion owner",
+                        );
+                        return Err(EnqueueError::FailClosed);
+                    }
+                    let upgraded = match existing
+                        .clone()
+                        .with_candidate_semantic_statement(Some(replacement))
+                    {
+                        Ok(upgraded) => upgraded,
+                        Err(error) => {
+                            self.latch_fail_closed(
+                                "authority upgrade invalidated its deferred body completion owner",
+                            );
+                            return Err(error);
+                        }
+                    };
+                    if prepared.deferred.insert(ordinal, upgraded).is_some() {
+                        self.latch_fail_closed(
+                            "authority upgrade duplicated its deferred body completion owner",
+                        );
+                        return Err(EnqueueError::FailClosed);
+                    }
+                }
+            }
+        }
+        Ok(prepared)
+    }
+
+    fn commit_prepared_body_pipeline_completion_refinements(
+        &mut self,
+        prepared: RuntimePreparedBodyCompletionRefinements,
+    ) -> Result<(), EnqueueError> {
+        let ingress_targets_exist = prepared.ingress.iter().all(|(target, _)| match target {
+            RuntimeBodyCompletionStorageTarget::Queued(admission_ordinal) => self
+                .ingress
+                .commands
+                .iter()
+                .any(|queued| queued.admission_ordinal == Some(*admission_ordinal)),
+            RuntimeBodyCompletionStorageTarget::Reserved(admission_ordinal) => self
+                .ingress
+                .reserved_body_available
+                .as_ref()
+                .is_some_and(|reservation| {
+                    reservation.admission_ordinal == Some(*admission_ordinal)
+                }),
+            RuntimeBodyCompletionStorageTarget::Deferred(_) => false,
+        });
+        if !ingress_targets_exist
+            || !prepared
+                .deferred
+                .keys()
+                .all(|ordinal| self.deferred_lifecycle_ownership.contains_key(ordinal))
+        {
+            self.latch_fail_closed(
+                "prevalidated authority upgrade lost its body completion target",
+            );
+            return Err(EnqueueError::FailClosed);
+        }
+
+        // Every target was validated above and the serialized runtime admits
+        // only vacant batch keys before this assignment-only commit tail.
+        for (target, replacement) in prepared.ingress {
+            match target {
+                RuntimeBodyCompletionStorageTarget::Queued(admission_ordinal) => {
+                    self.ingress
+                        .commands
+                        .iter_mut()
+                        .find(|queued| queued.admission_ordinal == Some(admission_ordinal))
+                        .expect("prevalidated queued body completion target remains serialized")
+                        .candidate_semantic_statement = Some(replacement);
+                }
+                RuntimeBodyCompletionStorageTarget::Reserved(admission_ordinal) => {
+                    let reservation = self
+                        .ingress
+                        .reserved_body_available
+                        .as_mut()
+                        .expect("prevalidated body reservation remains serialized");
+                    debug_assert_eq!(reservation.admission_ordinal, Some(admission_ordinal));
+                    reservation.candidate_semantic_statement = Some(replacement);
+                }
+                RuntimeBodyCompletionStorageTarget::Deferred(_) => {
+                    unreachable!("deferred completion targets use the deferred refinement commit")
+                }
+            }
+        }
+        for (ordinal, replacement) in prepared.deferred {
+            *self
+                .deferred_lifecycle_ownership
+                .get_mut(&ordinal)
+                .expect("prevalidated deferred body completion target remains serialized") =
+                replacement;
+        }
+        Ok(())
+    }
+
     fn body_pipeline_completion_is_owned_by(
         &mut self,
         tag: EventTag,
         candidate: &BodyPipelineCompletionEvidence,
         ownership: &RuntimeEffectOwnership,
-    ) -> Result<bool, EnqueueError> {
-        if !self.body_pipeline_completion_is_owned(tag, candidate)? {
-            return Ok(false);
-        }
-        let mut retained = self
-            .ingress
-            .exact_body_pipeline_completion_owners(tag, candidate)?;
-        for ordinal in self
-            .driver
-            .deferred_body_pipeline_completion_exact_owner_ordinals(tag, candidate)
-        {
-            let Some(deferred) = self.deferred_lifecycle_ownership.get(&ordinal) else {
-                self.latch_fail_closed(
-                    "exact deferred body completion lost its runtime lifecycle owner",
-                );
-                return Err(EnqueueError::FailClosed);
-            };
-            retained.push(deferred.owner.clone());
-        }
-        if retained.len() != 1 || retained.first() != Some(ownership.owner()) {
-            self.latch_fail_closed("coalesced body completion changed its exact lifecycle owner");
-            return Err(EnqueueError::FailClosed);
-        }
-        Ok(true)
+    ) -> Result<
+        Option<(
+            RuntimeLifecycleOwner,
+            Option<RuntimeCandidateSemanticStatement>,
+        )>,
+        EnqueueError,
+    > {
+        let Some(plan) = self.resolve_body_pipeline_completion_owner(tag, candidate, ownership)?
+        else {
+            return Ok(None);
+        };
+        let result = (plan.retained_owner.clone(), plan.effective_statement());
+        let prepared =
+            self.prepare_body_pipeline_completion_refinements(std::slice::from_ref(&plan))?;
+        self.commit_prepared_body_pipeline_completion_refinements(prepared)?;
+        Ok(Some(result))
     }
 
     fn enqueue_body_pipeline_completion(
@@ -12295,7 +13970,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         command: AdapterCommand,
         ownership: &RuntimeEffectOwnership,
     ) -> Result<(), EnqueueError> {
-        if self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)? {
+        if self
+            .body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?
+            .is_some()
+        {
             return Ok(());
         }
         self.enqueue_with_lifecycle_owner(tag, CommandClass::Completion, command, ownership)
@@ -13229,8 +14907,15 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             return Err(EnqueueError::DuplicateCompletionOwnership);
         }
-        if self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)? {
-            return BodyAvailableReservation::coalesced_with_owner(tag, manifest, ownership);
+        if let Some((retained_owner, retained_statement)) =
+            self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?
+        {
+            return BodyAvailableReservation::coalesced_with_lifecycle_owner(
+                tag,
+                manifest,
+                retained_owner,
+                retained_statement,
+            );
         }
         let preflight =
             self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
@@ -14125,6 +15810,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         let mut keys = BTreeSet::new();
         let mut commands = Vec::with_capacity(failures.len());
+        let mut refinement_plans = Vec::new();
         let admitted_at = Instant::now();
         for (tag, round, subject, ownership) in failures {
             if !ownership.validate_exact() {
@@ -14141,7 +15827,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 round: *round,
                 subject: *subject,
             };
-            if self.body_pipeline_completion_is_owned_by(*tag, &evidence, ownership)? {
+            if let Some(plan) =
+                self.resolve_body_pipeline_completion_owner(*tag, &evidence, ownership)?
+            {
+                refinement_plans.push(plan);
                 continue;
             }
             let command = AdapterCommand::ValidationFailed {
@@ -14189,13 +15878,24 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             )?;
             tagged.restored_producer_stage =
                 restored_owner.map(|(_, producer_stage)| producer_stage);
+            tagged.candidate_semantic_statement = ownership.candidate_semantic_statement();
+            if !tagged.validate_admission_identity() {
+                self.latch_fail_closed(
+                    "owned validation failure batch lost its candidate statement",
+                );
+                return Err(EnqueueError::FailClosed);
+            }
             commands.push(tagged);
         }
-        let result = self.ingress.enqueue_completion_batch(commands);
-        if result == Err(EnqueueError::FailClosed) {
-            self.latch_fail_closed("owned validation failure batch validation failed");
+        let prepared = self.prepare_body_pipeline_completion_refinements(&refinement_plans)?;
+        match self.ingress.enqueue_completion_batch(commands) {
+            Ok(()) => self.commit_prepared_body_pipeline_completion_refinements(prepared),
+            Err(EnqueueError::FailClosed) => {
+                self.latch_fail_closed("owned validation failure batch validation failed");
+                Err(EnqueueError::FailClosed)
+            }
+            Err(error) => Err(error),
         }
-        result
     }
 
     /// Enqueue a signer completion without retagging it to the current view.
@@ -14457,6 +16157,7 @@ mod tests {
         deferred_dispatches: usize,
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
         deferred_active_ordinals: BTreeSet<u128>,
+        deferred_occurrence_ownership: BTreeMap<u128, DeferredOccurrenceOwnershipEvidence>,
         deferred_service_cursor: DeferredPriority,
         deferred_identity_unavailable: bool,
         deferred_evidence_overrides: VecDeque<DeferredServiceEvidence>,
@@ -14467,6 +16168,8 @@ mod tests {
             wire::BlockSubject,
             wire::ExecutionCommitment,
         )>,
+        signature_fence_active: bool,
+        signature_fence_identity: u64,
     }
 
     impl FakeDriver {
@@ -14482,12 +16185,15 @@ mod tests {
                 deferred_dispatches: 0,
                 deferred_admission_ordinals: DeferredAdmissionOrdinalSource::new(0),
                 deferred_active_ordinals: BTreeSet::new(),
+                deferred_occurrence_ownership: BTreeMap::new(),
                 deferred_service_cursor: DeferredPriority::Completion,
                 deferred_identity_unavailable: false,
                 deferred_evidence_overrides: VecDeque::new(),
                 admission_preflight_override: None,
                 dormant_local_fifo_reservations: Vec::new(),
                 protected_commit: None,
+                signature_fence_active: false,
+                signature_fence_identity: 1,
             }
         }
     }
@@ -14496,6 +16202,7 @@ mod tests {
         type Command = FakeCommand;
         type Effect = FakeEffect;
         type Error = FakeError;
+        type SignatureFenceIdentity = u64;
 
         fn current_tag(&self) -> EventTag {
             self.current_tag
@@ -14567,6 +16274,18 @@ mod tests {
             !self.deferred_effects.is_empty()
         }
 
+        fn signature_fence_is_active(&self) -> bool {
+            self.signature_fence_active
+        }
+
+        fn signature_fence_identity(
+            &self,
+        ) -> Result<Option<Self::SignatureFenceIdentity>, Self::Error> {
+            Ok(self
+                .signature_fence_active
+                .then_some(self.signature_fence_identity))
+        }
+
         fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource {
             &self.deferred_admission_ordinals
         }
@@ -14577,6 +16296,15 @@ mod tests {
 
         fn all_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
             self.deferred_active_ordinals.clone()
+        }
+
+        fn deferred_occurrence_ownership(
+            &self,
+            admission_ordinal: u128,
+        ) -> Option<DeferredOccurrenceOwnershipEvidence> {
+            self.deferred_occurrence_ownership
+                .get(&admission_ordinal)
+                .cloned()
         }
 
         fn synthetic_deferred_lifecycle_owner(
@@ -14795,6 +16523,31 @@ mod tests {
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote))
     }
 
+    fn signed_runtime_timeout_vote(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        view: u64,
+        signer: u32,
+    ) -> wire::ConsensusMessageV2 {
+        let mut vote = wire::TimeoutVote {
+            round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view,
+            },
+            highest_prepare_qc: None,
+            signer,
+            signature: Vec::new(),
+        };
+        vote.signature = Signature::new(
+            keys[usize::try_from(signer).expect("small signer index")].private_key(),
+            &vote.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(vote))
+    }
+
     fn fair_runtime_ownership(
         message: &wire::ConsensusMessageV2,
         semantic_origin: PeerId,
@@ -14863,10 +16616,20 @@ mod tests {
         marker: u8,
         phase: wire::GlobalPhase,
     ) -> wire::QuorumCertificate {
+        signed_runtime_quorum_certificate_for_phase_at_view(context, keys, marker, phase, 0)
+    }
+
+    fn signed_runtime_quorum_certificate_for_phase_at_view(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        marker: u8,
+        phase: wire::GlobalPhase,
+        view: u64,
+    ) -> wire::QuorumCertificate {
         let round = wire::ConsensusRound {
             context_id: context.id(),
             height: context.height,
-            view: 0,
+            view,
         };
         let subject = wire::BlockSubject {
             parent_block_hash: None,
@@ -14918,10 +16681,18 @@ mod tests {
         context: &wire::HeightContext,
         keys: &[KeyPair],
     ) -> wire::TimeoutCertificate {
+        signed_runtime_timeout_certificate_for_view(context, keys, 0)
+    }
+
+    fn signed_runtime_timeout_certificate_for_view(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        view: u64,
+    ) -> wire::TimeoutCertificate {
         let round = wire::ConsensusRound {
             context_id: context.id(),
             height: context.height,
-            view: 0,
+            view,
         };
         let signers = vec![0, 1, 2];
         let preimage = wire::TimeoutVote {
@@ -16085,6 +17856,29 @@ mod tests {
             .expect("queue-ownership fixture stages an exact completion");
     }
 
+    fn stage_owned_completion_for_queue_test(
+        runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+        tag: EventTag,
+        command: AdapterCommand,
+        ownership: &RuntimeEffectOwnership,
+    ) {
+        let mut tagged = TaggedCommand::with_causal_origin(
+            tag,
+            CommandClass::Completion,
+            command,
+            Instant::now(),
+            ownership.owner().causal_origin().clone(),
+            ownership.owner().lifecycle_ordinal(),
+        )
+        .expect("owned queue fixture retains the exact lifecycle owner");
+        tagged.candidate_semantic_statement = ownership.candidate_semantic_statement();
+        assert!(tagged.validate_admission_identity());
+        runtime
+            .ingress
+            .enqueue(tagged)
+            .expect("owned queue fixture stages an exact completion");
+    }
+
     /// Attach the same private local/causal runtime wrapper that production
     /// dispatch installs around one exact adapter-owned Busy occurrence.
     fn mint_local_lifecycle_owner_for_test(
@@ -16219,10 +18013,11 @@ mod tests {
             .expect("real test fair ingress produces exact source ownership")
     }
 
-    fn preowned_leader_wire_ownerships(
+    fn preowned_leader_wire_ownerships_with_dequeue_mode(
         context: &wire::HeightContext,
         messages: &[(wire::ConsensusMessageV2, PeerId)],
         lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+        push_all_before_dequeue: bool,
     ) -> (
         TempDir,
         Arc<super::super::FairV2Ingress>,
@@ -16292,9 +18087,8 @@ mod tests {
             .expect("bind preowned leader-wire gate");
         ingress.open().expect("open preowned fair ingress");
 
-        let ownerships = messages
-            .iter()
-            .map(|(message, semantic_origin)| {
+        if push_all_before_dequeue {
+            for (message, semantic_origin) in messages {
                 assert!(matches!(
                     ingress.try_push(InboundBlockMessage::new(
                         BlockMessage::V2(message.clone()),
@@ -16302,6 +18096,22 @@ mod tests {
                     )),
                     Ok(super::super::FairV2IngressPushDisposition::Enqueued)
                 ));
+            }
+        }
+
+        let ownerships = messages
+            .iter()
+            .enumerate()
+            .map(|(message_index, (message, semantic_origin))| {
+                if !push_all_before_dequeue {
+                    assert!(matches!(
+                        ingress.try_push(InboundBlockMessage::new(
+                            BlockMessage::V2(message.clone()),
+                            Some(semantic_origin.clone()),
+                        )),
+                        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+                    ));
+                }
                 let mut admitted = ingress
                     .try_recv()
                     .expect("drain preowned leader-wire occurrence");
@@ -16315,11 +18125,18 @@ mod tests {
                 let token = ownership
                     .leader_wire_token()
                     .expect("productive dequeue retains its immutable leader-wire token");
+                let remaining_ingress = gate
+                    .ingress_scheduler_ordinals()
+                    .expect("read durable owners after atomic handoff");
+                assert!(!remaining_ingress.contains(&token.scheduler_ordinal()));
                 assert_eq!(
-                    gate.ingress_scheduler_ordinals()
-                        .expect("read durable owners after atomic handoff"),
-                    std::collections::BTreeSet::new(),
-                    "atomic handoff removes the owner from the durable Ingress selector"
+                    remaining_ingress.len(),
+                    if push_all_before_dequeue {
+                        messages.len().saturating_sub(message_index + 1)
+                    } else {
+                        0
+                    },
+                    "atomic handoff removes only the dequeued durable Ingress owner"
                 );
                 {
                     let state = ingress.state.lock();
@@ -16347,6 +18164,40 @@ mod tests {
             })
             .collect();
         (directory, ingress, ownerships)
+    }
+
+    fn preowned_leader_wire_ownerships(
+        context: &wire::HeightContext,
+        messages: &[(wire::ConsensusMessageV2, PeerId)],
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    ) -> (
+        TempDir,
+        Arc<super::super::FairV2Ingress>,
+        Vec<FairV2IngressOwnershipEvidence>,
+    ) {
+        preowned_leader_wire_ownerships_with_dequeue_mode(
+            context,
+            messages,
+            lifecycle_ordinals,
+            false,
+        )
+    }
+
+    fn preowned_leader_wire_ownerships_at_shared_cut(
+        context: &wire::HeightContext,
+        messages: &[(wire::ConsensusMessageV2, PeerId)],
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    ) -> (
+        TempDir,
+        Arc<super::super::FairV2Ingress>,
+        Vec<FairV2IngressOwnershipEvidence>,
+    ) {
+        preowned_leader_wire_ownerships_with_dequeue_mode(
+            context,
+            messages,
+            lifecycle_ordinals,
+            true,
+        )
     }
 
     struct LeaderWireProposalFixture {
@@ -16663,6 +18514,61 @@ mod tests {
             physical_cut,
             runtime_seal,
         )
+    }
+
+    fn bind_fake_local_deferred_target_for_test(
+        runtime: &mut SerializedV2Runtime<FakeDriver>,
+        semantic_identity: &[u8],
+    ) -> u128 {
+        let target_lifecycle_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint one fake deferred target lifecycle");
+        let target_origin = RuntimeCandidateCausalOrigin::mint_fresh_root(
+            runtime.round_tag(),
+            CommandClass::Completion,
+            RuntimeFreshRootKind::StartupRecovery,
+            semantic_identity,
+        );
+        let target_owner = RuntimeLifecycleOwner::new(target_origin, target_lifecycle_ordinal)
+            .expect("bind the fake deferred target lifecycle");
+        let (occurrence, runtime_seal) =
+            DeferredOccurrenceOwnershipEvidence::local_for_runtime_test(
+                &runtime.driver.deferred_admission_ordinals,
+                target_owner.causal_origin().lifecycle_key.clone(),
+                target_owner.lifecycle_ordinal(),
+                runtime.ingress_physical_cut,
+            );
+        let deferred_ordinal = occurrence.admission_ordinal();
+        let deferred = RuntimeDeferredLifecycleOwnership::new(
+            target_owner,
+            deferred_ordinal,
+            RuntimeDispatchIngress::LocalOrCausal,
+            None,
+            runtime.ingress_physical_cut,
+            runtime_seal,
+        )
+        .expect("freeze the fake local deferred target");
+        assert!(
+            runtime
+                .driver
+                .deferred_active_ordinals
+                .insert(deferred_ordinal)
+        );
+        assert!(
+            runtime
+                .driver
+                .deferred_occurrence_ownership
+                .insert(deferred_ordinal, occurrence)
+                .is_none()
+        );
+        assert!(
+            runtime
+                .deferred_lifecycle_ownership
+                .insert(deferred_ordinal, deferred)
+                .is_none()
+        );
+        deferred_ordinal
     }
 
     fn enqueue_fake(
@@ -17176,6 +19082,13 @@ mod tests {
         runtime
             .arm_live_clocks(start)
             .expect("arm runtime after preowning peer ingress");
+        let before_timeout = start + Duration::from_secs(9);
+        assert!(matches!(
+            runtime
+                .step_and_take_scheduler_ownership_for_test(before_timeout)
+                .expect("service the pre-fence retransmission episode"),
+            RuntimeStep::Advanced(_)
+        ));
         let deadline = start + runtime.round_timeout();
         let timeout_step = runtime
             .step(deadline)
@@ -17204,7 +19117,6 @@ mod tests {
         runtime
             .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
             .expect("publish pending TimeoutVote signer owner");
-
         let first_physical_ordinal = first_ownership
             .physical_admission_ordinal()
             .expect("checked target owns one receiver-local occurrence");
@@ -17266,12 +19178,27 @@ mod tests {
         );
         assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
 
+        let queue_before_fenced_idle = runtime.ingress.ownership_snapshot();
         assert!(matches!(
             runtime
-                .step_and_take_scheduler_ownership_for_test(deadline)
+                .step(deadline)
                 .expect("the later duplicate cannot cross the active signing fence"),
             RuntimeStep::Idle
         ));
+        let fenced_idle = runtime
+            .take_last_scheduler_ownership()
+            .expect("fenced idle retains exact scheduler evidence");
+        assert_eq!(fenced_idle.selected, RuntimeSelectedOwnerKind::Idle);
+        assert_eq!(fenced_idle.validate_exact(), Ok(()));
+        assert_eq!(
+            fenced_idle.queue_before,
+            queue_before_fenced_idle.projection
+        );
+        assert_eq!(fenced_idle.queue_after, queue_before_fenced_idle.projection);
+        assert!(!fenced_idle.fifo_ready);
+        assert!(!fenced_idle.completion_ready);
+        assert!(!fenced_idle.progress_ready);
+        assert!(!fenced_idle.normal_ready);
         assert_eq!(runtime.queued_commands(), 1);
         assert_eq!(
             runtime.deferred_lifecycle_ownership[&deferred_ordinal], deferred_target,
@@ -17563,6 +19490,283 @@ mod tests {
         assert!(runtime.leader_wire_runtime_receipts.is_empty());
         assert!(runtime.deferred_ingress_ownership.is_empty());
         assert!(runtime.deferred_lifecycle_ownership.is_empty());
+        assert_eq!(runtime.queued_commands(), 0);
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
+        let directory = TempDir::new().expect("temporary mixed-fence runtime directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let target =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate_for_phase(
+                    &context,
+                    &keys,
+                    0xD8,
+                    wire::GlobalPhase::Prepare,
+                ),
+            ));
+        let blocked = signed_runtime_timeout_vote(&context, &keys, 0, 2);
+        let safe = signed_runtime_timeout_vote(&context, &keys, 2, 3);
+        let target_source = context.roster[1].validator.clone();
+        let blocked_source = context.roster[2].validator.clone();
+        let safe_source = context.roster[3].validator.clone();
+        let (_leader_wire_directory, _leader_wire_ingress, ownerships) =
+            preowned_leader_wire_ownerships_at_shared_cut(
+                &context,
+                &[
+                    (target.clone(), target_source),
+                    (blocked.clone(), blocked_source),
+                    (safe.clone(), safe_source),
+                ],
+                runtime.ingress.lifecycle_ordinals.clone(),
+            );
+        let [target_ownership, blocked_ownership, safe_ownership]: [FairV2IngressOwnershipEvidence;
+            3] = ownerships
+            .try_into()
+            .expect("fixture creates three exact owners at one checked-dequeue cut");
+        let target_token = target_ownership
+            .leader_wire_token()
+            .expect("target owns a durable runtime token")
+            .clone();
+        let blocked_token = blocked_ownership
+            .leader_wire_token()
+            .expect("blocked peer input owns a durable runtime token")
+            .clone();
+        let safe_token = safe_ownership
+            .leader_wire_token()
+            .expect("safe predecessor owns a durable runtime token")
+            .clone();
+        let target_receipt = target_ownership
+            .leader_wire_runtime_receipt()
+            .expect("target owns a durable runtime receipt")
+            .clone();
+        let blocked_receipt = blocked_ownership
+            .leader_wire_runtime_receipt()
+            .expect("blocked input owns a durable runtime receipt")
+            .clone();
+        let safe_receipt = safe_ownership
+            .leader_wire_runtime_receipt()
+            .expect("safe predecessor owns a durable runtime receipt")
+            .clone();
+        let target_cut = target_ownership
+            .runtime_physical_cut()
+            .expect("shared dequeue freezes one physical cut");
+        for ownership in [&target_ownership, &blocked_ownership, &safe_ownership] {
+            assert!(
+                u128::from(
+                    ownership
+                        .physical_admission_ordinal()
+                        .expect("each fixture input owns a physical occurrence")
+                ) < target_cut,
+                "every mixed-fence owner must physically precede the target cut"
+            );
+        }
+
+        let start = Instant::now();
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm runtime after preowning mixed peer ingress");
+        runtime
+            .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9))
+            .expect("service the pre-fence retransmission episode");
+        let deadline = start + runtime.round_timeout();
+        let timeout_step = runtime
+            .step(deadline)
+            .expect("absolute deadline opens TimeoutVote signing");
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("timeout retains exact scheduler ownership");
+        let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
+            panic!("absolute deadline unexpectedly idled")
+        };
+        let timeout_ownership = runtime
+            .take_effect_ownership(timeout_effects.len())
+            .expect("TimeoutVote Sign retains its timeout root");
+        let [timeout_ownership] = timeout_ownership.as_slice() else {
+            panic!("TimeoutVote Sign has one exact owner")
+        };
+        let (sign_tag, signature_preimage) = match timeout_effects.as_slice() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(vote),
+                },
+            ] => (*tag, vote.signature_preimage()),
+            effects => panic!("unexpected timeout effects: {effects:?}"),
+        };
+        runtime
+            .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
+            .expect("publish pending TimeoutVote signer owner");
+        runtime
+            .enqueue_network_with_ingress_ownership(target, target_ownership)
+            .expect("admit deferred target from the shared cut");
+        runtime
+            .enqueue_network_with_ingress_ownership(blocked, blocked_ownership)
+            .expect("admit independently blocked peer input");
+        runtime
+            .enqueue_network_with_ingress_ownership(safe, safe_ownership)
+            .expect("admit far-future TimeoutVote which terminates before the reducer");
+        assert_eq!(runtime.queued_commands(), 3);
+
+        assert!(matches!(
+            runtime
+                .step_and_take_scheduler_ownership_for_test(deadline)
+                .expect("move target into Busy-deferred ownership"),
+            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+        ));
+        assert!(!runtime.driver().deferred_work_is_serviceable());
+        assert_eq!(runtime.queued_commands(), 2);
+        let queue_before_predecessor = runtime.ingress.ownership_snapshot();
+        let (&deferred_ordinal, deferred_target) = runtime
+            .deferred_lifecycle_ownership
+            .iter()
+            .next()
+            .expect("target retains one exact Busy occurrence");
+        let deferred_target = deferred_target.clone();
+
+        let predecessor_step = runtime
+            .step(deadline)
+            .expect("oldest safe pre-cut owner runs before the fence completion");
+        let predecessor_scheduling = runtime
+            .take_last_scheduler_ownership()
+            .expect("fence predecessor retains scheduler evidence");
+        assert_eq!(
+            predecessor_scheduling.selected,
+            RuntimeSelectedOwnerKind::FencePredecessor
+        );
+        assert!(!predecessor_scheduling.fence_completion_bypass);
+        assert_eq!(predecessor_scheduling.validate_exact(), Ok(()));
+        let RuntimeSelectedCandidateOwnership::Exact(predecessor_candidate) =
+            &predecessor_scheduling.candidate
+        else {
+            panic!("safe predecessor retains exact FIFO ownership")
+        };
+        assert_eq!(
+            predecessor_candidate.lifecycle_ordinal,
+            safe_token.scheduler_ordinal()
+        );
+        assert_eq!(
+            predecessor_scheduling.queue_before.service_cursor,
+            predecessor_scheduling.queue_after.service_cursor,
+            "dependency predecessor cannot advance ordinary class rotation"
+        );
+        assert_eq!(
+            predecessor_scheduling.queue_before.max_service_debt,
+            predecessor_scheduling.queue_after.max_service_debt,
+            "dependency predecessor cannot replenish ordinary service debt"
+        );
+        assert_eq!(
+            predecessor_scheduling.queue_before,
+            queue_before_predecessor.projection
+        );
+        let RuntimeStep::Advanced(predecessor_effects) = predecessor_step else {
+            panic!("safe predecessor unexpectedly idled")
+        };
+        assert!(predecessor_effects.is_empty());
+        assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            runtime.deferred_lifecycle_ownership[&deferred_ordinal],
+            deferred_target
+        );
+        assert_eq!(
+            runtime.leader_wire_runtime_receipts,
+            BTreeMap::from([
+                (target_token.scheduler_ordinal(), target_receipt.clone()),
+                (blocked_token.scheduler_ordinal(), blocked_receipt.clone()),
+            ])
+        );
+        let safe_terminals = runtime.take_leader_wire_runtime_terminals();
+        let [safe_terminal] = safe_terminals.as_slice() else {
+            panic!("safe predecessor emits exactly its own terminal")
+        };
+        let safe_terminal_receipt = match safe_terminal {
+            LeaderWireRuntimeTerminal::Volatile(receipt)
+            | LeaderWireRuntimeTerminal::Producer {
+                runtime: receipt, ..
+            } => receipt,
+        };
+        assert_eq!(safe_terminal_receipt, &safe_receipt);
+
+        let signature = Signature::new(keys[0].private_key(), &signature_preimage)
+            .payload()
+            .to_vec();
+        runtime
+            .enqueue_signature_with_owner(sign_tag, signature, timeout_ownership)
+            .expect("enqueue exact owned TimeoutVote completion");
+        runtime
+            .set_external_lifecycle_owners(Vec::new())
+            .expect("retire pending signer after completion enqueue");
+        let completion_step = runtime
+            .step(deadline)
+            .expect("completion follows the retired safe predecessor");
+        let completion_scheduling = runtime
+            .take_last_scheduler_ownership()
+            .expect("completion retains dependency evidence");
+        assert_eq!(
+            completion_scheduling.selected,
+            RuntimeSelectedOwnerKind::FenceCompletion
+        );
+        assert_eq!(completion_scheduling.validate_exact(), Ok(()));
+        let RuntimeStep::Advanced(completion_effects) = completion_step else {
+            panic!("exact completion unexpectedly idled")
+        };
+        runtime
+            .take_effect_ownership(completion_effects.len())
+            .expect("consume completion effects");
+
+        let deferred_step = runtime
+            .step(deadline)
+            .expect("opened Busy target drains after its completion");
+        let deferred_scheduling = runtime
+            .take_last_scheduler_ownership()
+            .expect("deferred target retains scheduler ownership");
+        assert_eq!(
+            deferred_scheduling.selected,
+            RuntimeSelectedOwnerKind::Deferred
+        );
+        let RuntimeStep::Advanced(deferred_effects) = deferred_step else {
+            panic!("opened deferred target unexpectedly idled")
+        };
+        runtime
+            .take_effect_ownership(deferred_effects.len())
+            .expect("consume deferred target effects");
+        let target_terminals = runtime.take_leader_wire_runtime_terminals();
+        assert_eq!(target_terminals.len(), 1);
+
+        let blocked_step = runtime
+            .step(deadline)
+            .expect("blocked peer input runs normally after target retirement");
+        let blocked_scheduling = runtime
+            .take_last_scheduler_ownership()
+            .expect("blocked peer input retains its independent FIFO owner");
+        assert_eq!(blocked_scheduling.selected, RuntimeSelectedOwnerKind::Fifo);
+        let RuntimeStep::Advanced(blocked_effects) = blocked_step else {
+            panic!("released peer input unexpectedly idled")
+        };
+        runtime
+            .take_effect_ownership(blocked_effects.len())
+            .expect("consume released peer effects");
+        let blocked_terminals = runtime.take_leader_wire_runtime_terminals();
+        let [blocked_terminal] = blocked_terminals.as_slice() else {
+            panic!("released peer input emits exactly its own terminal")
+        };
+        let blocked_terminal_receipt = match blocked_terminal {
+            LeaderWireRuntimeTerminal::Volatile(receipt)
+            | LeaderWireRuntimeTerminal::Producer {
+                runtime: receipt, ..
+            } => receipt,
+        };
+        assert_eq!(blocked_terminal_receipt, &blocked_receipt);
+        assert!(runtime.leader_wire_runtime_receipts.is_empty());
+        assert!(runtime.deferred_lifecycle_ownership.is_empty());
+        assert!(runtime.fence_retry_blocked_fifo_owners.is_empty());
         assert_eq!(runtime.queued_commands(), 0);
         assert!(!runtime.fail_closed);
     }
@@ -20704,6 +22908,79 @@ mod tests {
     }
 
     #[test]
+    fn equal_lifecycle_fence_siblings_follow_exact_physical_rank() {
+        let admitted_at = Instant::now();
+        let owner_tag = tag(0);
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"fence-sibling-block")),
+            payload_hash: Hash::new(b"fence-sibling-payload"),
+        };
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(4, 2, 0));
+        let lifecycle_ordinal = ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("reserve one shared fence lifecycle");
+        let predecessor = AdapterCommand::ApplicationCompleted(subject);
+        let mut causal_origin =
+            RuntimeCandidateCausalOrigin::mint(owner_tag, CommandClass::Normal, &predecessor, None);
+        assert!(causal_origin.bind_lifecycle_ordinal(lifecycle_ordinal));
+        let sibling = |class, command| {
+            TaggedCommand::with_causal_origin(
+                owner_tag,
+                class,
+                command,
+                admitted_at,
+                causal_origin.clone(),
+                lifecycle_ordinal,
+            )
+            .expect("construct one exact same-lifecycle fence sibling")
+        };
+        ingress
+            .enqueue(sibling(CommandClass::Normal, predecessor))
+            .expect("enqueue the physical predecessor");
+        ingress
+            .enqueue(sibling(
+                CommandClass::Completion,
+                AdapterCommand::SignatureCompleted(vec![0xA5]),
+            ))
+            .expect("enqueue the later causal completion");
+
+        let (first, first_owner, first_is_completion) = ingress
+            .pop_fence_dependency_with_ownership(
+                lifecycle_ordinal,
+                u128::MAX,
+                |queued| matches!(queued.command, AdapterCommand::SignatureCompleted(_)),
+                |_| true,
+            )
+            .expect("the exact dependency rank is valid")
+            .expect("one equal-lifecycle owner is ready");
+        assert!(matches!(
+            first.command,
+            AdapterCommand::ApplicationCompleted(_)
+        ));
+        assert!(!first_is_completion);
+        assert_eq!(first_owner.fifo_position, 0);
+
+        let (second, second_owner, second_is_completion) = ingress
+            .pop_fence_dependency_with_ownership(
+                lifecycle_ordinal,
+                u128::MAX,
+                |queued| matches!(queued.command, AdapterCommand::SignatureCompleted(_)),
+                |_| true,
+            )
+            .expect("the remaining completion rank is valid")
+            .expect("the equal-lifecycle completion is ready after its predecessor");
+        assert!(matches!(
+            second.command,
+            AdapterCommand::SignatureCompleted(_)
+        ));
+        assert!(second_is_completion);
+        assert_eq!(second_owner.fifo_position, 0);
+        assert!(ingress.commands.is_empty());
+    }
+
+    #[test]
     fn preassigned_batch_lifecycles_require_shared_mint_and_exact_root() {
         let admitted_at = Instant::now();
         let owner_tag = tag(0);
@@ -23075,6 +25352,128 @@ mod tests {
     }
 
     #[test]
+    fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
+        let directory = TempDir::new().expect("temporary restored-TC runtime directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 2, 2),
+            Some(0),
+        );
+        let started_at = Instant::now();
+        runtime
+            .arm_live_clocks(started_at)
+            .expect("arm the restarted runtime before freezing its clock owner");
+
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate(&context, &keys),
+            ));
+        let source = context.roster[1].validator.clone();
+        let (_leader_wire_directory, _leader_wire_ingress, ownerships) =
+            preowned_leader_wire_ownerships(
+                &context,
+                &[(message.clone(), source)],
+                runtime.ingress.lifecycle_ordinals.clone(),
+            );
+        let [runtime_owned]: [FairV2IngressOwnershipEvidence; 1] = ownerships
+            .try_into()
+            .expect("fixture creates one exact durable Runtime owner");
+        let restored_receipt = runtime_owned
+            .leader_wire_runtime_receipt()
+            .expect("pre-crash TC owns one exact runtime receipt")
+            .clone();
+
+        // Restart normalizes Runtime/VolatileTerminal to Dormant.  Its exact
+        // retransmission regains an Ingress carrier with the old immutable
+        // token, but the new process has not yet frozen the Runtime receipt or
+        // receiver physical cut.  This is the precise pre-dequeue projection
+        // observed on Taira after restart.
+        let mut restored_pre_runtime = runtime_owned.clone();
+        restored_pre_runtime.runtime_physical_cut = None;
+        restored_pre_runtime.leader_wire_runtime_receipt = None;
+        assert!(restored_pre_runtime.validate_exact());
+        assert_eq!(
+            restored_pre_runtime.leader_wire_token(),
+            Some(restored_receipt.token())
+        );
+
+        let deadline = started_at + runtime.round_timeout();
+        let timeout_owner = runtime
+            .frozen_timeout_owner_for_test(deadline)
+            .expect("freeze the new process's absolute-timeout owner");
+        assert!(
+            restored_receipt.owner().admission_ordinal() < timeout_owner.lifecycle_ordinal(),
+            "the durable replay must retain its pre-restart scheduler position"
+        );
+        assert!(
+            runtime.can_admit_network_message_with_ingress_ownership(
+                &message,
+                &restored_pre_runtime,
+            ),
+            "a later clock reservation cannot pin an older durable replay at fair ingress"
+        );
+
+        // Model the checked dequeue's atomic Ingress -> Runtime handoff.  The
+        // mutating seam must agree with the read-only predicate and still
+        // authenticate the TC before it owns reducer capacity.
+        runtime
+            .enqueue_network_with_ingress_ownership(message, runtime_owned)
+            .expect("authenticate and enqueue the restored TC under its old owner");
+
+        let timeout_step = runtime
+            .step(deadline)
+            .expect("the absolute timeout retains its already-frozen turn");
+        let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
+            panic!("frozen timeout unexpectedly idled")
+        };
+        assert!(matches!(
+            timeout_effects.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("timeout publishes exact scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::Timeout
+        );
+        let timeout_effect_ownership = runtime
+            .take_effect_ownership(timeout_effects.len())
+            .expect("persisted TimeoutIntent transfers one signer owner");
+        assert_eq!(timeout_effect_ownership.len(), 1);
+        runtime
+            .set_external_lifecycle_owners(vec![
+                timeout_effect_ownership[0].owner().clone(),
+            ])
+            .expect("publish the pending timeout signer owner");
+
+        let tc_step = runtime
+            .try_step_pacemaker_escape(deadline)
+            .expect("restored authenticated TC remains a certified escape")
+            .expect("TC runs after the one-shot timeout persistence turn");
+        let RuntimeStep::Advanced(tc_effects) = tc_step else {
+            panic!("restored TC unexpectedly idled")
+        };
+        assert!(matches!(
+            tc_effects.as_slice(),
+            [AdapterEffect::EnterView { tag, .. }] if tag.view() == 1
+        ));
+        assert_eq!(runtime.round_tag().view(), 1);
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("TC publishes exact scheduler ownership");
+        runtime
+            .take_effect_ownership(tc_effects.len())
+            .expect("consume the TC EnterView ownership");
+        let terminals = runtime.take_leader_wire_runtime_terminals();
+        assert_eq!(terminals.len(), 1, "the restored TC terminalizes exactly once");
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
     fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() {
         let directory = TempDir::new().expect("temporary multi-source QC directory");
         let (mut runtime, context, keys) =
@@ -23778,6 +26177,191 @@ mod tests {
     }
 
     #[test]
+    fn periodic_decision_store_retry_carries_durable_commit_authority() {
+        let directory = TempDir::new().expect("temporary periodic Decision-store directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime for production dispatch");
+        runtime
+            .enqueue_network(signed_runtime_proposal(&context, &keys, 0x8C))
+            .expect("enqueue authenticated proposal");
+        let RuntimeStep::Advanced(proposal_effects) = runtime.step(now).expect("dispatch proposal")
+        else {
+            panic!("proposal dispatch unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("proposal dispatch publishes scheduler ownership");
+        let (tag, manifest) = match proposal_effects.as_slice() {
+            [
+                AdapterEffect::FetchBody {
+                    tag,
+                    manifest: Some(manifest),
+                    ..
+                },
+            ] => (*tag, manifest.clone()),
+            effects => panic!("unexpected proposal effects: {effects:?}"),
+        };
+        let proposal_ownership = runtime
+            .take_effect_ownership(proposal_effects.len())
+            .expect("FetchBody retains the proposal lifecycle owner");
+        let _proposal_terminals = runtime.take_leader_wire_runtime_terminals();
+        let reservation = runtime
+            .reserve_body_available_with_owner(tag, manifest.clone(), &proposal_ownership[0])
+            .expect("reserve reconstructed body under its FetchBody owner");
+        runtime
+            .commit_body_available(reservation)
+            .expect("publish the owned body reconstruction completion");
+
+        let RuntimeStep::Advanced(store_effects) =
+            runtime.step(now).expect("dispatch body reconstruction")
+        else {
+            panic!("body reconstruction unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("body reconstruction publishes scheduler ownership");
+        assert!(matches!(
+            store_effects.as_slice(),
+            [AdapterEffect::StoreBody {
+                round,
+                subject,
+                ..
+            }] if *round == manifest.round && *subject == manifest.subject
+        ));
+        let incumbent_store_ownership = runtime
+            .take_effect_ownership(store_effects.len())
+            .expect("ordinary StoreBody retains its FetchBody owner")
+            .pop()
+            .expect("one StoreBody has one owner");
+        let incumbent_statement = incumbent_store_ownership
+            .candidate_semantic_statement()
+            .expect("ordinary StoreBody retains an exact body statement");
+        assert_eq!(incumbent_statement.phase, None);
+        assert_eq!(incumbent_statement.execution_commitment, None);
+        runtime
+            .set_external_lifecycle_owners(vec![incumbent_store_ownership.owner().clone()])
+            .expect("publish the in-flight StoreBody owner to scheduler arbitration");
+        assert_eq!(
+            runtime
+                .driver
+                .body_state_for_test(manifest.round, manifest.subject),
+            super::super::v2_core::BodyState::Available,
+        );
+
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable);
+        runtime
+            .bind_validated_body(&manifest, &validated)
+            .expect("register the exact deterministic execution commitment");
+        let decision = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: manifest.subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x8D; 96],
+        };
+        runtime
+            .ingress
+            .enqueue_authenticated(
+                tag,
+                CommandClass::Progress,
+                AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+                )),
+            )
+            .expect("enqueue the authenticated CommitQC");
+        let RuntimeStep::Advanced(decision_effects) =
+            runtime.step(now).expect("install the durable Decision")
+        else {
+            panic!("CommitQC dispatch unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("Decision dispatch publishes scheduler ownership");
+        assert!(
+            decision_effects.is_empty(),
+            "an in-flight StoreBody remains the sole physical body task"
+        );
+        runtime
+            .take_effect_ownership(decision_effects.len())
+            .expect("empty Decision batch has no retained effect sidecar");
+        let _decision_terminals = runtime.take_leader_wire_runtime_terminals();
+        runtime
+            .retire_proposal_work_after_decision(
+                decision.proposal_round,
+                decision.subject,
+                decision.execution_commitment,
+            )
+            .expect("outer Decision reconciliation preserves body recovery");
+
+        let periodic_at = now + runtime.retransmit_interval();
+        let RuntimeStep::Advanced(recovery_effects) = runtime
+            .step(periodic_at)
+            .expect("periodic durable-Decision recovery advances")
+        else {
+            panic!("periodic durable-Decision recovery unexpectedly idled")
+        };
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("periodic recovery publishes scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::PeriodicTimer,
+        );
+        let recovery_store_positions = recovery_effects
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| {
+                matches!(
+                    effect,
+                    AdapterEffect::StoreBody { round, subject, .. }
+                        if *round == manifest.round && *subject == manifest.subject
+                )
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            recovery_store_positions.len(),
+            1,
+            "periodic Decision recovery must emit one exact StoreBody: {recovery_effects:?}"
+        );
+        assert!(recovery_effects.iter().enumerate().all(|(index, effect)| {
+            recovery_store_positions.contains(&index)
+                || matches!(effect, AdapterEffect::Broadcast(_))
+        }));
+        let recovery_ownership = runtime
+            .take_effect_ownership(recovery_effects.len())
+            .expect("periodic StoreBody retains exact durable authority")
+            .swap_remove(recovery_store_positions[0]);
+        assert_ne!(
+            recovery_ownership.owner(),
+            incumbent_store_ownership.owner(),
+            "the periodic producer remains a distinct physical retry root"
+        );
+        assert!(recovery_ownership.binds_durable_decision_authority(
+            decision.round,
+            decision.proposal_round,
+            decision.subject,
+            decision.execution_commitment,
+        ));
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
     fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
         let directory = TempDir::new().expect("temporary destination-coalescing directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
@@ -23863,6 +26447,72 @@ mod tests {
                 &body_effect_ownership[0],
             )
             .expect("enqueue durable-store completion");
+        let store_effect = body_effects[0].clone();
+        let retry_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint an independently admitted Store retry");
+        let retry_store = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&store_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                source_tag,
+                retry_ordinal,
+            )],
+        )
+        .expect("bind the independently admitted Store retry")
+        .pop()
+        .expect("one Store retry owns one candidate");
+        assert_ne!(retry_store.owner(), body_effect_ownership[0].owner());
+        runtime
+            .enqueue_body_stored_with_owner(
+                source_tag,
+                manifest.round,
+                manifest.subject,
+                durable.clone(),
+                &retry_store,
+            )
+            .expect("a late exact Store retry keeps the queued incumbent completion");
+
+        let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0x8D);
+        prepare.phase = wire::GlobalPhase::Prepare;
+        prepare.round = manifest.round;
+        prepare.proposal_round = manifest.round;
+        prepare.subject = manifest.subject;
+        let certified_fetch = AdapterEffect::FetchBody {
+            tag: source_tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(prepare.clone()),
+        };
+        let upgrade_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint an independently admitted certified carrier");
+        let certified_fetch_owner = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&certified_fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                source_tag,
+                upgrade_ordinal,
+            )],
+        )
+        .expect("bind the independently admitted certified Fetch")
+        .pop()
+        .expect("one certified Fetch owns one candidate");
+        let certified_store_owner = certified_fetch_owner
+            .rebind_as_inherited_adapter_effect(&store_effect)
+            .expect("certified Fetch passes its authority to Store");
+        runtime
+            .enqueue_body_stored_with_owner(
+                source_tag,
+                manifest.round,
+                manifest.subject,
+                durable.clone(),
+                &certified_store_owner,
+            )
+            .expect("a late certified Store carrier keeps the queued incumbent completion");
+        assert_eq!(runtime.queued_commands(), 1);
         let RuntimeStep::Advanced(store_effects) = runtime
             .step(now)
             .expect("dispatch durable-store completion")
@@ -23927,14 +26577,18 @@ mod tests {
             source_tag.view() + 1,
             Generation::new(source_tag.generation().get() + 1),
         );
+        // The body reconstructed above already owns a terminal serviced-
+        // candidate record. Use another exact body to exercise the live Busy
+        // lane instead of asking the adapter to resurrect that terminal.
+        let rebound_manifest = runtime_manifest(&context, 0x8E);
         let (body_ordinal, body_owner) = defer_persistent_body_available_for_test(
             &mut runtime,
             source_tag,
-            &manifest,
+            &rebound_manifest,
             b"body-available-retirement-owner",
         );
         let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
-            manifest: manifest.clone(),
+            manifest: rebound_manifest.clone(),
         };
         assert_eq!(
             runtime
@@ -23943,11 +26597,11 @@ mod tests {
             (1, 1),
             "the current tag owns the real Busy-deferred completion"
         );
-        observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
+        observe_enter_view_for_test(&mut runtime, source_tag, rebound, &rebound_manifest);
         assert_eq!(
             runtime
                 .driver
-                .rebind_deferred_body_available(source_tag, rebound, &manifest),
+                .rebind_deferred_body_available(source_tag, rebound, &rebound_manifest),
             1,
             "the seam models an exact destination owner already transferred by another path"
         );
@@ -23961,7 +26615,7 @@ mod tests {
         assert!(
             runtime
                 .driver
-                .deferred_body_available_has_persistent_producer(rebound, &manifest)
+                .deferred_body_available_has_persistent_producer(rebound, &rebound_manifest)
                 .expect("validate the rebound durable producer"),
             "the destination must retain the sole persistent producer root"
         );
@@ -23969,14 +26623,14 @@ mod tests {
             &mut runtime,
             source_tag,
             AdapterCommand::BodyAvailable {
-                manifest: manifest.clone(),
+                manifest: rebound_manifest.clone(),
             },
         );
         assert_eq!(runtime.queued_commands(), 1);
 
         assert!(
             runtime
-                .rebind_body_available(source_tag, rebound, &manifest)
+                .rebind_body_available(source_tag, rebound, &rebound_manifest)
                 .expect("exact destination ownership coalesces the source")
         );
         assert!(!runtime.fail_closed);
@@ -23998,7 +26652,7 @@ mod tests {
         );
         assert!(
             !runtime
-                .rebind_body_available(source_tag, rebound, &manifest)
+                .rebind_body_available(source_tag, rebound, &rebound_manifest)
                 .expect("an idempotent retry finds no remaining source owner")
         );
         let same_view_rebound = EventTag::new(
@@ -24006,10 +26660,10 @@ mod tests {
             rebound.view(),
             Generation::new(rebound.generation().get() + 1),
         );
-        observe_enter_view_for_test(&mut runtime, rebound, same_view_rebound, &manifest);
+        observe_enter_view_for_test(&mut runtime, rebound, same_view_rebound, &rebound_manifest);
         assert!(
             runtime
-                .rebind_body_available(rebound, same_view_rebound, &manifest)
+                .rebind_body_available(rebound, same_view_rebound, &rebound_manifest)
                 .expect("same-view generation supersession transfers the Busy-deferred owner")
         );
         assert_eq!(
@@ -24026,7 +26680,7 @@ mod tests {
         );
         assert!(
             runtime
-                .retire_body_available(same_view_rebound, &manifest)
+                .retire_body_available(same_view_rebound, &rebound_manifest)
                 .expect("the unique destination owner remains retireable")
         );
         assert!(
@@ -25295,6 +27949,577 @@ mod tests {
         assert_eq!(runtime.queued_commands(), 1);
         assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
         assert!(runtime.fail_closed);
+    }
+
+    #[test]
+    fn same_owner_wrong_stage_cannot_coalesce_a_body_completion() {
+        let directory = TempDir::new().expect("temporary wrong-stage owner directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0xA6);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let store_effect = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let incumbent_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint the exact Store lifecycle");
+        let incumbent = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&store_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                tag,
+                incumbent_ordinal,
+            )],
+        )
+        .expect("bind the exact Store predecessor")
+        .pop()
+        .expect("one Store owns one candidate");
+        stage_owned_completion_for_queue_test(
+            &mut runtime,
+            tag,
+            AdapterCommand::BodyStored {
+                round: manifest.round,
+                subject: manifest.subject,
+                receipt: durable.clone(),
+            },
+            &incumbent,
+        );
+        let retained_statement = runtime.ingress.commands[0].candidate_semantic_statement;
+        let next_ordinal = runtime.ingress.next_admission_ordinal;
+
+        let validate_effect = AdapterEffect::ValidateBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let wrong_stage = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&validate_effect),
+            vec![RuntimeEffectOwnership::inherited(incumbent.owner().clone())],
+        )
+        .expect("bind the same owner to a different pipeline stage")
+        .pop()
+        .expect("one Validate owns one candidate");
+        assert_eq!(wrong_stage.owner(), incumbent.owner());
+        assert_eq!(
+            runtime.enqueue_body_stored_with_owner(
+                tag,
+                manifest.round,
+                manifest.subject,
+                durable,
+                &wrong_stage,
+            ),
+            Err(EnqueueError::FailClosed),
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            runtime.ingress.commands[0].candidate_semantic_statement,
+            retained_statement,
+        );
+        assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
+        assert!(runtime.fail_closed);
+    }
+
+    #[test]
+    fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
+        let directory = TempDir::new().expect("temporary fetch-completion owner directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0xA8);
+        let ordinary_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let bind_fetch = |effect: &AdapterEffect, ordinal| {
+            bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+            )
+            .expect("bind exact test Fetch ownership")
+            .pop()
+            .expect("one Fetch owns one candidate")
+        };
+
+        let incumbent_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint incumbent Fetch lifecycle");
+        let incumbent = bind_fetch(&ordinary_fetch, incumbent_ordinal);
+        let first = runtime
+            .reserve_body_available_with_owner(tag, manifest.clone(), &incumbent)
+            .expect("reserve completion under the first Fetch owner");
+        runtime
+            .commit_body_available(first)
+            .expect("publish the first exact completion");
+        assert_eq!(runtime.queued_commands(), 1);
+
+        let retry_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint independently admitted retry carrier");
+        let retry = bind_fetch(&ordinary_fetch, retry_ordinal);
+        assert_ne!(retry.owner(), incumbent.owner());
+        let coalesced_retry = runtime
+            .reserve_body_available_with_owner(tag, manifest.clone(), &retry)
+            .expect("an exact late Fetch retry keeps the queued incumbent");
+        assert!(!coalesced_retry.owns_new_slot());
+        assert_eq!(
+            coalesced_retry.lifecycle_owner().as_ref(),
+            Some(incumbent.owner())
+        );
+        runtime
+            .commit_body_available(coalesced_retry)
+            .expect("coalesced retry publishes no second completion");
+
+        let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0xA9);
+        prepare.phase = wire::GlobalPhase::Prepare;
+        prepare.round = manifest.round;
+        prepare.proposal_round = manifest.round;
+        prepare.subject = manifest.subject;
+        let certified_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(prepare.clone()),
+        };
+        let upgrade_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint independently admitted certified carrier");
+        let upgrade = bind_fetch(&certified_fetch, upgrade_ordinal);
+        assert_ne!(upgrade.owner(), incumbent.owner());
+        let coalesced_upgrade = runtime
+            .reserve_body_available_with_owner(tag, manifest.clone(), &upgrade)
+            .expect("a late certified Fetch keeps the exact queued completion owner");
+        assert!(!coalesced_upgrade.owns_new_slot());
+        assert_eq!(
+            coalesced_upgrade.lifecycle_owner().as_ref(),
+            Some(incumbent.owner())
+        );
+        runtime
+            .commit_body_available(coalesced_upgrade)
+            .expect("authority upgrade publishes no second completion");
+        let upgraded_statement = upgrade
+            .candidate_semantic_statement()
+            .expect("certified Fetch carries its complete authority statement");
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            runtime.ingress.commands[0].candidate_semantic_statement,
+            Some(upgraded_statement),
+            "the incumbent owner must retain the strongest admitted authority",
+        );
+
+        let mut conflicting_prepare = prepare;
+        conflicting_prepare.execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"conflicting queued parent state"),
+            Hash::new(b"conflicting queued post state"),
+            Hash::new(b"conflicting queued writes"),
+            Hash::new(b"conflicting queued block"),
+        );
+        let conflicting_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(conflicting_prepare),
+        };
+        let conflicting_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint independently admitted conflicting carrier");
+        let conflicting = bind_fetch(&conflicting_fetch, conflicting_ordinal);
+        assert_eq!(
+            runtime.reserve_body_available_with_owner(tag, manifest, &conflicting),
+            Err(EnqueueError::FailClosed),
+            "a second Prepare commitment cannot masquerade as another upgrade",
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            runtime.ingress.commands[0].candidate_semantic_statement,
+            Some(upgraded_statement),
+            "conflicting authority must not rewrite the retained statement",
+        );
+        assert!(runtime.fail_closed);
+    }
+
+    #[test]
+    fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_authority() {
+        let directory = TempDir::new().expect("temporary deferred-store owner directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0xAA);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let store_effect = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let incumbent_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint incumbent Store lifecycle");
+        let incumbent_store = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&store_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                tag,
+                incumbent_ordinal,
+            )],
+        )
+        .expect("bind the incumbent ordinary Store")
+        .pop()
+        .expect("one Store owns one candidate");
+        let incumbent_statement = incumbent_store
+            .candidate_semantic_statement()
+            .expect("ordinary Store carries its exact body statement");
+
+        let deferred_before = runtime.driver.all_deferred_admission_ordinals();
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                tag,
+                &manifest,
+                DeferredBodyPipelineStageForTest::BodyStored,
+            )
+            .expect("stage the exact Busy-deferred Store completion");
+        let deferred_ordinals = runtime
+            .driver
+            .all_deferred_admission_ordinals()
+            .difference(&deferred_before)
+            .copied()
+            .collect::<Vec<_>>();
+        let [deferred_ordinal] = deferred_ordinals.as_slice() else {
+            panic!("one Store completion owns one Busy ordinal")
+        };
+        bind_deferred_lifecycle_owner_for_test(
+            &mut runtime,
+            *deferred_ordinal,
+            incumbent_store.owner().clone(),
+        );
+        let deferred = runtime
+            .deferred_lifecycle_ownership
+            .remove(deferred_ordinal)
+            .expect("Busy Store has one runtime ownership wrapper")
+            .with_candidate_semantic_statement(Some(incumbent_statement))
+            .expect("attach the exact ordinary Store statement");
+        assert!(
+            runtime
+                .deferred_lifecycle_ownership
+                .insert(*deferred_ordinal, deferred)
+                .is_none()
+        );
+
+        let evidence = BodyPipelineCompletionEvidence::BodyStored {
+            round: manifest.round,
+            subject: manifest.subject,
+            receipt: durable.clone(),
+        };
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_body_pipeline_completion_exact_owner_ordinals(tag, &evidence),
+            vec![*deferred_ordinal],
+        );
+
+        let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0xAB);
+        prepare.phase = wire::GlobalPhase::Prepare;
+        prepare.round = manifest.round;
+        prepare.proposal_round = manifest.round;
+        prepare.subject = manifest.subject;
+        let certified_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(prepare.clone()),
+        };
+        let upgrade_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint independently admitted certified Store carrier");
+        let certified_fetch_owner = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&certified_fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, upgrade_ordinal)],
+        )
+        .expect("bind the certified Fetch parent")
+        .pop()
+        .expect("one Fetch owns one candidate");
+        let upgraded_store = certified_fetch_owner
+            .rebind_as_inherited_adapter_effect(&store_effect)
+            .expect("certified Fetch passes its authority to Store");
+        let upgraded_statement = upgraded_store
+            .candidate_semantic_statement()
+            .expect("certified Store retains its Prepare statement");
+        assert_ne!(upgraded_store.owner(), incumbent_store.owner());
+
+        runtime
+            .enqueue_body_stored_with_owner(
+                tag,
+                manifest.round,
+                manifest.subject,
+                durable.clone(),
+                &upgraded_store,
+            )
+            .expect("certified Store retry coalesces under the Busy incumbent");
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(
+            runtime.driver.all_deferred_admission_ordinals(),
+            BTreeSet::from([*deferred_ordinal]),
+        );
+        let retained = runtime
+            .deferred_lifecycle_ownership
+            .get(deferred_ordinal)
+            .expect("authority upgrade retains the Busy wrapper");
+        assert_eq!(retained.owner(), incumbent_store.owner());
+        assert_eq!(
+            retained.candidate_semantic_statement,
+            Some(upgraded_statement),
+            "the Busy incumbent must retain the strongest admitted authority",
+        );
+        assert!(retained.validate_exact());
+        assert!(!runtime.fail_closed);
+
+        let mut conflicting_prepare = prepare;
+        conflicting_prepare.execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"conflicting deferred parent state"),
+            Hash::new(b"conflicting deferred post state"),
+            Hash::new(b"conflicting deferred writes"),
+            Hash::new(b"conflicting deferred block"),
+        );
+        let conflicting_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(conflicting_prepare),
+        };
+        let conflicting_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint independently admitted conflicting Store carrier");
+        let conflicting_fetch_owner = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&conflicting_fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                tag,
+                conflicting_ordinal,
+            )],
+        )
+        .expect("bind the conflicting Fetch parent")
+        .pop()
+        .expect("one conflicting Fetch owns one candidate");
+        let conflicting_store = conflicting_fetch_owner
+            .rebind_as_inherited_adapter_effect(&store_effect)
+            .expect("conflicting Fetch passes its authority to Store");
+        assert_eq!(
+            runtime.enqueue_body_stored_with_owner(
+                tag,
+                manifest.round,
+                manifest.subject,
+                durable,
+                &conflicting_store,
+            ),
+            Err(EnqueueError::FailClosed),
+            "a second Prepare commitment cannot masquerade as a Store upgrade",
+        );
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(
+            runtime.driver.all_deferred_admission_ordinals(),
+            BTreeSet::from([*deferred_ordinal]),
+        );
+        let retained = runtime
+            .deferred_lifecycle_ownership
+            .get(deferred_ordinal)
+            .expect("conflicting authority cannot retire the Busy wrapper");
+        assert_eq!(retained.owner(), incumbent_store.owner());
+        assert_eq!(
+            retained.candidate_semantic_statement,
+            Some(upgraded_statement),
+        );
+        assert!(retained.validate_exact());
+        assert!(runtime.fail_closed);
+    }
+
+    #[test]
+    fn owned_validation_batch_refines_authority_only_after_atomic_commit() {
+        let directory = TempDir::new().expect("temporary owned validation batch directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let tag = runtime.round_tag();
+        let incumbent_manifest = runtime_manifest(&context, 0xAC);
+        let validate_effect = AdapterEffect::ValidateBody {
+            tag,
+            round: incumbent_manifest.round,
+            subject: incumbent_manifest.subject,
+        };
+        let incumbent_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint incumbent Validate lifecycle");
+        let incumbent = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&validate_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                tag,
+                incumbent_ordinal,
+            )],
+        )
+        .expect("bind the incumbent ordinary Validate")
+        .pop()
+        .expect("one Validate owns one candidate");
+        runtime
+            .enqueue_validation_failed_with_owner(
+                tag,
+                incumbent_manifest.round,
+                incumbent_manifest.subject,
+                &incumbent,
+            )
+            .expect("queue the incumbent validation failure");
+        let incumbent_statement = incumbent
+            .candidate_semantic_statement()
+            .expect("ordinary Validate carries an exact body statement");
+        assert_eq!(
+            runtime.ingress.commands[0].candidate_semantic_statement,
+            Some(incumbent_statement),
+        );
+
+        let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0xAD);
+        prepare.phase = wire::GlobalPhase::Prepare;
+        prepare.round = incumbent_manifest.round;
+        prepare.proposal_round = incumbent_manifest.round;
+        prepare.subject = incumbent_manifest.subject;
+        let certified_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: incumbent_manifest.round,
+            subject: incumbent_manifest.subject,
+            manifest: Some(incumbent_manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(prepare),
+        };
+        let upgrade_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint certified Validate carrier");
+        let certified_fetch_owner = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&certified_fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, upgrade_ordinal)],
+        )
+        .expect("bind the certified Fetch parent")
+        .pop()
+        .expect("one Fetch owns one candidate");
+        let upgraded_validate = certified_fetch_owner
+            .rebind_as_inherited_adapter_effect(&validate_effect)
+            .expect("certified Fetch passes its authority to Validate");
+        let upgraded_statement = upgraded_validate
+            .candidate_semantic_statement()
+            .expect("certified Validate retains its Prepare statement");
+
+        let mut batch = vec![(
+            tag,
+            incumbent_manifest.round,
+            incumbent_manifest.subject,
+            upgraded_validate,
+        )];
+        for marker in [0xAE, 0xAF, 0xB0] {
+            let manifest = runtime_manifest(&context, marker);
+            let effect = AdapterEffect::ValidateBody {
+                tag,
+                round: manifest.round,
+                subject: manifest.subject,
+            };
+            let ordinal = runtime
+                .ingress
+                .mint_non_fifo_lifecycle_ordinal()
+                .expect("mint vacant Validate lifecycle");
+            let ownership = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+            )
+            .expect("bind one vacant Validate owner")
+            .pop()
+            .expect("one Validate owns one candidate");
+            batch.push((tag, manifest.round, manifest.subject, ownership));
+        }
+        let first_vacant_statement = batch[1]
+            .3
+            .candidate_semantic_statement()
+            .expect("vacant Validate carries its exact statement");
+        let next_ordinal = runtime.ingress.next_admission_ordinal;
+        assert_eq!(
+            runtime.enqueue_validation_failures_atomically_with_owners(&batch),
+            Err(EnqueueError::Full),
+            "capacity rejection must precede every authority refinement",
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
+        assert_eq!(
+            runtime.ingress.commands[0].candidate_semantic_statement,
+            Some(incumbent_statement),
+            "a rejected batch cannot strengthen an earlier coalesced member",
+        );
+        assert!(!runtime.fail_closed);
+
+        runtime
+            .enqueue_validation_failures_atomically_with_owners(&batch[..2])
+            .expect("a fitting batch atomically refines and publishes its vacant member");
+        assert_eq!(runtime.queued_commands(), 2);
+        let retained_incumbent = runtime
+            .ingress
+            .commands
+            .iter()
+            .find(|queued| {
+                matches!(
+                    &queued.command,
+                    AdapterCommand::ValidationFailed { round, subject }
+                        if *round == incumbent_manifest.round
+                            && *subject == incumbent_manifest.subject
+                )
+            })
+            .expect("the incumbent validation failure remains queued");
+        assert_eq!(
+            retained_incumbent.candidate_semantic_statement,
+            Some(upgraded_statement),
+        );
+        let first_vacant_subject = batch[1].2;
+        let retained_vacant = runtime
+            .ingress
+            .commands
+            .iter()
+            .find(|queued| {
+                matches!(
+                    &queued.command,
+                    AdapterCommand::ValidationFailed { subject, .. }
+                        if *subject == first_vacant_subject
+                )
+            })
+            .expect("the fitting vacant validation failure was published");
+        assert_eq!(
+            retained_vacant.candidate_semantic_statement,
+            Some(first_vacant_statement),
+            "new owner-aware batch commands must retain typed authority",
+        );
+        assert!(!runtime.fail_closed);
     }
 
     #[test]
@@ -27336,7 +30561,10 @@ mod tests {
 
         let (retired, _) = runtime
             .ingress
-            .pop_pacemaker_progress_with_ownership(|command| command.is_certified_fence_escape())
+            .pop_pacemaker_progress_with_ownership(
+                |_| true,
+                |command| command.is_certified_fence_escape(),
+            )
             .expect("the certified priority seam remains exact")
             .expect("the retained CommitQC is selectable");
         assert!(retired.command.is_certified_fence_escape());
@@ -27438,11 +30666,382 @@ mod tests {
             .expect("the exact token materializes without changing total ownership");
         assert_eq!(runtime.queued_commands(), 4);
         assert_eq!(runtime.remaining_completion_capacity(), 0);
+        let snapshot = runtime.ingress.ownership_snapshot();
+        assert!(snapshot.validate_identity());
+        for (fifo_position, owner) in snapshot.occurrence_owners.iter().enumerate() {
+            assert_eq!(
+                snapshot.occurrence_index.get(&owner.admission_ordinal),
+                Some(&fifo_position),
+                "a reserved earlier admission materialized at the FIFO tail without corrupting its exact position"
+            );
+        }
         assert!(!runtime.fail_closed);
     }
 
     #[test]
-    fn certified_tc_crosses_full_retry_retained_prepare_prefix() {
+    fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
+        let start = Instant::now();
+        let owner_tag = tag(0);
+        let mut driver = FakeDriver::new(owner_tag);
+        driver.retry_once.insert(0xE2);
+        driver.signature_fence_active = true;
+        let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(6, 2, 1));
+        enqueue_fake(
+            &mut runtime,
+            owner_tag,
+            CommandClass::Progress,
+            FakeCommand::record(0xE2),
+        )
+        .expect("admit one unblocked retryable Progress root");
+        bind_fake_local_deferred_target_for_test(&mut runtime, b"pacemaker-retry-target");
+
+        let first = runtime
+            .dispatch_one_pacemaker_progress(start)
+            .expect("retryable pacemaker dispatch remains exact")
+            .expect("the unmarked occurrence owns one bounded turn");
+        assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+        let evidence = runtime
+            .take_last_scheduler_ownership()
+            .expect("retry retains exact scheduler evidence");
+        assert_eq!(
+            evidence.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
+        );
+        assert!(evidence.fence_retry_marker_required);
+        assert!(evidence.fence_retry_blocked_fifo_before.is_empty());
+        let [retained_marker] = evidence.fence_retry_blocked_fifo_after.as_slice() else {
+            panic!("retry installs exactly one physical occurrence marker")
+        };
+        let retained_marker = retained_marker.clone();
+        assert_eq!(evidence.validate_exact(), Ok(()));
+
+        let mut missing_requirement = evidence.clone();
+        missing_requirement.fence_retry_marker_required = false;
+        missing_requirement.projection_hash =
+            runtime_scheduler_projection_hash(&missing_requirement);
+        assert_eq!(
+            missing_requirement.validate_exact(),
+            Err(RuntimeSchedulerEvidenceError::InvalidProjection),
+            "a coherently rehashed retry cannot omit its required marker transition"
+        );
+
+        assert!(
+            runtime
+                .dispatch_one_pacemaker_progress(start)
+                .expect("marked pacemaker selection remains valid")
+                .is_none(),
+            "the same retryable occurrence cannot spin on the next turn"
+        );
+        assert!(runtime.last_scheduler_ownership().is_none());
+
+        runtime
+            .reconcile_fence_retry_blocked_fifo_owners()
+            .expect("a duplicate certified transition preserves the same fence owner");
+        assert_eq!(
+            runtime.fence_retry_blocked_fifo_owners,
+            vec![retained_marker.clone()]
+        );
+
+        runtime.driver.signature_fence_identity += 1;
+        runtime
+            .reconcile_fence_retry_blocked_fifo_owners()
+            .expect("a successor signer retires the prior fence's retry exclusions");
+        assert!(runtime.fence_retry_blocked_fifo_owners.is_empty());
+        assert!(runtime.fence_retry_signature_fence_identity.is_none());
+
+        runtime
+            .retain_fence_retry_blocked_fifo_owner(retained_marker)
+            .expect("the still-queued occurrence can bind to the successor fence");
+        runtime.ingress.commands.pop_front();
+        runtime
+            .reconcile_fence_retry_blocked_fifo_owners()
+            .expect("an independently retired exact occurrence prunes its marker");
+        assert!(runtime.fence_retry_blocked_fifo_owners.is_empty());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn fence_predecessor_retry_gets_one_bounded_dependency_turn() {
+        let start = Instant::now();
+        let owner_tag = tag(0);
+        let mut driver = FakeDriver::new(owner_tag);
+        driver.signature_fence_active = true;
+        assert!(driver.retry_once.insert(0xD1));
+        let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(6, 2, 1));
+        enqueue_fake(
+            &mut runtime,
+            owner_tag,
+            CommandClass::Normal,
+            FakeCommand::record(0xD1),
+        )
+        .expect("admit one pre-target retryable predecessor");
+
+        let target_ordinal =
+            bind_fake_local_deferred_target_for_test(&mut runtime, b"retryable-fence-target");
+        assert_eq!(
+            runtime
+                .physically_eligible_deferred_admission_ordinals()
+                .expect("the target remains physically eligible behind its predecessor"),
+            BTreeSet::from([target_ordinal])
+        );
+        assert!(
+            runtime
+                .eligible_deferred_admission_ordinals()
+                .expect("ordinary deferred eligibility remains logically ordered")
+                .is_empty(),
+            "serviceable deferred work may not overtake its older FIFO predecessor"
+        );
+
+        let first = runtime
+            .dispatch_one_fence_dependency(start, None)
+            .expect("the retryable predecessor dependency remains exact")
+            .expect("the oldest predecessor owns one bounded turn");
+        assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+        let evidence = runtime
+            .take_last_scheduler_ownership()
+            .expect("retry retains exact fence-dependency evidence");
+        assert_eq!(
+            evidence.selected,
+            RuntimeSelectedOwnerKind::FencePredecessorRetryRetained
+        );
+        assert!(evidence.fence_retry_marker_required);
+        assert!(evidence.fence_retry_blocked_fifo_before.is_empty());
+        assert_eq!(evidence.fence_retry_blocked_fifo_after.len(), 1);
+        assert_eq!(evidence.queue_before, evidence.queue_after);
+        assert_eq!(evidence.validate_exact(), Ok(()));
+        assert_eq!(runtime.queued_commands(), 1);
+
+        assert!(
+            runtime
+                .dispatch_one_fence_dependency(start, None)
+                .expect("the marked dependency set remains valid")
+                .is_none(),
+            "the same retryable predecessor cannot spin ahead of its fence completion"
+        );
+        assert!(runtime.last_scheduler_ownership().is_none());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn stale_certified_escape_preserves_same_fence_retry_exclusion() {
+        let directory = TempDir::new().expect("temporary stale-certified directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(6, 2, 1),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before installing two certified views");
+
+        for certificate_view in [0_u64, 1] {
+            runtime
+                .enqueue_network(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                        signed_runtime_timeout_certificate_for_view(
+                            &context,
+                            &keys,
+                            certificate_view,
+                        ),
+                    ),
+                ))
+                .expect("admit the next exact view certificate");
+            let advanced = runtime
+                .try_step_pacemaker_escape(now)
+                .expect("certified view installation remains exact")
+                .expect("the next TC owns one pacemaker turn");
+            let RuntimeStep::Advanced(effects) = advanced else {
+                panic!("certified view installation unexpectedly idled")
+            };
+            assert!(matches!(
+                effects.as_slice(),
+                [AdapterEffect::EnterView { tag, .. }]
+                    if tag.view() == certificate_view + 1
+            ));
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("view installation retains exact scheduler evidence");
+            runtime
+                .take_effect_ownership(effects.len())
+                .expect("consume the installed view's effect ownership");
+        }
+
+        let signer_tag = runtime.round_tag();
+        assert_eq!(signer_tag.view(), 2);
+        let timeout = runtime
+            .driver
+            .timeout_elapsed(signer_tag)
+            .expect("open the view-two local TimeoutVote signer");
+        assert!(matches!(
+            timeout.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+        assert!(runtime.driver.signature_fence_is_active());
+
+        let prepare = |marker| {
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate_for_phase_at_view(
+                    &context,
+                    &keys,
+                    marker,
+                    wire::GlobalPhase::Prepare,
+                    2,
+                ),
+            ))
+        };
+        runtime
+            .enqueue_network(prepare(0xE7))
+            .expect("admit the deferred PrepareQC target");
+        let deferred = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("PrepareQC Busy handoff remains exact")
+            .expect("the first PrepareQC owns one pacemaker turn");
+        assert!(matches!(deferred, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("Busy PrepareQC retains exact scheduler evidence");
+        assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
+        assert!(!runtime.driver.deferred_work_is_serviceable());
+
+        let highest_prepare = signed_runtime_quorum_certificate_for_phase_at_view(
+            &context,
+            &keys,
+            0xE9,
+            wire::GlobalPhase::Prepare,
+            0,
+        );
+        let stale_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let signers = vec![0, 1, 2];
+        let stale_preimage = wire::TimeoutVote {
+            round: stale_round,
+            highest_prepare_qc: Some(highest_prepare.clone()),
+            signer: signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let stale_shares = signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("small signer index")].private_key(),
+                    &stale_preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let stale_share_refs = stale_shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let stale = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
+                round: stale_round,
+                groups: vec![wire::TimeoutVoteGroup {
+                    highest_prepare_qc: Some(highest_prepare),
+                    signers,
+                    aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                        &stale_share_refs,
+                    )
+                    .expect("aggregate the stale certified fixture"),
+                }],
+            }),
+        );
+        let marked_prepare = prepare(0xE8);
+        let marked_source = context.roster[1].validator.clone();
+        let stale_source = context.roster[2].validator.clone();
+        let (_leader_wire_directory, _leader_wire_ingress, ownerships) =
+            preowned_leader_wire_ownerships(
+                &context,
+                &[
+                    (marked_prepare.clone(), marked_source),
+                    (stale.clone(), stale_source),
+                ],
+                runtime.ingress.lifecycle_ordinals.clone(),
+            );
+        let [marked_ownership, stale_ownership]: [FairV2IngressOwnershipEvidence; 2] = ownerships
+            .try_into()
+            .expect("fixture creates one pre-cut marker and one post-cut certified owner");
+        let target_cut = runtime
+            .deferred_lifecycle_ownership
+            .values()
+            .next()
+            .expect("the PrepareQC target retains its frozen physical cut")
+            .physical_cut;
+        assert!(
+            u128::from(
+                marked_ownership
+                    .physical_admission_ordinal()
+                    .expect("marked PrepareQC owns a physical occurrence")
+            ) < target_cut
+        );
+        assert!(
+            u128::from(
+                stale_ownership
+                    .physical_admission_ordinal()
+                    .expect("stale TC owns a physical occurrence")
+            ) >= target_cut,
+            "the stale certified command must exercise the pacemaker path, not the pre-cut dependency path"
+        );
+
+        runtime
+            .enqueue_network_with_ingress_ownership(marked_prepare, marked_ownership)
+            .expect("admit one exact blocked FIFO occurrence");
+        let marker = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| {
+                queued
+                    .cached_queue_occurrence_owner(&runtime.ingress.selection_source_identity)
+                    .cloned()
+            })
+            .expect("blocked PrepareQC retains its exact occurrence owner");
+        runtime
+            .retain_fence_retry_blocked_fifo_owner(marker.clone())
+            .expect("bind the exact retry exclusion to the active signer");
+        let marker_before = runtime.fence_retry_blocked_fifo_owners.clone();
+        runtime
+            .enqueue_network_with_ingress_ownership(stale, stale_ownership)
+            .expect("admit a valid but stale certified escape");
+
+        let escaped = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("stale certified scheduling remains exact")
+            .expect("the authenticated stale TC owns one pacemaker turn");
+        assert!(matches!(escaped, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+        let evidence = runtime
+            .take_last_scheduler_ownership()
+            .expect("stale TC retains exact scheduler evidence");
+        assert_eq!(
+            evidence.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
+        );
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &evidence.candidate else {
+            panic!("stale TC owns one exact authenticated FIFO occurrence")
+        };
+        assert_eq!(
+            candidate.selection_seal.kind,
+            RuntimeQueueSelectionKind::PacemakerCertifiedProgress
+        );
+        assert_eq!(evidence.fence_retry_blocked_fifo_before, marker_before);
+        assert_eq!(evidence.fence_retry_blocked_fifo_after, marker_before);
+        assert_eq!(evidence.validate_exact(), Ok(()));
+        assert!(runtime.driver.signature_fence_is_active());
+        runtime
+            .reconcile_fence_retry_blocked_fifo_owners()
+            .expect("the unchanged view-two signer preserves its retry exclusion");
+        assert_eq!(runtime.fence_retry_blocked_fifo_owners, marker_before);
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn certified_tc_crosses_full_fence_blocked_prepare_prefix() {
         let directory = TempDir::new().expect("temporary certified-prefix directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
             &directory,
@@ -27497,18 +31096,14 @@ mod tests {
         runtime
             .enqueue_network(prepare(0xE2))
             .expect("admit the second PrepareQC");
-        let retry = runtime
-            .try_step_pacemaker_escape(now)
-            .expect("retry-retained PrepareQC scheduling is valid")
-            .expect("the second PrepareQC owns one bounded retry");
-        assert!(matches!(retry, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
-        let retry_owner = runtime
-            .take_last_scheduler_ownership()
-            .expect("retry-retained PrepareQC keeps exact scheduler ownership");
-        assert_eq!(
-            retry_owner.selected,
-            RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
+        assert!(
+            runtime
+                .try_step_pacemaker_escape(now)
+                .expect("blocked PrepareQC classification is valid")
+                .is_none(),
+            "pacemaker escape cannot repeatedly redispatch a fence-blocked PrepareQC"
         );
+        assert!(runtime.last_scheduler_ownership().is_none());
         assert_eq!(runtime.queued_commands(), 1);
 
         runtime

@@ -124,6 +124,7 @@ assert_mutation_failure_contract() {
   local log="$2"
   local expected_status="$3"
   local expected_primary="$4"
+  local expected_trace
   local diagnostic_count
   local whitespace_prefixed_count
   if [[ "$expected_status" -eq 12 ]]; then
@@ -132,12 +133,14 @@ assert_mutation_failure_contract() {
         "$label" "$log" \
         "status-12 mutation expected a named invariant primary diagnostic"
     }
+    expected_trace="Error: The behavior up to this point is:"
   elif [[ "$expected_status" -eq 13 ]]; then
     [[ "$expected_primary" == "Error: Temporal properties were violated." ]] || {
       sumeragi_v2_tlc_contract_fail \
         "$label" "$log" \
         "status-13 mutation expected the exact temporal primary diagnostic"
     }
+    expected_trace="Error: The following behavior constitutes a counter-example:"
   else
     sumeragi_v2_tlc_contract_fail \
       "$label" "$log" \
@@ -146,7 +149,7 @@ assert_mutation_failure_contract() {
   sumeragi_v2_tlc_assert_exact_line \
     "$label" "$log" "$expected_primary"
   sumeragi_v2_tlc_assert_exact_line \
-    "$label" "$log" "Error: The behavior up to this point is:"
+    "$label" "$log" "$expected_trace"
   diagnostic_count="$(
     grep -Ec \
       '^[[:space:]]*(Error:|Deadlock reached([.]|$)|Temporal properties were violated[.]$)' \
@@ -297,8 +300,6 @@ mutation_cases=(
   "external-continuation-missing-volatile|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_volatile_bug.cfg|VolatileDepartureInstallsExactContinuation"
   "external-continuation-synthetic-carrier|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_synthetic_carrier_bug.cfg|ExternalMaterializationRequiresExactCarrier"
   "external-continuation-resurrection|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_resurrection_bug.cfg|TerminalIdentityCannotResurrect"
-  "external-continuation-missing-conditional-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_conditional_fairness_bug.cfg|ExternalContinuationsReachTerminal"
-  "external-continuation-missing-volatile-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_volatile_fairness_bug.cfg|ExternalContinuationsReachTerminal"
   "empty-producer-handoff-missing-reservation|SumeragiV2EmptyProducerHandoffMutation.tla|empty_producer_handoff_missing_reservation_bug.cfg|EmptyProducerDepartureNeverBecomesUnowned"
   "producer-origin-missing-owner|SumeragiV2ProducerOriginReservationMutation.tla|producer_origin_reservation_missing_owner_bug.cfg|ScheduledOriginHasBoundedReservation"
   "producer-origin-new-ordinal|SumeragiV2ProducerOriginReservationMutation.tla|producer_origin_reservation_new_ordinal_bug.cfg|DepartureContinuationReusesAdmissionOrdinal"
@@ -353,6 +354,8 @@ done
 
 temporal_mutation_cases=(
   "revision4-certified-fence-reservation-blocked|SumeragiV2Revision4CertifiedFenceReservation.tla|revision4_certified_fence_reservation_blocked_bug.cfg"
+  "external-continuation-missing-conditional-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_conditional_fairness_bug.cfg"
+  "external-continuation-missing-volatile-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_volatile_fairness_bug.cfg"
   "producer-replay-capacity-replenishment-lasso|SumeragiV2ProducerReplayCapacityMutation.tla|producer_replay_capacity_replenishment_lasso_bug.cfg"
 )
 

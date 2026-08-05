@@ -397,8 +397,8 @@ Init ==
   /\ fanout = {}
   /\ responseSource = NoSource
   /\ responseOutcome = NoOutcome
-  /\ ~transportPassed
-  /\ ~lifecycleAdmitted
+  /\ transportPassed = FALSE
+  /\ lifecycleAdmitted = FALSE
 
 BeginStateAtCuts(
     nextScenario, nextAdmissions, nextWaiters, nextTombstones,
@@ -419,8 +419,8 @@ BeginStateAtCuts(
   /\ fanout' = {}
   /\ responseSource' = nextResponseSource
   /\ responseOutcome' = NoOutcome
-  /\ ~transportPassed'
-  /\ ~lifecycleAdmitted'
+  /\ transportPassed' = FALSE
+  /\ lifecycleAdmitted' = FALSE
 
 BeginState(
     nextScenario, nextAdmissions, nextWaiters, nextTombstones,
@@ -950,13 +950,13 @@ ClassifyCertifiedResponseAuthority ==
           \/ responseSource \in FrozenQcSigners
        THEN {"wire-R"}
        ELSE {}
-  /\ transportPassed'
-  /\ ~lifecycleAdmitted'
+  /\ transportPassed' = TRUE
+  /\ lifecycleAdmitted' = FALSE
   /\ UNCHANGED
        <<scenario, admissions, waiters, tombstones,
          dischargeOrder, producerRuns,
          nextLifecycleOrdinal, nextSchedulerOrdinal,
-         nextPhysicalOrdinal, signatureCount>>
+         nextPhysicalOrdinal, signatureCount, responseSource>>
 
 ApplyCertifiedRawContextGate ==
   /\ scenario \in
@@ -968,8 +968,8 @@ ApplyCertifiedRawContextGate ==
      THEN /\ transportPassed' =
                (scenario \in {"RawActive", "RawHistorical"})
           /\ lifecycleAdmitted' = (scenario = "RawActive")
-     ELSE /\ transportPassed'
-          /\ lifecycleAdmitted'
+     ELSE /\ transportPassed' = TRUE
+          /\ lifecycleAdmitted' = TRUE
   /\ UNCHANGED
        <<scenario, admissions, waiters, tombstones,
          dischargeOrder, producerRuns,
@@ -1026,8 +1026,8 @@ Next ==
 Spec == Init /\ [][Next]_vars
 
 RestartUnionDischargesEveryAdmission ==
-  /\ scenario = "Union"
-  /\ phase = "Complete"
+  (  /\ scenario = "Union"
+     /\ phase = "Complete")
     => /\ admissions = {}
        /\ waiters = {}
        /\ tombstones = UnionTerminals
@@ -1035,8 +1035,8 @@ RestartUnionDischargesEveryAdmission ==
        /\ signatureCount = 1
 
 RestartUnionUsesCanonicalOrder ==
-  /\ scenario = "Union"
-  /\ phase = "Complete"
+  (  /\ scenario = "Union"
+     /\ phase = "Complete")
     => dischargeOrder = CanonicalUnionOrder
 
 InterruptedDischargePersistsBeforeAdvance ==
@@ -1061,8 +1061,8 @@ InterruptedDischargePersistsBeforeAdvance ==
            /\ signatureCount = 1)
 
 InterruptedRestartResumesWithoutReopening ==
-  /\ scenario = "InterruptedUnion"
-  /\ phase = "Complete"
+  (  /\ scenario = "InterruptedUnion"
+     /\ phase = "Complete")
     => /\ admissions = {}
        /\ waiters = {}
        /\ tombstones = UnionTerminals
@@ -1071,8 +1071,8 @@ InterruptedRestartResumesWithoutReopening ==
        /\ signatureCount = 1
 
 CrashResumeDischargesEveryRemainingAdmission ==
-  /\ scenario = "InterruptedUnion"
-  /\ phase = "Complete"
+  (  /\ scenario = "InterruptedUnion"
+     /\ phase = "Complete")
     => /\ admissions = {}
        /\ waiters = {}
        /\ tombstones = UnionTerminals
@@ -1080,20 +1080,20 @@ CrashResumeDischargesEveryRemainingAdmission ==
        /\ signatureCount = 1
 
 CrashResumeUsesCanonicalRemainingOrder ==
-  /\ scenario = "InterruptedUnion"
-  /\ phase = "Complete"
+  (  /\ scenario = "InterruptedUnion"
+     /\ phase = "Complete")
     => dischargeOrder = CanonicalUnionOrder
 
 ProducerHiddenUntilStartupDischarged ==
-  /\ scenario \in {"Union", "InterruptedUnion"}
-  /\ phase \in
-       {"Pending", "InterruptedAfterFirst", "InterruptedCrashed",
-        "ResumedAfterSecond", "ResumedAfterSecondCrashed"}
+  (  /\ scenario \in {"Union", "InterruptedUnion"}
+     /\ phase \in
+          {"Pending", "InterruptedAfterFirst", "InterruptedCrashed",
+           "ResumedAfterSecond", "ResumedAfterSecondCrashed"})
     => producerRuns = 0
 
 TerminalReplayIsExactAndOrdinalStable ==
-  /\ scenario = "TerminalReplay"
-  /\ phase = "Complete"
+  (  /\ scenario = "TerminalReplay"
+     /\ phase = "Complete")
     => /\ admissions = {}
        /\ waiters = {}
        /\ tombstones = {ResponseTombstoneR}
@@ -1104,8 +1104,8 @@ TerminalReplayIsExactAndOrdinalStable ==
        /\ signatureCount = 0
 
 RestartDecisionSupersessionConvertsResponseAtomically ==
-  /\ scenario = "TerminalDecision"
-  /\ phase = "Complete"
+  (  /\ scenario = "TerminalDecision"
+     /\ phase = "Complete")
     => /\ admissions = {}
        /\ waiters = {}
        /\ tombstones = {DecisionTombstoneR}
@@ -1116,8 +1116,8 @@ RestartDecisionSupersessionConvertsResponseAtomically ==
        /\ signatureCount = 0
 
 LiveDecisionSupersessionConvertsResponseBeforeOrdinal ==
-  /\ scenario = "LiveDecisionRetry"
-  /\ phase = "Complete"
+  (  /\ scenario = "LiveDecisionRetry"
+     /\ phase = "Complete")
     => /\ admissions = {}
        /\ waiters = {}
        /\ tombstones = {DecisionTombstoneR}
@@ -1128,8 +1128,8 @@ LiveDecisionSupersessionConvertsResponseBeforeOrdinal ==
        /\ signatureCount = 0
 
 PreFenceCarrierDefersDecisionRewriteUntilCheckedDrain ==
-  /\ scenario = "LiveDecisionPreFenceCarrier"
-  /\ phase \in {"DecisionPersisted", "Complete"}
+  (  /\ scenario = "LiveDecisionPreFenceCarrier"
+     /\ phase \in {"DecisionPersisted", "Complete"})
     => /\ IF phase = "DecisionPersisted"
           THEN /\ tombstones = {ResponseTombstoneR}
                /\ waiters = {LiveDecisionRetryWaiter}
@@ -1143,8 +1143,8 @@ PreFenceCarrierDefersDecisionRewriteUntilCheckedDrain ==
        /\ signatureCount = 0
 
 PreparedCarrierDecisionDrainIsAtomicAndOrdinalStable ==
-  /\ scenario = "LiveDecisionPreFencePreparedCarrier"
-  /\ phase \in {"DecisionPersisted", "Complete", "PolicyRejected"}
+  (  /\ scenario = "LiveDecisionPreFencePreparedCarrier"
+     /\ phase \in {"DecisionPersisted", "Complete", "PolicyRejected"})
     => /\ phase # "PolicyRejected"
        /\ IF phase = "DecisionPersisted"
           THEN /\ admissions = {PreFencePreparedAdmissionR}
@@ -1175,11 +1175,11 @@ InitialCorruptTombstones(nextScenario) ==
     [] OTHER -> {}
 
 CorruptTerminalWaiterFailStops ==
-  /\ scenario \in
-       {"TerminalMismatchCorrupt",
-        "TerminalOrphanCorrupt", "TerminalNegativeCorrupt",
-        "TerminalOwnerMismatchCorrupt"}
-  /\ phase \in {"Complete", "StartupRejected"}
+  (  /\ scenario \in
+          {"TerminalMismatchCorrupt",
+           "TerminalOrphanCorrupt", "TerminalNegativeCorrupt",
+           "TerminalOwnerMismatchCorrupt"}
+     /\ phase \in {"Complete", "StartupRejected"})
     => /\ phase = "StartupRejected"
        /\ admissions = {}
        /\ waiters = InitialCorruptWaiters(scenario)
@@ -1191,8 +1191,8 @@ CorruptTerminalWaiterFailStops ==
        /\ signatureCount = 0
 
 OwnerRequestMismatchWaiterFailStops ==
-  /\ scenario = "TerminalOwnerMismatchCorrupt"
-  /\ phase \in {"Complete", "StartupRejected"}
+  (  /\ scenario = "TerminalOwnerMismatchCorrupt"
+     /\ phase \in {"Complete", "StartupRejected"})
     => /\ phase = "StartupRejected"
        /\ admissions = {}
        /\ waiters = {OwnerRequestMismatchWaiterR}
@@ -1204,8 +1204,8 @@ OwnerRequestMismatchWaiterFailStops ==
        /\ signatureCount = 0
 
 DuplicateAdmissionTerminalFailsStartupAndPreservesState ==
-  /\ scenario = "AdmissionTerminalDuplicateCorrupt"
-  /\ phase \in {"Complete", "StartupRejected"}
+  (  /\ scenario = "AdmissionTerminalDuplicateCorrupt"
+     /\ phase \in {"Complete", "StartupRejected"})
     => /\ phase = "StartupRejected"
        /\ admissions = {AdmissionA}
        /\ waiters = {WaiterA}
@@ -1217,8 +1217,8 @@ DuplicateAdmissionTerminalFailsStartupAndPreservesState ==
        /\ signatureCount = 0
 
 NegativeRetryConsumesNoFreshOrdinal ==
-  /\ scenario = "NegativeRetry"
-  /\ phase \in {"PolicyRejected", "NegativeReadmitted"}
+  (  /\ scenario = "NegativeRetry"
+     /\ phase \in {"PolicyRejected", "NegativeReadmitted"})
     => /\ phase = "PolicyRejected"
        /\ waiters = {}
        /\ tombstones = {NegativeTombstoneN}
@@ -1228,8 +1228,8 @@ NegativeRetryConsumesNoFreshOrdinal ==
        /\ signatureCount = 0
 
 TerminalResponseRetryUsesFreshCarrierWithoutLifecycleResurrection ==
-  /\ scenario = "TerminalResurrection"
-  /\ phase \in {"TerminalReplayComplete", "Resurrected"}
+  (  /\ scenario = "TerminalResurrection"
+     /\ phase \in {"TerminalReplayComplete", "Resurrected"})
     => /\ phase = "TerminalReplayComplete"
        /\ admissions = {}
        /\ waiters = {}
@@ -1246,8 +1246,8 @@ InitialBodyAdmission(nextScenario) ==
   ELSE CorruptBodyAdmission
 
 MissingOrCorruptBodyFailStopsAndPreservesState ==
-  /\ scenario \in {"MissingBody", "CorruptBody"}
-  /\ phase \in {"Complete", "StartupRejected"}
+  (  /\ scenario \in {"MissingBody", "CorruptBody"}
+     /\ phase \in {"Complete", "StartupRejected"})
     => /\ phase = "StartupRejected"
        /\ admissions = {InitialBodyAdmission(scenario)}
        /\ waiters = {BodyWaiter}
@@ -1259,8 +1259,8 @@ MissingOrCorruptBodyFailStopsAndPreservesState ==
        /\ signatureCount = 0
 
 SuccessorTerminalPrunesPredecessorFamily ==
-  /\ scenario = "FamilyAdvance"
-  /\ phase = "Complete"
+  (  /\ scenario = "FamilyAdvance"
+     /\ phase = "Complete")
     => /\ admissions = {}
        /\ waiters = {}
        /\ tombstones = {NewFamilyTombstone}
@@ -1268,8 +1268,8 @@ SuccessorTerminalPrunesPredecessorFamily ==
        /\ signatureCount = 1
 
 ReceiverClosePublishesTypedTerminalWithoutDebt ==
-  /\ scenario = "ReceiverClose"
-  /\ phase = "Complete"
+  (  /\ scenario = "ReceiverClose"
+     /\ phase = "Complete")
     => /\ admissions = {}
        /\ waiters = {}
        /\ tombstones = {CloseTombstone}
@@ -1277,8 +1277,8 @@ ReceiverClosePublishesTypedTerminalWithoutDebt ==
        /\ signatureCount = 1
 
 CertifiedRequestFansOutToFullFrozenRoster ==
-  /\ scenario \in {"SignerResponse", "NonSignerResponse"}
-  /\ phase = "Complete"
+  (  /\ scenario \in {"SignerResponse", "NonSignerResponse"}
+     /\ phase = "Complete")
     => fanout = FullRemoteFrozenRoster
 
 OnlyFrozenQcSignersCanRespond ==
@@ -1310,11 +1310,11 @@ RawContextGateSeparatesLifecycleAuthority ==
            /\ ~lifecycleAdmitted)
 
 TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal ==
-  /\ scenario \in
-       {"TerminalReplay", "TerminalDecision",
-        "LiveDecisionRetry", "LiveDecisionPreFenceCarrier",
-        "LiveDecisionPreFencePreparedCarrier"}
-  /\ phase # "ChooseScenario"
+  (  /\ scenario \in
+          {"TerminalReplay", "TerminalDecision",
+           "LiveDecisionRetry", "LiveDecisionPreFenceCarrier",
+           "LiveDecisionPreFencePreparedCarrier"}
+     /\ phase # "ChooseScenario")
     => /\ nextLifecycleOrdinal = 10
        /\ nextSchedulerOrdinal =
             IF scenario \in
@@ -1331,9 +1331,9 @@ TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal ==
        /\ signatureCount = 0
 
 UnsealedRestartResponsesSignExactlyOnce ==
-  /\ scenario \in
-       {"Union", "InterruptedUnion", "FamilyAdvance", "ReceiverClose"}
-  /\ phase = "Complete"
+  (  /\ scenario \in
+          {"Union", "InterruptedUnion", "FamilyAdvance", "ReceiverClose"}
+     /\ phase = "Complete")
     => CASE scenario = "Union" -> signatureCount = 1
          [] scenario = "InterruptedUnion" -> signatureCount = 1
          [] scenario = "FamilyAdvance" -> signatureCount = 1
