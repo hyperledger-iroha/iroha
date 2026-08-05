@@ -36,7 +36,8 @@ use iroha::{
             IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
         },
         isi::{
-            Instruction, InstructionBox, Log, Mint, Register, SetKeyValue, SetParameter, Transfer,
+            Grant, Instruction, InstructionBox, Log, Mint, Register, SetKeyValue, SetParameter,
+            Transfer,
             identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
             ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -69,6 +70,7 @@ use iroha_crypto::{
     try_bfv_programmed_public_parameters_with_program,
 };
 use iroha_data_model::{HasMetadata, prelude::QueryBuilderExt};
+use iroha_executor_data_model::permission::query::CanReadAllLedgerData;
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     Network, NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,

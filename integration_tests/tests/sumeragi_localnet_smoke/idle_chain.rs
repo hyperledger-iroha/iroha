@@ -162,6 +162,10 @@ pub(super) async fn run() -> Result<()> {
         .with_real_genesis_keypair()
         .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_permissioned_consensus()
+        .with_genesis_instruction(Grant::account_permission(
+            CanReadAllLedgerData,
+            ALICE_ID.clone(),
+        ))
         .with_config_layer(|layer| {
             layer
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
