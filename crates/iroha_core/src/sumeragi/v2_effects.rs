@@ -2838,6 +2838,15 @@ pub(crate) trait EffectRuntime {
         context: &wire::HeightContext,
         certificate: &wire::QuorumCertificate,
     ) -> Result<(), String>;
+    /// Report whether an exact Store/Validate candidate already has its sole
+    /// terminal completion queued in runtime ingress or Busy-deferred storage.
+    fn body_pipeline_candidate_has_terminal(
+        &mut self,
+        _effect: &AdapterEffect,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
     fn queued_commands(&self) -> usize;
     fn remaining_completion_capacity(&self) -> usize;
     fn has_certified_fence_escape_credit(&self) -> bool;
@@ -3255,6 +3264,14 @@ impl EffectRuntime for SerializedV2Runtime {
             .authenticate(message)
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    fn body_pipeline_candidate_has_terminal(
+        &mut self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<bool, String> {
+        SerializedV2Runtime::body_pipeline_candidate_has_terminal(self, effect, ownership)
     }
 
     fn queued_commands(&self) -> usize {
@@ -4981,6 +4998,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .as_ref()
                 .and_then(|identity| retained_candidate_owners.get(identity))
                 .cloned();
+            let runtime_terminal_incumbent = self
+                .runtime
+                .body_pipeline_candidate_has_terminal(effect, evidence)
+                .map_err(EffectExecutorError::Runtime)?;
+            if runtime_terminal_incumbent && exact_incumbent.is_some() {
+                return Err(EffectExecutorError::Contract(
+                    "one body candidate was owned by both executor work and a runtime terminal"
+                        .to_owned(),
+                ));
+            }
             let fetch_key = match effect {
                 AdapterEffect::FetchBody {
                     tag,
@@ -5007,7 +5034,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .flatten();
             let candidate_owner_count_before =
                 candidate_semantic_identity.as_ref().map_or(0, |identity| {
-                    u8::from(retained_candidate_owners.contains_key(identity))
+                    u8::from(
+                        retained_candidate_owners.contains_key(identity)
+                            || runtime_terminal_incumbent,
+                    )
                 });
             let candidate_owner_count_after = u8::from(candidate.is_some());
             let mut admission = production_adapter_effect_candidate_admission_disposition(
@@ -5107,18 +5137,22 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     retain_effect.push(true);
                 }
                 (RuntimeCandidateAdmissionDisposition::CoalescedRetry, Some(_)) => {
-                    let redispatch =
+                    let redispatch = if runtime_terminal_incumbent {
+                        false
+                    } else {
                         Self::candidate_retry_is_redispatched(effect).ok_or_else(|| {
                             EffectExecutorError::Contract(
                                 "candidate retry omitted its closed adapter-effect policy"
                                     .to_owned(),
                             )
-                        })?;
+                        })?
+                    };
                     // Redispatched stages reach their idempotent handler with
                     // the incumbent owner and task ID, including an
                     // authenticated retry whose earlier physical command has
-                    // already drained. Signing stutters while the already-owned
-                    // signature task remains outstanding.
+                    // already drained. A runtime-owned terminal stutters here
+                    // before a cached handler could mint a second callback;
+                    // signing likewise stutters while its task remains live.
                     retain_effect.push(redispatch);
                 }
                 (RuntimeCandidateAdmissionDisposition::NonCandidate, None) => {
@@ -6216,18 +6250,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         ownership,
                     )
                     .map_err(runtime_enqueue_error),
-                Some(ValidationConsumer::LocalProposal {
-                    tag,
-                    manifest,
-                    ownership,
-                }) => self
+                Some(ValidationConsumer::LocalProposal { tag, manifest, .. }) => self
                     .runtime
                     .enqueue_local_proposal_with_owner(
                         *tag,
                         manifest.clone(),
                         pending.task.durable_receipt().clone(),
                         validated.clone(),
-                        ownership,
+                        pending.task.ownership(),
                     )
                     .map_err(runtime_enqueue_error),
                 None => Ok(()),
@@ -9409,6 +9439,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "one exact durable body has both validated and rejected outcomes".to_owned(),
             ));
         }
+        let validation_effect = AdapterEffect::ValidateBody {
+            tag: consumer.tag(),
+            round,
+            subject,
+        };
+        let validation_ownership = consumer
+            .ownership()
+            .rebind_as_inherited_adapter_effect(&validation_effect)
+            .map_err(EffectExecutorError::Contract)?;
         if let Some(validated) = self.validated_bodies.get(&key).cloned() {
             if validated.durable() != &durable_receipt {
                 return Err(EffectExecutorError::BodyStore(
@@ -9416,25 +9455,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
             let admission = match consumer {
-                ValidationConsumer::Reducer { tag, ownership } => {
+                ValidationConsumer::Reducer { tag, .. } => {
                     ValidationAdmissionPlan::RuntimeSucceeded {
                         tag,
                         round,
                         subject,
                         receipt: validated,
-                        ownership,
+                        ownership: validation_ownership,
                     }
                 }
                 ValidationConsumer::LocalProposal {
                     tag,
                     manifest,
-                    ownership,
+                    ownership: _,
                 } => ValidationAdmissionPlan::RuntimeLocalProposal {
                     tag,
                     manifest,
                     durable_receipt,
                     validated_receipt: validated,
-                    ownership,
+                    ownership: validation_ownership,
                 },
             };
             return Ok(ValidationStartPlan {
@@ -9449,14 +9488,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
             let admission = match consumer {
-                ValidationConsumer::Reducer { tag, ownership } => {
-                    ValidationAdmissionPlan::RuntimeFailed {
-                        tag,
-                        round,
-                        subject,
-                        ownership,
-                    }
-                }
+                ValidationConsumer::Reducer { tag, .. } => ValidationAdmissionPlan::RuntimeFailed {
+                    tag,
+                    round,
+                    subject,
+                    ownership: validation_ownership,
+                },
                 ValidationConsumer::LocalProposal { .. } => ValidationAdmissionPlan::None,
             };
             return Ok(ValidationStartPlan {
@@ -9478,22 +9515,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             let mut consumer = consumer;
             if let (
                 ValidationConsumer::Reducer {
-                    tag,
                     ownership: incoming_ownership,
+                    ..
                 },
                 Some((decision_round, proposal_round, decision_subject, commitment)),
             ) = (&mut consumer, self.protected_decision)
             {
-                let validation_effect = AdapterEffect::ValidateBody {
-                    tag: *tag,
-                    round,
-                    subject,
-                };
                 *incoming_ownership = existing
                     .task
                     .ownership()
                     .adopt_incumbent_body_stage_for_durable_decision(
-                        incoming_ownership,
+                        &validation_ownership,
                         &validation_effect,
                         decision_round,
                         proposal_round,
@@ -9505,7 +9537,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                             "validation Decision retry changed exact work or authority: {reason}"
                         ))
                     })?;
-            } else if existing.task.ownership() != consumer.ownership() {
+            } else if existing.task.ownership() != &validation_ownership {
                 return Err(EffectExecutorError::Contract(
                     "validation retry changed exact work or its lifecycle owner".to_owned(),
                 ));
@@ -9573,19 +9605,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.ensure_pending_slot()?;
         }
         let work = self.plan_work_id()?;
-        let validation_effect = AdapterEffect::ValidateBody {
-            tag: consumer.tag(),
-            round,
-            subject,
-        };
-        let ownership = consumer
-            .ownership()
-            .rebind_as_inherited_adapter_effect(&validation_effect)
-            .map_err(EffectExecutorError::Contract)?;
         let task = BodyValidationTask {
             id: work.id,
             durable_receipt,
-            ownership,
+            ownership: validation_ownership,
         };
         Ok(ValidationStartPlan {
             admission: ValidationAdmissionPlan::Service(task.clone()),
@@ -11555,6 +11578,7 @@ mod tests {
     struct FakeRuntime {
         steps: VecDeque<Result<RuntimeStep<AdapterEffect>, String>>,
         completions: Vec<RuntimeCompletion>,
+        validation_completion_ownerships: Vec<RuntimeEffectOwnership>,
         bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
         reserved_body_available: Option<BodyAvailableReservation>,
         decided_body: Option<DurableDecision>,
@@ -11571,6 +11595,7 @@ mod tests {
         next_lifecycle_ordinal: u128,
         effect_ownership_calls: usize,
         effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
+        terminal_body_candidate_identities: BTreeSet<Hash>,
         external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
         external_lifecycle_owner_capacity: Option<usize>,
         active_view_producer_retained: bool,
@@ -12270,6 +12295,20 @@ mod tests {
             ))
         }
 
+        fn enqueue_validation_succeeded_with_owner(
+            &mut self,
+            tag: EventTag,
+            round: wire::ConsensusRound,
+            subject: wire::BlockSubject,
+            receipt: ValidatedBodyReceipt,
+            ownership: &RuntimeEffectOwnership,
+        ) -> Result<(), EnqueueError> {
+            self.enqueue_validation_succeeded(tag, round, subject, receipt)?;
+            self.validation_completion_ownerships
+                .push(ownership.clone());
+            Ok(())
+        }
+
         fn enqueue_validation_failed(
             &mut self,
             tag: EventTag,
@@ -12277,6 +12316,19 @@ mod tests {
             subject: wire::BlockSubject,
         ) -> Result<(), EnqueueError> {
             self.push(RuntimeCompletion::ValidationFailed(tag, round, subject))
+        }
+
+        fn enqueue_validation_failed_with_owner(
+            &mut self,
+            tag: EventTag,
+            round: wire::ConsensusRound,
+            subject: wire::BlockSubject,
+            ownership: &RuntimeEffectOwnership,
+        ) -> Result<(), EnqueueError> {
+            self.enqueue_validation_failed(tag, round, subject)?;
+            self.validation_completion_ownerships
+                .push(ownership.clone());
+            Ok(())
         }
 
         fn enqueue_validation_failures_atomically(
@@ -12333,6 +12385,28 @@ mod tests {
             certificate
                 .validate(context)
                 .map_err(|error| error.to_string())
+        }
+
+        fn body_pipeline_candidate_has_terminal(
+            &mut self,
+            effect: &AdapterEffect,
+            ownership: &RuntimeEffectOwnership,
+        ) -> Result<bool, String> {
+            if !matches!(
+                effect,
+                AdapterEffect::StoreBody { .. } | AdapterEffect::ValidateBody { .. }
+            ) {
+                return Ok(false);
+            }
+            if !ownership.exactly_binds_adapter_effect(effect) {
+                return Err(
+                    "fake runtime terminal query received the wrong effect owner".to_owned(),
+                );
+            }
+            let identity = ownership.candidate_semantic_identity().ok_or_else(|| {
+                "fake runtime terminal query omitted the candidate identity".to_owned()
+            })?;
+            Ok(self.terminal_body_candidate_identities.contains(&identity))
         }
 
         fn queued_commands(&self) -> usize {
@@ -15909,6 +15983,52 @@ mod tests {
         assert!(executor.retained_effect_batch.is_none());
         assert!(executor.output_guard.restart_required());
         assert!(executor.status().fail_closed);
+    }
+
+    #[test]
+    fn runtime_terminal_body_candidate_stutters_before_cached_redispatch() {
+        let fixture = Fixture::new();
+        let cases = [
+            AdapterEffect::StoreBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            },
+            AdapterEffect::ValidateBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            },
+        ];
+
+        for effect in cases {
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            let mut services = fixture.services();
+            let root = executor.runtime.test_effect_ownership(&effect);
+            let bound =
+                bind_adapter_effect_batch_ownership(std::slice::from_ref(&effect), vec![root])
+                    .expect("bind the exact cached body candidate")
+                    .pop()
+                    .expect("one body effect has one candidate owner");
+            let identity = bound
+                .candidate_semantic_identity()
+                .expect("Store/Validate has one route-neutral identity");
+            executor
+                .runtime
+                .terminal_body_candidate_identities
+                .insert(identity);
+
+            executor
+                .consume_effects(vec![effect.clone()], &mut services)
+                .expect("the runtime terminal turns the retry into a 1-to-1 stutter");
+            assert!(executor.pending_stores.is_empty());
+            assert!(executor.pending_validations.is_empty());
+            assert!(services.store_tasks.is_empty());
+            assert!(services.validation_tasks.is_empty());
+            assert!(executor.runtime.completions.is_empty());
+            assert!(executor.retained_effect_batch.is_none());
+            assert!(!executor.status().fail_closed);
+        }
     }
 
     #[test]
@@ -22347,6 +22467,25 @@ mod tests {
             services.validation_tasks.last().map(BodyValidationTask::id),
             Some(validation_id)
         );
+        let completed = services.execute_validation(validation_id);
+        assert_eq!(
+            executor
+                .complete_body_validation(completed, &mut services)
+                .expect("route the incumbent validation completion under Commit authority"),
+            CompletionDisposition::Accepted,
+        );
+        let completion_ownership = executor
+            .runtime
+            .validation_completion_ownerships
+            .last()
+            .expect("owned validation completion retains its reducer authority");
+        assert_eq!(completion_ownership.owner(), incumbent_ownership.owner());
+        assert!(completion_ownership.binds_durable_decision_authority(
+            commit.round,
+            commit.proposal_round,
+            commit.subject,
+            commit.execution_commitment,
+        ));
         assert!(!executor.status().fail_closed);
     }
 

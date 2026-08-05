@@ -3,12 +3,15 @@
 use std::{env, fs, path::PathBuf, process};
 
 use color_eyre::{Result, eyre::eyre};
-use iroha_crypto::{Algorithm, PublicKey};
+use iroha_config::{base::toml::TomlSource, parameters::actual};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey};
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_genesis::RawGenesisTransaction;
 use mochi_integration::kagami_default_manifest_json;
 
 const DEFAULT_CHAIN_ID: &str = "mochi-mock-chain";
 const VERSION_OUTPUT: &str = "kagami_mock iroha3 test-stub";
+const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 
 fn main() {
     if let Err(err) = run() {
@@ -43,6 +46,7 @@ struct SignArgs {
     manifest_path: PathBuf,
     out_file: PathBuf,
     bound_manifest_out: PathBuf,
+    expected_hash_out: PathBuf,
     private_key_file: PathBuf,
     config_file: PathBuf,
 }
@@ -64,11 +68,72 @@ fn sign(args: Vec<String>) -> Result<()> {
         ));
     }
 
-    fs::write(&parsed.out_file, b"mock-signed-genesis")?;
+    let private_record = fs::read_to_string(&parsed.private_key_file)?;
+    let canonical_private = private_record
+        .strip_suffix('\n')
+        .ok_or_else(|| eyre!("private key record must end in one newline"))?;
+    if canonical_private.is_empty() || canonical_private.chars().any(char::is_whitespace) {
+        return Err(eyre!("private key record is not canonical"));
+    }
+    let private_key = canonical_private.parse::<ExposedPrivateKey>()?;
+    if private_key.to_string() != canonical_private {
+        return Err(eyre!("private key record is not canonical"));
+    }
+    let key_pair = KeyPair::from_private_key(private_key.0)?;
+    let manifest = RawGenesisTransaction::from_path(&parsed.manifest_path)?;
+    let config = load_peer_config(&parsed.config_file)?;
+    if config.common.chain != *manifest.chain_id()
+        || *config.common.chain_discriminant.value() != manifest.chain_discriminant()
+    {
+        return Err(eyre!(
+            "peer config chain or discriminant differs from the genesis manifest"
+        ));
+    }
+    if config.genesis.public_key != *key_pair.public_key() {
+        return Err(eyre!(
+            "genesis signing key does not match the public key pinned by --config"
+        ));
+    }
+    let da_proof_policies = iroha_core::da::proof_policy_bundle(&config.nexus.lane_config);
+    let confidential_policy_hash =
+        iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
+    let block = manifest
+        .clone()
+        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            &key_pair,
+            Some(da_proof_policies),
+            Some(confidential_policy_hash),
+        )?
+        .0;
+    fs::write(&parsed.out_file, block.encode_wire()?)?;
     if parsed.bound_manifest_out != parsed.manifest_path {
         fs::copy(&parsed.manifest_path, &parsed.bound_manifest_out)?;
     }
+    fs::write(&parsed.expected_hash_out, format!("{}\n", block.hash()))?;
     Ok(())
+}
+
+fn load_peer_config(path: &std::path::Path) -> Result<actual::Root> {
+    let mut source = TomlSource::from_file(path)
+        .map_err(|error| eyre!("failed to read peer config at {}: {error}", path.display()))?;
+    if let Some(expected_hash) = source
+        .table_mut()
+        .get_mut("genesis")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|genesis| genesis.get_mut("expected_hash"))
+        && expected_hash.as_str() == Some(GENESIS_EXPECTED_HASH_PLACEHOLDER)
+    {
+        let hash_body = Hash::new(b"Mochi mock unresolved genesis hash for policy derivation")
+            .to_string()
+            .to_ascii_uppercase();
+        *expected_hash = toml::Value::String(norito::literal::format("hash", hash_body.as_str()));
+    }
+    actual::Root::from_toml_source(source).map_err(|error| {
+        eyre!(
+            "failed to parse peer config at {}: {error:?}",
+            path.display()
+        )
+    })
 }
 
 fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
@@ -79,6 +144,7 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
         .ok_or_else(|| eyre!("missing genesis manifest path"))?;
     let mut out_file = None;
     let mut bound_manifest_out = None;
+    let mut expected_hash_out = None;
     let mut private_key_file = None;
     let mut config_file = None;
 
@@ -97,6 +163,13 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
                     args,
                     &mut index,
                     "--bound-manifest-out",
+                )?));
+            }
+            "--expected-hash-out" => {
+                expected_hash_out = Some(PathBuf::from(next_arg_value(
+                    args,
+                    &mut index,
+                    "--expected-hash-out",
                 )?));
             }
             "--private-key-file" => {
@@ -123,6 +196,8 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
         out_file: out_file.ok_or_else(|| eyre!("missing `--out-file` argument"))?,
         bound_manifest_out: bound_manifest_out
             .ok_or_else(|| eyre!("missing `--bound-manifest-out` argument"))?,
+        expected_hash_out: expected_hash_out
+            .ok_or_else(|| eyre!("missing `--expected-hash-out` argument"))?,
         private_key_file: private_key_file
             .ok_or_else(|| eyre!("missing `--private-key-file` argument"))?,
         config_file: config_file.ok_or_else(|| eyre!("missing `--config` argument"))?,
@@ -268,7 +343,48 @@ fn verify(args: Vec<String>) -> Result<()> {
 mod tests {
     use super::*;
     use iroha_crypto::KeyPair;
+    use iroha_data_model::block::decode_framed_signed_block;
     use norito::json::Value;
+
+    fn peer_config(
+        chain_id: &str,
+        genesis_public_key: &PublicKey,
+        manifest: &std::path::Path,
+        signed: &std::path::Path,
+    ) -> String {
+        format!(
+            r#"chain = "{chain_id}"
+chain_discriminant = {chain_discriminant}
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
+trusted_peers_pop = [
+  {{ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }}
+]
+
+[network]
+address = "addr:127.0.0.1:1337#8F78"
+public_address = "addr:127.0.0.1:1337#8F78"
+
+[torii]
+address = "addr:127.0.0.1:8080#8942"
+
+[genesis]
+public_key = "{genesis_public_key}"
+file = "{signed}"
+manifest_json = "{manifest}"
+expected_hash = "{GENESIS_EXPECTED_HASH_PLACEHOLDER}"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+"#,
+            chain_discriminant = iroha_data_model::account::address::chain_discriminant(),
+            manifest = manifest.display(),
+            signed = signed.display(),
+        )
+    }
 
     #[test]
     fn parse_generate_args_accepts_chain_id_and_consensus_mode() {
@@ -347,6 +463,8 @@ mod tests {
             "/tmp/genesis.signed.nrt".to_owned(),
             "--bound-manifest-out".to_owned(),
             "/tmp/genesis.bound.json".to_owned(),
+            "--expected-hash-out".to_owned(),
+            "/tmp/genesis.expected_hash".to_owned(),
             "--private-key-file".to_owned(),
             "/tmp/genesis.key".to_owned(),
             "--config".to_owned(),
@@ -361,6 +479,7 @@ mod tests {
                 manifest_path: PathBuf::from("/tmp/genesis.json"),
                 out_file: PathBuf::from("/tmp/genesis.signed.nrt"),
                 bound_manifest_out: PathBuf::from("/tmp/genesis.bound.json"),
+                expected_hash_out: PathBuf::from("/tmp/genesis.expected_hash"),
                 private_key_file: PathBuf::from("/tmp/genesis.key"),
                 config_file: PathBuf::from("/tmp/peer.toml"),
             }
@@ -373,11 +492,28 @@ mod tests {
         let manifest = temp.path().join("genesis.json");
         let signed = temp.path().join("genesis.signed.nrt");
         let bound = temp.path().join("genesis.bound.json");
+        let expected_hash = temp.path().join("genesis.expected_hash");
         let private_key = temp.path().join("genesis.key");
         let config = temp.path().join("peer.toml");
-        fs::write(&manifest, b"manifest").expect("write manifest");
-        fs::write(&private_key, b"private-key").expect("write private key");
-        fs::write(&config, b"config").expect("write config");
+        let key_pair = KeyPair::random();
+        let manifest_json = kagami_default_manifest_json(
+            key_pair.public_key(),
+            temp.path(),
+            "mock-sign-chain",
+            SumeragiConsensusMode::Permissioned,
+        )
+        .expect("build manifest");
+        fs::write(&manifest, manifest_json.as_bytes()).expect("write manifest");
+        fs::write(
+            &private_key,
+            format!("{}\n", ExposedPrivateKey(key_pair.private_key().clone())),
+        )
+        .expect("write private key");
+        fs::write(
+            &config,
+            peer_config("mock-sign-chain", key_pair.public_key(), &manifest, &signed),
+        )
+        .expect("write config");
 
         sign(vec![
             manifest.display().to_string(),
@@ -385,6 +521,8 @@ mod tests {
             signed.display().to_string(),
             "--bound-manifest-out".to_owned(),
             bound.display().to_string(),
+            "--expected-hash-out".to_owned(),
+            expected_hash.display().to_string(),
             "--private-key-file".to_owned(),
             private_key.display().to_string(),
             "--config".to_owned(),
@@ -394,11 +532,32 @@ mod tests {
         ])
         .expect("sign with mock kagami");
 
+        let wire = fs::read(signed).expect("read signed output");
+        let block = decode_framed_signed_block(&wire).expect("decode signed output");
         assert_eq!(
-            fs::read(signed).expect("read signed output"),
-            b"mock-signed-genesis"
+            fs::read(bound).expect("read bound output"),
+            manifest_json.as_bytes()
         );
-        assert_eq!(fs::read(bound).expect("read bound output"), b"manifest");
+        assert_eq!(
+            fs::read_to_string(expected_hash).expect("read exact hash"),
+            format!("{}\n", block.hash())
+        );
+        let parsed_config = load_peer_config(&config).expect("parse signing config");
+        assert_eq!(
+            block.da_proof_policies(),
+            Some(&iroha_core::da::proof_policy_bundle(
+                &parsed_config.nexus.lane_config
+            ))
+        );
+        assert_eq!(
+            block
+                .header()
+                .confidential_features()
+                .and_then(|digest| digest.zk_policy_hash),
+            Some(iroha_core::state::compute_genesis_confidential_policy_hash(
+                &parsed_config.zk
+            ))
+        );
     }
 
     #[test]
@@ -406,12 +565,34 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest = temp.path().join("genesis.json");
         let bound = temp.path().join("genesis.bound.json");
+        let expected_hash = temp.path().join("genesis.expected_hash");
         let private_key = temp.path().join("genesis.key");
         let config = temp.path().join("peer.toml");
-        fs::write(&manifest, b"manifest").expect("write manifest");
+        let key_pair = KeyPair::random();
+        let manifest_json = kagami_default_manifest_json(
+            key_pair.public_key(),
+            temp.path(),
+            "mock-sign-failure-chain",
+            SumeragiConsensusMode::Permissioned,
+        )
+        .expect("build manifest");
+        fs::write(&manifest, manifest_json).expect("write manifest");
         fs::write(&bound, b"sentinel").expect("write bound sentinel");
-        fs::write(&private_key, b"private-key").expect("write private key");
-        fs::write(&config, b"config").expect("write config");
+        fs::write(
+            &private_key,
+            format!("{}\n", ExposedPrivateKey(key_pair.private_key().clone())),
+        )
+        .expect("write private key");
+        fs::write(
+            &config,
+            peer_config(
+                "mock-sign-failure-chain",
+                key_pair.public_key(),
+                &manifest,
+                &temp.path().join("missing/genesis.signed.nrt"),
+            ),
+        )
+        .expect("write config");
 
         let _ = sign(vec![
             manifest.display().to_string(),
@@ -422,6 +603,8 @@ mod tests {
                 .to_string(),
             "--bound-manifest-out".to_owned(),
             bound.display().to_string(),
+            "--expected-hash-out".to_owned(),
+            expected_hash.display().to_string(),
             "--private-key-file".to_owned(),
             private_key.display().to_string(),
             "--config".to_owned(),

@@ -21,6 +21,7 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
+use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove,
 };
@@ -44,6 +45,10 @@ use crate::{
         GenesisProfile, NetworkPaths, NetworkProfile, PortAllocator, ProfilePreset,
         infer_workspace_root_from_sandbox_root,
     },
+    generation::{
+        GenerationInventoryContext, GenerationTransaction, PublicationFaultPoint,
+        VerifiedGeneration, current_generation_id, verify_selected_generation,
+    },
     genesis,
     logs::{LifecycleEvent, LogStreamKind, PeerLogStream},
     torii::{ManagedBlockStream, ManagedEventStream, ReadinessSmokePlan, ToriiClient, ToriiResult},
@@ -56,7 +61,10 @@ const DEFAULT_P2P_BASE_PORT: u16 = 1337;
 const GENESIS_FILE_NAME: &str = "genesis.json";
 const GENESIS_SIGNED_FILE_NAME: &str = "genesis.signed.nrt";
 const GENESIS_EXPECTED_HASH_FILE_NAME: &str = "genesis.expected_hash";
+const GENESIS_PUBLIC_KEY_FILE_NAME: &str = "genesis.public_key";
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
+#[cfg(test)]
+const TEST_FINALIZE_KAGAMI_STUB_SIGNATURE: &str = "MOCHI_TEST_FINALIZE_KAGAMI_STUB_SIGNATURE";
 const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
 const SMOKE_MAX_ATTEMPTS: usize = 3;
 const LOCAL_MCP_PROFILE: &str = "writer";
@@ -183,6 +191,21 @@ pub enum SupervisorError {
     /// Invalid configuration detected while loading supervisor artifacts.
     #[error("invalid configuration: {0}")]
     Config(String),
+    /// Another process is already preparing or publishing a generation.
+    #[error("Mochi generation lock is already held at `{path}`")]
+    GenerationLocked { path: PathBuf },
+    /// A candidate or published generation failed exact validation.
+    #[error("invalid Mochi generation: {0}")]
+    GenerationValidation(String),
+    /// The atomic commit occurred but synchronizing its parent directory failed.
+    #[error(
+        "publication of Mochi generation `{generation_id}` committed but durability is uncertain: {source}"
+    )]
+    PublicationUncertain {
+        generation_id: String,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl From<SignerVaultError> for SupervisorError {
@@ -720,6 +743,8 @@ pub struct SupervisorSessionInfo {
     pub profile_slug: String,
     /// Chain identifier currently configured for the sandbox.
     pub chain_id: String,
+    /// Immutable generation selected by the sandbox commit pointer.
+    pub generation_id: String,
     /// Profile-specific sandbox root containing peer state and logs.
     pub sandbox_root: PathBuf,
     /// Workspace root when Mochi can infer it from the sandbox layout.
@@ -1757,6 +1782,9 @@ impl SupervisorBuilder {
         let mut torii_ports = PortAllocator::new(self.torii_base_port);
         let mut p2p_ports = PortAllocator::new(self.p2p_base_port);
         let mut reserved_ports = HashSet::new();
+        let mut generation_transaction = GenerationTransaction::begin(paths.root())?;
+        let generation_id = generation_transaction.id().to_owned();
+        let generation_root = generation_transaction.root().to_path_buf();
 
         let mut specs = Vec::with_capacity(self.profile.topology.peer_count);
         for index in 0..self.profile.topology.peer_count {
@@ -1764,13 +1792,21 @@ impl SupervisorBuilder {
             let torii_port =
                 Self::reserve_unique_port(&mut torii_ports, &mut reserved_ports, "Torii")?;
             let p2p_port = Self::reserve_unique_port(&mut p2p_ports, &mut reserved_ports, "P2P")?;
-            specs.push(PeerSpec::new(&paths, alias, torii_port, p2p_port)?);
+            let storage_dir = generation_transaction.create_runtime_storage(&alias)?;
+            specs.push(PeerSpec::new_in_generation(
+                &generation_root,
+                storage_dir,
+                alias,
+                torii_port,
+                p2p_port,
+            )?);
         }
 
         let genesis = GenesisMaterial::create(
             &mut binaries,
             GenesisCreateContext {
-                paths: &paths,
+                generation_id: &generation_id,
+                generation_root: &generation_root,
                 chain_id: &chain_id,
                 peers: &specs,
                 config_overrides: &peer_config_overrides,
@@ -1785,7 +1821,42 @@ impl SupervisorBuilder {
         for spec in &specs {
             spec.write_config(&chain_id, &genesis, &specs, &peer_config_overrides, &[])?;
         }
-
+        genesis.validate_generation(&chain_id, &specs)?;
+        let expected_hash = genesis.expected_hash.ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "validated generation omitted its exact genesis hash".to_owned(),
+            )
+        })?;
+        let published_id = generation_transaction.publish(GenerationInventoryContext {
+            chain_id: &chain_id,
+            chain_discriminant: genesis.chain_discriminant,
+            genesis_public_key: genesis.public_key(),
+            expected_hash,
+        })?;
+        if published_id != generation_id {
+            return Err(SupervisorError::GenerationValidation(
+                "published generation id differs from the prepared generation".to_owned(),
+            ));
+        }
+        if current_generation_id(paths.root())?.as_deref() != Some(generation_id.as_str()) {
+            return Err(SupervisorError::GenerationValidation(
+                "current-generation does not select the committed generation".to_owned(),
+            ));
+        }
+        let selected_root = verify_selected_generation(paths.root(), &generation_id)?;
+        if selected_root.chain_id != chain_id
+            || selected_root.chain_discriminant != genesis.chain_discriminant
+            || selected_root.genesis_public_key != *genesis.public_key()
+            || selected_root.expected_hash != expected_hash
+            || !genesis.manifest_path.starts_with(&selected_root.root)
+            || !specs
+                .iter()
+                .all(|spec| spec.config_path.starts_with(&selected_root.root))
+        {
+            return Err(SupervisorError::GenerationValidation(
+                "published accessors do not resolve inside the selected generation".to_owned(),
+            ));
+        }
         let peers = specs
             .into_iter()
             .map(|spec| PeerHandle::prepared(spec, paths.logs_dir(), self.restart_policy))
@@ -2353,6 +2424,34 @@ impl Supervisor {
         &self.chain_id
     }
 
+    /// Return the immutable configuration/genesis generation identifier.
+    pub fn generation_id(&self) -> &str {
+        &self.genesis.generation_id
+    }
+
+    fn ensure_selected_generation_metadata(&self, selected: &VerifiedGeneration) -> Result<()> {
+        if selected.generation_id != self.genesis.generation_id
+            || selected.chain_id != self.chain_id
+            || selected.chain_discriminant != self.genesis.chain_discriminant
+            || selected.genesis_public_key != *self.genesis.public_key()
+            || Some(selected.expected_hash) != self.genesis.expected_hash
+            || !self.genesis.manifest_path.starts_with(&selected.root)
+            || !self.genesis.block_path.starts_with(&selected.root)
+            || !self.genesis.public_key_path.starts_with(&selected.root)
+            || !self.genesis.expected_hash_path.starts_with(&selected.root)
+            || !self
+                .peers
+                .iter()
+                .all(|peer| peer.config_path().starts_with(&selected.root))
+        {
+            return Err(SupervisorError::GenerationValidation(
+                "selected generation metadata differs from the validated supervisor state"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Path to the generated genesis manifest.
     pub fn genesis_manifest(&self) -> &Path {
         &self.genesis.manifest_path
@@ -2444,6 +2543,20 @@ impl Supervisor {
 
     /// Produce local sandbox connection details for bootstrap files and automation.
     pub fn session_info(&self) -> Result<SupervisorSessionInfo> {
+        let selected = current_generation_id(self.paths.root())?.ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "sandbox has no current-generation selection".to_owned(),
+            )
+        })?;
+        let selected_root = verify_selected_generation(self.paths.root(), &selected)?;
+        if selected != self.genesis.generation_id
+            || !self.genesis.manifest_path.starts_with(&selected_root.root)
+        {
+            return Err(SupervisorError::GenerationValidation(
+                "in-memory sandbox state differs from current-generation".to_owned(),
+            ));
+        }
+        self.ensure_selected_generation_metadata(&selected_root)?;
         let peer = self.peers.first().ok_or_else(|| {
             SupervisorError::Config("supervisor has no prepared peers".to_owned())
         })?;
@@ -2478,6 +2591,7 @@ impl Supervisor {
         Ok(SupervisorSessionInfo {
             profile_slug: self.profile.slug(),
             chain_id: self.chain_id.clone(),
+            generation_id: self.genesis.generation_id.clone(),
             sandbox_root: self.paths.root().to_path_buf(),
             workspace_root: infer_workspace_root_from_sandbox_root(
                 self.paths
@@ -2685,31 +2799,94 @@ impl Supervisor {
                 alias: alias.to_owned(),
             })?;
 
+        let generation_transaction = GenerationTransaction::begin(self.paths.root())?;
+        let generation_id = generation_transaction.id().to_owned();
+        let generation_root = generation_transaction.root().to_path_buf();
         let specs = self
             .peers
             .iter()
-            .map(|peer| peer.spec.clone())
-            .collect::<Vec<_>>();
-        let spec = specs
-            .get(index)
-            .cloned()
-            .expect("peer index should remain valid");
+            .map(|peer| peer.spec.in_generation(&generation_root))
+            .collect::<Result<Vec<_>>>()?;
+        let genesis = self
+            .genesis
+            .copy_into_generation(&generation_id, &generation_root)?;
+        for (peer_index, spec) in specs.iter().enumerate() {
+            let layers = if peer_index == index {
+                extra_layers
+            } else {
+                &[]
+            };
+            spec.write_config(
+                &self.chain_id,
+                &genesis,
+                &specs,
+                &self.peer_config_overrides,
+                layers,
+            )?;
+        }
+        genesis.validate_generation(&self.chain_id, &specs)?;
+        let expected_hash = genesis.expected_hash.ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "validated generation omitted its exact genesis hash".to_owned(),
+            )
+        })?;
 
-        let _ = self.peers[index].stop();
-        spec.write_config(
-            &self.chain_id,
-            &self.genesis,
-            &specs,
-            &self.peer_config_overrides,
-            extra_layers,
-        )?;
+        let was_running = self.peers[index].is_running();
+        if was_running {
+            self.peers[index].stop()?;
+        }
+        let publication = generation_transaction.publish(GenerationInventoryContext {
+            chain_id: &self.chain_id,
+            chain_discriminant: genesis.chain_discriminant,
+            genesis_public_key: genesis.public_key(),
+            expected_hash,
+        });
+        match publication {
+            Ok(published_id) => {
+                self.adopt_generation(specs, genesis);
+                let post_commit_check = (|| {
+                    if published_id != generation_id
+                        || current_generation_id(self.paths.root())?.as_deref()
+                            != Some(generation_id.as_str())
+                    {
+                        return Err(SupervisorError::GenerationValidation(
+                            "current-generation does not select the committed overlay generation"
+                                .to_owned(),
+                        ));
+                    }
+                    let verified = verify_selected_generation(self.paths.root(), &generation_id)?;
+                    self.ensure_selected_generation_metadata(&verified)
+                })();
+                if let Err(error) = post_commit_check {
+                    if was_running {
+                        let irohad_path = self.irohad_path()?;
+                        let _ = self.peers[index].start(&irohad_path, StartReason::Manual);
+                    }
+                    return Err(error);
+                }
+            }
+            Err(error @ SupervisorError::PublicationUncertain { .. }) => {
+                self.adopt_generation(specs, genesis);
+                if was_running {
+                    let irohad_path = self.irohad_path()?;
+                    let _ = self.peers[index].start(&irohad_path, StartReason::Manual);
+                }
+                return Err(error);
+            }
+            Err(error) => {
+                if was_running {
+                    let irohad_path = self.irohad_path()?;
+                    self.peers[index].start(&irohad_path, StartReason::Manual)?;
+                }
+                return Err(error);
+            }
+        }
 
-        let irohad_path = self.irohad_path()?;
-        let peer = self
-            .peers
-            .get_mut(index)
-            .expect("peer index should remain valid");
-        peer.start(&irohad_path, StartReason::Manual)
+        if was_running {
+            let irohad_path = self.irohad_path()?;
+            self.peers[index].start(&irohad_path, StartReason::Manual)?;
+        }
+        Ok(())
     }
 
     /// Export the current network state into a timestamped snapshot directory.
@@ -2718,6 +2895,18 @@ impl Supervisor {
     /// the latest genesis manifest so users can quickly restore the network to
     /// its present state.
     pub fn export_snapshot(&mut self, label: Option<&str>) -> Result<PathBuf> {
+        let selected = current_generation_id(self.paths.root())?.ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "sandbox has no current-generation selection".to_owned(),
+            )
+        })?;
+        if selected != self.genesis.generation_id {
+            return Err(SupervisorError::GenerationValidation(
+                "cannot snapshot in-memory state from a different generation".to_owned(),
+            ));
+        }
+        let verified = verify_selected_generation(self.paths.root(), &selected)?;
+        self.ensure_selected_generation_metadata(&verified)?;
         if self.is_any_running() {
             self.stop_all()?;
         }
@@ -2793,6 +2982,10 @@ impl Supervisor {
         let mut metadata = Map::new();
         metadata.insert("chain_id".to_owned(), Value::String(self.chain_id.clone()));
         metadata.insert(
+            "generation_id".to_owned(),
+            Value::String(self.genesis.generation_id.clone()),
+        );
+        metadata.insert(
             "created_at_ms".to_owned(),
             Value::Number((timestamp_ms() as u64).into()),
         );
@@ -2819,8 +3012,10 @@ impl Supervisor {
         Ok(destination)
     }
 
-    /// Restore a previously exported snapshot, rehydrating peer storage,
-    /// logs, and genesis manifests.
+    /// Restore a previously exported snapshot's mutable peer storage and logs.
+    ///
+    /// Snapshots are bound to one immutable generation. Configuration and
+    /// genesis artifacts are verified but never overwritten during restore.
     pub fn restore_snapshot<P: AsRef<Path>>(&mut self, snapshot: P) -> Result<PathBuf> {
         let candidate = snapshot.as_ref();
         let snapshot_root = if candidate.is_absolute() {
@@ -2853,6 +3048,23 @@ impl Supervisor {
                 snapshot_root.display(),
                 metadata.chain_id,
                 self.chain_id
+            )));
+        }
+        let selected_generation = current_generation_id(self.paths.root())?.ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "sandbox has no selected immutable generation".to_owned(),
+            )
+        })?;
+        let verified_generation =
+            verify_selected_generation(self.paths.root(), &selected_generation)?;
+        self.ensure_selected_generation_metadata(&verified_generation)?;
+        if metadata.generation_id != self.genesis.generation_id
+            || metadata.generation_id != selected_generation
+        {
+            return Err(SupervisorError::Config(format!(
+                "snapshot `{}` targets generation `{}` but current generation is `{selected_generation}`; refusing to overwrite immutable configuration",
+                snapshot_root.display(),
+                metadata.generation_id
             )));
         }
         let expected_peers = self.peers.len() as u64;
@@ -2956,18 +3168,8 @@ impl Supervisor {
             peer.wipe_storage()?;
 
             copy_dir_recursive(&alias_dir.join("storage"), peer.storage_dir())?;
-            copy_file_if_exists(&alias_dir.join("config.toml"), peer.config_path())?;
             copy_file_if_exists(&alias_dir.join("latest.log"), peer.log_path())?;
         }
-
-        if let Some(parent) = self.genesis_manifest().parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&genesis_src, self.genesis_manifest())?;
-        if let Some(parent) = self.genesis_block_file().parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&genesis_block_src, self.genesis_block_file())?;
 
         if was_running {
             self.start_all()?;
@@ -2980,21 +3182,39 @@ impl Supervisor {
     ///
     /// If peers were running before this call they are restarted afterwards.
     pub fn wipe_and_regenerate(&mut self) -> Result<()> {
-        let was_running = self.is_any_running();
-        if was_running {
-            self.stop_all()?;
-        }
+        self.wipe_and_regenerate_inner(None)
+    }
 
+    #[cfg(test)]
+    fn wipe_and_regenerate_with_publication_fault(
+        &mut self,
+        fault: PublicationFaultPoint,
+    ) -> Result<()> {
+        self.wipe_and_regenerate_inner(Some(fault))
+    }
+
+    fn wipe_and_regenerate_inner(
+        &mut self,
+        publication_fault: Option<PublicationFaultPoint>,
+    ) -> Result<()> {
+        let was_running = self.is_any_running();
+        let mut generation_transaction = GenerationTransaction::begin(self.paths.root())?;
+        let generation_id = generation_transaction.id().to_owned();
+        let generation_root = generation_transaction.root().to_path_buf();
         let mut specs = Vec::with_capacity(self.peers.len());
-        for peer in &mut self.peers {
-            peer.wipe_storage()?;
-            specs.push(peer.spec.clone());
+        for peer in &self.peers {
+            let storage_dir = generation_transaction.create_runtime_storage(peer.alias())?;
+            specs.push(
+                peer.spec
+                    .in_fresh_generation(&generation_root, storage_dir)?,
+            );
         }
 
         let genesis = GenesisMaterial::create(
             &mut self.binaries,
             GenesisCreateContext {
-                paths: &self.paths,
+                generation_id: &generation_id,
+                generation_root: &generation_root,
                 chain_id: &self.chain_id,
                 peers: &specs,
                 config_overrides: &self.peer_config_overrides,
@@ -3014,18 +3234,82 @@ impl Supervisor {
                 &[],
             )?;
         }
+        genesis.validate_generation(&self.chain_id, &specs)?;
+        let expected_hash = genesis.expected_hash.ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "validated generation omitted its exact genesis hash".to_owned(),
+            )
+        })?;
 
-        for (peer, spec) in self.peers.iter_mut().zip(specs.into_iter()) {
-            peer.replace_spec(spec);
+        // Keep the prior sandbox running throughout preparation. The short
+        // stop window begins only after the complete candidate validates.
+        if was_running && let Err(stop_error) = self.stop_all() {
+            let _ = self.start_all();
+            return Err(stop_error);
         }
-        self.genesis = genesis;
-        self.compatibility = None;
+        let inventory = GenerationInventoryContext {
+            chain_id: &self.chain_id,
+            chain_discriminant: genesis.chain_discriminant,
+            genesis_public_key: genesis.public_key(),
+            expected_hash,
+        };
+        let publication = match publication_fault {
+            Some(fault) => generation_transaction.publish_with_fault(inventory, fault),
+            None => generation_transaction.publish(inventory),
+        };
+        let published_id = match publication {
+            Ok(id) => id,
+            Err(error @ SupervisorError::PublicationUncertain { .. }) => {
+                self.adopt_generation(specs, genesis);
+                if was_running {
+                    let _ = self.start_all();
+                }
+                return Err(error);
+            }
+            Err(error) => {
+                if was_running {
+                    let _ = self.start_all();
+                }
+                return Err(error);
+            }
+        };
+        // The pointer rename is the commit point. Reconcile the complete
+        // in-memory generation before any post-commit filesystem check so an
+        // error can never leave a new selection paired with old accessors.
+        self.adopt_generation(specs, genesis);
+        let post_commit_check = (|| {
+            if published_id != generation_id
+                || current_generation_id(self.paths.root())?.as_deref()
+                    != Some(generation_id.as_str())
+            {
+                return Err(SupervisorError::GenerationValidation(
+                    "current-generation does not select the committed generation".to_owned(),
+                ));
+            }
+            let verified = verify_selected_generation(self.paths.root(), &generation_id)?;
+            self.ensure_selected_generation_metadata(&verified)
+        })();
+        if let Err(error) = post_commit_check {
+            if was_running {
+                let _ = self.start_all();
+            }
+            return Err(error);
+        }
 
         if was_running {
             self.start_all()?;
         }
 
         Ok(())
+    }
+
+    fn adopt_generation(&mut self, specs: Vec<PeerSpec>, genesis: GenesisMaterial) {
+        debug_assert_eq!(self.peers.len(), specs.len());
+        for (peer, spec) in self.peers.iter_mut().zip(specs) {
+            peer.replace_spec(spec);
+        }
+        self.genesis = genesis;
+        self.compatibility = None;
     }
 }
 
@@ -3582,15 +3866,17 @@ struct PeerSpec {
 }
 
 impl PeerSpec {
-    fn new(paths: &NetworkPaths, alias: String, torii_port: u16, p2p_port: u16) -> Result<Self> {
-        let peer_dir = paths.peer_dir(&alias);
-        if peer_dir.exists() {
-            fs::remove_dir_all(&peer_dir)?;
-        }
-        fs::create_dir_all(&peer_dir)?;
+    fn new_in_generation(
+        generation_root: &Path,
+        storage_dir: PathBuf,
+        alias: String,
+        torii_port: u16,
+        p2p_port: u16,
+    ) -> Result<Self> {
+        let generation_peer_dir = generation_root.join("peers").join(&alias);
+        fs::create_dir_all(&generation_peer_dir)?;
 
-        let storage_dir = peer_dir.join("storage");
-        fs::create_dir_all(&storage_dir)?;
+        Self::initialize_storage(&storage_dir)?;
 
         // Kura authenticates a pristine store root before establishing its
         // configured-catalog baseline. Keep its root separate from the other
@@ -3598,10 +3884,8 @@ impl PeerSpec {
         let kura_dir = storage_dir.join("kura");
 
         let snapshot_dir = storage_dir.join("snapshot");
-        fs::create_dir_all(snapshot_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME))?;
-
-        let config_path = peer_dir.join("config.toml");
-        let rans_tables_path = stage_managed_rans_tables(&peer_dir)?;
+        let config_path = generation_peer_dir.join("config.toml");
+        let rans_tables_path = stage_managed_rans_tables(&generation_peer_dir)?;
 
         let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (public_key, private_key) = key_pair.into_parts();
@@ -3636,6 +3920,34 @@ impl PeerSpec {
         })
     }
 
+    fn in_generation(&self, generation_root: &Path) -> Result<Self> {
+        let mut relocated = self.clone();
+        let peer_dir = generation_root.join("peers").join(&self.alias);
+        fs::create_dir_all(&peer_dir)?;
+        relocated.config_path = peer_dir.join("config.toml");
+        relocated.rans_tables_path = stage_managed_rans_tables(&peer_dir)?;
+        Ok(relocated)
+    }
+
+    fn in_fresh_generation(&self, generation_root: &Path, storage_dir: PathBuf) -> Result<Self> {
+        let mut relocated = self.in_generation(generation_root)?;
+        Self::initialize_storage(&storage_dir)?;
+        relocated.kura_dir = storage_dir.join("kura");
+        relocated.snapshot_dir = storage_dir.join("snapshot");
+        relocated.storage_dir = storage_dir;
+        Ok(relocated)
+    }
+
+    fn initialize_storage(storage_dir: &Path) -> Result<()> {
+        fs::create_dir_all(storage_dir)?;
+        fs::create_dir_all(
+            storage_dir
+                .join("snapshot")
+                .join(SNAPSHOT_GENERATIONS_DIR_NAME),
+        )?;
+        Ok(())
+    }
+
     fn write_config(
         &self,
         chain_id: &str,
@@ -3657,6 +3969,10 @@ impl PeerSpec {
             .cloned();
         let mut root = toml::Table::new();
         root.insert("chain".into(), toml::Value::String(chain_id.to_owned()));
+        root.insert(
+            "chain_discriminant".into(),
+            toml::Value::Integer(i64::from(genesis.chain_discriminant)),
+        );
         root.insert(
             "public_key".into(),
             toml::Value::String(self.keys.public_key.to_string()),
@@ -4162,11 +4478,14 @@ struct PeerKeys {
 
 #[derive(Debug)]
 struct GenesisMaterial {
+    generation_id: String,
     key_pair: KeyPair,
     manifest_path: PathBuf,
     block_path: PathBuf,
     expected_hash_path: PathBuf,
+    public_key_path: PathBuf,
     expected_hash: Option<HashOf<BlockHeader>>,
+    chain_discriminant: u16,
     profile: Option<GenesisProfile>,
     vrf_seed_hex: Option<String>,
     verify_report: Option<KagamiVerifyReport>,
@@ -4175,7 +4494,8 @@ struct GenesisMaterial {
 
 #[derive(Clone, Copy)]
 struct GenesisCreateContext<'a> {
-    paths: &'a NetworkPaths,
+    generation_id: &'a str,
+    generation_root: &'a Path,
     chain_id: &'a str,
     peers: &'a [PeerSpec],
     config_overrides: &'a PeerConfigOverrides,
@@ -4255,7 +4575,8 @@ impl Drop for TemporaryGenesisKeyFile {
 impl GenesisMaterial {
     fn create(binaries: &mut BinaryPaths, context: GenesisCreateContext<'_>) -> Result<Self> {
         let GenesisCreateContext {
-            paths,
+            generation_id,
+            generation_root,
             chain_id,
             peers,
             config_overrides,
@@ -4265,11 +4586,12 @@ impl GenesisMaterial {
             vrf_seed_hex,
             onboarding_authority,
         } = context;
-        let genesis_dir = paths.genesis_dir();
+        let genesis_dir = generation_root.join("genesis");
         fs::create_dir_all(&genesis_dir)?;
         let manifest_path = genesis_dir.join(GENESIS_FILE_NAME);
         let block_path = genesis_dir.join(GENESIS_SIGNED_FILE_NAME);
         let expected_hash_path = genesis_dir.join(GENESIS_EXPECTED_HASH_FILE_NAME);
+        let public_key_path = genesis_dir.join(GENESIS_PUBLIC_KEY_FILE_NAME);
 
         let key_pair = KeyPair::random();
         let manifest = Self::generate_manifest(
@@ -4302,13 +4624,17 @@ impl GenesisMaterial {
         let manifest = genesis::with_topology(manifest, topology);
         let json = norito::json::to_vec_pretty(&manifest)?;
         fs::write(&manifest_path, json)?;
+        fs::write(&public_key_path, format!("{}\n", key_pair.public_key()))?;
 
         let mut material = Self {
+            generation_id: generation_id.to_owned(),
             key_pair,
             manifest_path,
             block_path,
             expected_hash_path,
+            public_key_path,
             expected_hash: None,
+            chain_discriminant: manifest.chain_discriminant(),
             profile: genesis_profile,
             vrf_seed_hex: vrf_seed_hex.map(|value| value.to_owned()),
             verify_report: None,
@@ -4358,6 +4684,33 @@ impl GenesisMaterial {
         material.verify_report = verify_report;
         material.consensus_fingerprint = consensus_fingerprint;
         Ok(material)
+    }
+
+    fn copy_into_generation(&self, generation_id: &str, generation_root: &Path) -> Result<Self> {
+        let genesis_dir = generation_root.join("genesis");
+        fs::create_dir_all(&genesis_dir)?;
+        let manifest_path = genesis_dir.join(GENESIS_FILE_NAME);
+        let block_path = genesis_dir.join(GENESIS_SIGNED_FILE_NAME);
+        let expected_hash_path = genesis_dir.join(GENESIS_EXPECTED_HASH_FILE_NAME);
+        let public_key_path = genesis_dir.join(GENESIS_PUBLIC_KEY_FILE_NAME);
+        fs::copy(&self.manifest_path, &manifest_path)?;
+        fs::copy(&self.block_path, &block_path)?;
+        fs::copy(&self.expected_hash_path, &expected_hash_path)?;
+        fs::copy(&self.public_key_path, &public_key_path)?;
+        Ok(Self {
+            generation_id: generation_id.to_owned(),
+            key_pair: self.key_pair.clone(),
+            manifest_path,
+            block_path,
+            expected_hash_path,
+            public_key_path,
+            expected_hash: self.expected_hash,
+            chain_discriminant: self.chain_discriminant,
+            profile: self.profile,
+            vrf_seed_hex: self.vrf_seed_hex.clone(),
+            verify_report: self.verify_report.clone(),
+            consensus_fingerprint: self.consensus_fingerprint.clone(),
+        })
     }
 
     fn sign_manifest_with_kagami(
@@ -4412,6 +4765,10 @@ impl GenesisMaterial {
                 output.status
             )));
         }
+        #[cfg(test)]
+        if std::env::var_os(TEST_FINALIZE_KAGAMI_STUB_SIGNATURE).is_some() {
+            self.finalize_kagami_stub_signature(config_path, consensus_mode)?;
+        }
         let signed_metadata = fs::metadata(&self.block_path).map_err(|error| {
             SupervisorError::KagamiInvocation(format!(
                 "`kagami genesis sign` did not create `{}`: {error}",
@@ -4463,6 +4820,243 @@ impl GenesisMaterial {
 
         let manifest = RawGenesisTransaction::from_path(&self.manifest_path)?;
         Ok((manifest, expected_hash))
+    }
+
+    #[cfg(test)]
+    fn finalize_kagami_stub_signature(
+        &self,
+        config_path: &Path,
+        consensus_mode: SumeragiConsensusMode,
+    ) -> Result<()> {
+        let manifest = RawGenesisTransaction::from_path(&self.manifest_path)?;
+        if manifest.consensus_mode() != consensus_mode {
+            return Err(SupervisorError::KagamiInvocation(format!(
+                "test Kagami stub manifest mode {} differs from requested mode {consensus_mode}",
+                manifest.consensus_mode()
+            )));
+        }
+        let mut source = TomlSource::from_file(config_path).map_err(|error| {
+            SupervisorError::KagamiInvocation(format!(
+                "test Kagami stub failed reading config `{}`: {error:?}",
+                config_path.display()
+            ))
+        })?;
+        if let Some(expected_hash) = source
+            .table_mut()
+            .get_mut("genesis")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|genesis| genesis.get_mut("expected_hash"))
+            && expected_hash.as_str() == Some(GENESIS_EXPECTED_HASH_PLACEHOLDER)
+        {
+            let hash_body = Hash::new(b"Mochi unit-test Kagami unresolved genesis hash")
+                .to_string()
+                .to_ascii_uppercase();
+            *expected_hash =
+                toml::Value::String(norito::literal::format("hash", hash_body.as_str()));
+        }
+        let config = actual::Root::from_toml_source(source).map_err(|error| {
+            SupervisorError::KagamiInvocation(format!(
+                "test Kagami stub failed parsing config `{}`: {error:?}",
+                config_path.display()
+            ))
+        })?;
+        if config.common.chain != *manifest.chain_id()
+            || *config.common.chain_discriminant.value() != manifest.chain_discriminant()
+            || config.genesis.public_key != *self.public_key()
+        {
+            return Err(SupervisorError::KagamiInvocation(
+                "test Kagami stub config differs from its manifest or signing key".to_owned(),
+            ));
+        }
+        let block = manifest
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                &self.key_pair,
+                Some(iroha_core::da::proof_policy_bundle(
+                    &config.nexus.lane_config,
+                )),
+                Some(iroha_core::state::compute_genesis_confidential_policy_hash(
+                    &config.zk,
+                )),
+            )
+            .map_err(|error| {
+                SupervisorError::KagamiInvocation(format!(
+                    "test Kagami stub failed signing canonical genesis: {error:#}"
+                ))
+            })?
+            .0;
+        let wire = block.encode_wire().map_err(|error| {
+            SupervisorError::KagamiInvocation(format!(
+                "test Kagami stub failed encoding canonical genesis: {error}"
+            ))
+        })?;
+        fs::write(&self.block_path, wire)?;
+        fs::write(&self.expected_hash_path, format!("{}\n", block.hash()))?;
+        Ok(())
+    }
+
+    fn validate_generation(&self, chain_id: &str, peers: &[PeerSpec]) -> Result<()> {
+        const MAX_SIGNED_GENESIS_BYTES: u64 = 512 * 1024 * 1024;
+        let signed_metadata = fs::metadata(&self.block_path)?;
+        if !signed_metadata.is_file()
+            || signed_metadata.len() == 0
+            || signed_metadata.len() > MAX_SIGNED_GENESIS_BYTES
+        {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "signed genesis `{}` must be a non-empty regular file no larger than {MAX_SIGNED_GENESIS_BYTES} bytes",
+                self.block_path.display()
+            )));
+        }
+        let signed = fs::read(&self.block_path)?;
+        let manifest = RawGenesisTransaction::from_path(&self.manifest_path)?;
+        let expected_chain = chain_id.parse::<ChainId>().map_err(|error| {
+            SupervisorError::GenerationValidation(format!(
+                "configured chain id `{chain_id}` is invalid: {error}"
+            ))
+        })?;
+        if manifest.chain_id() != &expected_chain
+            || manifest.chain_discriminant() != self.chain_discriminant
+        {
+            return Err(SupervisorError::GenerationValidation(
+                "persisted genesis manifest changed its chain or discriminant".to_owned(),
+            ));
+        }
+        let expected_hash = self.expected_hash.ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "candidate generation has no exact genesis hash".to_owned(),
+            )
+        })?;
+        let public_record = fs::read_to_string(&self.public_key_path)?;
+        if public_record != format!("{}\n", self.public_key()) {
+            return Err(SupervisorError::GenerationValidation(
+                "candidate genesis public-key record is not exact and canonical".to_owned(),
+            ));
+        }
+        let validated = iroha_genesis::validate_prepared_genesis_bundle(
+            &signed,
+            &manifest,
+            self.public_key(),
+            expected_hash,
+        )
+        .map_err(|error| {
+            SupervisorError::GenerationValidation(format!(
+                "independent signed-genesis validation failed: {error:#}"
+            ))
+        })?;
+        iroha_core::validate_genesis_block(
+            validated.block(),
+            &AccountId::new(self.public_key().clone()),
+            &expected_chain,
+        )
+        .map_err(|error| {
+            SupervisorError::GenerationValidation(format!(
+                "signed genesis failed full core validation: {error}"
+            ))
+        })?;
+
+        let expected_roster = peers
+            .iter()
+            .map(|peer| (peer.keys.public_key.clone(), peer.keys.pop.clone()))
+            .collect::<BTreeMap<_, _>>();
+        if validated.validator_pops() != &expected_roster {
+            return Err(SupervisorError::GenerationValidation(
+                "signed genesis validator roster differs from the candidate peers".to_owned(),
+            ));
+        }
+
+        let canonical_block = fs::canonicalize(&self.block_path)?;
+        let canonical_manifest = fs::canonicalize(&self.manifest_path)?;
+        for peer in peers {
+            let source = TomlSource::from_file(&peer.config_path).map_err(|error| {
+                SupervisorError::GenerationValidation(format!(
+                    "candidate peer config `{}` failed reading: {error:?}",
+                    peer.config_path.display()
+                ))
+            })?;
+            let config = actual::Root::from_toml_source(source).map_err(|error| {
+                SupervisorError::GenerationValidation(format!(
+                    "candidate peer config `{}` failed parsing: {error:?}",
+                    peer.config_path.display()
+                ))
+            })?;
+            validate_managed_peer_paths(&config, peer, peers.len())?;
+            if config.common.chain != expected_chain
+                || *config.common.chain_discriminant.value() != self.chain_discriminant
+            {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "candidate peer config `{}` has the wrong chain or discriminant",
+                    peer.config_path.display()
+                )));
+            }
+            if config.genesis.public_key != *self.public_key()
+                || config.genesis.expected_hash != expected_hash
+            {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "candidate peer config `{}` has a different genesis key or hash",
+                    peer.config_path.display()
+                )));
+            }
+            let expected_da_policies =
+                iroha_core::da::proof_policy_bundle(&config.nexus.lane_config);
+            if validated.block().da_proof_policies() != Some(&expected_da_policies) {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "candidate peer config `{}` DA proof policy differs from the signed genesis header",
+                    peer.config_path.display()
+                )));
+            }
+            let expected_confidential_policy =
+                iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
+            let signed_confidential_policy = validated
+                .block()
+                .header()
+                .confidential_features()
+                .and_then(|digest| digest.zk_policy_hash);
+            if signed_confidential_policy != Some(expected_confidential_policy) {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "candidate peer config `{}` confidential policy differs from the signed genesis header",
+                    peer.config_path.display()
+                )));
+            }
+            let configured_block = config
+                .genesis
+                .file
+                .as_ref()
+                .ok_or_else(|| {
+                    SupervisorError::GenerationValidation(format!(
+                        "candidate peer config `{}` omitted genesis.file",
+                        peer.config_path.display()
+                    ))
+                })?
+                .resolve_relative_path();
+            let configured_manifest = config
+                .genesis
+                .manifest_json
+                .as_ref()
+                .ok_or_else(|| {
+                    SupervisorError::GenerationValidation(format!(
+                        "candidate peer config `{}` omitted genesis.manifest_json",
+                        peer.config_path.display()
+                    ))
+                })?
+                .resolve_relative_path();
+            if fs::canonicalize(configured_block)? != canonical_block
+                || fs::canonicalize(configured_manifest)? != canonical_manifest
+            {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "candidate peer config `{}` selects genesis outside its generation",
+                    peer.config_path.display()
+                )));
+            }
+            let trusted = config.common.trusted_peers.value();
+            if trusted.pops != expected_roster
+                || config.common.key_pair.public_key() != &peer.keys.public_key
+            {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "candidate peer config `{}` identity or PoP roster differs from signed genesis",
+                    peer.config_path.display()
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn generate_manifest(
@@ -4637,6 +5231,98 @@ impl GenesisMaterial {
     }
 }
 
+fn validate_managed_peer_paths(
+    config: &actual::Root,
+    peer: &PeerSpec,
+    peer_count: usize,
+) -> Result<()> {
+    let torii_dir = peer.storage_dir.join("torii");
+    let streaming_dir = peer.storage_dir.join("streaming");
+    let managed_paths = [
+        (
+            "kura.store_dir",
+            config.kura.store_dir.resolve_relative_path(),
+            peer.kura_dir.clone(),
+        ),
+        (
+            "snapshot.store_dir",
+            config.snapshot.store_dir.resolve_relative_path(),
+            peer.snapshot_dir.clone(),
+        ),
+        (
+            "torii.data_dir",
+            config.torii.data_dir.clone(),
+            torii_dir.clone(),
+        ),
+        (
+            "torii.da_ingest.replay_cache_store_dir",
+            config.torii.da_ingest.replay_cache_store_dir.clone(),
+            torii_dir.join("da_replay"),
+        ),
+        (
+            "torii.da_ingest.manifest_store_dir",
+            config.torii.da_ingest.manifest_store_dir.clone(),
+            torii_dir.join("da_manifests"),
+        ),
+        (
+            "torii.sorafs_storage.data_dir",
+            config.torii.sorafs_storage.data_dir.clone(),
+            peer.storage_dir.join("sorafs"),
+        ),
+        (
+            "streaming.session_store_dir",
+            config.streaming.session_store_dir.clone(),
+            streaming_dir.clone(),
+        ),
+        (
+            "streaming.soranet.provision_spool_dir",
+            config.streaming.soranet.provision_spool_dir.clone(),
+            streaming_dir.join("soranet_routes"),
+        ),
+        (
+            "streaming.soravpn.provision_spool_dir",
+            config.streaming.soravpn.provision_spool_dir.clone(),
+            streaming_dir.join("soravpn_routes"),
+        ),
+        (
+            "streaming.codec.rans_tables_path",
+            config.streaming.codec.rans_tables_path.clone(),
+            peer.rans_tables_path.clone(),
+        ),
+    ];
+    for (field, configured, expected) in managed_paths {
+        if configured != expected {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "candidate peer config `{}` redirects Mochi-managed `{field}` from `{}` to `{}`",
+                peer.config_path.display(),
+                expected.display(),
+                configured.display()
+            )));
+        }
+    }
+
+    if peer_count > 1 {
+        let configured = PathBuf::from(
+            config
+                .network
+                .soranet_handshake
+                .pow
+                .revocation_store_path
+                .as_ref(),
+        );
+        let expected = peer.storage_dir.join("soranet/ticket_revocations.norito");
+        if configured != expected {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "candidate peer config `{}` redirects Mochi-managed `network.soranet_handshake.pow.revocation_store_path` from `{}` to `{}`",
+                peer.config_path.display(),
+                expected.display(),
+                configured.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn parse_keyed_value(line: &str, keys: &[&str]) -> Option<String> {
     let lower = line.to_ascii_lowercase();
     for key in keys {
@@ -4776,6 +5462,7 @@ fn sanitize_snapshot_label(label: &str) -> Option<String> {
 
 struct SnapshotMetadata {
     chain_id: String,
+    generation_id: String,
     peer_count: u64,
     genesis_hash: Hash,
     kura_hashes: HashMap<String, Hash>,
@@ -4807,6 +5494,15 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
         .ok_or_else(|| {
             SupervisorError::Config(format!(
                 "snapshot metadata `{}` missing `chain_id` string",
+                metadata_path.display()
+            ))
+        })?;
+    let generation_id = object
+        .get("generation_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            SupervisorError::Config(format!(
+                "snapshot metadata `{}` missing `generation_id` string",
                 metadata_path.display()
             ))
         })?;
@@ -4880,6 +5576,7 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
     }
     Ok(SnapshotMetadata {
         chain_id: chain_id.to_owned(),
+        generation_id: generation_id.to_owned(),
         peer_count,
         genesis_hash,
         kura_hashes,
@@ -5253,6 +5950,7 @@ exit 0
         _log_guard: EnvVarGuard,
         _irohad_guard: EnvVarGuard,
         _iroha_cli_guard: EnvVarGuard,
+        _signature_guard: EnvVarGuard,
         log_path: PathBuf,
     }
 
@@ -5358,12 +6056,17 @@ esac
             let log_guard = EnvVarGuard::set("MOCHI_KAGAMI_LOG", log_path.as_os_str());
             let irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", iroha_stub.as_os_str());
             let iroha_cli_guard = EnvVarGuard::set("MOCHI_IROHA_CLI", iroha_stub.as_os_str());
+            let signature_guard = EnvVarGuard::set(
+                TEST_FINALIZE_KAGAMI_STUB_SIGNATURE,
+                std::ffi::OsStr::new("1"),
+            );
             let _ = fs::File::create(&log_path);
             Self {
                 _path_guard: path_guard,
                 _log_guard: log_guard,
                 _irohad_guard: irohad_guard,
                 _iroha_cli_guard: iroha_cli_guard,
+                _signature_guard: signature_guard,
                 log_path,
             }
         }
@@ -5513,25 +6216,44 @@ esac
         }
     }
 
+    fn test_peer_spec(
+        paths: &NetworkPaths,
+        alias: String,
+        torii_port: u16,
+        p2p_port: u16,
+    ) -> Result<PeerSpec> {
+        let peer_dir = paths.peer_dir(&alias);
+        fs::create_dir_all(&peer_dir)?;
+        let storage_dir = fs::canonicalize(peer_dir)?.join("storage");
+        PeerSpec::new_in_generation(paths.root(), storage_dir, alias, torii_port, p2p_port)
+    }
+
     fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
         let manifest_path = paths.genesis_dir().join(GENESIS_FILE_NAME);
         let block_path = paths.genesis_dir().join(GENESIS_SIGNED_FILE_NAME);
         let expected_hash_path = paths.genesis_dir().join(GENESIS_EXPECTED_HASH_FILE_NAME);
+        let public_key_path = paths.genesis_dir().join(GENESIS_PUBLIC_KEY_FILE_NAME);
         let expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
             .parse::<HashOf<BlockHeader>>()
             .expect("test genesis hash");
+        let key_pair = KeyPair::random();
         fs::create_dir_all(paths.genesis_dir()).expect("genesis dir");
         fs::write(&manifest_path, b"{}").expect("write manifest");
         fs::write(&block_path, b"norito-wire-stub").expect("write signed genesis");
         fs::write(&expected_hash_path, format!("{expected_hash}\n"))
             .expect("write genesis expected hash");
+        fs::write(&public_key_path, format!("{}\n", key_pair.public_key()))
+            .expect("write genesis public key");
 
         GenesisMaterial {
-            key_pair: KeyPair::random(),
+            generation_id: "00000000000000000000000000000000".to_owned(),
+            key_pair,
             manifest_path,
             block_path,
             expected_hash_path,
+            public_key_path,
             expected_hash: Some(expected_hash),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             profile: None,
             vrf_seed_hex: None,
             verify_report: None,
@@ -6981,8 +7703,8 @@ esac
     }
 
     #[test]
-    fn restore_snapshot_replaces_storage_and_configs() {
-        if !ports_available("restore_snapshot_replaces_storage_and_configs") {
+    fn restore_snapshot_replaces_only_mutable_runtime_state() {
+        if !ports_available("restore_snapshot_replaces_only_mutable_runtime_state") {
             return;
         }
         let _env = env_lock().lock().expect("env lock");
@@ -7016,7 +7738,6 @@ esac
         fs::write(storage_dir.join("marker.txt"), b"mutated-storage")
             .expect("overwrite storage marker");
         fs::remove_file(snapshot_dir.join("inner.txt")).expect("remove snapshot file");
-        fs::write(&config_path, b"mutated-config").expect("mutate config");
         fs::write(&log_path, b"mutated-log").expect("mutate log");
 
         supervisor
@@ -7082,7 +7803,11 @@ esac
             .export_snapshot(Some("Genesis Hash Mismatch"))
             .expect("export snapshot");
 
-        fs::write(supervisor.genesis_manifest(), b"mutated-genesis").expect("mutate genesis");
+        fs::write(
+            snapshot_root.join("genesis").join(GENESIS_FILE_NAME),
+            b"mutated-genesis",
+        )
+        .expect("mutate snapshot genesis");
 
         let err = supervisor
             .restore_snapshot(&snapshot_root)
@@ -7332,8 +8057,8 @@ esac
     }
 
     #[test]
-    fn existing_peer_directories_are_cleaned_before_build() {
-        if !ports_available("existing_peer_directories_are_cleaned_before_build") {
+    fn existing_peer_directories_preserve_unmanaged_artifacts_during_build() {
+        if !ports_available("existing_peer_directories_preserve_unmanaged_artifacts_during_build") {
             return;
         }
         let _env = env_lock().lock().expect("env lock");
@@ -7357,8 +8082,8 @@ esac
             .expect("build supervisor");
 
         assert!(
-            !stale_file.exists(),
-            "stale peer artefacts should be removed during build"
+            stale_file.exists(),
+            "building a new generation must not delete unmanaged peer artifacts"
         );
 
         let rebuilt_storage = supervisor.peers()[0].spec.storage_dir.clone();
@@ -7397,13 +8122,18 @@ esac
             );
         }
 
-        let genesis_path = supervisor.genesis_manifest().to_path_buf();
-        fs::write(&genesis_path, b"not-json").expect("corrupt genesis manifest");
+        let retired_genesis_path = supervisor.genesis_manifest().to_path_buf();
+        fs::write(&retired_genesis_path, b"not-json").expect("corrupt genesis manifest");
 
         supervisor
             .wipe_and_regenerate()
             .expect("wipe and regenerate should succeed");
 
+        let genesis_path = supervisor.genesis_manifest().to_path_buf();
+        assert_ne!(
+            genesis_path, retired_genesis_path,
+            "regeneration must select a new immutable generation"
+        );
         let manifest_bytes = fs::read(&genesis_path).expect("read regenerated genesis");
         let manifest: Value =
             norito::json::from_slice(&manifest_bytes).expect("genesis should be valid JSON");
@@ -7442,6 +8172,129 @@ esac
                     .is_none(),
                 "wipe should leave snapshot generations empty for peer {}",
                 peer.alias()
+            );
+        }
+    }
+
+    #[test]
+    fn post_commit_publication_fault_reconciles_generation_and_storage_atomically() {
+        if !ports_available(
+            "post_commit_publication_fault_reconciles_generation_and_storage_atomically",
+        ) {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _stub = KagamiStub::install(temp.path());
+        let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
+            .data_root(temp.path())
+            .build()
+            .expect("build supervisor");
+        let old_generation = supervisor.generation_id().to_owned();
+        let old_storage = supervisor
+            .peers()
+            .iter()
+            .map(|peer| peer.storage_dir().to_path_buf())
+            .collect::<Vec<_>>();
+        for (index, storage) in old_storage.iter().enumerate() {
+            fs::write(storage.join(format!("sentinel-{index}")), b"old state")
+                .expect("write old-generation sentinel");
+        }
+
+        let error = supervisor
+            .wipe_and_regenerate_with_publication_fault(PublicationFaultPoint::AfterPointerRename)
+            .expect_err("post-rename durability fault must be reported as uncertain");
+        let committed_generation = match error {
+            SupervisorError::PublicationUncertain { generation_id, .. } => generation_id,
+            other => panic!("unexpected post-commit error: {other}"),
+        };
+        assert_ne!(committed_generation, old_generation);
+        assert_eq!(supervisor.generation_id(), committed_generation);
+        assert_eq!(
+            current_generation_id(supervisor.paths.root()).expect("read committed pointer"),
+            Some(committed_generation.clone())
+        );
+        let verified = verify_selected_generation(supervisor.paths.root(), &committed_generation)
+            .expect("post-rename selected generation remains complete");
+        supervisor
+            .ensure_selected_generation_metadata(&verified)
+            .expect("in-memory metadata follows the committed selection");
+        for (index, peer) in supervisor.peers().iter().enumerate() {
+            assert!(
+                peer.config_path().starts_with(&verified.root),
+                "peer config must move as one generation"
+            );
+            assert_ne!(peer.storage_dir(), old_storage[index]);
+            assert!(
+                !peer
+                    .storage_dir()
+                    .join(format!("sentinel-{index}"))
+                    .exists(),
+                "fresh generation storage starts empty"
+            );
+            assert_eq!(
+                fs::read(old_storage[index].join(format!("sentinel-{index}")))
+                    .expect("retired generation state remains intact"),
+                b"old state"
+            );
+        }
+    }
+
+    #[test]
+    fn precommit_publication_fault_removes_only_candidate_runtime_storage() {
+        if !ports_available("precommit_publication_fault_removes_only_candidate_runtime_storage") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _stub = KagamiStub::install(temp.path());
+        let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
+            .data_root(temp.path())
+            .build()
+            .expect("build supervisor");
+        let generation = supervisor.generation_id().to_owned();
+        let storage = supervisor
+            .peers()
+            .iter()
+            .map(|peer| peer.storage_dir().to_path_buf())
+            .collect::<Vec<_>>();
+        let storage_entries = storage
+            .iter()
+            .map(|active| {
+                fs::read_dir(active.parent().expect("storage-generations parent"))
+                    .expect("read storage generations")
+                    .map(|entry| entry.expect("storage generation entry").file_name())
+                    .collect::<HashSet<_>>()
+            })
+            .collect::<Vec<_>>();
+        for (index, active) in storage.iter().enumerate() {
+            fs::write(active.join(format!("sentinel-{index}")), b"active state")
+                .expect("write active storage sentinel");
+        }
+
+        let error = supervisor
+            .wipe_and_regenerate_with_publication_fault(PublicationFaultPoint::BeforeInventory)
+            .expect_err("precommit publication fault must fail");
+        assert!(matches!(error, SupervisorError::GenerationValidation(_)));
+        assert_eq!(supervisor.generation_id(), generation);
+        assert_eq!(
+            current_generation_id(supervisor.paths.root()).expect("read preserved pointer"),
+            Some(generation)
+        );
+        for (index, peer) in supervisor.peers().iter().enumerate() {
+            assert_eq!(peer.storage_dir(), storage[index]);
+            assert_eq!(
+                fs::read(storage[index].join(format!("sentinel-{index}")))
+                    .expect("read preserved active state"),
+                b"active state"
+            );
+            let after = fs::read_dir(storage[index].parent().expect("storage-generations parent"))
+                .expect("read storage generations after fault")
+                .map(|entry| entry.expect("storage generation entry").file_name())
+                .collect::<HashSet<_>>();
+            assert_eq!(
+                after, storage_entries[index],
+                "precommit failure must remove the candidate storage generation"
             );
         }
     }
@@ -7511,10 +8364,75 @@ esac
         let temp = tempfile::tempdir().expect("tempdir");
         let paths = NetworkPaths::from_root(temp.path(), &NetworkProfile::default());
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let peer_id = spec.peer_id();
         let parsed: PublicKey = peer_id.public_key().clone();
         assert_eq!(parsed, spec.keys.public_key);
+    }
+
+    #[test]
+    fn generated_peer_config_preserves_all_mochi_managed_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = NetworkPaths::from_root(temp.path(), &NetworkProfile::default());
+        paths.ensure().expect("paths");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let genesis = test_genesis_material(&paths);
+        spec.write_config(
+            "managed-paths-chain",
+            &genesis,
+            std::slice::from_ref(&spec),
+            &PeerConfigOverrides::default(),
+            &[],
+        )
+        .expect("write generated peer config");
+        let config = actual::Root::from_toml_source(
+            TomlSource::from_file(&spec.config_path).expect("read generated peer config"),
+        )
+        .expect("parse generated peer config");
+
+        validate_managed_peer_paths(&config, &spec, 1)
+            .expect("generated config keeps every Mochi-managed path");
+    }
+
+    #[test]
+    fn managed_peer_path_validation_rejects_runtime_root_redirects() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = NetworkPaths::from_root(temp.path(), &NetworkProfile::default());
+        paths.ensure().expect("paths");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let genesis = test_genesis_material(&paths);
+        spec.write_config(
+            "managed-path-tamper-chain",
+            &genesis,
+            std::slice::from_ref(&spec),
+            &PeerConfigOverrides::default(),
+            &[],
+        )
+        .expect("write generated peer config");
+        let load = || {
+            actual::Root::from_toml_source(
+                TomlSource::from_file(&spec.config_path).expect("read generated peer config"),
+            )
+            .expect("parse generated peer config")
+        };
+
+        let mut config = load();
+        *config.kura.store_dir.value_mut() = temp.path().join("redirected-kura");
+        let error = validate_managed_peer_paths(&config, &spec, 1)
+            .expect_err("redirected Kura root must fail generation validation");
+        assert!(error.to_string().contains("kura.store_dir"));
+
+        let mut config = load();
+        *config.snapshot.store_dir.value_mut() = temp.path().join("redirected-snapshot");
+        let error = validate_managed_peer_paths(&config, &spec, 1)
+            .expect_err("redirected snapshot root must fail generation validation");
+        assert!(error.to_string().contains("snapshot.store_dir"));
+
+        let mut config = load();
+        config.torii.data_dir = temp.path().join("redirected-torii");
+        let error = validate_managed_peer_paths(&config, &spec, 1)
+            .expect_err("redirected Torii root must fail generation validation");
+        assert!(error.to_string().contains("torii.data_dir"));
     }
 
     #[test]
@@ -7714,7 +8632,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
 
         let mut nexus = toml::Table::new();
@@ -7798,7 +8716,7 @@ esac
         paths.ensure().expect("paths");
         let specs = (0_u16..4)
             .map(|index| {
-                PeerSpec::new(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
+                test_peer_spec(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
                     .expect("peer spec")
             })
             .collect::<Vec<_>>();
@@ -7843,7 +8761,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
         let mut storage = toml::Table::new();
         storage.insert("enabled".into(), toml::Value::Boolean(true));
@@ -7886,7 +8804,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
         let mut storage = toml::Table::new();
         storage.insert(
@@ -7925,7 +8843,7 @@ esac
         paths.ensure().expect("paths");
         let specs = (0_u16..4)
             .map(|index| {
-                PeerSpec::new(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
+                test_peer_spec(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
                     .expect("peer spec")
             })
             .collect::<Vec<_>>();
@@ -8021,7 +8939,7 @@ esac
         paths.ensure().expect("paths");
         let specs = (0_u16..4)
             .map(|index| {
-                PeerSpec::new(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
+                test_peer_spec(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
                     .expect("peer spec")
             })
             .collect::<Vec<_>>();
@@ -8100,7 +9018,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
 
         let mut soranet = toml::Table::new();
@@ -8243,7 +9161,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
 
         for (key, nested, expected_error) in [
@@ -8296,7 +9214,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
 
         let mut da_ingest = toml::Table::new();
@@ -8349,7 +9267,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
         let mut kura = toml::Table::new();
         kura.insert(
@@ -8384,7 +9302,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
         let mut kura = toml::Table::new();
         kura.insert("store_dir".into(), toml::Value::Integer(7));
@@ -8415,7 +9333,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         let genesis = test_genesis_material(&paths);
 
         let mut lane0 = toml::Table::new();
@@ -8967,7 +9885,7 @@ esac
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
-        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
         fs::write(&spec.config_path, "chain = \"cwd-test\"\n").expect("write config");
 
         let cwd_capture = temp.path().join("peer-cwd.txt");

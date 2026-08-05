@@ -2131,7 +2131,7 @@ impl RuntimeEffectOwnership {
 
     /// Return whether this non-forgeable sidecar names one exact production
     /// adapter effect, including all of the effect's concrete coordinates.
-    fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
+    pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
         let Some(binding) = self.binding.as_ref() else {
             return false;
         };
@@ -2143,6 +2143,94 @@ impl RuntimeEffectOwnership {
                     effect_kind,
                     &production_adapter_effect_semantic_identity(effect),
                 )
+    }
+
+    /// Return whether this exact predecessor capability authorizes one body
+    /// pipeline successor. The mapping is deliberately closed: matching body
+    /// coordinates alone never authorize a lifecycle-owner handoff.
+    fn exactly_authorizes_body_pipeline_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        tag: EventTag,
+        successor: &BodyPipelineCompletionEvidence,
+    ) -> bool {
+        if !self.exactly_binds_adapter_effect(predecessor) {
+            return false;
+        }
+        match (predecessor, successor) {
+            (
+                AdapterEffect::StoreBody {
+                    tag: predecessor_tag,
+                    round,
+                    subject,
+                },
+                BodyPipelineCompletionEvidence::BodyStored {
+                    round: successor_round,
+                    subject: successor_subject,
+                    receipt,
+                },
+            ) => {
+                *predecessor_tag == tag
+                    && *round == *successor_round
+                    && *subject == *successor_subject
+                    && receipt.round() == *round
+                    && receipt.subject() == *subject
+            }
+            (
+                AdapterEffect::ValidateBody {
+                    tag: predecessor_tag,
+                    round,
+                    subject,
+                },
+                BodyPipelineCompletionEvidence::ValidationSucceeded {
+                    round: successor_round,
+                    subject: successor_subject,
+                    receipt,
+                },
+            ) => {
+                *predecessor_tag == tag
+                    && *round == *successor_round
+                    && *subject == *successor_subject
+                    && receipt.durable().round() == *round
+                    && receipt.durable().subject() == *subject
+            }
+            (
+                AdapterEffect::ValidateBody {
+                    tag: predecessor_tag,
+                    round,
+                    subject,
+                },
+                BodyPipelineCompletionEvidence::ValidationFailed {
+                    round: successor_round,
+                    subject: successor_subject,
+                },
+            ) => {
+                *predecessor_tag == tag
+                    && *round == *successor_round
+                    && *subject == *successor_subject
+            }
+            (
+                AdapterEffect::ValidateBody {
+                    tag: predecessor_tag,
+                    round,
+                    subject,
+                },
+                BodyPipelineCompletionEvidence::LocalProposalReady {
+                    manifest,
+                    durable_receipt,
+                    validated_receipt,
+                },
+            ) => {
+                *predecessor_tag == tag
+                    && *round == manifest.round
+                    && *subject == manifest.subject
+                    && durable_receipt.round() == *round
+                    && durable_receipt.subject() == *subject
+                    && durable_receipt.manifest_hash() == iroha_crypto::HashOf::new(manifest)
+                    && validated_receipt.durable() == durable_receipt
+            }
+            _ => false,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2243,8 +2331,8 @@ impl RuntimeEffectOwnership {
         };
         let (effect_kind, candidate_kind, round, subject) = match completion {
             BodyPipelineCompletionEvidence::LocalProposalReady { manifest, .. } => (
-                RUNTIME_EFFECT_KIND_STORE_BODY,
-                RUNTIME_CANDIDATE_KIND_STORE_BODY,
+                RUNTIME_EFFECT_KIND_VALIDATE_BODY,
+                RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
                 manifest.round,
                 manifest.subject,
             ),
@@ -7225,6 +7313,48 @@ fn manifests_conflict_for_same_body(
 }
 
 impl AdapterCommand {
+    fn body_pipeline_completion_evidence(&self) -> Option<BodyPipelineCompletionEvidence> {
+        match self {
+            Self::LocalProposalReady {
+                manifest,
+                durable_receipt,
+                validated_receipt,
+            } => Some(BodyPipelineCompletionEvidence::LocalProposalReady {
+                manifest: manifest.clone(),
+                durable_receipt: durable_receipt.clone(),
+                validated_receipt: validated_receipt.clone(),
+            }),
+            Self::BodyAvailable { .. } => None,
+            Self::BodyStored {
+                round,
+                subject,
+                receipt,
+            } => Some(BodyPipelineCompletionEvidence::BodyStored {
+                round: *round,
+                subject: *subject,
+                receipt: receipt.clone(),
+            }),
+            Self::ValidationSucceeded {
+                round,
+                subject,
+                receipt,
+            } => Some(BodyPipelineCompletionEvidence::ValidationSucceeded {
+                round: *round,
+                subject: *subject,
+                receipt: receipt.clone(),
+            }),
+            Self::ValidationFailed { round, subject } => {
+                Some(BodyPipelineCompletionEvidence::ValidationFailed {
+                    round: *round,
+                    subject: *subject,
+                })
+            }
+            Self::Authenticated(_)
+            | Self::SignatureCompleted(_)
+            | Self::ApplicationCompleted(_) => None,
+        }
+    }
+
     /// Return whether this command owns the candidate's logical stage slot
     /// and, if so, whether its full trusted evidence is exact.
     fn body_pipeline_completion_ownership(
@@ -13928,6 +14058,98 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         Ok(())
     }
 
+    fn body_pipeline_completion_predecessor(
+        tag: EventTag,
+        candidate: &BodyPipelineCompletionEvidence,
+    ) -> Option<AdapterEffect> {
+        match candidate {
+            BodyPipelineCompletionEvidence::BodyStored { round, subject, .. } => {
+                Some(AdapterEffect::StoreBody {
+                    tag,
+                    round: *round,
+                    subject: *subject,
+                })
+            }
+            BodyPipelineCompletionEvidence::ValidationSucceeded { round, subject, .. }
+            | BodyPipelineCompletionEvidence::ValidationFailed { round, subject }
+            | BodyPipelineCompletionEvidence::LocalProposalReady {
+                manifest: wire::PayloadManifest { round, subject, .. },
+                ..
+            } => Some(AdapterEffect::ValidateBody {
+                tag,
+                round: *round,
+                subject: *subject,
+            }),
+            BodyPipelineCompletionEvidence::BodyAvailable { .. } => None,
+        }
+    }
+
+    /// Return whether the runtime already owns the terminal completion for an
+    /// exact Store/Validate candidate. This closes the executor visibility
+    /// gap after asynchronous work retires but before its queued completion is
+    /// consumed. The query never transfers or replaces the incumbent owner;
+    /// a stronger compatible authority statement is refined under that owner.
+    pub(crate) fn body_pipeline_candidate_has_terminal(
+        &mut self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<bool, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 body terminal query entered a closed runtime".to_owned());
+        }
+        if !matches!(
+            effect,
+            AdapterEffect::StoreBody { .. } | AdapterEffect::ValidateBody { .. }
+        ) {
+            return Ok(false);
+        }
+        if !ownership.exactly_binds_adapter_effect(effect) {
+            self.latch_fail_closed("body terminal query omitted its exact predecessor capability");
+            return Err("Sumeragi v2 body terminal query failed closed".to_owned());
+        }
+
+        let mut candidates = self
+            .ingress
+            .commands
+            .iter()
+            .filter_map(|queued| {
+                let evidence = queued.command.body_pipeline_completion_evidence()?;
+                ownership
+                    .exactly_authorizes_body_pipeline_successor(effect, queued.tag, &evidence)
+                    .then_some((queued.tag, evidence))
+            })
+            .collect::<Vec<_>>();
+        for (_, tag, evidence) in self.driver.deferred_body_pipeline_terminal_candidates() {
+            if !ownership.exactly_authorizes_body_pipeline_successor(effect, tag, &evidence) {
+                continue;
+            }
+            candidates.push((tag, evidence));
+        }
+        let [(tag, candidate)] = candidates.as_slice() else {
+            return if candidates.is_empty() {
+                Ok(false)
+            } else {
+                self.latch_fail_closed(
+                    "one body candidate retained multiple terminal completion owners",
+                );
+                Err("Sumeragi v2 body candidate has duplicate terminal owners".to_owned())
+            };
+        };
+        let plan = self
+            .resolve_body_pipeline_completion_owner(*tag, candidate, ownership)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                self.latch_fail_closed("body terminal query lost its serialized completion owner");
+                "Sumeragi v2 body terminal query lost ownership".to_owned()
+            })?;
+        let prepared = self
+            .prepare_body_pipeline_completion_refinements(std::slice::from_ref(&plan))
+            .map_err(|error| error.to_string())?;
+        self.commit_prepared_body_pipeline_completion_refinements(prepared)
+            .map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
     fn body_pipeline_completion_is_owned_by(
         &mut self,
         tag: EventTag,
@@ -13970,6 +14192,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         command: AdapterCommand,
         ownership: &RuntimeEffectOwnership,
     ) -> Result<(), EnqueueError> {
+        let Some(predecessor) = Self::body_pipeline_completion_predecessor(tag, &evidence) else {
+            self.latch_fail_closed("owned body completion omitted its exact predecessor stage");
+            return Err(EnqueueError::FailClosed);
+        };
+        if !ownership.exactly_authorizes_body_pipeline_successor(&predecessor, tag, &evidence) {
+            self.latch_fail_closed("owned body completion changed its exact predecessor stage");
+            return Err(EnqueueError::FailClosed);
+        }
         if self
             .body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?
             .is_some()
@@ -14368,7 +14598,13 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
         };
-        if let Some((owner, _)) = restored_owner.as_ref() {
+        // Ordinary post-cut replays remain on their fair-ingress carrier.
+        // A restored certified escape may enter its reserved prefix because
+        // target-relative arbitration still preserves the already-frozen
+        // clock turn ahead of that physically later occurrence.
+        if let Some((owner, _)) = restored_owner.as_ref()
+            && !wire_payload_is_certified_fence_escape(authenticated.payload())
+        {
             match self.clock_owner_reservation_blocks(owner) {
                 Ok(true) => {
                     // Preserve the exact fair-ingress occurrence outside the
@@ -14519,15 +14755,32 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let Some(source_physical_ordinal) = ownership.physical_admission_ordinal() else {
             return Some(true);
         };
-        match self.clock_owner_reservation_blocks_occurrence(
-            token.scheduler_ordinal(),
-            source_physical_ordinal,
-        ) {
-            Ok(true) => return Some(false),
-            Ok(false) => {}
-            // Drain malformed process-local state so the mutating seam can
-            // expose the invariant failure instead of pinning a fair lane.
-            Err(_) => return Some(true),
+        if wire_payload_is_certified_fence_escape(&runtime_message.payload) {
+            // A restored certificate keeps its immutable pre-crash token even
+            // when its new physical carrier arrives after a freshly frozen
+            // clock owner.  Admit that carrier into the reserved certified
+            // prefix: target-relative arbitration still excludes it from the
+            // clock's predecessor set, so the clock turn runs first and the
+            // certificate remains available as the following escape.  A
+            // genuinely new post-cut token has a later ordinal from the same
+            // actor-global source and cannot use this exception to acquire an
+            // older logical position.
+            if self.validate_clock_owner_physical_cuts().is_err() {
+                // Drain malformed process-local state so the mutating seam can
+                // expose the invariant failure instead of pinning a fair lane.
+                return Some(true);
+            }
+        } else {
+            match self.clock_owner_reservation_blocks_occurrence(
+                token.scheduler_ordinal(),
+                source_physical_ordinal,
+            ) {
+                Ok(true) => return Some(false),
+                Ok(false) => {}
+                // Drain malformed process-local state so the mutating seam can
+                // expose the invariant failure instead of pinning a fair lane.
+                Err(_) => return Some(true),
+            }
         }
 
         let may_use_progress = self
@@ -15827,6 +16080,18 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 round: *round,
                 subject: *subject,
             };
+            let predecessor = AdapterEffect::ValidateBody {
+                tag: *tag,
+                round: *round,
+                subject: *subject,
+            };
+            if !ownership.exactly_authorizes_body_pipeline_successor(&predecessor, *tag, &evidence)
+            {
+                self.latch_fail_closed(
+                    "validation failure batch changed its exact predecessor stage",
+                );
+                return Err(EnqueueError::FailClosed);
+            }
             if let Some(plan) =
                 self.resolve_body_pipeline_completion_owner(*tag, &evidence, ownership)?
             {
@@ -15876,9 +16141,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 owner.causal_origin().clone(),
                 owner.lifecycle_ordinal(),
             )?;
+            tagged.candidate_semantic_statement = ownership.candidate_semantic_statement();
             tagged.restored_producer_stage =
                 restored_owner.map(|(_, producer_stage)| producer_stage);
-            tagged.candidate_semantic_statement = ownership.candidate_semantic_statement();
             if !tagged.validate_admission_identity() {
                 self.latch_fail_closed(
                     "owned validation failure batch lost its candidate statement",
@@ -25401,23 +25666,37 @@ mod tests {
         let timeout_owner = runtime
             .frozen_timeout_owner_for_test(deadline)
             .expect("freeze the new process's absolute-timeout owner");
+        let timeout_physical_cut = runtime
+            .timeout_owner_physical_cut
+            .expect("the frozen timeout owns one immutable receiver cut");
         assert!(
             restored_receipt.owner().admission_ordinal() < timeout_owner.lifecycle_ordinal(),
             "the durable replay must retain its pre-restart scheduler position"
         );
+
+        // The retransmitted carrier is physically new even though its durable
+        // leader-wire token is logically older.  Recreate the dequeue-time
+        // projection on the far side of the frozen timeout cut.
+        let restored_physical_ordinal = u64::try_from(timeout_physical_cut)
+            .expect("the small test receiver cut fits its physical ordinal");
+        restored_pre_runtime.first.physical_admission_ordinal = restored_physical_ordinal;
+        restored_pre_runtime.latest.physical_admission_ordinal = restored_physical_ordinal;
+        assert!(restored_pre_runtime.validate_exact());
         assert!(
-            runtime.can_admit_network_message_with_ingress_ownership(
-                &message,
-                &restored_pre_runtime,
-            ),
+            runtime
+                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),
             "a later clock reservation cannot pin an older durable replay at fair ingress"
         );
 
         // Model the checked dequeue's atomic Ingress -> Runtime handoff.  The
         // mutating seam must agree with the read-only predicate and still
         // authenticate the TC before it owns reducer capacity.
+        let mut restored_runtime = restored_pre_runtime;
+        restored_runtime.runtime_physical_cut = timeout_physical_cut.checked_add(1);
+        restored_runtime.leader_wire_runtime_receipt = Some(restored_receipt);
+        assert!(restored_runtime.validate_exact());
         runtime
-            .enqueue_network_with_ingress_ownership(message, runtime_owned)
+            .enqueue_network_with_ingress_ownership(message, restored_runtime)
             .expect("authenticate and enqueue the restored TC under its old owner");
 
         let timeout_step = runtime
@@ -25445,9 +25724,7 @@ mod tests {
             .expect("persisted TimeoutIntent transfers one signer owner");
         assert_eq!(timeout_effect_ownership.len(), 1);
         runtime
-            .set_external_lifecycle_owners(vec![
-                timeout_effect_ownership[0].owner().clone(),
-            ])
+            .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
             .expect("publish the pending timeout signer owner");
 
         let tc_step = runtime
@@ -25469,7 +25746,11 @@ mod tests {
             .take_effect_ownership(tc_effects.len())
             .expect("consume the TC EnterView ownership");
         let terminals = runtime.take_leader_wire_runtime_terminals();
-        assert_eq!(terminals.len(), 1, "the restored TC terminalizes exactly once");
+        assert_eq!(
+            terminals.len(),
+            1,
+            "the restored TC terminalizes exactly once"
+        );
         assert!(!runtime.fail_closed);
     }
 
@@ -26778,6 +27059,300 @@ mod tests {
                 .expect("the retained FIFO destination remains uniquely retireable")
         );
         assert_eq!(retirement_runtime.queued_commands(), 0);
+    }
+
+    #[test]
+    fn queued_body_terminal_is_visible_to_exact_store_and_validate_retries() {
+        let directory = TempDir::new().expect("temporary body-terminal visibility directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime for terminal-visibility dispatch");
+        runtime
+            .enqueue_network(signed_runtime_proposal(&context, &keys, 0x8D))
+            .expect("enqueue authenticated proposal");
+        let RuntimeStep::Advanced(fetch_effects) = runtime.step(now).expect("dispatch proposal")
+        else {
+            panic!("proposal dispatch unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("proposal dispatch publishes scheduler ownership");
+        let (tag, manifest) = match fetch_effects.as_slice() {
+            [
+                AdapterEffect::FetchBody {
+                    tag,
+                    manifest: Some(manifest),
+                    ..
+                },
+            ] => (*tag, manifest.clone()),
+            effects => panic!("unexpected proposal effects: {effects:?}"),
+        };
+        let fetch_ownership = runtime
+            .take_effect_ownership(fetch_effects.len())
+            .expect("take exact FetchBody ownership");
+        let reservation = runtime
+            .reserve_body_available_with_owner(tag, manifest.clone(), &fetch_ownership[0])
+            .expect("reserve exact body reconstruction");
+        runtime
+            .commit_body_available(reservation)
+            .expect("publish body reconstruction");
+
+        let RuntimeStep::Advanced(store_effects) =
+            runtime.step(now).expect("dispatch body reconstruction")
+        else {
+            panic!("body reconstruction unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("body reconstruction publishes scheduler ownership");
+        assert!(matches!(
+            store_effects.as_slice(),
+            [AdapterEffect::StoreBody { .. }]
+        ));
+        let store_effect = store_effects[0].clone();
+        let store_ownership = runtime
+            .take_effect_ownership(store_effects.len())
+            .expect("take exact StoreBody ownership");
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        runtime
+            .enqueue_body_stored_with_owner(
+                tag,
+                manifest.round,
+                manifest.subject,
+                durable.clone(),
+                &store_ownership[0],
+            )
+            .expect("queue exact durable-store terminal");
+        let store_retry_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint a source-recognized StoreBody retry owner");
+        let store_retry = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&store_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                tag,
+                store_retry_ordinal,
+            )],
+        )
+        .expect("bind exact StoreBody retry")
+        .pop()
+        .expect("one StoreBody retry has one owner");
+        assert_ne!(store_retry.owner(), store_ownership[0].owner());
+        assert!(
+            runtime
+                .body_pipeline_candidate_has_terminal(&store_effect, &store_retry)
+                .expect("query queued StoreBody terminal")
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(!runtime.fail_closed);
+
+        let RuntimeStep::Advanced(validate_effects) =
+            runtime.step(now).expect("dispatch durable-store terminal")
+        else {
+            panic!("durable-store terminal unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("durable-store dispatch publishes scheduler ownership");
+        assert!(matches!(
+            validate_effects.as_slice(),
+            [AdapterEffect::ValidateBody { .. }]
+        ));
+        let validate_effect = validate_effects[0].clone();
+        let validate_ownership = runtime
+            .take_effect_ownership(validate_effects.len())
+            .expect("take exact ValidateBody ownership");
+        runtime
+            .enqueue_validation_succeeded_with_owner(
+                tag,
+                manifest.round,
+                manifest.subject,
+                ValidatedBodyReceipt::for_test(durable),
+                &validate_ownership[0],
+            )
+            .expect("queue exact validation terminal");
+        let validate_retry_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint a source-recognized ValidateBody retry owner");
+        let validate_retry = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&validate_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                tag,
+                validate_retry_ordinal,
+            )],
+        )
+        .expect("bind exact ValidateBody retry")
+        .pop()
+        .expect("one ValidateBody retry has one owner");
+        assert_ne!(validate_retry.owner(), validate_ownership[0].owner());
+        assert!(
+            runtime
+                .body_pipeline_candidate_has_terminal(&validate_effect, &validate_retry)
+                .expect("query queued ValidateBody terminal")
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn queued_store_terminal_query_refines_prepare_to_commit_under_incumbent() {
+        let directory = TempDir::new().expect("temporary terminal-refinement directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x8E);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let store_effect = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+
+        let mut commit = signed_runtime_quorum_certificate(&context, &keys, 0x8F);
+        commit.round = manifest.round;
+        commit.proposal_round = manifest.round;
+        commit.subject = manifest.subject;
+        let mut prepare = commit.clone();
+        prepare.phase = wire::GlobalPhase::Prepare;
+        let fetch = |certificate| AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(certificate),
+        };
+        let bind_store = |effect: &AdapterEffect, ordinal| {
+            bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+            )
+            .expect("bind one certified FetchBody carrier")
+            .pop()
+            .expect("one FetchBody carrier owns one candidate")
+            .rebind_as_inherited_adapter_effect(&store_effect)
+            .expect("carry certified authority into StoreBody")
+        };
+
+        let prepare_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint Prepare-authorized StoreBody owner");
+        let prepare_store = bind_store(&fetch(prepare), prepare_ordinal);
+        let evidence = BodyPipelineCompletionEvidence::BodyStored {
+            round: manifest.round,
+            subject: manifest.subject,
+            receipt: durable.clone(),
+        };
+        assert!(prepare_store.exactly_authorizes_body_pipeline_successor(
+            &store_effect,
+            tag,
+            &evidence,
+        ));
+        stage_owned_completion_for_queue_test(
+            &mut runtime,
+            tag,
+            AdapterCommand::BodyStored {
+                round: manifest.round,
+                subject: manifest.subject,
+                receipt: durable,
+            },
+            &prepare_store,
+        );
+        let incumbent = runtime.ingress.commands[0]
+            .lifecycle_owner()
+            .expect("queued terminal retains its incumbent owner");
+
+        let commit_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint Commit-authorized StoreBody retry owner");
+        let commit_store = bind_store(&fetch(commit), commit_ordinal);
+        let commit_statement = commit_store
+            .candidate_semantic_statement()
+            .expect("Commit-authorized StoreBody carries its exact statement");
+        assert_ne!(commit_store.owner(), &incumbent);
+        assert!(
+            runtime
+                .body_pipeline_candidate_has_terminal(&store_effect, &commit_store)
+                .expect("terminal query accepts the monotonic Commit refinement")
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            runtime.ingress.commands[0]
+                .lifecycle_owner()
+                .expect("authority refinement preserves the incumbent owner"),
+            incumbent,
+        );
+        assert_eq!(
+            runtime.ingress.commands[0].candidate_semantic_statement,
+            Some(commit_statement),
+        );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn local_proposal_ready_is_owned_by_its_validate_predecessor() {
+        let (context, _) = authenticated_runtime_context();
+        let manifest = runtime_manifest(&context, 0x90);
+        let tag = EventTag::new(context.height, manifest.round.view, Generation::new(4));
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let evidence = BodyPipelineCompletionEvidence::LocalProposalReady {
+            manifest: manifest.clone(),
+            durable_receipt: durable.clone(),
+            validated_receipt: ValidatedBodyReceipt::for_test(durable),
+        };
+        let store_effect = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let validate_effect = AdapterEffect::ValidateBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let store = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&store_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 9_090)],
+        )
+        .expect("bind exact StoreBody ownership")
+        .pop()
+        .expect("one StoreBody effect owns one candidate");
+        let validate = store
+            .rebind_as_inherited_adapter_effect(&validate_effect)
+            .expect("carry the body owner into ValidateBody");
+
+        assert!(!store.binds_body_pipeline_completion_predecessor(&evidence));
+        assert!(validate.binds_body_pipeline_completion_predecessor(&evidence));
+        assert!(!store.exactly_authorizes_body_pipeline_successor(&store_effect, tag, &evidence,));
+        assert!(validate.exactly_authorizes_body_pipeline_successor(
+            &validate_effect,
+            tag,
+            &evidence,
+        ));
     }
 
     #[test]

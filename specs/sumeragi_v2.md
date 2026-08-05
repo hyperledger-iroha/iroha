@@ -110,10 +110,14 @@ Stake controls NPoS eligibility and backed committee seats, not vote weight or
 leader frequency. The remaining seats use the finalized epoch seed's
 deterministic PRF order.
 
-NPoS epochs contain exactly the configured `3,600` finalized non-empty blocks.
-This remains a height-derived boundary because ordinary block validation
-rejects an empty block before it can be voted, applied, or finalized; therefore
-every advancing consensus height contributes exactly one non-empty block.
+NPoS epochs contain exactly the configured `3,600` finalized consensus heights.
+Ordinary proposal production remains workload-driven and therefore contributes
+a non-empty block only when user, internal, or autonomous work exists. An
+explicitly armed recovery heartbeat may instead finalize one truly empty block;
+it advances the consensus and epoch height while leaving the non-empty-block
+counter unchanged. Generic block validation accepts that canonical carrier,
+while the local proposal-work gate is responsible for never manufacturing it
+from a clean idle height.
 The old committee authenticates the complete next-epoch roster, proofs of
 possession, equal-vote quorum, seed, and end height in the terminal height
 context before the successor committee can activate. A configured validator
@@ -1097,7 +1101,8 @@ paper argument assumes that, after GST:
 - body transfer, reconstruction, validation, signing, certificate formation, application, and
   fsync terminate within the declared service bounds;
 - an honest leader can construct a deterministically valid non-empty proposal
-  from available user, internal, or recovery work;
+  from available user or internal work, or an empty carrier from explicitly
+  armed recovery-heartbeat work;
 - correct nodes eventually recover with intact WAL state;
 - an honest leader recurs within one roster rotation;
 - honest Prepare signers continue serving their durable bodies; and

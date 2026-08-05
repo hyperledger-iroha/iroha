@@ -5539,21 +5539,4 @@ mod tests {
         assert!(restored.producer_continuations.is_empty());
         assert!(!restored.decision_reclaimed);
     }
-
-    #[test]
-    #[ignore = "operator diagnostic for an explicitly supplied out-of-tree snapshot directory"]
-    fn inspect_external_leader_wire_lifecycle_snapshots() {
-        let directory = std::env::var_os("SUMERAGI_LIVE_WAL_DIR")
-            .map(PathBuf::from)
-            .expect("SUMERAGI_LIVE_WAL_DIR must name the copied diagnostic directory");
-        for validator in 1_u8..=4 {
-            let path = directory.join(format!(
-                "validator-{validator}.leader-wire-lifecycles"
-            ));
-            let bytes = fs::read(&path).expect("read copied leader-wire lifecycle snapshot");
-            let decoded = decode_leader_wire_frame(&bytes, u64::MAX)
-                .expect("decode copied leader-wire lifecycle snapshot");
-            eprintln!("validator {validator}: {decoded:#?}");
-        }
-    }
 }
