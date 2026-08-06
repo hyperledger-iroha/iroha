@@ -488,6 +488,11 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     "$release_host_root/cache" \
     "$release_host_root/cargo-home" \
     "$release_host_root/release"
+  # `integration_tests/build.rs` stages canonical IVM fixtures below the
+  # historical crate-local `crates/ivm/target` path. Keep that build output in
+  # the authenticated external target without making any source directory
+  # writable.
+  mkdir -m 0700 -- "$release_host_root/workspace-target/ivm-crate-target"
   for cargo_cache in registry git; do
     if [[ -d "${inherited_cargo_cache_home}/${cargo_cache}" ]]; then
       ln -s "$(canonical_path "${inherited_cargo_cache_home}/${cargo_cache}")" \
@@ -544,10 +549,13 @@ for parent in root.parents:
 PY
 
   ln -s "$release_host_root/workspace-target" "$sealed_repo_root/target"
+  ln -s "../../target/ivm-crate-target" "$sealed_repo_root/crates/ivm/target"
   python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
-    --seal --root "$sealed_repo_root" --writable target
+    --seal --root "$sealed_repo_root" \
+    --writable target --writable crates/ivm/target
   python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
-    --verify --root "$sealed_repo_root" --writable target
+    --verify --root "$sealed_repo_root" \
+    --writable target --writable crates/ivm/target
   # Keep both digests. The candidate manifest records the original checkout;
   # the sealed manifest may change because the manifest intentionally binds all
   # permission bits. Every child build/evidence item uses the sealed digest,
@@ -724,6 +732,23 @@ verify_release_identity() {
     echo "sealed release target changed at ${checkpoint}" >&2
     return 1
   fi
+  local observed_ivm_target expected_ivm_target
+  if [[ ! -L "$repo_root/crates/ivm/target" ]]; then
+    echo "sealed release IVM target is not the external output symlink at ${checkpoint}" >&2
+    return 1
+  fi
+  observed_ivm_target="$(
+    python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+      "$repo_root/crates/ivm/target"
+  )"
+  expected_ivm_target="$(
+    python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+      "$IROHA_RELEASE_WORKSPACE_TARGET/ivm-crate-target"
+  )"
+  if [[ "$observed_ivm_target" != "$expected_ivm_target" ]]; then
+    echo "sealed release IVM target changed at ${checkpoint}" >&2
+    return 1
+  fi
   local expected observed
   expected="$(<"$IROHA_RELEASE_EXPECTED_IDENTITY_PATH")"
   if ! observed="$(release_identity_json)"; then
@@ -735,7 +760,8 @@ verify_release_identity() {
     return 1
   fi
   if ! python3 -I -S scripts/seal_workspace_source.py \
-    --verify --root "$repo_root" --writable target; then
+    --verify --root "$repo_root" \
+    --writable target --writable crates/ivm/target; then
     echo "release source seal changed at ${checkpoint}" >&2
     return 1
   fi

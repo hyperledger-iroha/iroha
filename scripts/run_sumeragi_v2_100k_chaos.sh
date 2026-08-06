@@ -65,7 +65,8 @@ verify_identity() {
   fi
   if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]]; then
     python3 scripts/seal_workspace_source.py \
-      --verify --root "$repo_root" --writable target
+      --verify --root "$repo_root" \
+      --writable target --writable crates/ivm/target
   fi
 }
 

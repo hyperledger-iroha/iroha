@@ -7951,6 +7951,15 @@ mod kagemusha_v4_artifact_contract_tests {
         candidate
     }
 
+    fn rebind_qualified_candidate_sha256(manifest: &mut KagemushaRecursiveSpendArtifactManifestV4) {
+        let candidate = unsigned_candidate(manifest);
+        manifest.qualified_candidate_sha256 =
+            kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate.sha256().expect("tampered candidate identity"),
+                manifest.qualification_receipt_sha256,
+            );
+    }
+
     fn signed_review_bytes(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         reviewers: &[&KeyPair],
@@ -8872,6 +8881,7 @@ mod kagemusha_v4_artifact_contract_tests {
         params_tamper.profiles[0]
             .circuit_params
             .minimum_unusable_rows += 1;
+        rebind_qualified_candidate_sha256(&mut params_tamper);
         assert_ne!(
             second_subject,
             params_tamper
@@ -8880,6 +8890,7 @@ mod kagemusha_v4_artifact_contract_tests {
         );
         let mut bootstrap_tamper = manifest.clone();
         bootstrap_tamper.profiles[0].artifacts[3].payload_sha256[0] ^= 1;
+        rebind_qualified_candidate_sha256(&mut bootstrap_tamper);
         assert_ne!(
             second_subject,
             bootstrap_tamper
@@ -8981,6 +8992,7 @@ mod kagemusha_v4_artifact_contract_tests {
         signed_params_tamper.profiles[0]
             .circuit_params
             .minimum_unusable_rows += 1;
+        rebind_qualified_candidate_sha256(&mut signed_params_tamper);
         assert_eq!(
             KagemushaAuthenticatedReleaseV4::verify(
                 &signed_params_tamper,
@@ -8993,6 +9005,7 @@ mod kagemusha_v4_artifact_contract_tests {
         );
         let mut signed_bootstrap_tamper = manifest;
         signed_bootstrap_tamper.profiles[0].artifacts[3].payload_sha256[0] ^= 1;
+        rebind_qualified_candidate_sha256(&mut signed_bootstrap_tamper);
         assert_eq!(
             KagemushaAuthenticatedReleaseV4::verify(
                 &signed_bootstrap_tamper,
@@ -12320,7 +12333,7 @@ mod kagemusha_v4_topup_provenance_tests {
                 payload_hash: Hash::new([seed, 10]),
             },
             execution_commitment: execution_commitment(seed),
-            signers: vec![0],
+            signers: vec![0, 1, 2],
             aggregate_signature: vec![seed; 96],
         };
         let proof = KagemushaTopUpFinalityProofV2 {
@@ -12375,8 +12388,29 @@ mod kagemusha_v4_topup_provenance_tests {
             generation: "provenance-test-release".to_owned(),
             manifest_sha256: [0x51; 32],
         };
-        let validator_key = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::BlsNormal)
-            .expect("deterministic validator key");
+        let mut validators_and_pops = [0x61_u8, 0x62, 0x63, 0x64]
+            .into_iter()
+            .map(|seed| {
+                let validator_key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic validator key");
+                let validator_pop: [u8; 96] =
+                    iroha_crypto::bls_normal_pop_prove(validator_key.private_key())
+                        .expect("deterministic validator proof of possession")
+                        .try_into()
+                        .expect("BLS-normal proof of possession is exactly 96 bytes");
+                (
+                    ValidatorPower {
+                        validator: PeerId::new(validator_key.public_key().clone()),
+                        power: 1,
+                    },
+                    validator_pop,
+                )
+            })
+            .collect::<Vec<_>>();
+        validators_and_pops
+            .sort_unstable_by(|(left, _), (right, _)| left.validator.cmp(&right.validator));
+        let (validator_set, validator_set_pops): (Vec<ValidatorPower>, Vec<[u8; 96]>) =
+            validators_and_pops.into_iter().unzip();
         let roster = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
             chain_id: chain_id.clone(),
@@ -12385,11 +12419,8 @@ mod kagemusha_v4_topup_provenance_tests {
                 activates_at_height: 1,
                 withdraws_at_height: 100,
                 consensus_mode: ConsensusMode::Permissioned,
-                validator_set: vec![ValidatorPower {
-                    validator: PeerId::new(validator_key.public_key().clone()),
-                    power: 1,
-                }],
-                validator_set_pops: vec![[0x62; 96]],
+                validator_set,
+                validator_set_pops,
             }],
         };
         let mut evidence = seeds
