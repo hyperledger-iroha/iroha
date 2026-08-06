@@ -1549,7 +1549,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::first_same_subject_lock_preserves_pending_local_proposal_events
   sumeragi::v2_runner::tests::higher_same_subject_lock_retires_prior_origin_work
   sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work
-  sumeragi::v2_runner::tests::late_old_rejection_cannot_arm_heartbeat_for_replacement_lock
+  sumeragi::v2_runner::tests::late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock
   sumeragi::v2_runner::tests::decision_retires_local_work_before_prepared_delivery
   sumeragi::v2_runner::tests::finalized_rollover_closes_ingress_before_successor_replay
   sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff
@@ -2052,8 +2052,8 @@ required_multilane_core_focus_tests=(
   state::tests::queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set
   state::tests::same_carrier_queue_plan_certificate_cannot_authorize_autonomous_execution
   smartcontracts::ivm::host::tests::state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker
-  sumeragi::v2_lane_work::tests::repeated_heartbeat_retries_never_make_autonomous_routes_ordinary_eligible
-  sumeragi::v2_runner::tests::deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat
+  sumeragi::v2_lane_work::tests::repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible
+  sumeragi::v2_runner::tests::deferred_autonomous_work_timeout_arms_only_a_non_empty_retry
   torii_proxy::tests::torii_transaction_admission_wire_indexes_are_stable
   torii_proxy::tests::queue_plan_synced_request_identity_is_semantic_and_source_bound
   torii_proxy::tests::queue_plan_certificate_rejects_noncanonical_semantic_request_identity

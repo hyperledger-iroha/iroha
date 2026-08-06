@@ -882,8 +882,9 @@ production fixture, or while admitted disk, signing, reconstruction,
 validation, or application work does not terminate.
 
 This is the conditional consensus-height progress target, not a completed
-machine-checked liveness theorem and not a transaction-fairness claim. A valid
-empty heartbeat can satisfy progress. Transaction inclusion, mempool fairness,
+machine-checked liveness theorem and not a transaction-fairness claim. An idle
+height deliberately stutters until transaction, autonomous, internal, or
+state-derived time-trigger work exists. Transaction inclusion, mempool fairness,
 and censorship resistance are explicitly out of scope in the proof ledger. It
 must remain described as a paper argument while
 `machine_checked_completion` is false.

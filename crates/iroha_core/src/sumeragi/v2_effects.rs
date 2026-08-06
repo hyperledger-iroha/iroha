@@ -52,7 +52,8 @@
 //!    completions to the matching executor completion methods. The production
 //!    validation callback is
 //!    `ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block`; legacy
-//!    validation rejects valid empty heartbeat blocks and is not interchangeable.
+//!    validation admits only bodies which pass the shared deterministic
+//!    transaction/internal/time-trigger work gate and is not interchangeable.
 //! 5. Return application durability with
 //!    [`V2EffectExecutor::complete_application`].
 //! 6. After [`V2EffectExecutor::ready_to_finish`], consume the executor with

@@ -56,9 +56,8 @@ use super::{
     },
     v2_body_store::{BlockSignaturePolicy, V2BodyStore},
     v2_candidate::{
-        CandidateAssemblyOutcome, CandidateAttachments, CandidateDescriptor, CandidateLimits,
-        CandidateParent, CandidateRequest, CandidateWorkProvider, CandidateWorkUnavailable,
-        PreparedCandidateWork, V2CandidateAssembler,
+        CandidateAssemblyOutcome, CandidateAttachments, CandidateLimits, CandidateParent,
+        CandidateRequest, V2CandidateAssembler, candidate_block_has_proposal_work,
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
@@ -341,15 +340,15 @@ impl PendingSuccessorActivation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalValidationDisposition {
     Ignored,
-    RetryHeartbeat,
-    FatalHeartbeat,
+    RetryNonEmpty,
+    FatalNonEmpty,
 }
 
 #[derive(Default, Debug)]
 struct LocalProposalState {
     attempted: Option<LocalProposalOwner>,
     submitted: Option<(LocalProposalOwner, wire::BlockSubject)>,
-    heartbeat_only: Option<LocalProposalOwner>,
+    non_empty_retry: Option<LocalProposalOwner>,
     candidate_work_wait: Option<CandidateWorkWait>,
     pending_events: Option<PendingLocalEvents>,
     global_selection: Option<PendingGlobalSelection>,
@@ -445,10 +444,10 @@ impl LocalProposalState {
             self.attempted = continued_exact_work.then_some(owner);
         }
         if self
-            .heartbeat_only
+            .non_empty_retry
             .is_some_and(|candidate| candidate != owner)
         {
-            self.heartbeat_only = None;
+            self.non_empty_retry = None;
         }
         if self
             .candidate_work_wait
@@ -460,7 +459,7 @@ impl LocalProposalState {
     }
 
     /// Keep retrying deferred autonomous work for the bounded observation
-    /// window, then arm an explicit empty heartbeat for this exact owner.
+    /// window, then arm one ordinary non-empty recovery retry for this owner.
     ///
     /// Expiry deliberately changes only proposal shape. It never changes the
     /// lane adapter's routing or queue-ownership policy.
@@ -470,7 +469,7 @@ impl LocalProposalState {
         now: Instant,
         wait_bound: Duration,
     ) {
-        if self.heartbeat_only == Some(owner) {
+        if self.non_empty_retry == Some(owner) {
             self.candidate_work_wait = None;
             return;
         }
@@ -486,8 +485,22 @@ impl LocalProposalState {
             });
             return;
         }
-        self.heartbeat_only = Some(owner);
+        self.non_empty_retry = Some(owner);
         self.candidate_work_wait = None;
+    }
+
+    /// Retire an armed recovery retry which completed assembly without finding
+    /// any publishable work. A later retry must cross a fresh bounded
+    /// observation window instead of re-running full assembly every runner
+    /// poll.
+    fn retire_unsubmitted_non_empty_retry(&mut self, owner: LocalProposalOwner) -> bool {
+        let owner = self.reconcile(owner);
+        if self.non_empty_retry != Some(owner) {
+            return false;
+        }
+        self.non_empty_retry = None;
+        self.candidate_work_wait = None;
+        true
     }
 
     fn handle_validation_rejection(
@@ -513,32 +526,32 @@ impl LocalProposalState {
         }) {
             self.global_selection = None;
         }
-        if self.heartbeat_only == Some(owner) {
-            return LocalValidationDisposition::FatalHeartbeat;
+        if self.non_empty_retry == Some(owner) {
+            return LocalValidationDisposition::FatalNonEmpty;
         }
         self.attempted = None;
-        self.heartbeat_only = Some(owner);
+        self.non_empty_retry = Some(owner);
         self.submitted = None;
         self.candidate_work_wait = None;
-        LocalValidationDisposition::RetryHeartbeat
+        LocalValidationDisposition::RetryNonEmpty
     }
 
     /// Abandon a candidate whose lane-local ownership could not be bound
-    /// before the body was submitted, then give the exact owner one empty
-    /// heartbeat attempt. The caller releases the candidate's selection lease
+    /// before the body was submitted, then give the exact owner one ordinary
+    /// non-empty retry. The caller releases the candidate's selection lease
     /// before crossing this boundary, without publishing a body or events.
     fn handle_candidate_binding_rejection(
         &mut self,
         owner: LocalProposalOwner,
     ) -> LocalValidationDisposition {
         let owner = self.reconcile(owner);
-        if self.heartbeat_only == Some(owner) {
-            return LocalValidationDisposition::FatalHeartbeat;
+        if self.non_empty_retry == Some(owner) {
+            return LocalValidationDisposition::FatalNonEmpty;
         }
         self.attempted = None;
-        self.heartbeat_only = Some(owner);
+        self.non_empty_retry = Some(owner);
         self.candidate_work_wait = None;
-        LocalValidationDisposition::RetryHeartbeat
+        LocalValidationDisposition::RetryNonEmpty
     }
 
     fn take_prepared_events(
@@ -1933,15 +1946,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         rejection.subject(),
                     ) {
                         LocalValidationDisposition::Ignored => {}
-                        LocalValidationDisposition::FatalHeartbeat => {
-                            return Err(V2RunnerError::LocalHeartbeatRejected(
+                        LocalValidationDisposition::FatalNonEmpty => {
+                            return Err(V2RunnerError::LocalNonEmptyRetryRejected(
                                 rejection.reason().to_owned(),
                             ));
                         }
-                        LocalValidationDisposition::RetryHeartbeat => {
+                        LocalValidationDisposition::RetryNonEmpty => {
                             iroha_logger::warn!(
                                 reason = rejection.reason(),
-                                "local Sumeragi v2 candidate rejected; retrying an empty heartbeat"
+                                "local Sumeragi v2 candidate rejected; retrying with non-empty work only"
                             );
                         }
                     }
@@ -2443,6 +2456,16 @@ fn schedule_local_proposal(
         if !block.is_resultless_proposal() {
             return Err(V2RunnerError::ResultBearingProposal);
         }
+        let time_trigger_clock_progress_required = block
+            .header()
+            .creation_time()
+            .checked_sub(block_cadence)
+            .is_some_and(|parent_creation_time| {
+                state.time_trigger_clock_progress_required_fast(parent_creation_time)
+            });
+        if !candidate_block_has_proposal_work(&block, time_trigger_clock_progress_required) {
+            return Err(V2RunnerError::EmptyProposalWork);
+        }
         let lane_binding = if context.height == 1 {
             let authenticated_genesis = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
             lane_work.bind_locked_genesis_body(&block, authenticated_genesis)
@@ -2590,39 +2613,23 @@ fn schedule_local_proposal(
             &carrier_context_header,
             npos_vrf,
         )?;
-        let assembly = if proposal_state.heartbeat_only == Some(owner) {
-            assembler.assemble(CandidateRequest {
-                context,
-                directive,
-                local_validator,
-                parent,
-                state,
-                queue,
-                key_pair,
-                output_guard,
-                attachments,
-                allow_empty_recovery_heartbeat: true,
-                work_provider: HeartbeatOnlyWorkProvider,
-            })?
-        } else {
-            assembler.assemble(CandidateRequest {
-                context,
-                directive,
-                local_validator,
-                parent,
-                state,
-                queue,
-                key_pair,
-                output_guard,
-                attachments,
-                allow_empty_recovery_heartbeat: false,
-                work_provider: &mut *lane_work,
-            })?
-        };
+        let assembly = assembler.assemble(CandidateRequest {
+            context,
+            directive,
+            local_validator,
+            parent,
+            state,
+            queue,
+            key_pair,
+            output_guard,
+            attachments,
+            work_provider: &mut *lane_work,
+        })?;
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
             CandidateAssemblyOutcome::NoProposalWork(report) => {
                 let now = Instant::now();
+                proposal_state.retire_unsubmitted_non_empty_retry(owner);
                 if report.work_deferred > 0 {
                     proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound);
                 } else {
@@ -2649,7 +2656,7 @@ fn schedule_local_proposal(
             return Err(V2RunnerError::StaleTag);
         }
         let report = candidate.scan_report();
-        if proposal_state.heartbeat_only != Some(owner)
+        if proposal_state.non_empty_retry != Some(owner)
             && report.selected == 0
             && report.work_deferred > 0
         {
@@ -2666,16 +2673,15 @@ fn schedule_local_proposal(
             // is available to a later-height reproposal.
             drop(candidate);
             match proposal_state.handle_candidate_binding_rejection(owner) {
-                LocalValidationDisposition::RetryHeartbeat => {
+                LocalValidationDisposition::RetryNonEmpty => {
                     iroha_logger::warn!(
                         height = tag.height(),
                         view = tag.view(),
-                        "discarded an unsubmitted candidate after lane-local ownership binding rejected; retrying as an empty heartbeat"
+                        "discarded an unsubmitted candidate after lane-local ownership binding rejected; retrying with non-empty work only"
                     );
                     return Ok(());
                 }
-                LocalValidationDisposition::FatalHeartbeat
-                | LocalValidationDisposition::Ignored => {
+                LocalValidationDisposition::FatalNonEmpty | LocalValidationDisposition::Ignored => {
                     return Err(V2RunnerError::LaneCandidateBinding);
                 }
             }
@@ -4681,26 +4687,6 @@ fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> Adapt
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct HeartbeatOnlyWorkProvider;
-
-impl CandidateWorkProvider for HeartbeatOnlyWorkProvider {
-    fn prepare(
-        &mut self,
-        _context: &wire::HeightContext,
-        _view: wire::View,
-        candidates: &[CandidateDescriptor<'_>],
-    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
-        if candidates.is_empty() {
-            return Ok(PreparedCandidateWork::default());
-        }
-        Err(CandidateWorkUnavailable::new(
-            (0..candidates.len()).collect::<BTreeSet<_>>(),
-            "local fallback requested an empty heartbeat",
-        ))
-    }
-}
-
 fn apply_bounded_sidecar_admissions<T, Error>(
     limit: usize,
     mut next: impl FnMut() -> Result<Option<T>, Error>,
@@ -5370,9 +5356,12 @@ pub(super) enum V2RunnerError {
     /// Deterministic local candidate operation failed.
     #[error("Sumeragi v2 candidate failed: {0}")]
     Candidate(String),
-    /// Even an empty fallback failed deterministic validation.
-    #[error("Sumeragi v2 empty heartbeat failed validation: {0}")]
-    LocalHeartbeatRejected(String),
+    /// A fresh, inbound, or recovered body carried no deterministic ledger work.
+    #[error("Sumeragi v2 proposal carries no transaction, internal, or time-trigger work")]
+    EmptyProposalWork,
+    /// The one bounded non-empty recovery retry failed deterministic validation.
+    #[error("Sumeragi v2 non-empty recovery retry failed validation: {0}")]
+    LocalNonEmptyRetryRejected(String),
     /// The exact bounded discovery request vanished before reducer admission.
     #[error("Sumeragi v2 CommitQC discovery request disappeared before reducer admission")]
     BlockSyncRequestDisappeared,
@@ -6321,19 +6310,6 @@ mod tests {
             gate.earliest_ingress_scheduler_ordinal()
                 .expect("retry retains the terminal tombstone"),
             None
-        );
-    }
-
-    #[test]
-    fn heartbeat_provider_accepts_only_an_empty_descriptor_batch() {
-        let (context, _) = context();
-        let mut provider = HeartbeatOnlyWorkProvider;
-        assert_eq!(
-            provider
-                .prepare(&context, 0, &[])
-                .expect("an explicit heartbeat has no lane work")
-                .native_amx_receipts,
-            Vec::new()
         );
     }
 
@@ -8109,7 +8085,7 @@ mod tests {
         let mut state = LocalProposalState {
             attempted: Some(owner_a),
             submitted: Some((owner_a, subject_a)),
-            heartbeat_only: Some(owner_a),
+            non_empty_retry: Some(owner_a),
             candidate_work_wait: Some(CandidateWorkWait {
                 owner: owner_a,
                 started_at: now,
@@ -8127,13 +8103,13 @@ mod tests {
 
         assert!(state.attempted.is_none());
         assert!(state.submitted.is_none());
-        assert!(state.heartbeat_only.is_none());
+        assert!(state.non_empty_retry.is_none());
         assert!(state.candidate_work_wait.is_none());
         assert!(state.pending_events.is_none());
     }
 
     #[test]
-    fn deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat() {
+    fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
         let (context, _) = context();
         let owner = proposal_owner(
             &context,
@@ -8146,7 +8122,7 @@ mod tests {
         let mut state = LocalProposalState::default();
 
         state.defer_candidate_work(owner, started_at, wait_bound);
-        assert_eq!(state.heartbeat_only, None);
+        assert_eq!(state.non_empty_retry, None);
         assert!(
             state
                 .candidate_work_wait
@@ -8157,20 +8133,34 @@ mod tests {
             .checked_add(wait_bound)
             .expect("fixture wait deadline is representable");
         state.defer_candidate_work(owner, expired_at, wait_bound);
-        assert_eq!(state.heartbeat_only, Some(owner));
+        assert_eq!(state.non_empty_retry, Some(owner));
         assert!(state.candidate_work_wait.is_none());
 
         state.defer_candidate_work(owner, expired_at, wait_bound);
         assert_eq!(
-            state.heartbeat_only,
+            state.non_empty_retry,
             Some(owner),
-            "repeated timeout handling must never re-arm ordinary candidate work"
+            "repeated timeout handling must retain the same single retry"
         );
         assert!(state.candidate_work_wait.is_none());
+
+        assert!(state.retire_unsubmitted_non_empty_retry(owner));
+        assert_eq!(state.non_empty_retry, None);
+        state.defer_candidate_work(owner, expired_at, wait_bound);
+        assert!(
+            state.candidate_work_wait.is_some_and(|wait| {
+                wait.owner == owner && wait.started_at == expired_at && wait.next_retry > expired_at
+            }),
+            "an unsubmitted retry must cross a fresh bounded observation window"
+        );
+        assert!(
+            !state.retire_unsubmitted_non_empty_retry(owner),
+            "a consumed retry cannot be retired twice"
+        );
     }
 
     #[test]
-    fn pre_submit_lane_binding_rejection_arms_one_empty_heartbeat_retry() {
+    fn pre_submit_lane_binding_rejection_arms_one_non_empty_retry() {
         let (context, _) = context();
         let owner = proposal_owner(
             &context,
@@ -8191,11 +8181,11 @@ mod tests {
 
         assert_eq!(
             state.handle_candidate_binding_rejection(owner),
-            LocalValidationDisposition::RetryHeartbeat,
+            LocalValidationDisposition::RetryNonEmpty,
             "an unsubmitted lane-binding rejection must not stop the process"
         );
         assert_eq!(state.attempted, None);
-        assert_eq!(state.heartbeat_only, Some(owner));
+        assert_eq!(state.non_empty_retry, Some(owner));
         assert!(state.candidate_work_wait.is_none());
         assert!(state.submitted.is_none());
         assert!(state.pending_events.is_none());
@@ -8203,8 +8193,8 @@ mod tests {
 
         assert_eq!(
             state.handle_candidate_binding_rejection(owner),
-            LocalValidationDisposition::FatalHeartbeat,
-            "a rejected empty heartbeat still fails closed"
+            LocalValidationDisposition::FatalNonEmpty,
+            "a rejected non-empty recovery retry still fails closed"
         );
     }
 
@@ -8290,7 +8280,7 @@ mod tests {
     }
 
     #[test]
-    fn late_old_rejection_cannot_arm_heartbeat_for_replacement_lock() {
+    fn late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock() {
         let (context, _) = context();
         let tag = EventTag::new(context.height, 5, Generation::new(12));
         let subject_a = proposal_subject(b"rejected old A");
@@ -8311,19 +8301,19 @@ mod tests {
             state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_a,),
             LocalValidationDisposition::Ignored
         );
-        assert_eq!(state.heartbeat_only, None);
+        assert_eq!(state.non_empty_retry, None);
 
         state.submitted = Some((owner_b, subject_b));
         assert_eq!(
             state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-            LocalValidationDisposition::RetryHeartbeat
+            LocalValidationDisposition::RetryNonEmpty
         );
-        assert_eq!(state.heartbeat_only, Some(owner_b));
+        assert_eq!(state.non_empty_retry, Some(owner_b));
 
         state.submitted = Some((owner_b, subject_b));
         assert_eq!(
             state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-            LocalValidationDisposition::FatalHeartbeat
+            LocalValidationDisposition::FatalNonEmpty
         );
     }
 
@@ -8337,7 +8327,7 @@ mod tests {
         let mut state = LocalProposalState {
             attempted: Some(active),
             submitted: Some((active, subject)),
-            heartbeat_only: None,
+            non_empty_retry: None,
             candidate_work_wait: None,
             pending_events: Some(PendingLocalEvents {
                 owner: active,

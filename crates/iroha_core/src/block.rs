@@ -1552,7 +1552,10 @@ use crate::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
     },
-    sumeragi::{VotingBlock, network_topology::Topology, status},
+    sumeragi::{
+        VotingBlock, network_topology::Topology, status,
+        v2_candidate::candidate_block_has_proposal_work,
+    },
     tx::{
         AcceptTransactionFail, LaneAssignment, SignatureRejectionCode, SignatureVerificationFail,
         enforce_fraud_policy,
@@ -6608,8 +6611,9 @@ pub(crate) mod valid {
         /// A certified later leader may re-propose an unchanged locked body,
         /// so its embedded block signature need not belong to the current
         /// proposal leader. This path skips only that already-checked block
-        /// signature set. It also permits a genuinely empty heartbeat body,
-        /// which v2 uses when bounded lane assembly has no available work.
+        /// signature set. A body which is wire-empty may pass only when the
+        /// shared semantic-work gate proves state-derived clock progress or
+        /// autonomous/internal work; genuinely idle bodies are rejected.
         /// Legacy in-block previous-roster evidence may be absent because the
         /// authenticated height context and its parent CommitQC are the v2
         /// reconfiguration proof; malformed evidence is still rejected when
@@ -6971,6 +6975,25 @@ pub(crate) mod valid {
                 record_timings(&mut timings, stateless_elapsed, None);
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let ConsensusValidationProfile::SumeragiV2 { block_cadence, .. } =
+                &validation_profile
+            {
+                let time_trigger_clock_progress_required = block
+                    .header()
+                    .creation_time()
+                    .checked_sub(*block_cadence)
+                    .is_some_and(|parent_creation_time| {
+                        state.time_trigger_clock_progress_required_fast(parent_creation_time)
+                    });
+                if !candidate_block_has_proposal_work(&block, time_trigger_clock_progress_required)
+                {
+                    let stateless_elapsed = stateless_start.elapsed();
+                    record_timings(&mut timings, stateless_elapsed, None);
+                    let error = BlockValidationError::EmptyBlock;
+                    emit_rejection(&block, &error);
+                    return WithEvents::new(Err((Box::new(block), Box::new(error))));
+                }
             }
             if let Some(context) = cache_context {
                 let mut cache = state.stateless_validation_cache().lock();
@@ -23514,9 +23537,17 @@ pub(crate) mod valid {
         fn empty_block_rejected_during_validation() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let state = State::new(World::new(), Arc::clone(&kura), query);
-
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "empty-block-validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -23544,8 +23575,15 @@ pub(crate) mod valid {
                     header.creation_time_ms = 1;
                     header.merkle_root = None;
                 });
+                let mut signed = SignedBlock::from(valid);
+                signed.set_da_proof_policies(Some(
+                    crate::da::active_proof_policy_bundle_at_height(
+                        &state.nexus_snapshot(),
+                        signed.header().height().get(),
+                    ),
+                ));
                 with_current_state_confidential_features(
-                    SignedBlock::from(valid),
+                    signed,
                     &state,
                     &[(0, &leader_private)],
                 )
@@ -23567,7 +23605,11 @@ pub(crate) mod valid {
                     Ok(_) => panic!("empty block should be rejected"),
                     Err(err) => err,
                 };
-                assert!(matches!(err.1.as_ref(), BlockValidationError::EmptyBlock));
+                assert!(
+                    matches!(err.1.as_ref(), BlockValidationError::EmptyBlock),
+                    "expected empty-block rejection, got {:?}",
+                    err.1
+                );
             }
 
             {
@@ -23589,7 +23631,11 @@ pub(crate) mod valid {
                     Ok(_) => panic!("empty block should be rejected"),
                     Err(err) => err,
                 };
-                assert!(matches!(err.1.as_ref(), BlockValidationError::EmptyBlock));
+                assert!(
+                    matches!(err.1.as_ref(), BlockValidationError::EmptyBlock),
+                    "expected empty-block rejection with events, got {:?}",
+                    err.1
+                );
                 assert!(events.borrow().iter().any(|event| {
                     matches!(
                         event,
@@ -23624,10 +23670,11 @@ pub(crate) mod valid {
                 &mut v2_voting_block,
             )
             .unpack(|_| {});
-            let (heartbeat, staged_state) =
-                v2_result.expect("Sumeragi v2 must accept a valid empty heartbeat block");
-            assert!(heartbeat.as_ref().is_empty());
-            drop(staged_state);
+            let error = match v2_result {
+                Ok(_) => panic!("Sumeragi v2 must reject a truly idle body"),
+                Err(error) => error,
+            };
+            assert!(matches!(error.1.as_ref(), BlockValidationError::EmptyBlock));
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = ValidBlock::validate_keep_voting_block(
@@ -23653,14 +23700,23 @@ pub(crate) mod valid {
         fn v2_validation_is_wall_clock_independent_and_uses_height_context_for_reconfiguration() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let state = State::new(World::new(), Arc::clone(&kura), query);
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "v2-wall-clock-validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public)]);
 
             let first =
                 commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 1);
-            let second = commit_block_at_height(
+            let _second = commit_block_at_height(
                 &state,
                 &kura,
                 &topology,
@@ -23669,20 +23725,30 @@ pub(crate) mod valid {
                 Some(first),
                 2,
             );
-            let candidate = with_current_state_confidential_features(
-                SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
-                    &leader_private,
-                    |header| {
-                        header.set_height(nonzero!(3_u64));
-                        header.set_prev_block_hash(Some(second));
-                        header.creation_time_ms = 1_000_000;
-                        header.merkle_root = None;
-                        header.set_prev_roster_evidence_hash(None);
-                    },
-                )),
-                &state,
-                &[(0, &leader_private)],
-            );
+            let candidate_at = |creation_time_ms: u64, label: &str| {
+                let (_clock, candidate_time) =
+                    TimeSource::new_mock(Duration::from_millis(creation_time_ms));
+                let (authority, signer) = gen_account_in(label);
+                let transaction = TransactionBuilder::new_with_time_source(
+                    state.chain_id.clone(),
+                    authority,
+                    &candidate_time,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([Log::new(Level::INFO, label.to_owned())])
+                .sign(signer.private_key());
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+                let parent = state.view().latest_block().expect("audited v2 parent");
+                with_current_state_da_sidecars(
+                    BlockBuilder::new_with_time_source(vec![accepted], candidate_time)
+                        .chain(0, Some(parent.as_ref())),
+                    &state,
+                )
+                .sign(&leader_private)
+                .unpack(|_| {})
+                .into()
+            };
+            let candidate: SignedBlock = candidate_at(1_000_000, "v2-wall-clock-work");
             assert!(candidate.previous_roster_evidence().is_none());
             let (_clock, local_time) = TimeSource::new_mock(Duration::ZERO);
 
@@ -23719,23 +23785,11 @@ pub(crate) mod valid {
             let (valid, staged) = v2.expect(
                 "v2 validation must depend on parent time/context, not a validator's wall clock or legacy roster sidecar",
             );
-            assert!(valid.as_ref().is_empty());
+            assert_eq!(valid.as_ref().external_transactions().count(), 1);
+            assert!(valid.as_ref().error(0).is_some());
             drop(staged);
 
-            let noncanonical = with_current_state_confidential_features(
-                SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
-                    &leader_private,
-                    |header| {
-                        header.set_height(nonzero!(3_u64));
-                        header.set_prev_block_hash(Some(second));
-                        header.creation_time_ms = 1_000_001;
-                        header.merkle_root = None;
-                        header.set_prev_roster_evidence_hash(None);
-                    },
-                )),
-                &state,
-                &[(0, &leader_private)],
-            );
+            let noncanonical: SignedBlock = candidate_at(1_000_001, "v2-noncanonical-time-work");
             let mut noncanonical_voting_block = None;
             let rejected = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 noncanonical.clone(),
@@ -23768,8 +23822,17 @@ pub(crate) mod valid {
         fn v2_snapshot_parent_enforces_authenticated_hash_height_and_logical_time() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let state = State::new(World::new(), Arc::clone(&kura), query);
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "v2-snapshot-validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let peer = PeerId::new(leader.public_key().clone());
             let topology = Topology::new(vec![peer.clone()]);
             let first =
@@ -23783,6 +23846,11 @@ pub(crate) mod valid {
                 Some(first),
                 2,
             );
+            let audited_parent = state
+                .view()
+                .latest_block()
+                .expect("snapshot parent is available before hash-only conversion");
+            assert_eq!(audited_parent.hash(), second);
             kura.force_hash_only_block_for_testing(nonzero!(2_usize))
                 .expect("remove audited parent body");
             assert!(state.view().latest_block().is_none());
@@ -23822,17 +23890,27 @@ pub(crate) mod valid {
                 leader_seed: [0x51; 32],
             };
             context.validate().expect("valid snapshot context");
-            let candidate_at = |creation_time_ms| {
-                SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
-                    leader.private_key(),
-                    |header| {
-                        header.set_height(nonzero!(3_u64));
-                        header.set_prev_block_hash(Some(second));
-                        header.creation_time_ms = creation_time_ms;
-                        header.merkle_root = None;
-                        header.set_prev_roster_evidence_hash(None);
-                    },
-                ))
+            let candidate_at = |creation_time_ms: u64| {
+                let (_clock, candidate_time) =
+                    TimeSource::new_mock(Duration::from_millis(creation_time_ms));
+                let (authority, signer) = gen_account_in("v2-snapshot-parent-work");
+                let transaction = TransactionBuilder::new_with_time_source(
+                    state.chain_id.clone(),
+                    authority,
+                    &candidate_time,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([Log::new(Level::INFO, "v2-snapshot-parent-work".to_owned())])
+                .sign(signer.private_key());
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+                with_current_state_da_sidecars(
+                    BlockBuilder::new_with_time_source(vec![accepted], candidate_time)
+                        .chain(0, Some(audited_parent.as_ref())),
+                    &state,
+                )
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into()
             };
             let validate = |candidate: SignedBlock, context: &consensus_v2::HeightContext| {
                 let mut voting_block = None;
@@ -23852,7 +23930,8 @@ pub(crate) mod valid {
 
             let (valid, staged) = validate(candidate_at(12), &context)
                 .expect("exact anchor time plus cadence is accepted");
-            assert!(valid.as_ref().is_empty());
+            assert_eq!(valid.as_ref().external_transactions().count(), 1);
+            assert!(valid.as_ref().error(0).is_some());
             drop(staged);
             assert!(matches!(
                 validate(candidate_at(13), &context),

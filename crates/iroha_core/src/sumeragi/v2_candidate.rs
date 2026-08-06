@@ -273,7 +273,7 @@ impl CandidateParent<'_> {
 ///
 /// Single-route transactions remain eligible. Native AMX transactions are
 /// reported unavailable and therefore remain in the queue without preventing
-/// an honest leader from producing a heartbeat or single-route block.
+/// an honest leader from producing a control-work or single-route block.
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg(test)]
 pub(crate) struct SingleRouteWorkProvider;
@@ -317,8 +317,6 @@ pub(crate) struct CandidateRequest<'request, Work> {
     pub(crate) output_guard: &'request ConsensusOutputGuard,
     /// Immutable subsystem attachments for this height.
     pub(crate) attachments: CandidateAttachments,
-    /// Whether this exact recovery path may deliberately build an empty body.
-    pub(crate) allow_empty_recovery_heartbeat: bool,
     /// Frozen readiness adapter for lane-local and Native AMX work.
     pub(crate) work_provider: Work,
 }
@@ -343,8 +341,7 @@ pub(crate) struct CandidateScanReport {
 /// Result of one bounded fresh-candidate assembly attempt.
 #[derive(Debug)]
 pub(crate) enum CandidateAssemblyOutcome {
-    /// A signed body carrying ordinary, autonomous, internal, or explicitly
-    /// armed recovery-heartbeat work.
+    /// A signed body carrying ordinary, autonomous, or internal work.
     Assembled(AssembledV2Candidate),
     /// The queue snapshot and internal providers contained no proposal work.
     NoProposalWork(CandidateScanReport),
@@ -442,13 +439,13 @@ impl V2CandidateAssembler {
     /// The queue is never mutated. An empty queue, an entirely unavailable
     /// lane/AMX snapshot, or a batch whose transactions do not fit returns
     /// [`CandidateAssemblyOutcome::NoProposalWork`] unless genuine internal
-    /// work exists or the caller explicitly armed a recovery heartbeat.
+    /// work exists.
     ///
     /// # Errors
     ///
     /// Returns [`CandidateError`] for a stale reducer directive, a non-leader
     /// caller, parent/context drift, malformed certified work, signing failure,
-    /// or a heartbeat which itself exceeds frozen body/chunk limits.
+    /// or proposal framing which itself exceeds frozen body/chunk limits.
     pub(crate) fn assemble<Work: CandidateWorkProvider>(
         &self,
         mut request: CandidateRequest<'_, Work>,
@@ -521,9 +518,7 @@ impl V2CandidateAssembler {
             validate_prepared_work(request.context, view, &descriptors, &prepared_work)?;
 
             report.selected = selected.len();
-            if !request.allow_empty_recovery_heartbeat
-                && !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work)
-            {
+            if !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work) {
                 if request.queue.transaction_selection_durability_faulted() {
                     return Err(CandidateError::RestartRequired);
                 }
@@ -546,6 +541,12 @@ impl V2CandidateAssembler {
                 &selected,
                 &prepared_work,
             )?;
+            if !candidate_block_has_proposal_work(
+                &block,
+                request.attachments.time_trigger_clock_progress_required,
+            ) {
+                return Err(CandidateError::BuiltWithoutProposalWork);
+            }
 
             let chunk_count = encoded_chunk_count(request.context.da_layout, canonical_wire.len())?;
             let within_size = canonical_wire.len() <= exact_payload_limit;
@@ -560,7 +561,7 @@ impl V2CandidateAssembler {
                     // strict bound on signing/encoding attempts.
                     continue;
                 }
-                return Err(CandidateError::HeartbeatExceedsPayloadLimits {
+                return Err(CandidateError::ProposalFramingExceedsPayloadLimits {
                     encoded_bytes: canonical_wire.len(),
                     encoded_chunks: chunk_count,
                     max_bytes: exact_payload_limit,
@@ -834,13 +835,51 @@ fn candidate_has_proposal_work(
     !selected.is_empty()
         || !prepared_work.autonomous_lane_payloads.is_empty()
         || attachments.time_trigger_clock_progress_required
-        || attachments.da_commitments.is_some()
-        || attachments.da_pin_intents.is_some()
+        || attachments
+            .da_commitments
+            .as_ref()
+            .is_some_and(|bundle| !bundle.is_empty())
+        || attachments
+            .da_pin_intents
+            .as_ref()
+            .is_some_and(|bundle| !bundle.is_empty())
         || attachments.previous_roster_evidence.is_some()
-        || attachments.npos_consensus_effects.is_some()
+        || attachments
+            .npos_consensus_effects
+            .as_ref()
+            .is_some_and(|effects| !effects.is_empty())
         || attachments.sccp_commitment_root.is_some()
         || attachments.certified_merge_carrier_header.is_some()
         || attachments.certified_merge_entry.is_some()
+}
+
+/// Return whether a canonical resultless v2 body carries deterministic ledger
+/// work. The caller supplies the state-derived clock-progress decision for the
+/// exact parent: clock progress is semantic work even when no trigger fires in
+/// this particular block and therefore no trigger entrypoint is serialized.
+///
+/// This is the common fail-closed boundary used after fresh assembly, before
+/// validating an inbound body, and before re-proposing a recovered locked body.
+pub(crate) fn candidate_block_has_proposal_work(
+    block: &SignedBlock,
+    time_trigger_clock_progress_required: bool,
+) -> bool {
+    block.external_entrypoints_cloned().next().is_some()
+        || block.execution_context().is_some_and(|context| {
+            !context.autonomous_lane_payloads.is_empty() || context.merge_entry.is_some()
+        })
+        || block
+            .da_commitments()
+            .is_some_and(|bundle| !bundle.is_empty())
+        || block
+            .da_pin_intents()
+            .is_some_and(|bundle| !bundle.is_empty())
+        || block.previous_roster_evidence().is_some()
+        || block
+            .npos_consensus_effects()
+            .is_some_and(|effects| !effects.is_empty())
+        || block.header().sccp_commitment_root().is_some()
+        || time_trigger_clock_progress_required
 }
 
 fn stripped_carrier_context_matches(
@@ -1412,14 +1451,18 @@ pub(crate) enum CandidateError {
     /// BlockBuilder unexpectedly attached deterministic execution output.
     #[error("built Sumeragi v2 candidate is not resultless")]
     BuiltResultBearingProposal,
+    /// A post-build check found no transaction, internal, autonomous, or
+    /// state-derived clock-progress work.
+    #[error("built Sumeragi v2 candidate carries no deterministic proposal work")]
+    BuiltWithoutProposalWork,
     /// Canonical block framing failed.
     #[error("failed to encode canonical Sumeragi v2 body: {0}")]
     CanonicalEncoding(String),
-    /// Even an empty heartbeat exceeds the immutable height limits.
+    /// Mandatory proposal framing exceeds the immutable height limits.
     #[error(
-        "empty Sumeragi v2 heartbeat needs {encoded_bytes} bytes/{encoded_chunks} chunks, exceeding {max_bytes} bytes/{max_chunks} chunks"
+        "Sumeragi v2 proposal framing needs {encoded_bytes} bytes/{encoded_chunks} chunks, exceeding {max_bytes} bytes/{max_chunks} chunks"
     )]
-    HeartbeatExceedsPayloadLimits {
+    ProposalFramingExceedsPayloadLimits {
         /// Exact canonical body bytes.
         encoded_bytes: usize,
         /// Deterministic encoded chunks.
@@ -1676,7 +1719,6 @@ mod tests {
     }
 
     fn assemble_empty_snapshot_candidate(
-        allow_empty_recovery_heartbeat: bool,
         attachments: CandidateAttachments,
     ) -> CandidateAssemblyOutcome {
         let (state, mut context, anchor, key) = snapshot_parent_fixture();
@@ -1713,7 +1755,6 @@ mod tests {
             key_pair: &key,
             output_guard: &output_guard,
             attachments,
-            allow_empty_recovery_heartbeat,
             work_provider: SingleRouteWorkProvider,
         })
         .expect("empty snapshot candidate assembly")
@@ -1721,7 +1762,7 @@ mod tests {
 
     #[test]
     fn proposal_work_gate_defers_idle_candidate() {
-        let outcome = assemble_empty_snapshot_candidate(false, CandidateAttachments::default());
+        let outcome = assemble_empty_snapshot_candidate(CandidateAttachments::default());
         let CandidateAssemblyOutcome::NoProposalWork(report) = outcome else {
             panic!("an idle height must not manufacture an empty candidate");
         };
@@ -1729,29 +1770,68 @@ mod tests {
     }
 
     #[test]
-    fn proposal_work_gate_preserves_armed_recovery_heartbeat() {
-        let outcome = assemble_empty_snapshot_candidate(true, CandidateAttachments::default());
+    fn proposal_work_gate_normalizes_empty_control_bundles() {
+        let outcome = assemble_empty_snapshot_candidate(CandidateAttachments {
+            da_commitments: Some(DaCommitmentBundle::new(Vec::new())),
+            da_pin_intents: Some(DaPinIntentBundle::new(Vec::new())),
+            npos_consensus_effects: Some(NposConsensusEffects::default()),
+            ..CandidateAttachments::default()
+        });
+        let CandidateAssemblyOutcome::NoProposalWork(report) = outcome else {
+            panic!("normalized empty control bundles must not manufacture a candidate");
+        };
+        assert_eq!(report, CandidateScanReport::default());
+    }
+
+    #[test]
+    fn proposal_work_gate_preserves_time_trigger_work() {
+        let outcome = assemble_empty_snapshot_candidate(CandidateAttachments {
+            time_trigger_clock_progress_required: true,
+            ..CandidateAttachments::default()
+        });
         let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
-            panic!("an explicitly armed recovery heartbeat must remain available");
+            panic!("due time-trigger work must produce a candidate");
         };
         assert_eq!(candidate.scan_report(), CandidateScanReport::default());
         assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
     }
 
     #[test]
-    fn proposal_work_gate_preserves_time_trigger_work() {
-        let outcome = assemble_empty_snapshot_candidate(
-            false,
-            CandidateAttachments {
-                time_trigger_clock_progress_required: true,
-                ..CandidateAttachments::default()
-            },
+    fn canonical_block_work_gate_preserves_transaction_autonomous_and_clock_work() {
+        let (_state, context, _anchor, key) = snapshot_parent_fixture();
+        let mut block: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
+        assert!(!candidate_block_has_proposal_work(&block, false));
+        assert!(
+            candidate_block_has_proposal_work(&block, true),
+            "state-derived clock progress is semantic proposal work"
         );
-        let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
-            panic!("due time-trigger work must produce a candidate");
-        };
-        assert_eq!(candidate.scan_report(), CandidateScanReport::default());
-        assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
+
+        let transaction = accepted(71, "canonical-block-external");
+        block.set_external_entrypoints(vec![transaction.entrypoint().clone()]);
+        assert!(candidate_block_has_proposal_work(&block, false));
+
+        let mut autonomous: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
+        autonomous.set_execution_context(Some(
+            BlockExecutionContextBundle::default().with_autonomous_lane_payloads(vec![
+                AutonomousLanePayloadEnvelopeV1 {
+                    version: 1,
+                    chain_id_hash: Hash::new(context.chain_id.as_str().as_bytes()),
+                    epoch: context.epoch,
+                    lane_id: LaneId::new(1),
+                    dataspace_id: DataSpaceId::new(11),
+                    lane_incarnation: Hash::new(b"canonical block autonomous incarnation"),
+                    proposal_height: context.height,
+                    lane_block_height: 1,
+                    lane_block_view: 0,
+                    proposal_hash: Hash::new(b"canonical block autonomous proposal"),
+                    descriptor_hash: Hash::new(b"canonical block autonomous descriptor"),
+                    payload_hash: Hash::new(b"canonical block autonomous payload"),
+                    producer: PeerId::new(key.public_key().clone()),
+                    canonical_payload: vec![0xA5],
+                },
+            ]),
+        ));
+        assert!(candidate_block_has_proposal_work(&autonomous, false));
     }
 
     #[test]

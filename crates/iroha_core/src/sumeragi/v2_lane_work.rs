@@ -28516,19 +28516,19 @@ pub(super) mod tests {
         let queued_after_reservation = queue.queued_len();
         let context = adapter.context.clone();
         for _ in 0..3 {
-            let heartbeat_work = (&mut adapter)
+            let recovery_work = (&mut adapter)
                 .prepare(&context, 0, &[])
-                .expect("heartbeat retry carries durable autonomous ownership");
-            assert_eq!(heartbeat_work.autonomous_lane_payloads.len(), 1);
+                .expect("non-empty retry carries durable autonomous ownership");
+            assert_eq!(recovery_work.autonomous_lane_payloads.len(), 1);
 
             adapter.next_autonomous_producer_tick = Instant::now();
             adapter
                 .schedule_autonomous_lane_production(0, limits)
-                .expect("heartbeat retry drives the idempotent lane producer");
+                .expect("non-empty retry drives the idempotent lane producer");
             assert_eq!(
                 queue.live_lane_reservations(),
                 exact_reservations,
-                "heartbeat/global retry must neither release nor duplicate exact reservations"
+                "non-empty/global retry must neither release nor duplicate exact reservations"
             );
             assert_eq!(queue.queued_len(), queued_after_reservation);
         }
@@ -29365,7 +29365,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn repeated_heartbeat_retries_never_make_autonomous_routes_ordinary_eligible() {
+    fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
@@ -29387,10 +29387,10 @@ pub(super) mod tests {
         let mut provider = &mut adapter;
 
         for _ in 0..3 {
-            let heartbeat = provider
+            let recovery = provider
                 .prepare(&context, 0, &[])
-                .expect("an empty heartbeat requires no ordinary lane ownership");
-            assert!(heartbeat.native_amx_receipts.is_empty());
+                .expect("a non-empty retry requires no ordinary lane ownership");
+            assert!(recovery.native_amx_receipts.is_empty());
 
             let unavailable = provider
                 .prepare(&context, 0, &[candidate])
