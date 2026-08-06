@@ -3723,8 +3723,7 @@ impl Queue {
             return Ok(LaneQueueReservationOutcome::AlreadyFinalized);
         };
         self.validate_live_reservation_against_queue(&record)?;
-        let restored_fifo =
-            self.fifo_with_released_reservations_locked(core::slice::from_ref(&record))?;
+        self.fifo_with_released_reservations_locked(core::slice::from_ref(&record))?;
         let transition = self
             .begin_durability_transition_locked([key.signed_transaction_hash])
             .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
@@ -3735,6 +3734,25 @@ impl Queue {
 
         let queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
+        let restored_fifo = match self
+            .fifo_with_released_reservations_locked(core::slice::from_ref(&record))
+        {
+            Ok(fifo) => fifo,
+            Err(error) => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot publish a durably released lane reservation against the current FIFO: {error}"
+                    ),
+                );
+                self.latch_lane_reservation_post_journal_publication_fault_locked(&error);
+                drop(store);
+                drop(transition);
+                drop(queue_guard);
+                self.publish_latched_lane_reservation_durability_fault(None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+        };
         store.live_by_hash.remove(&key.signed_transaction_hash);
         self.replace_fifo_locked(&restored_fifo);
         self.reconcile_missing_reservation_payloads_locked(&mut store);
@@ -3815,7 +3833,7 @@ impl Queue {
             .iter()
             .map(|(_, record)| record.clone())
             .collect::<Vec<_>>();
-        let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;
+        self.fifo_with_released_reservations_locked(&released_records)?;
         let transition = self
             .begin_durability_transition_locked(
                 records.iter().map(|(key, _)| key.signed_transaction_hash),
@@ -3829,6 +3847,23 @@ impl Queue {
 
         let queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
+        let restored_fifo = match self.fifo_with_released_reservations_locked(&released_records) {
+            Ok(fifo) => fifo,
+            Err(error) => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot publish durably released lane reservations against the current FIFO: {error}"
+                    ),
+                );
+                self.latch_lane_reservation_post_journal_publication_fault_locked(&error);
+                drop(store);
+                drop(transition);
+                drop(queue_guard);
+                self.publish_latched_lane_reservation_durability_fault(None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+        };
         for (key, _) in &records {
             store.live_by_hash.remove(&key.signed_transaction_hash);
         }
@@ -4332,7 +4367,7 @@ impl Queue {
         }
         let mut records = records;
         records.sort_by_key(|record| record.fifo_order.ordinal);
-        let restored_fifo = self.fifo_with_released_reservations_locked(&records)?;
+        self.fifo_with_released_reservations_locked(&records)?;
         let transition = self
             .begin_durability_transition_locked(
                 records
@@ -4347,6 +4382,23 @@ impl Queue {
 
         let queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
+        let restored_fifo = match self.fifo_with_released_reservations_locked(&records) {
+            Ok(fifo) => fifo,
+            Err(error) => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot publish durably pruned lane reservations against the current FIFO: {error}"
+                    ),
+                );
+                self.latch_lane_reservation_post_journal_publication_fault_locked(&error);
+                drop(store);
+                drop(transition);
+                drop(queue_guard);
+                self.publish_latched_lane_reservation_durability_fault(None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+        };
         for record in &records {
             store
                 .live_by_hash
@@ -4657,6 +4709,24 @@ impl Queue {
             );
         }
         true
+    }
+
+    /// Fail closed when an already durable reservation release cannot be published against the
+    /// current in-memory FIFO. The durable journal is authoritative, while retaining the live
+    /// in-memory owner is the restrictive state until restart replay completes the transition.
+    ///
+    /// The caller holds `push_remove_lock` and must publish backpressure only after releasing all
+    /// queue and reservation-store guards.
+    fn latch_lane_reservation_post_journal_publication_fault_locked(&self, error: &std::io::Error) {
+        if !self
+            .lane_reservation_durability_fault
+            .swap(true, Ordering::AcqRel)
+        {
+            iroha_logger::error!(
+                %error,
+                "lane queue reservation publication failed after a durable journal transition; disabling all transaction selection until restart recovery"
+            );
+        }
     }
 
     /// Execute one blocking reservation-journal transition without queue or owner-index locks.
@@ -12163,7 +12233,26 @@ impl Queue {
         &self,
         records: &[LaneQueueReservationRecordV5],
     ) -> Result<Vec<SignedTxHash>, LaneQueueReservationError> {
-        let mut hashes = self.fifo_snapshot_locked();
+        let raw_hashes = self.fifo_snapshot_locked();
+        // Committed removals deliberately retain a physical FIFO cell behind an exact removal
+        // fence until a consumer rebuilds the queue. Such a terminal tombstone no longer has a
+        // FIFO ordinal because it no longer owns a transaction. Exclude only that exact state;
+        // every other incomplete ownership combination remains a fail-closed invariant error.
+        let mut hashes = Vec::with_capacity(raw_hashes.len().saturating_add(records.len()));
+        for hash in raw_hashes {
+            let removed = self.removed_hashes.contains_key(&hash);
+            let tracked = self.txs.contains_key(&hash);
+            let has_fifo_order = self.fifo_order_by_hash.contains_key(&hash);
+            match (removed, tracked, has_fifo_order) {
+                (true, false, false) => {}
+                (false, true, true) => hashes.push(hash),
+                _ => {
+                    return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                        "queued transaction {hash} has inconsistent FIFO ownership: removed={removed}, tracked={tracked}, fifo_order={has_fifo_order}"
+                    )));
+                }
+            }
+        }
         let mut members = hashes.iter().copied().collect::<HashSet<_>>();
         for record in records {
             record
@@ -12219,7 +12308,17 @@ impl Queue {
     /// Caller must hold `push_remove_lock`.
     fn replace_fifo_locked(&self, hashes: &[SignedTxHash]) {
         let mut age_ring = self.queued_age_ring.lock();
-        while self.tx_hashes.pop().is_some() {}
+        let retained = hashes.iter().copied().collect::<HashSet<_>>();
+        let mut drained_terminal_tombstones = Vec::new();
+        while let Some(hash) = self.tx_hashes.pop() {
+            if !retained.contains(&hash)
+                && self.removed_hashes.contains_key(&hash)
+                && !self.txs.contains_key(&hash)
+                && !self.fifo_order_by_hash.contains_key(&hash)
+            {
+                drained_terminal_tombstones.push(hash);
+            }
+        }
         self.clear_queued_age_index_locked(&mut age_ring);
         for hash in hashes.iter().copied() {
             self.tx_hashes
@@ -12230,6 +12329,11 @@ impl Queue {
                 .get(&hash)
                 .map_or(0, |entry| *entry.value());
             self.record_queued_age_locked(&mut age_ring, hash, enqueued_at_ms);
+        }
+        // Clear only fences whose exact terminal physical cells were removed by this atomic FIFO
+        // replacement. Unrelated non-FIFO removal fences continue to reject stale retries.
+        for hash in drained_terminal_tombstones {
+            self.removed_hashes.remove(&hash);
         }
     }
 
@@ -12267,14 +12371,13 @@ impl Queue {
         // missing transaction, or a tombstoned hash that is still tracked, remains a fail-closed
         // invariant violation below.
         let mut hashes = Vec::with_capacity(raw_hashes.len().saturating_add(1));
-        let mut drained_terminal_tombstones = Vec::new();
         for queued_hash in raw_hashes {
             let removed = self.removed_hashes.contains_key(&queued_hash);
             let tracked = self.txs.contains_key(&queued_hash);
             let has_fifo_order = self.fifo_order_by_hash.contains_key(&queued_hash);
             match (removed, tracked, has_fifo_order) {
-                (true, false, false) => drained_terminal_tombstones.push(queued_hash),
-                (false, true, _) => hashes.push(queued_hash),
+                (true, false, false) => {}
+                (false, true, true) => hashes.push(queued_hash),
                 _ => {
                     return Err(format!(
                         "queued transaction {queued_hash} has inconsistent FIFO ownership: removed={removed}, tracked={tracked}, fifo_order={has_fifo_order}"
@@ -12317,11 +12420,6 @@ impl Queue {
                 .map(|(_, queued_hash)| queued_hash)
                 .collect::<Vec<_>>(),
         );
-        // Clear only the removal fences whose physical FIFO entries were atomically drained.
-        // Non-FIFO fences can still protect concurrent guard/conflict reconciliation.
-        for drained_hash in drained_terminal_tombstones {
-            self.removed_hashes.remove(&drained_hash);
-        }
         self.removed_hashes.remove(&hash);
         Ok(())
     }
@@ -19122,6 +19220,7 @@ pub mod tests {
         queue.removed_hashes.insert(non_fifo_marker, ());
         time_handle.advance(Duration::from_millis(1));
         let second = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &second);
         let second_hash = second.hash();
         let second_plan = queue
             .route_plan_with_state(&second, &state)
@@ -27201,10 +27300,12 @@ pub mod tests {
     async fn committing_popped_transaction_does_not_create_fifo_tombstone() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let transaction = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+        let state = Arc::new(state);
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let hash = transaction.as_ref().hash();
 
         queue
