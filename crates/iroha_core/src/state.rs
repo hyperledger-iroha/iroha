@@ -2363,7 +2363,7 @@ fn decode_canonical_merge_routing_plan(
 }
 
 /// Return the transaction-membership hashes committed by an execution batch.
-pub(crate) fn merge_execution_committed_transaction_hashes(
+pub fn merge_execution_committed_transaction_hashes(
     batch: &MergeExecutionBatch,
 ) -> Vec<HashOf<SignedTransaction>> {
     batch
