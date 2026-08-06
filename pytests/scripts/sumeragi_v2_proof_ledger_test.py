@@ -24516,6 +24516,57 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
         runtime_path.write_text(canonical, encoding="utf-8")
 
 
+def test_physical_leader_wire_replay_mutation_survives_item_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """A retained token must be strictly older than its physical replay."""
+
+    module = load_checker()
+    runtime_relative = Path("crates/iroha_core/src/sumeragi/v2_runtime.rs")
+    runtime_path = tmp_path / runtime_relative
+    runtime_path.parent.mkdir(parents=True)
+    shutil.copy2(module.ROOT_DIR / runtime_relative, runtime_path)
+
+    source = runtime_path.read_text(encoding="utf-8")
+    items = [
+        item
+        for item in module.rust_items(source, "is_physical_leader_wire_replay")
+        if item.brace_context
+        == (("impl", "RuntimeIngressOwnershipEvidence"),)
+    ]
+    assert len(items) == 1
+    item = items[0]
+    old = "token.admission_ordinal() < physical_ordinal"
+    new = "token.admission_ordinal() <= physical_ordinal"
+    assert item.source.count(old) == 1
+    mutated_item_source = item.source.replace(old, new, 1)
+    runtime_path.write_text(
+        source.replace(item.source, mutated_item_source, 1),
+        encoding="utf-8",
+    )
+
+    mutated_item = next(
+        candidate
+        for candidate in module.rust_items(
+            runtime_path.read_text(encoding="utf-8"),
+            "is_physical_leader_wire_replay",
+        )
+        if candidate.brace_context
+        == (("impl", "RuntimeIngressOwnershipEvidence"),)
+    )
+    module._AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
+        "runtime_ingress_is_physical_leader_wire_replay"
+    ] = module._rust_item_token_sha256(mutated_item)
+
+    errors = module._runtime_clock_reservation_source_fidelity_errors(tmp_path)
+    assert any(
+        "physical replay classification must require a strictly older durable "
+        "admission token and reject partial ownership"
+        in error
+        for error in errors
+    ), errors
+
+
 def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -24567,6 +24618,32 @@ def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
             "FairV2IngressBarrierBypass::None,",
             "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
             "test-only ordinary retirement baseline must pass",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_checked",
+            "self.try_recv_if_at_checked(Instant::now(), predicate)",
+            "self.try_recv_if_at_checked(Instant::now(), |_| true)",
+            "ordinary checked ingress must reach only the wrapper which hard-codes no bypass",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_checked_retiring_obsolete_with_barrier_bypass",
+            "self.try_recv_if_at_checked_classified(Instant::now(), true, barrier_bypass, predicate)",
+            "self.try_recv_if_at_checked_classified(\n"
+            "            Instant::now(),\n"
+            "            true,\n"
+            "            FairV2IngressBarrierBypass::None,\n"
+            "            predicate,\n"
+            "        )",
+            "only the explicitly named internal wrapper may forward a bypass policy",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_at_checked",
+            "FairV2IngressBarrierBypass::None,",
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
+            "ordinary timestamped ingress must pass FairV2IngressBarrierBypass::None",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
@@ -24696,6 +24773,36 @@ def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "emitted_timeout_recovery_owner",
+            "|| episode.timeout_vote_owner_universe != self.driver.timeout_vote_owner_universe()",
+            "|| false",
+            "only the exact emitted current-view episode and frozen owner universe may authorize recovery",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_recovery_episode_allows_clock_blockers",
+            "|| blockers.timeout",
+            "|| false",
+            "the episode may cross neither the absolute timeout nor a pre-frozen retransmit",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_vote_recovery_candidate_from_fair",
+            "ingress_ownership.physical_admission_ordinal()",
+            "ingress_ownership\n"
+            "            .runtime_physical_cut()\n"
+            "            .and_then(|cut| u64::try_from(cut).ok())",
+            "pre-runtime candidate projection must retain the exact token and physical carrier",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_vote_recovery_candidate_from_runtime",
+            "(Some(_), None) | (None, Some(_)) => Err(EnqueueError::FailClosed)",
+            "(Some(_), None) | (None, Some(_)) => Ok(None)",
+            "runtime candidate projection must reject partial leader-wire ownership",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
             "validate_against",
             "RuntimeTimeoutVoteEpisodeDisposition::PreCutDescent => {\n"
             "                    self.token.scheduler_ordinal() < timeout_ordinal\n"
@@ -24777,6 +24884,27 @@ def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
             "let post_snapshot_source = context.roster[2].validator.clone();",
             "let post_snapshot_source = context.roster[1].validator.clone();",
             "distinct real post-snapshot source",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut",
+            "assert_eq!(non_candidate.count_transition(), (0, 0));",
+            "assert_eq!(non_candidate.count_transition(), (1, 1));",
+            "unrelated ingress must project 0→0",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view",
+            "assert_eq!(first_plan.count_transition(), (0, 1));",
+            "assert_eq!(first_plan.count_transition(), (1, 1));",
+            "first fresh source admission must project 0→1",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission",
+            "assert!(token.admission_ordinal() < replay_physical_ordinal);",
+            "assert!(token.admission_ordinal() <= replay_physical_ordinal);",
+            "restored TimeoutVote must bind a fresh physical carrier",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
@@ -42610,6 +42738,56 @@ def test_leader_wire_physical_ingress_rejects_semantic_mutations(
     )
 
     assert any(expected_error in error for error in errors), errors
+
+
+def test_restart_physical_high_water_mutation_survives_item_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """Restart must publish the restored physical high-water before admission."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    ingress_path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
+    source = ingress_path.read_text(encoding="utf-8")
+    items = [
+        item
+        for item in module.rust_items(source, "bind_leader_wire_lifecycle_gate")
+        if item.brace_context == (("impl", "FairV2Ingress"),)
+    ]
+    assert len(items) == 1
+    item = items[0]
+    old = ".max(restore.last_admission_ordinal());"
+    new = ".max(0);"
+    assert item.source.count(old) == 1
+    mutated_item_source = item.source.replace(old, new, 1)
+    ingress_path.write_text(
+        source.replace(item.source, mutated_item_source, 1),
+        encoding="utf-8",
+    )
+
+    mutated_item = next(
+        candidate
+        for candidate in module.rust_items(
+            ingress_path.read_text(encoding="utf-8"),
+            "bind_leader_wire_lifecycle_gate",
+        )
+        if candidate.brace_context == (("impl", "FairV2Ingress"),)
+    )
+    module._LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+        "bind_leader_wire_lifecycle_gate"
+    ] = module._rust_item_token_sha256(mutated_item)
+
+    errors = (
+        module._leader_wire_physical_ingress_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+    assert any(
+        "restart binding must preserve the durable physical admission "
+        "high-watermark before any fresh carrier allocation"
+        in error
+        for error in errors
+    ), errors
 
 
 @pytest.mark.parametrize(

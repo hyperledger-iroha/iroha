@@ -347,9 +347,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "runtime_ingress_leader_wire_physical_carrier": (
         "964b47b38e48c18e93b0a4e9d63ac711f5ef14ed89d933ffbe1e93233d59d7c5"
     ),
-    # TODO: Replace with the reviewed token digest after the focused production
-    # replay regressions and negative mutations pass.
-    "runtime_ingress_is_physical_leader_wire_replay": "PENDING_BEHAVIOR_VALIDATION",
+    "runtime_ingress_is_physical_leader_wire_replay": (
+        "7af77803b6cb064c9f611601e930c2ee13db7e961a5c85fad10a80900299792a"
+    ),
     "runtime_ingress_earliest_physical_carrier": (
         "aab95bf9cc5928cda4550fa375c56f8958b473940ab865b7527946eb5f235325"
     ),
@@ -461,84 +461,94 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
 }
 
 # Exact comment/literal-free token seals for the finite current-view
-# TimeoutVote recovery episode. Every entry remains deliberately unapproved
-# until its focused positive baseline and negative mutations pass together;
-# no digest in this inventory may be bulk-refreshed.
+# TimeoutVote recovery episode. Each entry is approved only after its focused
+# positive baseline and negative mutations pass together; no digest in this
+# inventory may be bulk-refreshed.
 _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::fair_v2_ingress_is_direct_validator_timeout_vote_owner": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "be2e39948e3696646e15c3331e020351b8f5065ecb25d9aef466674afc18b648"
     ),
-    "ingress::try_recv_if_checked": "PENDING_BEHAVIOR_VALIDATION",
+    "ingress::try_recv_if_checked": (
+        "091f57ccb6adaafd50864565891f636b364658cb8ed70cc5254d521901779a82"
+    ),
     "ingress::try_recv_if_checked_retiring_obsolete": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "06c5d041e60dd73dbddb63a9e4600772d7ff1e80d250255612a18a3ecb7b7733"
     ),
     "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "36e0d2de5bd03d5f3547ab4e7b9be43a74d51b7abfb2f4ca72753171f8605bf6"
     ),
-    "ingress::try_recv_if_at_checked": "PENDING_BEHAVIOR_VALIDATION",
+    "ingress::try_recv_if_at_checked": (
+        "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
+    ),
     "ingress::try_recv_if_at_checked_classified": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
     ),
     "runner::run_inner": "PENDING_BEHAVIOR_VALIDATION",
-    "runner::drain_v2_ingress": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::drain_v2_ingress": (
+        "dad59f9959e17dd1d504935ab1bacb07e7dc8652d71727ff96e6316ec6f3f5c5"
+    ),
     "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "fb2a98e36b7014a4199ae78eda34119f69cec26fc25fff2d4ce5758f41d74777"
     ),
     "runtime::RuntimeTimeoutVoteEpisodeOwner::same_lifecycle_owner_as": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "4c7e987d86308f3f71c36a9c91f9f4dfdda750f411382dd5934fbb61554668bb"
     ),
     "runtime::RuntimeTimeoutVoteEpisodeAdmissionPlan::count_transition": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "63923a863bfa409746d6f5efe7a5609913a9ebd19ffe98d65281a2e9a94f310f"
     ),
-    "runtime::emitted_timeout_recovery_owner": "PENDING_BEHAVIOR_VALIDATION",
+    "runtime::emitted_timeout_recovery_owner": (
+        "62364351b1c0cbc70ec583b61313e53a374b60fc83e4b4257beefcd35c953fa5"
+    ),
     "runtime::timeout_recovery_episode_allows_clock_blockers": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "4c52b5a78486a535d247919079bb60090ace9ba4b77e1759763aec0f48627f55"
     ),
     "runtime::timeout_vote_recovery_candidate_from_fair": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "8a3399864c9016a838a2c64df3ac10e1642e9acdf9275e7b054c0160e7905072"
     ),
     "runtime::timeout_vote_recovery_candidate_from_runtime": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "edbe98f16b7a80cb790a6eee1c0a3026c7e6030e005aeaf0d4ef81de45403594"
     ),
-    "runtime::timeout_vote_recovery_candidate": "PENDING_BEHAVIOR_VALIDATION",
+    "runtime::timeout_vote_recovery_candidate": (
+        "46f46e7ce5eae9a06ff23fbf54c582addeccc5bfe5cef9372e54c1a6053ceda0"
+    ),
     "runtime::timeout_vote_episode_admission_plan": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "a4e4b2455b2c355c57bdeab05470e4a700afa498980adb02ed31504f75ed01ec"
     ),
     "runtime::enqueue_network_with_ingress_ownership": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
     ),
     "runtime::can_admit_timeout_vote_recovery_episode": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "9b99f56691a9752e95501583a1e187d8727498035d8d899c55277ccd3ffde47b"
     ),
 }
 
 _TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
     "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
     ),
     "restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "00eb6a4425997fe9ef985adb09e792913c5df8805e58c4de9473e7fd720724d2"
     ),
     "pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "47d9e77bbf51c1564dbdb4bb7ab2f5d3dafecc279a11fb59f91dcdeed2254d7f"
     ),
     "two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "7b7545acd3419b5e23f92402787307896e18465e6ad8a922b94a1ec0bddb6581"
     ),
     "restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "5cfdf24f7d136889a6bf829dbe980858899c7b663bc6574445c63d08ca869344"
     ),
 }
 
 _TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
     "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "394810ab62d382e3016e5a6c88660778c34beca86d0804b567a74be47f8694d5"
     ),
 }
 
 _TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {
     "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "0fc0836ffbbd67bdd8174d4a981eb6f9e9baf6918705df9d30d3b393bc8fb625"
     ),
 }
 
@@ -548,93 +558,127 @@ _TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {
 _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": {
         "AsyncLeaderWireCanonicalLifecyclePayload": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "b921a227ed962459b4973297dd0d9be90c81401af62ba7f385e398de31a8b453"
         ),
-        "AsyncLeaderWireLifecycleSubject": "PENDING_BEHAVIOR_VALIDATION",
-        "AsyncLeaderWireLifecycleIdentityAt": "PENDING_BEHAVIOR_VALIDATION",
-        "AsyncLeaderWireLifecycleRecord": "PENDING_BEHAVIOR_VALIDATION",
-        "AsyncLeaderWireLifecycleTyped": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncLeaderWireLifecycleSubject": (
+            "77c927fa76dda21438c34668681704a702894bde0e6497f57c3518c9f4acb1cb"
+        ),
+        "AsyncLeaderWireLifecycleIdentityAt": (
+            "3144055cc1d2ba15799bc2f716423a113d1998fcdfe2e1e5410e437aafac0045"
+        ),
+        "AsyncLeaderWireLifecycleRecord": (
+            "854dd230bb474215e7b417f3d80d3327811b5aaf3a1eb5cb2ca4c3c3bdb6bc51"
+        ),
+        "AsyncLeaderWireLifecycleTyped": (
+            "dc59143994e349417932182b8042555bd572c60cfa7a6ccf37dd3db9d2252053"
+        ),
         "AsyncTimeoutRecoveryVoteOwnerDispositions": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "f6d0a37b228934a0f88c3d9ae8cc46aec9ed1331ae9172b5784ef78ec6092090"
         ),
         "AsyncTimeoutRecoveryVoteAdmissionDispositions": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "2c2ef87daca3055b2b0747d1664ad617a826c85370434509f8ea58b6050c4c23"
         ),
-        "AsyncTimeoutRecoveryEpisodeKey": "PENDING_BEHAVIOR_VALIDATION",
-        "AsyncTimeoutRecoveryEpisodeKeySet": "PENDING_BEHAVIOR_VALIDATION",
-        "AsyncTimeoutRecoveryVoteOwnerSlot": "PENDING_BEHAVIOR_VALIDATION",
-        "AsyncTimeoutRecoveryVoteOwnerUniverse": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryEpisodeKey": (
+            "61dfcd9bf069add7d70901f79ac047bf57fad89e302b3855c9dddc3ea390da59"
+        ),
+        "AsyncTimeoutRecoveryEpisodeKeySet": (
+            "35f54e3863b1adea21d2f768a5be5862d13d9c4aaff3e41c9eb54fbb3db3a37a"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerSlot": (
+            "681ac1b76eedfd4cf39b4407c5f75a199fc3088fcb89ff2704ef0450e32e757f"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerUniverse": (
+            "eb5c4dc611f078a882b491ffba0e33446987966a124e23630b9835d214e5cdb5"
+        ),
         "AsyncTimeoutRecoveryVoteOwnerValidForEpisode": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "5a7bdb2dff26729c0a73dd25a76f084af512fd78152d84511d77f0cf48b9faa0"
         ),
-        "AsyncTimeoutRecoveryEpisodeValidIn": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryEpisodeValidIn": (
+            "ebc240a8012b97d2d93de0c8e89b8dc59d16555b4b6246bc5f80640e974aa53d"
+        ),
         "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "67dda9f1b2cf4edf41d7ef7a7e7279615e9472dc97895e9e677208b882560879"
         ),
-        "AsyncTimeoutRecoveryVoteBasicBinding": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteBasicBinding": (
+            "7bb504333f577e6112b7d4e700c5bd06273c6a991f37f19b5a2ad148bd3fe286"
+        ),
         "AsyncTimeoutRecoveryVoteIngressRecordsFor": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "bfa3c52d46c7f667b1c4692190c73202864dde163cb07948424677b7336c0ebf"
         ),
-        "AsyncTimeoutRecoveryVotePreCutDescent": "PENDING_BEHAVIOR_VALIDATION",
-        "AsyncTimeoutRecoveryVoteRestoredDescent": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVotePreCutDescent": (
+            "e281c02fe826ce29730d14d8d1660a1fe850ef6e37ba9957d6239e494d8278fb"
+        ),
+        "AsyncTimeoutRecoveryVoteRestoredDescent": (
+            "b62e3824511a155faa4a16e5b264675d112b41c47705d634dc0da866880e1db1"
+        ),
         "AsyncTimeoutRecoveryVoteFreshReplenishment": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "866f9a2e43a1e7434faa9ed0aabfa15e5a880e8d34b50812c39331763df2bed5"
         ),
         "AsyncTimeoutRecoveryVoteDispositionMatches": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "7d7b112535e7390fcc77ea79d994ece09822223bc2f58c255dd57732dd7437f9"
         ),
-        "AsyncTimeoutRecoveryVoteCandidateOwners": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteCandidateOwners": (
+            "30123fde668ec8ff7f8142ba8eb692926e42c9a4bdbb17a568ac3cbd940d1173"
+        ),
         "AsyncTimeoutRecoveryVoteCandidateDefined": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "0050d45aafb4106ebc997e8b044c310806bbfdaf5233b712374a0a6d3e9889a6"
         ),
         "AsyncTimeoutRecoveryVoteCandidateOwner": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "f7fdd337e582dc62d429eab16fd16674b17e07890d2753301f66d9ae0c91bc66"
         ),
-        "AsyncTimeoutRecoveryVoteIncumbents": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteIncumbents": (
+            "5de335606d8bf7816ddfea5b85dd1716545d0ca267bd22e89e9888bb732350a1"
+        ),
         "AsyncTimeoutRecoverySameVoteLifecycleOwner": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "7c638dd0530b7bd889e0755a45eda303f98359575397a219e86593067a78caff"
         ),
-        "AsyncTimeoutRecoveryVoteAdmissionPlan": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteAdmissionPlan": (
+            "d0da8ba07c67af4fd18a668523e3748f3972a66f85b05c2b12795ece44068b55"
+        ),
         "AsyncTimeoutRecoveryVoteAdmissionRequired": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "2f5ee1a824beb7736d0bbb7f0c051b29fee24fb4a782c56a3a7b1ab863afc273"
         ),
-        "AsyncTimeoutRecoveryVoteAdmissionAllowed": "PENDING_BEHAVIOR_VALIDATION",
-        "AsyncTimeoutRecoveryVoteBarrierException": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteAdmissionAllowed": (
+            "8dd0ff9ee7a45c7bd12d8cee1c0ba3c155115b1ec6f8cc83bbdfc237fe14b7d9"
+        ),
+        "AsyncTimeoutRecoveryVoteBarrierException": (
+            "d8522b9b23b8314bdbbe6b6a81d601dfab6d3fbaa389e51e76029b33db0f5b5e"
+        ),
         "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "085073b59232d8c3e930b7fead0151ac8d6a37602452c556ad4174a98b734988"
         ),
         "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "d2f99c02442f82c8ae6041155b28d431bc38821ca3bb7b5420e032930baa6145"
         ),
         "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "86ad64b20c4ec9626b9fc1221b15c3d51a67187d0664a0c41bcd22b48c66a94b"
         ),
         "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "28f5c1e16034f5dd5c3cae9ccf22c81cb02e1d9ffc1eb20aa04f04e6b915b385"
         ),
         "AsyncTimeoutRecoveryVoteRuntimeRecordsAfter": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "48aa5a6e4b6422d73214ea872f4fa817071bd17b2a6fa4c55b59aa100f0ac5b2"
         ),
         "AsyncTimeoutRecoveryVoteAdmissionNodesThisStep": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "cc519f7ac25e4fed87ac00a68d907e97b72b1385eb6d527d4ed94facde6456a8"
         ),
         "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "f49556faa311370cee18c10d8af8489054c87bfceca95df7e10ca49f4114e0b2"
         ),
         "AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "37d807e2f76d7170ca7145829e8ebe8b2fafd5f2b24ea0130e3beff0fa5d6021"
         ),
         "AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "acf7fbae28f75e45ecd317451bc2e38ab865fab16acdc736d0bd8024d952d200"
         ),
         "AsyncTimeoutRecoveryAdmittedVoteSlots": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "b09ad8beca8d2938814d9d19fd3446c596f01131e885bbb4f8875f1749800183"
         ),
         "AsyncTimeoutRecoveryRemainingProducerSlots": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "a3c7c870d7110bfcf64c6be0e5889f13fb836379b55954775349f11ab762a75c"
         ),
         "AsyncTimeoutRecoveryProducerEpisodeMeasure": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "316131577d432419223b8e039fc85c66144da1996701736cf6a04882105747b7"
         ),
     },
 }
@@ -2082,9 +2126,9 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
     ),
-    # TODO: Replace with the reviewed token digest after the focused production
-    # replay regressions and negative mutations pass.
-    "bind_leader_wire_lifecycle_gate": "PENDING_BEHAVIOR_VALIDATION",
+    "bind_leader_wire_lifecycle_gate": (
+        "d6d8898d1a10684cc1f1aea7c91aa84dfb2f90862378d41d0f0908d57e2dfcc2"
+    ),
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
