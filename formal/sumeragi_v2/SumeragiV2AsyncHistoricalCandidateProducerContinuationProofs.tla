@@ -60,6 +60,27 @@ HistoricalCandidateProducerContinuationFrozenPrefixDescentProperty(
            ~> HistoricalCandidateProducerContinuationPrefixDescentGoal(
                 node, record, status, budget)
 
+(***************************************************************************
+Ingress-cut residual.
+
+The historical target remains a member of the global durable continuation
+set while an earlier admitted ingress lifecycle owns the serialized runner.
+It is therefore not a target exit when the runner-eligible projection is
+empty.  The residual freezes the original continuation-prefix budget and
+hands the earlier physical lifecycle to the separate finite ingress corridor.
+That corridor may return only to this same framed prefix, to a strictly lower
+prefix, or to the exact target-status exit; clearing the barrier is not itself
+advertised as continuation progress.
+***************************************************************************)
+
+HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+    node, record, status, budget) ==
+  /\ HistoricalCandidateProducerContinuationFrozenPrefixAtBudget(
+       node, record, status, budget)
+  /\ ~HistoricalCandidateProducerContinuationPrefixDescentGoal(
+       node, record, status, budget)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+
 HistoricalCandidateProducerContinuationFrozenPrefixDescentOrIngressCutProperty(
     specification) ==
   specification
@@ -161,27 +182,6 @@ HistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode(
        node, record, status, budget)
   /\ HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
        node, selected, distance)
-
-(***************************************************************************
-Ingress-cut residual.
-
-The historical target remains a member of the global durable continuation
-set while an earlier admitted ingress lifecycle owns the serialized runner.
-It is therefore not a target exit when the runner-eligible projection is
-empty.  The residual freezes the original continuation-prefix budget and
-hands the earlier physical lifecycle to the separate finite ingress corridor.
-That corridor may return only to this same framed prefix, to a strictly lower
-prefix, or to the exact target-status exit; clearing the barrier is not itself
-advertised as continuation progress.
-***************************************************************************)
-
-HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
-    node, record, status, budget) ==
-  /\ HistoricalCandidateProducerContinuationFrozenPrefixAtBudget(
-       node, record, status, budget)
-  /\ ~HistoricalCandidateProducerContinuationPrefixDescentGoal(
-       node, record, status, budget)
-  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
 
 HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
     node, record, status, budget) ==
@@ -585,18 +585,89 @@ THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationLocalReplayDesce
   \A initialContext:
     HistoricalCandidateProducerContinuationLocalReplayDescentProperty(
       AsyncLiveSpecAt(initialContext))
-BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
-   HistoricalCandidateProducerContinuationLocalReplayStepCannotReplenish,
-   HistoricalCandidateProducerContinuationFairLocalReplayDescends,
-   HistoricalCandidateProducerContinuationLocalReplayEnablesFairRunner,
-   AsyncLiveSpecProjectsAsyncSpec,
-   WF1, PTL, IsaT(1200)
-   DEF HistoricalCandidateProducerContinuationLocalReplayDescentProperty,
-       HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance,
-       HistoricalCandidateProducerContinuationLocalReplayProgress,
-       AsyncLiveSpecAt, AsyncFairnessAt
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncLiveSpecAt(initialContext)
+         PROVE \A node \in ValidatorIds,
+                   record \in AsyncCandidateProducerContinuationRecordSet,
+                   distance \in 1..2:
+                 HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
+                   node, record, distance)
+                   ~> HistoricalCandidateProducerContinuationLocalReplayProgress(
+                        node, record, distance)
+    <2>1. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncProgressOwnershipInvariant
+              /\ AsyncCandidateServiceLifecycleInvariant)
+      BY <1>1, AsyncLiveSpecProjectsAsyncSpec,
+         AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant,
+         AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle, PTL
+         DEF AsyncCandidateServiceTombstoneLifecycleInvariant
+    <2>2. ASSUME NEW node \in ValidatorIds,
+                  NEW record
+                    \in AsyncCandidateProducerContinuationRecordSet,
+                  NEW distance \in 1..2
+           PROVE HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
+                   node, record, distance)
+                   ~> HistoricalCandidateProducerContinuationLocalReplayProgress(
+                        node, record, distance)
+      <3>1. CASE node \in Responsive
+        <4>1. [](HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
+                    node, record, distance)
+                  /\ ~HistoricalCandidateProducerContinuationLocalReplayProgress(
+                       node, record, distance)
+                 => ENABLED
+                      <<PostGstRunHistoricalRecoveryNode(node)>>_AsyncAllVars)
+          BY <2>1,
+             HistoricalCandidateProducerContinuationLocalReplayEnablesFairRunner,
+             PTL
+        <4>2. (HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
+                    node, record, distance)
+                  /\ ~HistoricalCandidateProducerContinuationLocalReplayProgress(
+                       node, record, distance)
+                  /\ <<PostGstRunHistoricalRecoveryNode(node)>>_AsyncAllVars
+                  /\ [AsyncNext]_AsyncAllVars
+                 => HistoricalCandidateProducerContinuationLocalReplayProgress(
+                      node, record, distance)')
+          BY <2>1,
+             HistoricalCandidateProducerContinuationFairLocalReplayDescends,
+             PTL
+             DEF PostGstRunHistoricalRecoveryNode,
+                 RunHistoricalRecoveryNode, RunNodeWork,
+                 AsyncNext, AsyncAllVars
+        <4>3. (HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
+                    node, record, distance)
+                  /\ ~HistoricalCandidateProducerContinuationLocalReplayProgress(
+                       node, record, distance)
+                  /\ [AsyncNext]_AsyncAllVars
+                 => \/ HistoricalCandidateProducerContinuationLocalReplayProgress(
+                          node, record, distance)'
+                    \/ HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
+                         node, record, distance)')
+          BY <2>1,
+             HistoricalCandidateProducerContinuationLocalReplayStepCannotReplenish,
+             PTL
+        <4>4. WF_AsyncAllVars(PostGstRunHistoricalRecoveryNode(node))
+          BY <1>1, <3>1, AsyncLiveSpecProjectsAsyncSpec
+             DEF AsyncSpecAt, AsyncFairnessAt
+        <4>5. [][AsyncNext]_AsyncAllVars
+          BY <1>1, AsyncLiveSpecProjectsAsyncSpec DEF AsyncSpecAt
+        <4> QED BY <4>1, <4>2, <4>3, <4>4, <4>5, PTL
+      <3>2. CASE node \notin Responsive
+        <4>1. []~HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance(
+                    node, record, distance)
+          BY <2>1, <3>2, AsyncStrongTypeProjectsAsyncType, PTL
+             DEF HistoricalCandidateProducerContinuationSelectedLocalReplayAtDistance,
+                 HistoricalCandidateProducerContinuationSelectedAtStatus,
+                 HistoricalCandidateProducerContinuationAtStatus,
+                 HistoricalRecoveryTarget,
+                 AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                 AsyncHistoricalRecoveryTypeInvariant
+        <4> QED BY <4>1, PTL
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>2
+  <1> QED BY <1>1
+     DEF HistoricalCandidateProducerContinuationLocalReplayDescentProperty
 
 THEOREM AsyncLiveClosesHistoricalCandidateProducerContinuationLocalReplay ==
   \A initialContext:
@@ -624,22 +695,103 @@ THEOREM AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefixReadyE
                       node, record, status, budget)
                  \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
                       node, record, status, budget)
-BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
-   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   HistoricalCandidateProducerContinuationFrozenPrefixReadyStepCannotReplenish,
-   HistoricalCandidateProducerContinuationFairTurnStrictlyDescendsPrefix,
-   HistoricalCandidateProducerContinuationSourceEnablesFairRunner,
-   AsyncLiveSpecProjectsAsyncSpec,
-   WF1, PTL, IsaT(1200)
-   DEF HistoricalCandidateProducerContinuationFrozenPrefixReady,
-       HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
-       HistoricalCandidateProducerContinuationAtStatus,
-       HistoricalCandidateProducerContinuationPrefixDescentGoal,
-       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
-       HistoricalRecoveryRunnerBlockedOnExternalContinuation,
-       AsyncLiveSpecAt, AsyncFairnessAt
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncLiveSpecAt(initialContext)
+         PROVE \A node \in ValidatorIds,
+                   record \in AsyncCandidateProducerContinuationRecordSet,
+                   status \in {"Reserved", "Materialized"},
+                   budget \in
+                     AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+                 HistoricalCandidateProducerContinuationFrozenPrefixReady(
+                   node, record, status, budget)
+                   ~> \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+                            node, record, status, budget)
+                       \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+                            node, record, status, budget)
+    <2>1. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncProgressOwnershipInvariant
+              /\ AsyncCandidateServiceLifecycleInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant)
+      BY <1>1, AsyncLiveSpecProjectsAsyncSpec,
+         AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant,
+         AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage, PTL
+         DEF AsyncCandidateServiceTombstoneLifecycleInvariant
+    <2>2. ASSUME NEW node \in ValidatorIds,
+                  NEW record
+                    \in AsyncCandidateProducerContinuationRecordSet,
+                  NEW status \in {"Reserved", "Materialized"},
+                  NEW budget \in
+                    AsyncCandidateProducerContinuationFrozenPrefixRankCarrier
+           PROVE HistoricalCandidateProducerContinuationFrozenPrefixReady(
+                   node, record, status, budget)
+                   ~> \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+                            node, record, status, budget)
+                       \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+                            node, record, status, budget)
+      <3> DEFINE Goal ==
+             \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+                  node, record, status, budget)
+             \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+                  node, record, status, budget)
+      <3>1. CASE node \in Responsive
+        <4>1. [](HistoricalCandidateProducerContinuationFrozenPrefixReady(
+                    node, record, status, budget)
+                  /\ ~Goal
+                 => ENABLED
+                      <<PostGstRunHistoricalRecoveryNode(node)>>_AsyncAllVars)
+          BY <2>1,
+             HistoricalCandidateProducerContinuationSourceEnablesFairRunner,
+             PTL
+             DEF HistoricalCandidateProducerContinuationFrozenPrefixReady,
+                 HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+                 HistoricalCandidateProducerContinuationAtStatus,
+                 HistoricalRecoveryRunnerBlockedOnExternalContinuation
+        <4>2. (HistoricalCandidateProducerContinuationFrozenPrefixReady(
+                    node, record, status, budget)
+                  /\ ~Goal
+                  /\ <<PostGstRunHistoricalRecoveryNode(node)>>_AsyncAllVars
+                  /\ [AsyncNext]_AsyncAllVars
+                 => Goal')
+          BY <2>1,
+             HistoricalCandidateProducerContinuationFairTurnStrictlyDescendsPrefix,
+             PTL
+             DEF HistoricalCandidateProducerContinuationFrozenPrefixReady,
+                 PostGstRunHistoricalRecoveryNode,
+                 RunHistoricalRecoveryNode, RunNodeWork,
+                 AsyncNext, AsyncAllVars, Goal
+        <4>3. (HistoricalCandidateProducerContinuationFrozenPrefixReady(
+                    node, record, status, budget)
+                  /\ ~Goal
+                  /\ [AsyncNext]_AsyncAllVars
+                 => \/ Goal'
+                    \/ HistoricalCandidateProducerContinuationFrozenPrefixReady(
+                         node, record, status, budget)')
+          BY <2>1,
+             HistoricalCandidateProducerContinuationFrozenPrefixReadyStepCannotReplenish,
+             PTL DEF Goal
+        <4>4. WF_AsyncAllVars(PostGstRunHistoricalRecoveryNode(node))
+          BY <1>1, <3>1, AsyncLiveSpecProjectsAsyncSpec
+             DEF AsyncSpecAt, AsyncFairnessAt
+        <4>5. [][AsyncNext]_AsyncAllVars
+          BY <1>1, AsyncLiveSpecProjectsAsyncSpec DEF AsyncSpecAt
+        <4> QED BY <4>1, <4>2, <4>3, <4>4, <4>5, PTL
+      <3>2. CASE node \notin Responsive
+        <4>1. []~HistoricalCandidateProducerContinuationFrozenPrefixReady(
+                    node, record, status, budget)
+          BY <2>1, <3>2, AsyncStrongTypeProjectsAsyncType, PTL
+             DEF HistoricalCandidateProducerContinuationFrozenPrefixReady,
+                 HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+                 HistoricalCandidateProducerContinuationAtStatus,
+                 HistoricalRecoveryTarget,
+                 AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                 AsyncHistoricalRecoveryTypeInvariant
+        <4> QED BY <4>1, PTL
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>2
+  <1> QED BY <1>1
 
 THEOREM AsyncLiveClosesHistoricalCandidateProducerContinuationFrozenPrefixLocalReplayEpisode ==
   \A initialContext:

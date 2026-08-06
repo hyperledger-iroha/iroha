@@ -290,7 +290,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateProducerContinuationStoredCarrierMakesSelectedRecordReady",
     "AsyncCandidateProducerContinuationReplayDispatchesOnlyExactIdentity",
     "AsyncOlderCandidateLifecyclePreventsDueTimeoutOvertake",
-    "AsyncOlderRetransmitLifecyclePreventsDueTimeoutOvertake",
+    "AsyncOlderRetransmitLifecycleCannotAloneBlockDueTimeout",
     "AsyncOlderCandidateLifecyclePreventsDueRetransmitOvertake",
     "AsyncPostRetransmitCutCandidateCannotBlockDueRetransmit",
     "AsyncEarlierIngressLifecyclePreventsDueTimeoutOvertake",

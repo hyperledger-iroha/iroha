@@ -419,14 +419,12 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "accept_driver_dispatch": (
         "650c7e0b0c9e1af79cb835080e7ff5f9cdf63a0e80e476586c211e6566e6d9f9"
     ),
-    "enqueue_network_with_ingress_ownership": (
-        "552da003386e22bf9d0a44fbba0384b46ef0ad3f47123dd0b563b16dc9435ed9"
-    ),
-    "can_admit_pre_runtime_leader_wire": (
-        "4e47e7139d509949b21629d6947976a42243945e8fb6c414899a813b0c1a8a9f"
-    ),
+    # TODO: Replace these individually after the timeout-episode semantic
+    # mutations prove the reviewed pre-runtime and mutating admission paths.
+    "enqueue_network_with_ingress_ownership": "PENDING_BEHAVIOR_VALIDATION",
+    "can_admit_pre_runtime_leader_wire": "PENDING_BEHAVIOR_VALIDATION",
     "can_admit_network_message_with_ingress_ownership": (
-        "338ddd65e84755b37a84a618375f27631ddabc72e478b2405ee7f9904b5ecad3"
+        "PENDING_BEHAVIOR_VALIDATION"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
@@ -462,14 +460,322 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     ),
 }
 
+# Exact comment/literal-free token seals for the finite current-view
+# TimeoutVote recovery episode. Every entry remains deliberately unapproved
+# until its focused positive baseline and negative mutations pass together;
+# no digest in this inventory may be bulk-refreshed.
+_TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
+    "ingress::fair_v2_ingress_is_direct_validator_timeout_vote_owner": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "ingress::try_recv_if_checked": "PENDING_BEHAVIOR_VALIDATION",
+    "ingress::try_recv_if_checked_retiring_obsolete": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "ingress::try_recv_if_at_checked": "PENDING_BEHAVIOR_VALIDATION",
+    "ingress::try_recv_if_at_checked_classified": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runner::run_inner": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::drain_v2_ingress": "PENDING_BEHAVIOR_VALIDATION",
+    "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runtime::RuntimeTimeoutVoteEpisodeOwner::same_lifecycle_owner_as": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runtime::RuntimeTimeoutVoteEpisodeAdmissionPlan::count_transition": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runtime::emitted_timeout_recovery_owner": "PENDING_BEHAVIOR_VALIDATION",
+    "runtime::timeout_recovery_episode_allows_clock_blockers": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runtime::timeout_vote_recovery_candidate_from_fair": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runtime::timeout_vote_recovery_candidate_from_runtime": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runtime::timeout_vote_recovery_candidate": "PENDING_BEHAVIOR_VALIDATION",
+    "runtime::timeout_vote_episode_admission_plan": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runtime::enqueue_network_with_ingress_ownership": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runtime::can_admit_timeout_vote_recovery_episode": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
+    "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
+    "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {
+    "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+}
+
+# Comment-normalized formal operators for the same finite producer episode.
+# These remain fail-closed placeholders until every listed semantic mutation
+# is observed to fail independently.
+_TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncLeaderWireCanonicalLifecyclePayload": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncLeaderWireLifecycleSubject": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncLeaderWireLifecycleIdentityAt": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncLeaderWireLifecycleRecord": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncLeaderWireLifecycleTyped": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteOwnerDispositions": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionDispositions": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryEpisodeKey": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryEpisodeKeySet": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteOwnerSlot": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteOwnerUniverse": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteOwnerValidForEpisode": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryEpisodeValidIn": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteBasicBinding": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteIngressRecordsFor": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVotePreCutDescent": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteRestoredDescent": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteFreshReplenishment": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteDispositionMatches": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteCandidateOwners": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteCandidateDefined": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteCandidateOwner": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteIncumbents": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoverySameVoteLifecycleOwner": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionPlan": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteAdmissionRequired": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionAllowed": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteBarrierException": "PENDING_BEHAVIOR_VALIDATION",
+        "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteRuntimeRecordsAfter": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionNodesThisStep": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryAdmittedVoteSlots": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryRemainingProducerSlots": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryProducerEpisodeMeasure": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+    },
+}
+
+# Exact theorem statements and proofs which close the finite producer episode.
+# These seals stay deliberately unapproved until every independent theorem and
+# downstream-provider mutation fails after its local digest is refreshed.
+_TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission": (
+            "09724aa3803ff9a87bbc61b24f101afa4d2ead895f167a3c05beb3bd59403698"
+        ),
+        "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryUpdatedEpisodeIsRetainedByAdmissionState": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryRetainedEpisodesContainFramedEpisode": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutVoteFairIngressDrainLeavesCoreState": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncPostGstHasNoControlServiceReset": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryEpisodeCurrentBoundaryForNode": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncUnchangedCoreStatePreservesTimeoutBoundary": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutVoteIngressDrainRetainsCurrentEpisodeBoundary": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncUnchangedCoreStateExcludesPersistInstall": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncFairIngressDrainPreservesRetransmitTimerState": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncFairIngressDrainExcludesDirectRetransmit": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTypedOutstandingTagRemovalChangesFunction": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncDeferredRetransmitRemovesOutstandingTag": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncFairIngressDrainExcludesDeferredRetransmit": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncIngressDrainFramesDeferredAndCausalQueues": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutVoteFairIngressFramesCommandAndWork": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncSequenceSetAfterAppendAddsOnlyValue": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncOwnedTimeoutRecoveryCurrentOriginHasBeginTimeoutPhase": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutVoteDeliveryOriginHasDistinctPhase": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+    },
+    "SumeragiV2AdequateLeaderServiceClosureProofs.tla": {
+        "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode": (
+            "PENDING_BEHAVIOR_VALIDATION"
+        ),
+    },
+}
+
 # Exact production effect-executor entry points which retain the authenticated
 # ingress carrier and latch a fail-stop restart on malformed ownership.
 _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
-    "enqueue_network_with_ingress_ownership": (
-        "9bf3e8ec45247e920681de7f13941d8544df863b73c5a3ac243adcacae0b2587"
-    ),
+    # TODO: Approve separately after timeout-episode capacity mutations pass.
+    "enqueue_network_with_ingress_ownership": "PENDING_BEHAVIOR_VALIDATION",
     "can_admit_network_message_with_ingress_ownership": (
-        "644421658388af9adb80656b4b0d7b402835187c13d5c32b92e43f41ae5ff10f"
+        "PENDING_BEHAVIOR_VALIDATION"
     ),
 }
 
@@ -1581,7 +1887,8 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544",
+    # TODO: Approve after the three-mode timeout-episode runner mutations pass.
+    "run_inner": "PENDING_BEHAVIOR_VALIDATION",
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -1769,9 +2076,9 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
     "fair_v2_ingress_admit_leader_wire": (
         "140325f2b05a0c93744b2fbd483e485d95f17a0c8ce08ac1bf41808047e306f4"
     ),
-    "try_recv_if_at_checked": (
-        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
-    ),
+    # TODO: Approve the complete classified selector only after both ordinary
+    # and timeout-episode barrier mutations pass.
+    "try_recv_if_at_checked_classified": "PENDING_BEHAVIOR_VALIDATION",
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
     ),
@@ -1781,7 +2088,8 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544",
+    # TODO: Approve after the three-mode timeout-episode runner mutations pass.
+    "run_inner": "PENDING_BEHAVIOR_VALIDATION",
     "advance_executor": "ce2f1975fd47aac0b33326547595f05779ab0a920e5996499bf450330c457f93",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
@@ -2105,12 +2413,9 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 }
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
-    "run_inner": (
-        "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
-    ),
-    "drain_v2_ingress": (
-        "272a78c4508606ba867590b62f91abe66df76dd08cdaf69874d54adc43727e96"
-    ),
+    # TODO: Approve these separately after the three-mode drain mutations pass.
+    "run_inner": "PENDING_BEHAVIOR_VALIDATION",
+    "drain_v2_ingress": "PENDING_BEHAVIOR_VALIDATION",
     "dispatch_lane_work_effects": (
         "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c"
     ),
@@ -2229,9 +2534,9 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
     "runtime::has_certified_fence_escape_credit": (
         "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
-    "runner::run_inner": (
-        "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
-    ),
+    # TODO: Approve after Spent certificate credit is shown not to suppress the
+    # independent TimeoutVote producer episode.
+    "runner::run_inner": "PENDING_BEHAVIOR_VALIDATION",
     "test::retained_response_certificate_escape_is_charged_only_once": (
         "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
     ),
@@ -3006,9 +3311,9 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "try_push_at": (
         "30ae6c2db810338e07a3dc33562d38ecb45ca07df2ecc5780f1baff01b7d4f70"
     ),
-    "try_recv_if_at_checked": (
-        "0cd1c170181644d1e59bd1da4f543cb74b0f7449c953426aeb2def19f172e670"
-    ),
+    # TODO: Approve the complete classified selector after focused barrier
+    # mutations; ordinary wrappers are sealed independently above.
+    "try_recv_if_at_checked_classified": "PENDING_BEHAVIOR_VALIDATION",
 }
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
     "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (

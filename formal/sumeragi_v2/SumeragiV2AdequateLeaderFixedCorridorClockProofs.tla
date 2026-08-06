@@ -856,10 +856,11 @@ AdequateLeaderFixedCandidateRemainingActionCredit(candidate) ==
     + AdequateLeaderFixedCandidateSuccessorTailActionCredit(candidate.kind)
 
 AdequateLeaderFixedCutCumulativeActionTokens(node, cutoffOrdinal) ==
-  {<<candidate, token>>:
-     candidate \in AsyncCausalEpisodeCandidates(node, cutoffOrdinal),
-     token
-       \in 1..AdequateLeaderFixedCandidateRemainingActionCredit(candidate)}
+  UNION
+    {{<<candidate, token>>:
+        token
+          \in 1..AdequateLeaderFixedCandidateRemainingActionCredit(candidate)}:
+       candidate \in AsyncCausalEpisodeCandidates(node, cutoffOrdinal)}
 
 AdequateLeaderFixedCutCumulativeActionDebt(node, cutoffOrdinal) ==
   Cardinality(

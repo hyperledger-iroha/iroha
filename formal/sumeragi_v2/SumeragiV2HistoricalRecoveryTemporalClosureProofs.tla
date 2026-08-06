@@ -973,13 +973,14 @@ BY DEF IndexedHistoricalCertificateCommandFor,
 
 THEOREM IndexedHistoricalCertificateCommandRefinesHistoricalOwner ==
   \A initialContext \in AdmissibleContextRecords,
-     node \in Responsive, qc, candidate:
-    /\ IndexedDecisionWitnessSupportAt(initialContext)
-    /\ IndexedHistoricalCertificateCommandFor(
-         initialContext, node, qc, candidate)
-      => IndexedHistoricalTransport(initialContext)!
-           HistoricalCommitDecisionCandidateOwned(
-             node, candidate.kind)
+     node \in Responsive:
+    \A qc, candidate:
+      /\ IndexedDecisionWitnessSupportAt(initialContext)
+      /\ IndexedHistoricalCertificateCommandFor(
+           initialContext, node, qc, candidate)
+        => IndexedHistoricalTransport(initialContext)!
+             HistoricalCommitDecisionCandidateOwned(
+               node, candidate.kind)
 BY IsaT(300)
    DEF IndexedHistoricalCertificateCommandFor,
        IndexedHistoricalCertificateLineageCandidateFor,
@@ -1197,7 +1198,17 @@ THEOREM IndexedDecisionWitnessBracketPreservesHistoricalCertificateLocalLineage 
          IndexedDecisionWitness(initialContext)!AsyncAllVars)
     => IndexedHistoricalCertificateLocalLineageInvariantAt(
          initialContext)'
-BY IndexedDecisionWitness(initialContext)!
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords
+         PROVE /\ IndexedDecisionWitnessSupportAt(initialContext)
+               /\ IndexedHistoricalTemporalSupportAt(initialContext)
+               /\ IndexedHistoricalCertificateLocalLineageInvariantAt(
+                    initialContext)
+               /\ [IndexedDecisionWitness(initialContext)!AsyncNext]_(
+                    IndexedDecisionWitness(initialContext)!AsyncAllVars)
+               => IndexedHistoricalCertificateLocalLineageInvariantAt(
+                    initialContext)'
+    BY IndexedDecisionWitness(initialContext)!
      DirectCommitQcCandidateHasExactImportLineage,
    IndexedDecisionWitness(initialContext)!
      CommitCertificateResponseCandidateHasExactImportLineage,
@@ -1315,6 +1326,7 @@ BY IndexedDecisionWitness(initialContext)!
        IndexedAsync!QcEnvelope,
        IndexedAsync!DiscoveredCommitQcItem,
        IndexedCore, IndexedScheduler, IndexedProducer
+  <1> QED BY <1>1
 
 THEOREM IndexedBracketStepPreservesHistoricalCertificateLocalLineage ==
   /\ IndexedDecisionWitnessSupport
@@ -1777,7 +1789,6 @@ PROOF
                  IndexedHistoricalTransport!
                    AsyncResponsiveAppliedArchiveServers,
                  IndexedAsync!AsyncResponsiveAppliedArchiveServers,
-                 IndexedHistoricalTransport!asyncActiveRequests,
                  IndexedScheduler
         <4>7. \/ IndexedHistoricalCertificateGoal(
                        initialContext, node)
@@ -1816,7 +1827,7 @@ PROOF
                    initialContext, node, 4)
       <3>1. [](IndexedHistoricalCertificateStageAt(
                   initialContext, node, 4)
-                => /\ IndexedHistoricalTransport(initialContext)!gst
+                => /\ IndexedCore(initialContext, 7)
                    /\ IndexedHistoricalTransport(initialContext)!
                         HistoricalRecoveryTarget(node))
         BY <2>2, Isa, PTL
@@ -1831,7 +1842,7 @@ PROOF
                IndexedHistoricalTransport!
                  AsyncHistoricalRecoveryTypeInvariant,
                IndexedHistoricalTransport!HistoricalRecoveryTarget
-      <3>2. (IndexedHistoricalTransport(initialContext)!gst
+      <3>2. (IndexedCore(initialContext, 7)
                 /\ IndexedHistoricalTransport(initialContext)!
                      HistoricalRecoveryTarget(node))
                ~>
@@ -2166,12 +2177,13 @@ PROOF
 
 THEOREM IndexedExactRecoveryStageProjectsHistoricalDecisionStageGoal ==
   \A initialContext \in AdmissibleContextRecords,
-     node \in Responsive, qc:
-    /\ IndexedHistoricalDecisionOwned(initialContext, node)
-    /\ IndexedHistoricalDecisionRecord(initialContext, node, qc)
-    /\ IndexedDecisionWitness(initialContext)!
-         DecisionRecoveryStageExact(node, qc)
-    => IndexedHistoricalDecisionStageGoal(initialContext, node)
+     node \in Responsive:
+    \A qc:
+      /\ IndexedHistoricalDecisionOwned(initialContext, node)
+      /\ IndexedHistoricalDecisionRecord(initialContext, node, qc)
+      /\ IndexedDecisionWitness(initialContext)!
+           DecisionRecoveryStageExact(node, qc)
+      => IndexedHistoricalDecisionStageGoal(initialContext, node)
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW node \in Responsive,
@@ -2443,25 +2455,43 @@ THEOREM IndexedHistoricalDecisionOrdinaryOwnerPersistsOrGoals ==
        => \/ owner'
           \/ IndexedHistoricalDecisionOrdinaryRankGoal(
                initialContext, node, rank)'
-BY IndexedHistoricalTransport(initialContext)!
-     HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff,
-   JoinedNonCurrentHasApplicationEvidence, IsaT(1800)
-   DEF IndexedHistoricalDecisionOrdinaryRankGoal,
-       IndexedHistoricalDecisionStageAt,
-       IndexedHistoricalDecisionRecord,
-       IndexedHistoricalDecisionOwned,
-       IndexedHistoricalRecoveryRunnerOwned,
-       IndexedHistoricalExactApplication,
-       IndexedNodeCurrentAt,
-       IndexedDecisionWitnessSupportAt,
-       IndexedCompositionInvariant,
-       IndexedResponsiveRecoveryDormant,
-       IndexedCore, IndexedScheduler, IndexedRecovery,
-       IndexedAsync!AsyncCurrentResponsiveVoters,
-       IndexedAsync!NodeHasApplication,
-       IndexedHistoricalTransport!AsyncCurrentResponsiveVoters,
-       IndexedHistoricalTransport!NodeHasApplication,
-       IndexedChainVars
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
+                NEW node \in Responsive,
+                NEW rank \in 1..6
+         PROVE LET owner ==
+                     /\ node \in IndexedAsync(initialContext)!
+                                  AsyncCurrentResponsiveVoters
+                     /\ IndexedHistoricalDecisionStageAt(
+                          initialContext, node, rank)
+               IN /\ IndexedCompositionInvariant
+                  /\ IndexedDecisionWitnessSupportAt(initialContext)
+                  /\ IndexedResponsiveRecoveryDormant
+                  /\ owner
+                  /\ [IndexedChainNext]_IndexedChainVars
+                  => \/ owner'
+                     \/ IndexedHistoricalDecisionOrdinaryRankGoal(
+                          initialContext, node, rank)'
+    BY IndexedHistoricalTransport(initialContext)!
+         HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff,
+       JoinedNonCurrentHasApplicationEvidence, IsaT(1800)
+       DEF IndexedHistoricalDecisionOrdinaryRankGoal,
+           IndexedHistoricalDecisionStageAt,
+           IndexedHistoricalDecisionRecord,
+           IndexedHistoricalDecisionOwned,
+           IndexedHistoricalRecoveryRunnerOwned,
+           IndexedHistoricalExactApplication,
+           IndexedNodeCurrentAt,
+           IndexedDecisionWitnessSupportAt,
+           IndexedCompositionInvariant,
+           IndexedResponsiveRecoveryDormant,
+           IndexedCore, IndexedScheduler, IndexedRecovery,
+           IndexedAsync!AsyncCurrentResponsiveVoters,
+           IndexedAsync!NodeHasApplication,
+           IndexedHistoricalTransport!AsyncCurrentResponsiveVoters,
+           IndexedHistoricalTransport!NodeHasApplication,
+           IndexedChainVars
+  <1> QED BY <1>1
 
 THEOREM IndexedHistoricalDecisionOwnerClassesCloseRankProgress ==
   /\ IndexedHistoricalDecisionOrdinaryOwnerRankProgressProperty
@@ -2821,15 +2851,16 @@ IndexedHistoricalCertificateCandidateEntryGoal(initialContext, node) ==
 
 THEOREM IndexedHistoricalCertificateReceivedQcLineageExposesCandidateEntry ==
   \A initialContext \in AdmissibleContextRecords,
-     node \in Responsive, qc:
-    /\ IndexedHistoricalCertificateStageAt(initialContext, node, 1)
-    /\ IndexedDecisionWitnessSupportAt(initialContext)
-    /\ IndexedHistoricalCertificateReceivedQcLineageInvariantAt(
-         initialContext)
-    /\ IndexedHistoricalCertificateReceivedQcLineageSource(
-         initialContext, node, qc)
-    => IndexedHistoricalCertificateCandidateEntryGoal(
-         initialContext, node)
+     node \in Responsive:
+    \A qc:
+      /\ IndexedHistoricalCertificateStageAt(initialContext, node, 1)
+      /\ IndexedDecisionWitnessSupportAt(initialContext)
+      /\ IndexedHistoricalCertificateReceivedQcLineageInvariantAt(
+           initialContext)
+      /\ IndexedHistoricalCertificateReceivedQcLineageSource(
+           initialContext, node, qc)
+      => IndexedHistoricalCertificateCandidateEntryGoal(
+           initialContext, node)
 BY IndexedHistoricalCertificateCommandRefinesHistoricalOwner,
    IsaT(600)
    DEF IndexedHistoricalCertificateReceivedQcLineageInvariantAt,
@@ -2850,15 +2881,16 @@ BY IndexedHistoricalCertificateCommandRefinesHistoricalOwner,
 
 THEOREM IndexedHistoricalCertificateDecisionWalLineageExposesCandidateEntry ==
   \A initialContext \in AdmissibleContextRecords,
-     node \in Responsive, qc:
-    /\ IndexedHistoricalCertificateStageAt(initialContext, node, 1)
-    /\ IndexedDecisionWitnessSupportAt(initialContext)
-    /\ IndexedHistoricalCertificateDecisionWalLineageInvariantAt(
-         initialContext)
-    /\ IndexedHistoricalCertificateDecisionWalLineageSource(
-         initialContext, node, qc)
-    => IndexedHistoricalCertificateCandidateEntryGoal(
-         initialContext, node)
+     node \in Responsive:
+    \A qc:
+      /\ IndexedHistoricalCertificateStageAt(initialContext, node, 1)
+      /\ IndexedDecisionWitnessSupportAt(initialContext)
+      /\ IndexedHistoricalCertificateDecisionWalLineageInvariantAt(
+           initialContext)
+      /\ IndexedHistoricalCertificateDecisionWalLineageSource(
+           initialContext, node, qc)
+      => IndexedHistoricalCertificateCandidateEntryGoal(
+           initialContext, node)
 BY IndexedHistoricalCertificateCommandRefinesHistoricalOwner,
    IsaT(600)
    DEF IndexedHistoricalCertificateDecisionWalLineageInvariantAt,
@@ -2879,13 +2911,14 @@ BY IndexedHistoricalCertificateCommandRefinesHistoricalOwner,
 
 THEOREM IndexedHistoricalCertificateExactCommandExposesCandidateEntry ==
   \A initialContext \in AdmissibleContextRecords,
-     node \in Responsive, qc, candidate:
-    /\ IndexedHistoricalCertificateStageAt(initialContext, node, 1)
-    /\ IndexedDecisionWitnessSupportAt(initialContext)
-    /\ IndexedHistoricalCertificateCommandFor(
-         initialContext, node, qc, candidate)
-    => IndexedHistoricalCertificateCandidateEntryGoal(
-         initialContext, node)
+     node \in Responsive:
+    \A qc, candidate:
+      /\ IndexedHistoricalCertificateStageAt(initialContext, node, 1)
+      /\ IndexedDecisionWitnessSupportAt(initialContext)
+      /\ IndexedHistoricalCertificateCommandFor(
+           initialContext, node, qc, candidate)
+      => IndexedHistoricalCertificateCandidateEntryGoal(
+           initialContext, node)
 BY IndexedHistoricalCertificateCommandRefinesHistoricalOwner
    DEF IndexedHistoricalCertificateCandidateEntryGoal,
        IndexedHistoricalCertificateCandidateTailAt
@@ -3031,7 +3064,7 @@ PROOF
            DEF IndexedDecisionWitnessSupport,
                IndexedHistoricalCertificateExactCommandLocalImportAt
       <3> QED BY <3>1, PTL
-    <2> QED BY <2>1
+    <2> QED BY <2>2
   <1> QED BY <1>1
 
 THEOREM IndexedChainSpecClosesHistoricalCertificateReceivedQcLocalImportEntry ==
@@ -3887,7 +3920,7 @@ IndexedAdequateLeaderLocalFairBehaviorAt(initialContext) ==
   /\ [][IndexedAdequateLeaderWitness(initialContext)!AsyncNext]_(
        IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)
   /\ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
-       IndexedAdequateLeaderWitness(initialContext)!gst
+       IndexedCore(initialContext, 7)
          /\ IndexedAdequateLeaderWitness(initialContext)!AsyncTick)
   /\ \A node \in IndexedAdequateLeaderWitness(initialContext)!
                    AsyncVotersAt(initialContext):
@@ -4043,7 +4076,7 @@ PROOF
                 /\ IndexedAdequateLeaderWitness(initialContext)!
                      AdequateLeaderLocalTargetDecisionSource(target)
          PROVE IndexedAllResponsiveJoined(initialContext)
-    <2>1. IndexedAsync(initialContext)!gst
+    <2>1. IndexedCore(initialContext, 7)
       BY <1>1, Isa
          DEF IndexedAdequateLeaderWitness!
                AdequateLeaderLocalTargetDecisionSource
@@ -4670,8 +4703,8 @@ PROOF
                /\ IndexedResponsiveActiveRosterAt(initialContext)
                  ~> IndexedHistoricalRecoveryTypedArchiveAuthority(
                       initialContext)
-    <2>0. LET server ==
-                 IndexedHistoricalRecoveryArchiveOwner(initialContext)
+    <2> DEFINE server ==
+          IndexedHistoricalRecoveryArchiveOwner(initialContext)
     <2>1. server \in IndexedAsync(initialContext)!
                     AsyncVotersAt(initialContext)
       BY <1>1, IndexedHistoricalRecoveryArchiveOwnerIsFrozenResponsiveVoter
@@ -4921,6 +4954,65 @@ BY IsaT(480)
        AdmissibleContextRecords, FrozenContextAdmissible,
        ContextRecords, Heights, ModelConfiguration, ValidatorIds
 
+THEOREM IndexedHistoricalAuthorityResidualPersistsOrEnters ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    /\ IndexedCompositionInvariant
+    /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+         initialContext, node)
+    /\ [IndexedChainNext]_IndexedChainVars
+    => \/ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+             initialContext, node)'
+       \/ IndexedHistoricalRecoveryEntryGoal(initialContext, node)'
+BY IndexedStepPreservesCompositionInvariant,
+   IndexedBracketStepKeepsNodeHeightsMonotone,
+   IndexedNodeJoinIsStable, Isa
+   DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidual,
+       IndexedHistoricalRecoveryEntryGoal,
+       IndexedHistoricalRecoveryOpenable,
+       IndexedHistoricalExactApplication,
+       IndexedHistoricalDecisionOwned,
+       IndexedHistoricalRecoveryRunnerOwned,
+       IndexedHistoricalRecoveryTargetOwned,
+       IndexedHistoricalRecoveryTargetReady,
+       IndexedHistoricalRecoverySourceReady,
+       HistoricalRecoveryOutstanding,
+       ExactNodeLocationAt,
+       IndexedCurrentDecisions, IndexedCurrentApplications,
+       IndexedDecisionEvidence, IndexedApplicationEvidence,
+       IndexedCompositionInvariant,
+       IndexedEveryInstanceStrongInvariant,
+       IndexedTotalReceiptProjection,
+       IndexedDecisionReceiptProjection,
+       IndexedApplicationReceiptProjection,
+       IndexedChainNext, IndexedChainVars,
+       IndexedProductActionAt, IndexedReceiptClassification,
+       IndexedReceiptFreeChainStutter,
+       IndexedDecisionReceiptHandoff,
+       IndexedApplicationReceiptHandoff,
+       NewIndexedDecisionReceipt, NewIndexedApplicationReceipt,
+       NoNewIndexedDurableReceipt,
+       IndexedAsync!StrongInductiveInvariant,
+       IndexedAsync!Safety, IndexedAsync!TypeInvariant,
+       IndexedAsync!AsyncHistoricalRecoveryTypeInvariant,
+       IndexedAsync!NodeHasDecision,
+       IndexedAsync!NodeHasApplication,
+       IndexedAsync!HistoricalRecoveryTarget,
+       IndexedAsync!AsyncCurrentResponsiveVoters,
+       IndexedAsync!BodyHeldBy,
+       IndexedAsync!AsyncNext,
+       IndexedAsync!AsyncNonCrashStep,
+       IndexedAsync!AsyncSetGST,
+       IndexedAsync!PreGstCrash,
+       IndexedAsync!PreGstResponsiveCrash,
+       IndexedAsync!PreGstResponsiveRestart,
+       IndexedAsync!PreGstResponsiveReplay,
+       IndexedAsync!Crash,
+       IndexedAsync!Restart,
+       IndexedAsync!ApplyDecision,
+       Chain!RecordCertifiedNext, Chain!RecordKnownDecision,
+       Chain!RecordAppliedNext, Chain!RecordKnownApplication
+
 THEOREM IndexedLiveChainSpecClosesActivatedArchiveProducerResidual ==
   /\ IndexedLiveChainSpec
   /\ IndexedLocalAdequateLeaderDecisionConvergenceProperty
@@ -5071,65 +5163,6 @@ IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext) ==
              IndexedAncestorContext(targetContext, blockHeight), node)
              ~> IndexedHistoricalRecoveryEntryGoal(
                   IndexedAncestorContext(targetContext, blockHeight), node)
-
-THEOREM IndexedHistoricalAuthorityResidualPersistsOrEnters ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in Responsive:
-    /\ IndexedCompositionInvariant
-    /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
-         initialContext, node)
-    /\ [IndexedChainNext]_IndexedChainVars
-    => \/ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
-             initialContext, node)'
-       \/ IndexedHistoricalRecoveryEntryGoal(initialContext, node)'
-BY IndexedStepPreservesCompositionInvariant,
-   IndexedBracketStepKeepsNodeHeightsMonotone,
-   IndexedNodeJoinIsStable, Isa
-   DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidual,
-       IndexedHistoricalRecoveryEntryGoal,
-       IndexedHistoricalRecoveryOpenable,
-       IndexedHistoricalExactApplication,
-       IndexedHistoricalDecisionOwned,
-       IndexedHistoricalRecoveryRunnerOwned,
-       IndexedHistoricalRecoveryTargetOwned,
-       IndexedHistoricalRecoveryTargetReady,
-       IndexedHistoricalRecoverySourceReady,
-       HistoricalRecoveryOutstanding,
-       ExactNodeLocationAt,
-       IndexedCurrentDecisions, IndexedCurrentApplications,
-       IndexedDecisionEvidence, IndexedApplicationEvidence,
-       IndexedCompositionInvariant,
-       IndexedEveryInstanceStrongInvariant,
-       IndexedTotalReceiptProjection,
-       IndexedDecisionReceiptProjection,
-       IndexedApplicationReceiptProjection,
-       IndexedChainNext, IndexedChainVars,
-       IndexedProductActionAt, IndexedReceiptClassification,
-       IndexedReceiptFreeChainStutter,
-       IndexedDecisionReceiptHandoff,
-       IndexedApplicationReceiptHandoff,
-       NewIndexedDecisionReceipt, NewIndexedApplicationReceipt,
-       NoNewIndexedDurableReceipt,
-       IndexedAsync!StrongInductiveInvariant,
-       IndexedAsync!Safety, IndexedAsync!TypeInvariant,
-       IndexedAsync!AsyncHistoricalRecoveryTypeInvariant,
-       IndexedAsync!NodeHasDecision,
-       IndexedAsync!NodeHasApplication,
-       IndexedAsync!HistoricalRecoveryTarget,
-       IndexedAsync!AsyncCurrentResponsiveVoters,
-       IndexedAsync!BodyHeldBy,
-       IndexedAsync!AsyncNext,
-       IndexedAsync!AsyncNonCrashStep,
-       IndexedAsync!AsyncSetGST,
-       IndexedAsync!PreGstCrash,
-       IndexedAsync!PreGstResponsiveCrash,
-       IndexedAsync!PreGstResponsiveRestart,
-       IndexedAsync!PreGstResponsiveReplay,
-       IndexedAsync!Crash,
-       IndexedAsync!Restart,
-       IndexedAsync!ApplyDecision,
-       Chain!RecordCertifiedNext, Chain!RecordKnownDecision,
-       Chain!RecordAppliedNext, Chain!RecordKnownApplication
 
 THEOREM IndexedHistoricalServiceKernelsDischargeEntryCompletion ==
   /\ IndexedChainSpec
@@ -5352,12 +5385,12 @@ PROOF
        DEF IndexedHistoricalRecoveryEntryCompletionAt
 
 THEOREM IndexedHistoricalLowerAuthorityProgressGivesStrictAncestorAdvance ==
-  /\ targetContext \in AdmissibleContextRecords
-  /\ IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext)
-  /\ IndexedHistoricalRecoveryEntryCompletionBelow(targetContext)
-  => IndexedStrictAncestorRecoveryAdvance(targetContext)
+  \A targetContext \in AdmissibleContextRecords:
+    /\ IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext)
+    /\ IndexedHistoricalRecoveryEntryCompletionBelow(targetContext)
+    => IndexedStrictAncestorRecoveryAdvance(targetContext)
 PROOF
-  <1>1. ASSUME targetContext \in AdmissibleContextRecords,
+  <1>1. ASSUME NEW targetContext \in AdmissibleContextRecords,
               IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext),
               IndexedHistoricalRecoveryEntryCompletionBelow(targetContext),
               NEW blockHeight \in 0..targetContext.height,
@@ -5565,14 +5598,14 @@ PROOF
               NEW rank \in 1..6
          PROVE IndexedHistoricalDecisionOrdinaryOwnerRankProgressAt(
                  initialContext, node, rank)
-    <2>0. LET owner ==
-                 /\ node \in IndexedAsync(initialContext)!
-                              AsyncCurrentResponsiveVoters
-                 /\ IndexedHistoricalDecisionStageAt(
-                      initialContext, node, rank)
-               goal ==
-                 IndexedHistoricalDecisionOrdinaryRankGoal(
-                   initialContext, node, rank)
+    <2> DEFINE owner ==
+          /\ node \in IndexedAsync(initialContext)!
+                       AsyncCurrentResponsiveVoters
+          /\ IndexedHistoricalDecisionStageAt(
+               initialContext, node, rank)
+    <2> DEFINE goal ==
+          IndexedHistoricalDecisionOrdinaryRankGoal(
+            initialContext, node, rank)
     <2>1. []IndexedCompositionInvariant
       BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
     <2>2. []IndexedDecisionWitnessSupport

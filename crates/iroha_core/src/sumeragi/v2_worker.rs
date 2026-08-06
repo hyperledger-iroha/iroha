@@ -18596,10 +18596,10 @@ pub(super) mod tests {
 
     use super::*;
     use crate::sumeragi::{
-        FairV2Ingress, FairV2IngressClass, FairV2IngressPushDisposition, FairV2IngressPushError,
-        FairV2IngressSource, FairV2IngressWireKey, InboundBlockMessage,
-        fair_v2_ingress_admit_with_roster_for_test, fair_v2_ingress_is_certified_body_request,
-        fair_v2_ingress_required_capacity,
+        FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressClass,
+        FairV2IngressPushDisposition, FairV2IngressPushError, FairV2IngressSource,
+        FairV2IngressWireKey, InboundBlockMessage, fair_v2_ingress_admit_with_roster_for_test,
+        fair_v2_ingress_is_certified_body_request, fair_v2_ingress_required_capacity,
         v2::AdapterEffect,
         v2_block_sync::tests::durable_history_fixture,
         v2_body_store::DurableBodyReceipt,
@@ -26297,6 +26297,221 @@ pub(super) mod tests {
                 "case={case}"
             );
         }
+    }
+
+    #[test]
+    fn timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier() {
+        let (service, keys) = fixture_with_block_payload();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let serve_via = service.context.roster[0].validator.clone();
+        let timeout_messages = [2_u32, 3_u32].map(|signer| {
+            let source = service.context.roster
+                [usize::try_from(signer).expect("small timeout signer index")]
+            .validator
+            .clone();
+            let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                    round: proposal.round,
+                    highest_prepare_qc: None,
+                    signer,
+                    signature: vec![
+                        0x7A_u8
+                            .checked_add(u8::try_from(signer).expect("small signer marker"))
+                            .expect("small signer marker does not overflow");
+                        48
+                    ],
+                }),
+            ));
+            (message, source)
+        });
+
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
+        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            128,
+            512 * 1024 * 1024,
+            64 * 1024 * 1024,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
+        );
+        let roster = service
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        ingress
+            .configure_roster_for_context(
+                roster.iter().cloned(),
+                &service.context.chain_id,
+                service.context.da_layout,
+            )
+            .expect("configure the production-shaped timeout/Serve ingress");
+        ingress.require_certified_serve_gate();
+        ingress.require_leader_wire_lifecycle_gate();
+
+        let directory = TempDir::new().expect("temporary timeout/Serve ingress gate");
+        let owner = [0xAC; 32];
+        let capacity =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                service.context.da_layout.max_chunk_count,
+            )
+            .expect("derive finite timeout/Serve lifecycle capacity");
+        let recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            service.context.id(),
+            service.context.height,
+            owner,
+            0,
+            false,
+        );
+        let (leader_gate, restore) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &directory.path().join("timeout-vote-serve-bypass.wal"),
+                service.context.id(),
+                service.context.height,
+                owner,
+                roster,
+                capacity,
+                service.context.da_layout.max_chunk_count,
+                recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("open the timeout/Serve leader lifecycle gate");
+        let serve_gate = CertifiedServeIngressGate {
+            queue: Arc::clone(&command_tx.queue),
+        };
+        ingress
+            .bind_certified_serve_gate(serve_gate.clone())
+            .expect("bind the exact Serve ingress gate");
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                Arc::clone(&leader_gate),
+                restore,
+                command_tx.queue.lifecycle_ordinals.clone(),
+                service.context.id(),
+                service.context.height,
+            )
+            .expect("bind the timeout-vote lifecycle to the shared ordinal source");
+        ingress.open().expect("open the timeout/Serve ingress");
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), serve_via,)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        for (message, source) in timeout_messages {
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::new(message, Some(source))),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+        }
+        let serve_barrier = serve_gate
+            .selected_barrier()
+            .expect("inspect the selected Serve barrier")
+            .expect("the exact request owns one selected Serve turn");
+        assert_eq!(serve_barrier.carrier_ordinal(), 1);
+        assert_eq!(serve_barrier.scheduler_ordinal(), 1);
+        assert_eq!(
+            leader_gate
+                .earliest_ingress_scheduler_ordinal()
+                .expect("inspect the queued TimeoutVote owner"),
+            Some(2)
+        );
+
+        assert!(
+            ingress
+                .try_recv_if_checked_retiring_obsolete(|inbound| {
+                    matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                            ..
+                        })
+                    )
+                })
+                .expect("ordinary selection preserves the selected Serve barrier")
+                .is_none(),
+            "ordinary ingress cannot move a later TimeoutVote ahead of Serve"
+        );
+        assert!(
+            ingress
+                .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
+                    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
+                    |_| false,
+                )
+                .expect("the bypass pass still executes its downstream predicate")
+                .is_none(),
+            "the internal bypass never admits a TimeoutVote by itself"
+        );
+        let mut selected_slots = BTreeSet::new();
+        for expected_scheduler_ordinal in [2_u128, 3_u128] {
+            let (mut timeout_vote, disposition) = ingress
+                .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
+                    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
+                    |inbound| {
+                        matches!(
+                            inbound.message(),
+                            BlockMessage::V2(wire::ConsensusMessageV2 {
+                                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                                ..
+                            })
+                        )
+                    },
+                )
+                .expect("each timeout episode turn preserves both durable gates")
+                .expect("each exact TimeoutVote reaches the authoritative predicate");
+            assert_eq!(
+                disposition,
+                super::super::FairV2IngressDequeueDisposition::Admit
+            );
+            let ownership = timeout_vote
+                .take_ingress_ownership()
+                .expect("the selected TimeoutVote retains exact ownership");
+            assert!(ownership.validate_exact());
+            let token = ownership
+                .leader_wire_token()
+                .expect("the selected TimeoutVote retains its productive token");
+            assert_eq!(token.scheduler_ordinal(), expected_scheduler_ordinal);
+            assert!(
+                selected_slots.insert(token.slot.clone()),
+                "each roster signer owns a distinct timeout episode slot"
+            );
+            assert!(ownership.leader_wire_runtime_receipt().is_some());
+            assert_eq!(
+                serve_gate
+                    .selected_barrier()
+                    .expect("inspect the retained Serve barrier")
+                    .map(|barrier| barrier.carrier_ordinal()),
+                Some(1),
+                "each timeout turn leaves the older Serve carrier selected"
+            );
+        }
+        assert_eq!(selected_slots.len(), 2);
+        assert_eq!(
+            ingress.len(),
+            1,
+            "both timeout slots drain while the selected Serve carrier remains queued"
+        );
+        assert_eq!(
+            serve_gate
+                .selected_barrier()
+                .expect("inspect the retained Serve barrier")
+                .map(|barrier| barrier.carrier_ordinal()),
+            Some(1)
+        );
     }
 
     #[test]

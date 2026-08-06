@@ -3323,6 +3323,39 @@ fn fair_v2_ingress_is_timeout_vote(inbound: &InboundBlockMessage) -> bool {
     fair_v2_ingress_message_is_timeout_vote(inbound.message())
 }
 
+/// Whether one queued occurrence is the exact pre-runtime TimeoutVote owner
+/// delivered directly by its authenticated validator source.
+///
+/// This is only a selector prerequisite. The serialized runtime still checks
+/// the current episode, signer index, signature, frozen roster slot, and
+/// ordinary Progress capacity before the occurrence can leave fair ingress.
+fn fair_v2_ingress_is_direct_validator_timeout_vote_owner(
+    source: &FairV2IngressSource,
+    entry: &FairV2IngressEntry,
+) -> bool {
+    let FairV2IngressSource::Validator(authenticated_source) = source else {
+        return false;
+    };
+    let Some(token) = entry.leader_wire_token.as_ref() else {
+        return false;
+    };
+    let Some(ownership) = entry.inbound.ingress_ownership() else {
+        return false;
+    };
+    fair_v2_ingress_is_timeout_vote(&entry.inbound)
+        && entry.inbound.sender() == Some(authenticated_source)
+        && entry.inbound.via() == Some(authenticated_source)
+        && token.identity.phase == FairV2IngressLeaderWirePhase::TimeoutVote
+        && token.source_class == FairV2IngressLeaderWireSourceClass::Control
+        && token.identity.semantic_origin == *authenticated_source
+        && token.slot.semantic_origin == *authenticated_source
+        && ownership.validate_exact()
+        && ownership.leader_wire_token() == Some(token)
+        && ownership.leader_wire_runtime_receipt().is_none()
+        && ownership.runtime_physical_cut().is_none()
+        && ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)
+}
+
 fn fair_v2_ingress_message_is_timeout_vote(message: &BlockMessage) -> bool {
     matches!(
         message,
@@ -3984,6 +4017,23 @@ pub(crate) enum FairV2IngressDequeueDisposition {
     /// The monotone safety-WAL recovery cut permanently obsoleted the exact
     /// productive wire, so capacity cannot make it relevant again.
     RetireObsolete,
+}
+
+/// Closed internal policy for crossing a durable physical ingress barrier.
+///
+/// The ordinary selector preserves every barrier. The timeout-vote episode
+/// variant exposes only a directly authenticated validator's exact productive
+/// TimeoutVote to the downstream episode predicate while a selected Serve
+/// occurrence or one bounded certified-response carrier owns the shared
+/// physical turn. Response authority is acquired only after dequeue, so the
+/// phase check deliberately does not assume a claim which cannot exist yet.
+/// It neither borrows certified capacity nor admits the vote by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FairV2IngressBarrierBypass {
+    /// Preserve every durable ingress barrier.
+    None,
+    /// Let the finite current-view TimeoutVote episode reach its predicate.
+    TimeoutVoteEpisode,
 }
 
 /// Fixed-capacity, roster-aware v2 ingress with per-hop admission and service fairness.
@@ -6447,18 +6497,34 @@ impl FairV2Ingress {
         self.try_recv_if_at_checked(Instant::now(), predicate)
     }
 
-    /// Checked production dequeue which also releases a productive wire made
-    /// permanently obsolete by the monotone safety-WAL recovery cut.
+    /// Test-only ordinary dequeue baseline which also releases a productive
+    /// wire made permanently obsolete by the monotone safety-WAL recovery cut.
     ///
     /// An obsolete carrier still crosses the ordinary durable
     /// `Ingress -> Runtime` handoff. The caller must immediately publish its
     /// `Runtime -> VolatileTerminal` transition instead of sending the payload
     /// to the reducer. Temporary downstream backpressure remains queued.
+    #[cfg(test)]
     pub(crate) fn try_recv_if_checked_retiring_obsolete(
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Result<Option<(InboundBlockMessage, FairV2IngressDequeueDisposition)>, String> {
-        self.try_recv_if_at_checked_classified(Instant::now(), true, predicate)
+        self.try_recv_if_at_checked_classified(
+            Instant::now(),
+            true,
+            FairV2IngressBarrierBypass::None,
+            predicate,
+        )
+    }
+
+    /// Checked production dequeue with one explicitly selected internal
+    /// barrier-bypass policy.
+    pub(crate) fn try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
+        &self,
+        barrier_bypass: FairV2IngressBarrierBypass,
+        predicate: impl FnMut(&InboundBlockMessage) -> bool,
+    ) -> Result<Option<(InboundBlockMessage, FairV2IngressDequeueDisposition)>, String> {
+        self.try_recv_if_at_checked_classified(Instant::now(), true, barrier_bypass, predicate)
     }
 
     #[cfg(test)]
@@ -6477,14 +6543,20 @@ impl FairV2Ingress {
         service_attempt_at: Instant,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Result<Option<InboundBlockMessage>, String> {
-        self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)
-            .map(|selected| selected.map(|(inbound, _)| inbound))
+        self.try_recv_if_at_checked_classified(
+            service_attempt_at,
+            false,
+            FairV2IngressBarrierBypass::None,
+            predicate,
+        )
+        .map(|selected| selected.map(|(inbound, _)| inbound))
     }
 
     fn try_recv_if_at_checked_classified(
         &self,
         service_attempt_at: Instant,
         retire_obsolete_leader_wire: bool,
+        barrier_bypass: FairV2IngressBarrierBypass,
         mut predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Result<Option<(InboundBlockMessage, FairV2IngressDequeueDisposition)>, String> {
         let _service_guard = self.service_lock.lock();
@@ -6819,8 +6891,21 @@ impl FairV2Ingress {
                                         authenticated_certified_fence_escape
                                             && (selected_serve_barrier.is_some()
                                                 || certified_body_request_cutoff.is_some());
+                                    let timeout_vote_episode_dependency =
+                                        barrier_bypass
+                                            == FairV2IngressBarrierBypass::TimeoutVoteEpisode
+                                            && fair_v2_ingress_is_direct_validator_timeout_vote_owner(
+                                                source, entry,
+                                            )
+                                            && (leader_wire_barrier.as_ref().is_some_and(|owner| {
+                                                owner.token.identity.phase
+                                                    == FairV2IngressLeaderWirePhase::CertifiedResponse
+                                            }) || (leader_wire_barrier.is_none()
+                                                && (selected_serve_barrier.is_some()
+                                                    || certified_body_request_cutoff.is_some())));
                                     let dependency_bypass = !ingress_barrier_allows
                                         && (serve_fence_escape_dependency
+                                            || timeout_vote_episode_dependency
                                             || (leader_wire_control_barrier
                                                 && (earlier_dependency
                                                     || selected_serve_control_dependency
@@ -8101,6 +8186,104 @@ struct SumeragiWorker {
 mod authoritative_runtime_gate_tests {
     include!("tests/mod_authoritative_runtime_gate_01_support.rs");
     include!("tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs");
+
+    #[test]
+    fn timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+        let validator = PeerId::new(KeyPair::random().public_key().clone());
+        let response = v2_certified_body_response(0, 0, 1);
+        let round = match &response {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+                ..
+            }) => response.manifest.round,
+            _ => unreachable!("certified response fixture is a v2 envelope"),
+        };
+        let mut timeout = v2_timeout_vote();
+        match &mut timeout {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+                ..
+            }) => vote.round = round,
+            _ => unreachable!("timeout fixture is a v2 envelope"),
+        }
+        let _gate_directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(response, Some(validator.clone()),)),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(timeout, Some(validator))),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        {
+            let state = ingress.state.lock();
+            let earliest = state
+                .leader_wire_lifecycles
+                .values()
+                .filter(|record| record.status == super::FairV2IngressLeaderWireStatus::Ingress)
+                .min_by_key(|record| record.token.scheduler_ordinal)
+                .expect("one leader-wire barrier is active");
+            assert_eq!(
+                earliest.token.identity.phase,
+                super::FairV2IngressLeaderWirePhase::CertifiedResponse
+            );
+        }
+
+        let is_timeout_vote = |inbound: &InboundBlockMessage| {
+            matches!(
+                inbound.message(),
+                BlockMessage::V2(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                    ..
+                })
+            )
+        };
+        assert!(
+            ingress
+                .try_recv_if_checked_retiring_obsolete(is_timeout_vote)
+                .expect("ordinary selection preserves the response barrier")
+                .is_none()
+        );
+        assert!(
+            ingress
+                .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
+                    super::FairV2IngressBarrierBypass::TimeoutVoteEpisode,
+                    |_| false,
+                )
+                .expect("the internal episode policy still needs its runtime predicate")
+                .is_none()
+        );
+        let (mut selected, disposition) = ingress
+            .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
+                super::FairV2IngressBarrierBypass::TimeoutVoteEpisode,
+                is_timeout_vote,
+            )
+            .expect("the response barrier preserves the checked dequeue")
+            .expect("the exact timeout vote reaches its episode predicate");
+        assert_eq!(disposition, super::FairV2IngressDequeueDisposition::Admit);
+        assert!(is_timeout_vote(&selected));
+        let ownership = selected
+            .take_ingress_ownership()
+            .expect("the selected timeout vote retains exact ingress ownership");
+        assert!(ownership.validate_exact());
+        assert!(ownership.leader_wire_runtime_receipt().is_some());
+        assert_eq!(ingress.len(), 1, "the certified response stays retained");
+        assert!(
+            ingress
+                .state
+                .lock()
+                .leader_wire_lifecycles
+                .values()
+                .any(|record| {
+                    record.status == super::FairV2IngressLeaderWireStatus::Ingress
+                        && record.token.identity.phase
+                            == super::FairV2IngressLeaderWirePhase::CertifiedResponse
+                })
+        );
+    }
+
     #[test]
     fn restored_productive_retry_stays_behind_an_earlier_certified_request_carrier() {
         let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);

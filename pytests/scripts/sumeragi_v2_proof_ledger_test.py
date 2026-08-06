@@ -392,6 +392,105 @@ def copy_serviced_candidate_production_fixture(tmp_path: Path) -> None:
         shutil.copy2(ROOT_DIR / relative, destination)
 
 
+def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
+    """Copy only the Rust and TLA+ sources bound by the timeout episode."""
+
+    for relative in (
+        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("formal/sumeragi_v2/SumeragiV2AsyncNetwork.tla"),
+        Path(
+            "formal/sumeragi_v2/"
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
+        ),
+        Path(
+            "formal/sumeragi_v2/"
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla"
+        ),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(module.ROOT_DIR / relative, destination)
+    return tmp_path / "formal" / "sumeragi_v2"
+
+
+def approve_timeout_vote_episode_fixture_seals(
+    module, repo_root: Path, formal_dir: Path
+) -> None:
+    """Bind test-local seals so mutations must fail their semantic contracts."""
+
+    role_paths = {
+        "ingress": repo_root / "crates/iroha_core/src/sumeragi/mod.rs",
+        "runner": repo_root / "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "runtime": repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+    }
+    for key in module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256:
+        role, qualified_name = key.split("::", 1)
+        item_name = qualified_name.rsplit("::", 1)[-1]
+        source = role_paths[role].read_text(encoding="utf-8")
+        items = module.rust_items(source, item_name)
+        assert len(items) == 1, key
+        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[key] = (
+            module._rust_item_token_sha256(items[0])
+        )
+
+    regression_groups = (
+        (
+            module._TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256,
+            role_paths["runtime"],
+        ),
+        (
+            module._TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256,
+            role_paths["ingress"],
+        ),
+        (
+            module._TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256,
+            repo_root / "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        ),
+    )
+    for seals, path in regression_groups:
+        source = path.read_text(encoding="utf-8")
+        for name in seals:
+            items = module.rust_items(source, name)
+            assert len(items) == 1, name
+            seals[name] = module._rust_item_token_sha256(items[0])
+
+    for filename, formal_seals in (
+        module._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256.items()
+    ):
+        formal_path = formal_dir / filename
+        formal_source = formal_path.read_text(encoding="utf-8")
+        for symbol in formal_seals:
+            extracted = module._top_level_operator_body(
+                formal_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            assert extracted is not None, symbol
+            body, _ = extracted
+            formal_seals[symbol] = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+    for filename, theorem_seals in (
+        module._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256.items()
+    ):
+        formal_path = formal_dir / filename
+        formal_source = formal_path.read_text(encoding="utf-8")
+        for symbol in theorem_seals:
+            extracted = module._top_level_theorem_body(
+                formal_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            assert extracted is not None, symbol
+            body, _ = extracted
+            theorem_seals[symbol] = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+
+
 def copy_async_source_fidelity_fixture(
     tmp_path: Path, module, *formal_names: str
 ) -> Path:
@@ -725,6 +824,64 @@ def mutate_tla_theorem(
     position = source.find(old, declaration.end(), theorem_end)
     assert position >= 0, (symbol, old)
     return source[:position] + new + source[position + len(old) :]
+
+
+def wrap_tla_theorem_proof_step(
+    source: str,
+    symbol: str,
+    anchor: str,
+) -> str:
+    """Wrap one anchored structured proof step in an invalid temporal box."""
+
+    declaration = re.search(
+        rf"(?m)^THEOREM\s+{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
+        source,
+    )
+    assert declaration is not None, symbol
+    next_declaration = re.search(
+        r"(?m)^(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|={4,}\s*$)",
+        source[declaration.end() :],
+    )
+    theorem_end = (
+        len(source)
+        if next_declaration is None
+        else declaration.end() + next_declaration.start()
+    )
+    theorem = source[declaration.end() : theorem_end]
+    assert theorem.count(anchor) == 1, (symbol, anchor)
+    anchor_offset = theorem.index(anchor)
+    labels = [
+        match
+        for match in re.finditer(r"(?m)^[ \t]*<\d+>\d+\.[ \t]*", theorem)
+        if match.end() <= anchor_offset
+    ]
+    assert labels, (symbol, anchor)
+    label = labels[-1]
+    proof_marker = re.search(
+        r"(?m)^[ \t]*BY\b",
+        theorem[label.end() :],
+    )
+    assert proof_marker is not None, (symbol, anchor)
+    step_end = label.end() + proof_marker.start()
+    assert anchor_offset < step_end, (symbol, anchor)
+    step = theorem[label.end() : step_end]
+    formula = step.rstrip()
+    trailing = step[len(formula) :]
+    mutated_theorem = (
+        theorem[: label.end()]
+        + "[]("
+        + formula
+        + ")"
+        + trailing
+        + theorem[step_end:]
+    )
+    return (
+        source[: declaration.end()]
+        + mutated_theorem
+        + source[theorem_end:]
+    )
 
 
 def delete_tla_theorem_token(source: str, symbol: str, token: str) -> str:
@@ -10860,7 +11017,6 @@ def copy_quantitative_fixed_corridor_fixture(
     ):
         source_path = (
             ROOT_DIR
-            / "docs"
             / "formal"
             / "sumeragi_v2"
             / f"{module_name}.tla"
@@ -10933,6 +11089,22 @@ def test_quantitative_fixed_corridor_contract_is_static_and_non_vacuous(
             "              + AsyncCausalExactRemainingOccurrenceBudget(\n"
             "                  successors[3].kind)\n",
             "",
+        ),
+        (
+            "SumeragiV2AsyncCausalWorkBudgetProofs",
+            "AsyncCausalEpisodeExactCandidateOccurrenceTokens",
+            "  UNION {\n"
+            "    {<<candidate, token>>:\n"
+            "       token\n"
+            "         \\in 1..AsyncCausalExactRemainingOccurrenceBudget("
+            "candidate.kind)}:\n"
+            "    candidate \\in AsyncCausalEpisodeCandidates("
+            "node, cutoffOrdinal)}\n",
+            "  {<<candidate, token>>:\n"
+            "     candidate \\in AsyncCausalEpisodeCandidates("
+            "node, cutoffOrdinal),\n"
+            "     token \\in 1..AsyncCausalExactRemainingOccurrenceBudget("
+            "candidate.kind)}\n",
         ),
         (
             "SumeragiV2AsyncCausalWorkBudgetProofs",
@@ -11088,6 +11260,22 @@ def test_quantitative_fixed_corridor_contract_is_static_and_non_vacuous(
             "1..AdequateLeaderFixedCandidateRemainingActionCredit(candidate)",
             "1..AdequateLeaderFixedCandidateSuccessorTailActionCredit("
             "candidate.kind)",
+        ),
+        (
+            "SumeragiV2AdequateLeaderFixedCorridorClockProofs",
+            "AdequateLeaderFixedCutCumulativeActionTokens",
+            "  UNION\n"
+            "    {{<<candidate, token>>:\n"
+            "        token\n"
+            "          \\in 1..AdequateLeaderFixedCandidateRemainingActionCredit("
+            "candidate)}:\n"
+            "       candidate \\in AsyncCausalEpisodeCandidates("
+            "node, cutoffOrdinal)}\n",
+            "  {<<candidate, token>>:\n"
+            "     candidate \\in AsyncCausalEpisodeCandidates("
+            "node, cutoffOrdinal),\n"
+            "     token \\in 1..AdequateLeaderFixedCandidateRemainingActionCredit("
+            "candidate)}\n",
         ),
         (
             "SumeragiV2AdequateLeaderFixedCorridorClockProofs",
@@ -11502,6 +11690,15 @@ def test_quantitative_fixed_corridor_interface_mutations_fail_closed(
         ),
         (
             "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
+            "  \\A origin:\n"
+            "    \\A node \\in ValidatorIds, "
+            "cutoffOrdinal \\in Nat \\ {0}:\n",
+            "  \\A node \\in ValidatorIds, origin, "
+            "cutoffOrdinal \\in Nat \\ {0}:\n",
+            "must state only",
+        ),
+        (
+            "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
             "   AsyncSharedSchedulerHighWatermarkIsMonotone,\n",
             "",
             "must retain reviewed proof dependencies",
@@ -11513,10 +11710,28 @@ def test_quantitative_fixed_corridor_interface_mutations_fail_closed(
             "must retain reviewed proof dependencies",
         ),
         (
+            "AsyncCausalEpisodeOwnedLifecycleServeCutCannotReplenish",
+            "  \\A origin:\n"
+            "    \\A node \\in ValidatorIds, "
+            "cutoffOrdinal \\in Nat \\ {0}:\n",
+            "  \\A node \\in ValidatorIds, origin, "
+            "cutoffOrdinal \\in Nat \\ {0}:\n",
+            "must state only",
+        ),
+        (
             "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
             "   AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget,\n",
             "",
             "must retain reviewed proof dependencies",
+        ),
+        (
+            "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
+            "  \\A origin:\n"
+            "    \\A node \\in ValidatorIds,\n"
+            "       cutoffOrdinal \\in Nat \\ {0},\n",
+            "  \\A node \\in ValidatorIds, origin,\n"
+            "     cutoffOrdinal \\in Nat \\ {0},\n",
+            "must state only",
         ),
     ),
 )
@@ -22479,7 +22694,7 @@ def test_async_lifecycle_rejects_independent_service_store_capacity(
             "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
             (
                 "/\\ AsyncFreshServeIngressSchedulerReservationMatchesIn(\n"
-                "               compactedState)"
+                "               leaderWireState)"
             ),
             "/\\ TRUE",
         ),
@@ -22490,6 +22705,30 @@ def test_async_lifecycle_rejects_independent_service_store_capacity(
                 "               serveIngressState)"
             ),
             "AsyncCandidateLifecycleReservationsAvailableIn(compactedState)",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            (
+                "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+                "               ordinaryCarrierState)"
+            ),
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(candidateServiceState)",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            (
+                "/\\ timeoutState.timeoutRecoveryEpisodes =\n"
+                "               resetState.timeoutRecoveryEpisodes"
+            ),
+            "/\\ TRUE",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            (
+                "/\\ asyncControlServiceState'.timeoutRecoveryEpisodes =\n"
+                "               timeoutVoteState.timeoutRecoveryEpisodes"
+            ),
+            "/\\ TRUE",
         ),
         (
             "AsyncIgnoredIngressEpisodeCannotConsumeLifecycleCapacity",
@@ -24277,6 +24516,1703 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
         runtime_path.write_text(canonical, encoding="utf-8")
 
 
+def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The focused contract is source-sealed and owned by the causal gate."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    assert (
+        module._timeout_vote_episode_source_fidelity_errors(
+            tmp_path, formal_dir
+        )
+        == []
+    )
+    assert (
+        "_timeout_vote_episode_source_fidelity_errors"
+        in module._production_causal_fifo_source_fidelity_errors.__code__.co_names
+    )
+
+    class PropagatedTimeoutEpisodeError(RuntimeError):
+        pass
+
+    class ErrorProbe:
+        def __iter__(self):
+            raise PropagatedTimeoutEpisodeError
+
+    monkeypatch.setattr(
+        module,
+        "_runtime_clock_reservation_source_fidelity_errors",
+        lambda _repo_root: [],
+    )
+    monkeypatch.setattr(
+        module,
+        "_timeout_vote_episode_source_fidelity_errors",
+        lambda _repo_root, _formal_dir: ErrorProbe(),
+    )
+    with pytest.raises(PropagatedTimeoutEpisodeError):
+        module._production_causal_fifo_source_fidelity_errors(formal_dir)
+
+
+@pytest.mark.parametrize(
+    ("relative", "item_name", "old", "new", "expected_error"),
+    (
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_checked_retiring_obsolete",
+            "FairV2IngressBarrierBypass::None,",
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
+            "test-only ordinary retirement baseline must pass",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "let FairV2IngressSource::Validator(authenticated_source) = source else {\n"
+            "        return false;\n"
+            "    };",
+            "let authenticated_source = match source {\n"
+            "        FairV2IngressSource::Validator(source)\n"
+            "        | FairV2IngressSource::Authenticated(source) => source,\n"
+            "        FairV2IngressSource::Anonymous => return false,\n"
+            "    };",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "entry.inbound.sender() == Some(authenticated_source)",
+            "entry.inbound.sender().is_some()",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "entry.inbound.via() == Some(authenticated_source)",
+            "entry.inbound.via().is_some()",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "token.identity.semantic_origin == *authenticated_source",
+            "token.identity.semantic_origin == token.slot.semantic_origin",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "token.slot.semantic_origin == *authenticated_source",
+            "token.slot.semantic_origin == token.identity.semantic_origin",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "ownership.leader_wire_runtime_receipt().is_none()",
+            "ownership.leader_wire_runtime_receipt().is_some()",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "ownership.runtime_physical_cut().is_none()",
+            "ownership.runtime_physical_cut().is_some()",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)",
+            "ownership.physical_admission_ordinal() != Some(entry.admission_ordinal)",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "&& ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)",
+            "&& ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)\n"
+            "        || true",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_at_checked_classified",
+            "owner.token.identity.phase\n"
+            "                                                    == FairV2IngressLeaderWirePhase::CertifiedResponse",
+            "owner.token.identity.phase\n"
+            "                                                    == FairV2IngressLeaderWirePhase::TimeoutVote",
+            "limited to a CertifiedResponse leader owner",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_at_checked_classified",
+            "== FairV2IngressLeaderWirePhase::CertifiedResponse\n",
+            "== FairV2IngressLeaderWirePhase::CertifiedResponse\n"
+            "                                                    && CertifiedResponseClaimMatches\n",
+            "may not require a response claim",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_at_checked_classified",
+            "let dependency_bypass = !ingress_barrier_allows",
+            "let dependency_bypass = ingress_barrier_allows",
+            "subordinate to a blocked ordinary barrier",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            "drain_v2_ingress",
+            "V2IngressDrainMode::Ordinary | V2IngressDrainMode::CertifiedFenceEscape => {\n"
+            "                FairV2IngressBarrierBypass::None\n"
+            "            }",
+            "V2IngressDrainMode::Ordinary | V2IngressDrainMode::CertifiedFenceEscape => {\n"
+            "                FairV2IngressBarrierBypass::TimeoutVoteEpisode\n"
+            "            }",
+            "only TimeoutVoteEpisode mode may use",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            "drain_v2_ingress",
+            "V2IngressDrainMode::CertifiedFenceEscape => {\n"
+            "                            network_ingress_is_certified_fence_escape(&message.payload)\n"
+            "                        }\n"
+            "                        V2IngressDrainMode::TimeoutVoteEpisode => {\n"
+            "                            inbound.ingress_ownership().is_some_and(|ownership| {\n"
+            "                                executor.can_admit_timeout_vote_recovery_episode(message, ownership)\n"
+            "                            })\n"
+            "                        }",
+            "V2IngressDrainMode::CertifiedFenceEscape => {\n"
+            "                            inbound.ingress_ownership().is_some_and(|ownership| {\n"
+            "                                executor.can_admit_timeout_vote_recovery_episode(message, ownership)\n"
+            "                            })\n"
+            "                        }\n"
+            "                        V2IngressDrainMode::TimeoutVoteEpisode => {\n"
+            "                            network_ingress_is_certified_fence_escape(&message.payload)\n"
+            "                        }",
+            "pure disjoint drains",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "validate_against",
+            "RuntimeTimeoutVoteEpisodeDisposition::PreCutDescent => {\n"
+            "                    self.token.scheduler_ordinal() < timeout_ordinal\n"
+            "                        && self.token.admission_ordinal() == self.carrier_physical_ordinal\n"
+            "                }",
+            "RuntimeTimeoutVoteEpisodeDisposition::PreCutDescent => {\n"
+            "                    self.token.scheduler_ordinal() < timeout_ordinal\n"
+            "                        && self.token.admission_ordinal() == self.carrier_physical_ordinal\n"
+            "                        && self.carrier_physical_ordinal < physical_cut\n"
+            "                }",
+            "including P at or above the physical cut",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "validate_against",
+            "self.token.scheduler_ordinal() > timeout_ordinal",
+            "self.token.scheduler_ordinal() >= timeout_ordinal",
+            "fresh replenishment must be strictly above",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "same_lifecycle_owner_as",
+            "self.token == other.token",
+            "self.token.slot == other.token.slot",
+            "immutable retained token",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "count_transition",
+            "Self::NonCandidate => (0, 0)",
+            "Self::NonCandidate => (1, 1)",
+            "exactly 0→0, 0→1, and 1→1",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "count_transition",
+            "(0, 1)",
+            "(1, 1)",
+            "exactly 0→0, 0→1, and 1→1",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "count_transition",
+            "(1, 1)\n            }",
+            "(0, 1)\n            }",
+            "exactly 0→0, 0→1, and 1→1",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_vote_recovery_candidate",
+            ".get(signer_index)",
+            ".first()",
+            "bounded frozen-roster lookup",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_vote_episode_admission_plan",
+            "Some(incumbent) if !incumbent.same_lifecycle_owner_as(&candidate.owner) =>",
+            "Some(_) =>",
+            "different owner must fail closed",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "can_admit_timeout_vote_recovery_episode",
+            "Ok(plan) if plan.count_transition() != (0, 0)",
+            "Ok(plan) if plan.count_transition() == (0, 0)",
+            "reviewed count-changing or coalesced episode plan",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "enqueue_network_with_ingress_ownership",
+            "episode.admitted_timeout_vote_owners = prospective;",
+            "let _ = prospective;",
+            "prospective map may publish only after enqueue",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "let post_snapshot_source = context.roster[2].validator.clone();",
+            "let post_snapshot_source = context.roster[1].validator.clone();",
+            "distinct real post-snapshot source",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot",
+            "assert!(u128::from(physical_ordinal) >= timeout_physical_cut);",
+            "assert!(u128::from(physical_ordinal) < timeout_physical_cut);",
+            "P at or above the physical cut",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+            "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier",
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,\n"
+            "                    |_| false,",
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,\n"
+            "                    |_| true,",
+            "must still reject when its downstream predicate rejects",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier",
+            "earliest.token.identity.phase,\n"
+            "                super::FairV2IngressLeaderWirePhase::CertifiedResponse",
+            "earliest.token.identity.phase,\n"
+            "                super::FairV2IngressLeaderWirePhase::TimeoutVote",
+            "freeze an exact CertifiedResponse-phase owner",
+        ),
+    ),
+)
+def test_timeout_vote_episode_rust_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    relative: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Each Rust weakening fails semantically even with its seal refreshed."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    assert (
+        module._timeout_vote_episode_source_fidelity_errors(
+            tmp_path, formal_dir
+        )
+        == []
+    )
+
+    mutate_rust_item_source(
+        module,
+        tmp_path / relative,
+        item_name,
+        old,
+        new,
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_timeout_vote_episode_runner_mode_inventory_mutation(
+    tmp_path: Path,
+) -> None:
+    """The runner cannot collapse the reviewed three-mode ingress policy."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    mutate_source_once(
+        runner,
+        "    CertifiedFenceEscape,\n",
+        "",
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any("exactly Ordinary, CertifiedFenceEscape" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    (
+        (
+            "remove_retained_response_timeout_turn",
+            "retained-response backpressure must give a conditional one-shot",
+        ),
+        (
+            "remove_selected_serve_timeout_turn",
+            "selected Serve must keep certificate escape inside",
+        ),
+        (
+            "move_selected_serve_timeout_turn_under_claim",
+            "selected Serve must keep certificate escape inside",
+        ),
+    ),
+)
+def test_timeout_vote_episode_runner_schedule_mutations(
+    tmp_path: Path,
+    mutation: str,
+    expected_error: str,
+) -> None:
+    """Both TimeoutVote turns are unconditional and Serve does not spend its claim."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    source = runner.read_text(encoding="utf-8")
+
+    if mutation == "remove_retained_response_timeout_turn":
+        region_start = source.index("                if response_backpressured {")
+        region_end = source.index(
+            "                    executor.reconcile_retained_response_certified_fence_escape_phase();",
+            region_start,
+        )
+        region = source[region_start:region_end]
+        call_start = region.rfind("                    drain_v2_ingress(")
+        assert call_start >= 0
+        call_end = region.index("                    )?;\n", call_start) + len(
+            "                    )?;\n"
+        )
+        mutated_region = region[:call_start] + region[call_end:]
+        source = source[:region_start] + mutated_region + source[region_end:]
+    elif mutation == "remove_selected_serve_timeout_turn":
+        region_start = source.index("            if let Some(serve_barrier) = certified_serve_barrier {")
+        region_end = source.index(
+            "                if let Some(timeout_recovery_cut) =",
+            region_start,
+        )
+        region = source[region_start:region_end]
+        call_start = region.rfind("                    drain_v2_ingress(")
+        assert call_start >= 0
+        call_end = region.index("                    )?;\n", call_start) + len(
+            "                    )?;\n"
+        )
+        mutated_region = region[:call_start] + region[call_end:]
+        source = source[:region_start] + mutated_region + source[region_end:]
+    else:
+        before = (
+            "                    .map_err(V2RunnerError::Service)?;\n"
+            "                }\n"
+            "                if !recovering_interrupted_tip {\n"
+            "                    // The one-shot older-runtime claim above cannot own the\n"
+        )
+        under_claim = (
+            "                    .map_err(V2RunnerError::Service)?;\n"
+            "                if !recovering_interrupted_tip {\n"
+            "                    // The one-shot older-runtime claim above cannot own the\n"
+        )
+        assert source.count(before) == 1
+        source = source.replace(before, under_claim, 1)
+        after = (
+            "                        V2IngressDrainMode::TimeoutVoteEpisode,\n"
+            "                        1,\n"
+            "                    )?;\n"
+            "                }\n"
+            "                if let Some(timeout_recovery_cut) ="
+        )
+        close_claim_after = (
+            "                        V2IngressDrainMode::TimeoutVoteEpisode,\n"
+            "                        1,\n"
+            "                    )?;\n"
+            "                }\n"
+            "                }\n"
+            "                if let Some(timeout_recovery_cut) ="
+        )
+        assert source.count(after) == 1
+        source = source.replace(after, close_claim_after, 1)
+
+    runner.write_text(source, encoding="utf-8")
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "AsyncLeaderWireCanonicalLifecyclePayload",
+            "ELSE AsyncLeaderWireServiceIdentity(item)",
+            "ELSE DeliverySubject(item)",
+            "full concrete leader-wire lifecycle payload identity",
+        ),
+        (
+            "AsyncLeaderWireLifecycleSubject",
+            'IF item.kind = "TimeoutVote" THEN NoSubject ELSE DeliverySubject(item)',
+            'IF item.kind = "TimeoutVote"\n'
+            "THEN item.envelope.vote.highSubject\n"
+            "ELSE DeliverySubject(item)",
+            "TimeoutVote-only semantic lifecycle-subject normalization",
+        ),
+        (
+            "AsyncLeaderWireLifecycleIdentityAt",
+            "subject |-> AsyncLeaderWireLifecycleSubject(item)",
+            "subject |-> DeliverySubject(item)",
+            "normalized semantic leader-wire identity",
+        ),
+        (
+            "AsyncLeaderWireLifecycleIdentityAt",
+            "payload |-> AsyncLeaderWireCanonicalLifecyclePayload(item)",
+            "payload |-> AsyncLeaderWireServiceIdentity(item)",
+            "full concrete payload",
+        ),
+        (
+            "AsyncLeaderWireLifecycleRecord",
+            "subject |-> AsyncLeaderWireLifecycleSubject(item)",
+            "subject |-> DeliverySubject(item)",
+            "normalized leader-wire lifecycle record",
+        ),
+        (
+            "AsyncLeaderWireLifecycleTyped",
+            "record.subject = AsyncLeaderWireLifecycleSubject(record.item)",
+            "record.subject = DeliverySubject(record.item)",
+            "typed leader-wire lifecycle must retain normalized binding",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerDispositions",
+            '{"PreCutDescent", "RestoredDescent", "FreshReplenishment"}',
+            '{"PreCutDescent", "FreshReplenishment"}',
+            "closed timeout-vote owner disposition inventory",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionDispositions",
+            '{"NonCandidate", "FirstAdmission", "CoalescedRetry"}',
+            '{"FirstAdmission", "CoalescedRetry"}',
+            "closed timeout-vote admission disposition inventory",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerSlot",
+            "[episode |-> key, source |-> source]",
+            "[episode |-> key, source |-> key.leader]",
+            "frozen episode-and-source timeout-vote slot",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeKey",
+            "subject |-> NoSubject",
+            "subject |-> origin.subject",
+            "frozen target/context/leader/view/NoSubject/phase timeout episode key",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeKeySet",
+            "subject: {NoSubject}",
+            "subject: SubjectOrNone",
+            "key set with only the normalized NoSubject",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerValidForEpisode",
+            "AsyncLeaderWireLifecycleSubject(owner.identity) = episode.key.subject",
+            "AsyncControlItemSubject(owner.identity) = episode.key.subject",
+            "timeout-vote owner episode validity must retain dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeValidIn",
+            "episode.key.subject = NoSubject",
+            "episode.timeoutOwnerOrigin.subject = episode.key.subject",
+            "semantic key must use NoSubject independently",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBasicBinding",
+            "AsyncLeaderWireLifecycleSubject(item) = episode.key.subject",
+            "AsyncControlItemSubject(item) = episode.key.subject",
+            "direct authenticated current-view TimeoutVote binding must retain dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBasicBinding",
+            "/\\ ExactPrepareQcMatchesRef(\n"
+            "       item.envelope.vote.highestPrepareQc,\n"
+            "       item.envelope.vote.highRank,\n"
+            "       item.envelope.vote.highSubject)",
+            "/\\ TRUE",
+            "direct authenticated current-view TimeoutVote binding",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBasicBinding",
+            "item.envelope.vote.highRank <= item.envelope.vote.view",
+            "TRUE",
+            "direct authenticated current-episode TimeoutVote binding",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerUniverse",
+            "source \\in VotingRoster(origin.context.epoch)",
+            "source \\in ValidatorIds",
+            "roster-derived frozen timeout-vote owner universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBasicBinding",
+            "item.source = item.envelope.vote.signer",
+            "TRUE",
+            "direct TimeoutVote binding",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteIngressRecordsFor",
+            'record.status = "Ingress"',
+            'record.status = "Runtime"',
+            "exact TimeoutVote Ingress-record candidate set",
+        ),
+        (
+            "AsyncTimeoutRecoveryVotePreCutDescent",
+            "/\\ record.admissionOrdinal = record.physicalAdmissionOrdinal",
+            "/\\ record.admissionOrdinal = record.physicalAdmissionOrdinal\n"
+            "  /\\ record.physicalAdmissionOrdinal < episode.physicalCut",
+            "formal A=P,S<timeout descent classification",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteRestoredDescent",
+            "/\\ record.admissionOrdinal < record.physicalAdmissionOrdinal",
+            "/\\ record.admissionOrdinal = record.physicalAdmissionOrdinal",
+            "formal restored descent classification",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteFreshReplenishment",
+            "record.schedulerOrdinal > episode.timeoutOwnerOrdinal",
+            "record.schedulerOrdinal >= episode.timeoutOwnerOrdinal",
+            "strict fresh replenishment classification",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteDispositionMatches",
+            "AsyncTimeoutRecoveryVotePreCutDescent(record, episode)",
+            "TRUE",
+            "closed descent/restored/replenishment dispatcher",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCandidateOwners",
+            "AsyncLeaderWireServiceIdentity(item),",
+            "AsyncLeaderWireLifecycleSubject(item),",
+            "exact episode/record/disposition TimeoutVote candidate projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCandidateDefined",
+            "IsFiniteSet(candidates)",
+            "TRUE",
+            "finite singleton timeout-vote candidate predicate",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCandidateDefined",
+            "Cardinality(candidates) = 1",
+            "Cardinality(candidates) >= 1",
+            "finite singleton timeout-vote candidate predicate",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCandidateOwner",
+            "CHOOSE owner \\in\n"
+            "    AsyncTimeoutRecoveryVoteCandidateOwners(node, item): TRUE",
+            "CHOOSE owner \\in AsyncTimeoutRecoveryVoteOwnerSet: TRUE",
+            "unique timeout-vote candidate selector",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteIncumbents",
+            "owner.slot = candidate.slot",
+            "TRUE",
+            "same-slot timeout-vote incumbent set",
+        ),
+        (
+            "AsyncTimeoutRecoverySameVoteLifecycleOwner",
+            "/\\ left.identity = right.identity",
+            "/\\ TRUE",
+            "current formal timeout-vote lifecycle-owner equality",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionPlan",
+            'THEN {"FirstAdmission"}\n'
+            "          ELSE IF \\A incumbent \\in incumbents:\n"
+            "                    AsyncTimeoutRecoverySameVoteLifecycleOwner(\n"
+            "                      incumbent, candidate)\n"
+            '               THEN {"CoalescedRetry"}',
+            'THEN {"CoalescedRetry"}\n'
+            "          ELSE IF \\A incumbent \\in incumbents:\n"
+            "                    AsyncTimeoutRecoverySameVoteLifecycleOwner(\n"
+            "                      incumbent, candidate)\n"
+            '               THEN {"FirstAdmission"}',
+            "exact NonCandidate/FirstAdmission/CoalescedRetry/conflict plan",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRequired",
+            "AsyncTimeoutRecoveryVoteBasicBinding(node, item, episode)",
+            "TRUE",
+            "exact timeout-vote admission-required predicate",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionAllowed",
+            "\\/ ~AsyncTimeoutRecoveryVoteAdmissionRequired(node, item)",
+            "\\/ TRUE\n  \\/ ~AsyncTimeoutRecoveryVoteAdmissionRequired(node, item)",
+            "fail-closed exact timeout-vote admission gate",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeValidIn",
+            "IsFiniteSet(episode.timeoutVoteOwnerUniverse)",
+            "TRUE",
+            "finite timeout-recovery episode",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "episode.key.context = context",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "episode.timeoutOwnerOrigin.height = context.height",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "episode.key.view = nodeView[episode.node]",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "episode.generation = generation[episode.node]",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "~NodeHasDecision(episode.node)",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBarrierException",
+            "source = item.source",
+            "TRUE",
+            "direct-validator finite TimeoutVote barrier exception",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
+            'owner.phase = "CertifiedResponse"',
+            'owner.phase = "TimeoutVote"',
+            "exact Ingress CertifiedResponse phase",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
+            "/\\ owner.status = \"Ingress\"",
+            "/\\ owner.status = \"Ingress\"\n"
+            "  /\\ CertifiedResponseClaimMatches(owner)",
+            "cannot require a response claim",
+        ),
+        (
+            "AsyncServeIngressIndexMayPrecedeAdmittedTarget",
+            "IN \\/ index <=",
+            "IN \\/ TRUE\n          \\/ index <=",
+            "exact selected-Serve timeout-vote exception placement",
+        ),
+        (
+            "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
+            "IN \\/ index <= owner.ingressPredecessors[source]",
+            "IN \\/ TRUE\n          \\/ index <= owner.ingressPredecessors[source]",
+            "exact CertifiedResponse-only leader-wire timeout-vote exception placement",
+        ),
+        (
+            "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
+            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier(",
+            "AsyncTimeoutRecoveryVoteBarrierException(",
+            "general TimeoutVote barrier exception directly",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep",
+            '\\cap {"FirstAdmission", "CoalescedRetry"} # {}',
+            '\\cap {"CoalescedRetry"} # {}',
+            "exact TimeoutVote Ingress-to-Runtime admission occurrence",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteRuntimeRecordsAfter",
+            'record.status = "Runtime"',
+            'record.status = "Ingress"',
+            "exact post-admission TimeoutVote Runtime-record set",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionNodesThisStep",
+            "{node \\in ValidatorIds:",
+            "{node \\in {}:",
+            "exact timeout-vote admission-node set",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission",
+            '"FirstAdmission"\n'
+            "                  \\in AsyncTimeoutRecoveryVoteAdmissionPlan(node, item)",
+            '"CoalescedRetry"\n'
+            "                  \\in AsyncTimeoutRecoveryVoteAdmissionPlan(node, item)",
+            "only FirstAdmission may increase",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission",
+            "{AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(state, episode):\n"
+            "          episode \\in state.timeoutRecoveryEpisodes}",
+            "{episode: episode \\in state.timeoutRecoveryEpisodes}",
+            "exact timeout-vote episode-state transformer",
+        ),
+        (
+            "AsyncTimeoutRecoveryAdmittedVoteSlots",
+            "{owner.slot: owner \\in episode.admittedTimeoutVoteOwners}",
+            "{}",
+            "exact admitted timeout-vote slot projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryRemainingProducerSlots",
+            "episode.timeoutVoteOwnerUniverse\n"
+            "    \\ AsyncTimeoutRecoveryAdmittedVoteSlots(episode)",
+            "episode.timeoutVoteOwnerUniverse \\ {}",
+            "finite timeout-vote producer remainder",
+        ),
+        (
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure",
+            "Cardinality(AsyncTimeoutRecoveryRemainingProducerSlots(episode))",
+            "Cardinality(episode.timeoutVoteOwnerUniverse)",
+            "finite timeout-vote producer-episode measure",
+        ),
+        (
+            "AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition",
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+            "          ordinaryCarrierState)",
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+            "          candidateServiceState)",
+            "actual serialized slot pipeline including the ordinary carrier",
+        ),
+        (
+            "AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition",
+            "IN AsyncTimeoutRecoveryEpisodeStateAfterTransition(\n"
+            "       leaderWireState, serveIngressState, timeoutState)",
+            "IN timeoutState",
+            "actual serialized slot pipeline including the ordinary carrier",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep",
+            "IN /\\ IngressDrainStep(node)\n"
+            "     /\\ DrainFairIngressSelected(node)",
+            "IN /\\ DrainFairIngressSelected(node)",
+            "exact TimeoutVote Ingress-to-Runtime transition",
+        ),
+    ),
+)
+def test_timeout_vote_episode_formal_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """The formal episode contract rejects widening after digest refresh."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_operator(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            "LET item == AsyncSelectedFairIngressItem(node)",
+            "LET item == CHOOSE candidate \\in AsyncNetworkItems: TRUE",
+            "NonCandidate exact zero-admission theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            '{"NonCandidate"}',
+            '{"FirstAdmission"}',
+            "NonCandidate exact zero-admission theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            "=> /\\ ~AsyncTimeoutRecoveryVoteCandidateDefined(node, item)",
+            "=> /\\ AsyncTimeoutRecoveryVoteCandidateDefined(node, item)",
+            "NonCandidate exact zero-admission theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            "/\\ ~AsyncTimeoutRecoveryVoteAdmissionOccursThisStep(node)",
+            "/\\ AsyncTimeoutRecoveryVoteAdmissionOccursThisStep(node)",
+            "NonCandidate exact zero-admission theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            "BY Isa DEF AsyncTimeoutRecoveryVoteAdmissionPlan,\n"
+            "           AsyncTimeoutRecoveryVoteAdmissionOccursThisStep",
+            "BY Isa DEF AsyncTimeoutRecoveryVoteAdmissionPlan",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(episode) \\in Nat",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(episode) \\in Int",
+            "finite timeout-vote producer-episode theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite",
+            "BY <2>1, <2>2, FS_Difference, Isa",
+            "BY <2>1, <2>2, Isa",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot",
+            "candidate.slot \\in\n"
+            "         AsyncTimeoutRecoveryRemainingProducerSlots(episode)",
+            "TRUE",
+            "fresh owner exact remaining-slot removal theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 0",
+            "fresh owner exact remaining-slot removal theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot",
+            "BY <1>1, AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite",
+            "BY <1>1",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 0",
+            "FirstAdmission exact one-slot consumption theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot",
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(node, item) =\n"
+            '                  {"FirstAdmission"}',
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(node, item) =\n"
+            '                  {"CoalescedRetry"}',
+            "FirstAdmission exact one-slot consumption theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot",
+            "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "=> /\\ after = episode",
+            "=> /\\ TRUE",
+            "CoalescedRetry exact producer-episode stutter theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "=> /\\ after = episode",
+            '=> /\\ candidate.disposition = "FreshReplenishment"\n'
+            "              /\\ after = episode",
+            "must not open a fresh non-descent residual",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after)\n"
+            "                     = AsyncTimeoutRecoveryProducerEpisodeMeasure(episode)",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1\n"
+            "                     = AsyncTimeoutRecoveryProducerEpisodeMeasure(episode)",
+            "CoalescedRetry exact producer-episode stutter theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "candidate.slot \\notin\n"
+            "                     AsyncTimeoutRecoveryRemainingProducerSlots(episode)",
+            "TRUE",
+            "CoalescedRetry exact producer-episode stutter theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "DEF After, Node, Item, Candidate, MatchingNodes,\n"
+            "                 AsyncTimeoutRecoveryEpisodeAfterVoteAdmission",
+            "DEF After, Node, Item, Candidate, MatchingNodes",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "=> /\\ AsyncTimeoutRecoveryProducerEpisodeMeasure(episode) \\in Nat",
+            "=> /\\ CandidateServiceRank' < CandidateServiceRank\n"
+            "                /\\ AsyncTimeoutRecoveryProducerEpisodeMeasure(episode) \\in Nat",
+            "must not conclude protocol progress or main ingress/service-rank descent",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            'candidate.disposition = "FreshReplenishment"',
+            'candidate.disposition = "PreCutDescent"',
+            "FirstAdmission-only fresh replenishment finite producer-slot descent",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(node, item) =\n"
+            '                  {"FirstAdmission"}',
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(node, item) =\n"
+            '                  {"FirstAdmission", "CoalescedRetry"}',
+            "FirstAdmission-only fresh replenishment finite producer-slot descent",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 0",
+            "FirstAdmission-only fresh replenishment finite producer-slot descent",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "BY <3>1, AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite",
+            "BY <3>1",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryUpdatedEpisodeIsRetainedByAdmissionState",
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(state, episode)",
+            "episode",
+            "updated timeout episode retention theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent",
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(right, episode)",
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(left, episode)",
+            "timeout-vote episode transformer state-independence theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent",
+            "BY DEF AsyncTimeoutRecoveryEpisodeAfterVoteAdmission",
+            "BY Isa",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+            "               ordinaryCarrierState)",
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+            "               candidateServiceState)",
+            "thread the ordinary carrier before compaction",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "/\\ timeoutVoteState.timeoutRecoveryEpisodes =\n"
+            "               {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(",
+            "/\\ TRUE \\/ timeoutVoteState.timeoutRecoveryEpisodes =\n"
+            "               {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(",
+            "frame the timeout episode through reset, admission, and the prime state",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "/\\ timeoutState.timeoutRecoveryEpisodes =\n"
+            "               resetState.timeoutRecoveryEpisodes",
+            "/\\ TRUE",
+            "frame the timeout episode through reset, admission, and the prime state",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "/\\ asyncControlServiceState'.timeoutRecoveryEpisodes =\n"
+            "               timeoutVoteState.timeoutRecoveryEpisodes",
+            "/\\ TRUE",
+            "frame the timeout episode through reset, admission, and the prime state",
+        ),
+        (
+            "AsyncTimeoutRecoveryRetainedEpisodesContainFramedEpisode",
+            "=> episode \\in\n"
+            "         AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(",
+            "=> TRUE \\/ episode \\in\n"
+            "         AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(",
+            "framed timeout-recovery episode retention theorem",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainLeavesCoreState",
+            "=> UNCHANGED vars",
+            "=> TRUE",
+            "selected TimeoutVote fair-ingress core-state frame",
+        ),
+        (
+            "AsyncPostGstHasNoControlServiceReset",
+            "gst => AsyncControlServiceResetNodesThisStep = {}",
+            "gst => TRUE",
+            "post-GST control-service reset exclusion theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryForNode",
+            "/\\ context = episode.key.context",
+            "/\\ TRUE",
+            "current timeout-recovery episode boundary projection",
+        ),
+        (
+            "AsyncUnchangedCoreStatePreservesTimeoutBoundary",
+            "/\\ context' = episode.key.context",
+            "/\\ TRUE",
+            "unchanged-core timeout boundary preservation theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainRetainsCurrentEpisodeBoundary",
+            "/\\ ~AsyncNodeHasDecisionIn(\n"
+            "                 episode.node, context', decisions')",
+            "/\\ TRUE",
+            "selected TimeoutVote current-episode boundary retention theorem",
+        ),
+        (
+            "AsyncUnchangedCoreStateExcludesPersistInstall",
+            "UNCHANGED vars => AsyncPersistInstallCommandsThisStep = {}",
+            "UNCHANGED vars => TRUE",
+            "unchanged-core persist-install exclusion theorem",
+        ),
+        (
+            "AsyncFairIngressDrainPreservesRetransmitTimerState",
+            "asyncRetransmitDeadlines' = asyncRetransmitDeadlines",
+            "TRUE",
+            "fair-ingress retransmit timer-state frame",
+        ),
+        (
+            "AsyncFairIngressDrainExcludesDirectRetransmit",
+            "=> ~DirectRetransmitStep(node)",
+            "=> TRUE",
+            "fair-ingress direct-retransmit exclusion theorem",
+        ),
+        (
+            "AsyncTypedOutstandingTagRemovalChangesFunction",
+            "=> [tags EXCEPT\n"
+            "              ![node] = @ \\ {\"RetransmitElapsed\"}] # tags",
+            "=> TRUE",
+            "typed outstanding-tag removal strict-change theorem",
+        ),
+        (
+            "AsyncDeferredRetransmitRemovesOutstandingTag",
+            "/\\ asyncOutstandingTags' =\n"
+            "              [asyncOutstandingTags EXCEPT\n"
+            "                 ![node] = @ \\ {\"RetransmitElapsed\"}]",
+            "/\\ TRUE",
+            "deferred retransmit exact outstanding-tag removal theorem",
+        ),
+        (
+            "AsyncFairIngressDrainExcludesDeferredRetransmit",
+            "PROVE FALSE",
+            "PROVE TRUE",
+            "fair-ingress deferred-retransmit exclusion theorem",
+        ),
+        (
+            "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle",
+            "=> ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)",
+            "=> TRUE",
+            "ingress-drain retransmit-lifecycle noncompletion theorem",
+        ),
+        (
+            "AsyncIngressDrainFramesDeferredAndCausalQueues",
+            "/\\ asyncCausalQueues' = asyncCausalQueues",
+            "/\\ TRUE",
+            "ingress-drain deferred and causal queue frame theorem",
+        ),
+        (
+            "AsyncIngressDrainFramesDeferredAndCausalQueues",
+            "LeaveCausalQueues",
+            "EnqueueCandidate",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressFramesCommandAndWork",
+            "![candidate.node] = Append(@, candidate)",
+            "![node] = Append(@, candidate)",
+            "TimeoutVote fair-ingress command and work frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressFramesCommandAndWork",
+            "CandidateAdmissionCoalesced",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers",
+            "/\\ asyncCausalQueues' = asyncCausalQueues",
+            "/\\ TRUE",
+            "TimeoutVote ingress scheduler-carrier frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers",
+            "![candidate.node] = Append(@, candidate)",
+            "![node] = Append(@, candidate)",
+            "TimeoutVote ingress scheduler-carrier frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers",
+            "AsyncIngressDrainFramesDeferredAndCausalQueues,",
+            "AsyncTimeoutVoteFairIngressFramesCommandAndWork,",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers",
+            "AsyncTimeoutVoteFairIngressFramesCommandAndWork, Isa",
+            "Isa",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncSequenceSetAfterAppendAddsOnlyValue",
+            "SequenceSet(Append(sequence, value))",
+            "SequenceSet(sequence)",
+            "sequence-set append adds only the appended value theorem",
+        ),
+        (
+            "AsyncSequenceSetAfterAppendAddsOnlyValue",
+            "AppendProperties",
+            "LenProperties",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+            "\\cup {value}",
+            "\\cup {}",
+            "mapped sequence-set append adds only the appended value theorem",
+        ),
+        (
+            "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+            "/\\ (\\A owner \\in keys:\n"
+            "          mapping[owner] \\in Seq(Range(mapping[owner])))",
+            "/\\ \\A owner \\in keys:\n"
+            "         mapping[owner] \\in Seq(Range(mapping[owner]))",
+            "mapped sequence-set append adds only the appended value theorem",
+        ),
+        (
+            "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+            "AsyncSequenceSetAfterAppendAddsOnlyValue",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "=> AsyncScheduledCandidateOriginsForNodeAfter(node)",
+            "=> TRUE \\/ AsyncScheduledCandidateOriginsForNodeAfter(node)",
+            "TimeoutVote ingress exact scheduled-origin extension theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "TimeoutVote ingress exact scheduled-origin extension theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "TimeoutVote ingress exact scheduled-origin extension theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ \\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner])",
+            "TimeoutVote ingress exact scheduled-origin extension theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "AsyncSequenceSetAfterAppendAddsOnlyValue",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase",
+            'AsyncProposedTimeoutCausalOrigin(node).phase = "BeginTimeout"',
+            'AsyncProposedTimeoutCausalOrigin(node).phase = "DeliverTimeout"',
+            "proposed timeout causal-origin phase theorem",
+        ),
+        (
+            "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase",
+            "AsyncProposedTimeoutCausalCommand,",
+            "TimeoutCausalCommand,",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase",
+            'AsyncTimeoutLifecycleOrigin(node).phase = "BeginTimeout"',
+            'AsyncTimeoutLifecycleOrigin(node).phase = "DeliverTimeout"',
+            "owned timeout lifecycle-origin phase theorem",
+        ),
+        (
+            "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase",
+            "AsyncTimeoutRecoveryEpisodeForNodeIn(",
+            "AsyncTimeoutRecoveryEpisodesForNodeIn(",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin",
+            "AsyncEffectiveTimeoutLifecycleOrigin(node)",
+            "AsyncProposedTimeoutCausalOrigin(node)",
+            "current timeout causal-origin selection theorem",
+        ),
+        (
+            "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin",
+            "DEF AsyncCurrentTimeoutCausalOrigin",
+            "DEF AsyncEffectiveTimeoutLifecycleOrigin",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncOwnedTimeoutRecoveryCurrentOriginHasBeginTimeoutPhase",
+            'AsyncCurrentTimeoutCausalOrigin(node).phase = "BeginTimeout"',
+            'AsyncCurrentTimeoutCausalOrigin(node).phase = "DeliverTimeout"',
+            "owned timeout-recovery current-origin phase theorem",
+        ),
+        (
+            "AsyncOwnedTimeoutRecoveryCurrentOriginHasBeginTimeoutPhase",
+            "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind",
+            "DeliveryKind(item)",
+            '"DeliverTimeout"',
+            "delivery candidate causal-origin phase theorem",
+        ),
+        (
+            "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind",
+            "AsyncDeliveryCandidateCausalOriginAt,",
+            "AsyncCandidateCausalOrigin,",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteDeliveryOriginHasDistinctPhase",
+            'DeliveryCandidate(item).causalOrigin.phase = "DeliverTimeout"',
+            'DeliveryCandidate(item).causalOrigin.phase = "BeginTimeout"',
+            "TimeoutVote delivery-origin phase theorem",
+        ),
+        (
+            "AsyncTimeoutVoteDeliveryOriginHasDistinctPhase",
+            "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle",
+            "=> ~AsyncTimeoutLifecycleTransfersThisStep(node)",
+            "=> TRUE",
+            "TimeoutVote ingress timeout-lifecycle nontransfer theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "TimeoutVote ingress timeout-lifecycle nontransfer theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "TimeoutVote ingress timeout-lifecycle nontransfer theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "/\\ AsyncControlServiceResetNodesThisStep = {}",
+            "/\\ TRUE",
+            "TimeoutVote ingress complete timeout-recovery frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "TimeoutVote ingress complete timeout-recovery frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "               AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "TimeoutVote ingress complete timeout-recovery frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle",
+            "AsyncStrongTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ gst",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ IngressDrainStep(node)",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            '/\\ item.kind = "TimeoutVote"',
+            '/\\ item.kind = "CertifiedResponse"',
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "=> episode \\in timeoutRecoveryState.timeoutRecoveryEpisodes",
+            "=> episode \\in asyncControlServiceState.timeoutRecoveryEpisodes",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "RecoveryState,\n"
+            "             AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition",
+            "RecoveryState,\n"
+            "             AsyncControlServiceStateTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "AsyncStrongTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState",
+            "asyncControlServiceState'.timeoutRecoveryEpisodes",
+            "asyncControlServiceState.timeoutRecoveryEpisodes",
+            "atomic timeout-vote admission prime-state projection",
+        ),
+        (
+            "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState",
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation,",
+            "AsyncStrongTypeInvariant,",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ gst",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ IngressDrainStep(node)",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "\\in asyncControlServiceState'.timeoutRecoveryEpisodes",
+            "\\in asyncControlServiceState.timeoutRecoveryEpisodes",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "AsyncStrongTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent",
+            "AsyncStrongTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState",
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "must retain exact proof dependencies",
+        ),
+    ),
+)
+def test_timeout_vote_episode_theorem_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Each finite-episode theorem weakening fails after digest refresh."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_theorem(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("filename", "symbol", "old", "new", "expected_error"),
+    (
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "episode.key.subject = NoSubject",
+            "episode.key.subject = subject",
+            "timeout episode key subject must be NoSubject",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "episode \\in AsyncTimeoutRecoveryEpisodesForNodeIn(\n"
+            "            asyncControlServiceState, target)",
+            "episode \\in AsyncTimeoutRecoveryEpisodes'",
+            "normalized episode key",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "DeliverySubject(item) = subject",
+            "TRUE",
+            "external DeliverySubject",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "candidate.slot.episode = episode.key",
+            "TRUE",
+            "exact frozen candidate slot",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "introducedOwner \\in\n"
+            "            AdequateLeaderTargetRankIntroducedOwnerIdentitySet(",
+            "TRUE \\/ introducedOwner \\in\n"
+            "            AdequateLeaderTargetRankIntroducedOwnerIdentitySet(",
+            "exact frozen candidate slot",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "introducedOwner \\in\n"
+            "               AdequateLeaderFrozenOwnerUniverse(",
+            "TRUE \\/ introducedOwner \\in\n"
+            "               AdequateLeaderFrozenOwnerUniverse(",
+            "exact frozen candidate slot",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "candidate.slot \\in episode.timeoutVoteOwnerUniverse",
+            "TRUE",
+            "exact frozen candidate slot",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            'candidate.disposition = "FreshReplenishment"',
+            'candidate.disposition = "PreCutDescent"',
+            "FirstAdmission-only fresh replenishment",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(target, item) =\n"
+            '            {"FirstAdmission"}',
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(target, item) =\n"
+            '            {"CoalescedRetry"}',
+            "FirstAdmission-only fresh replenishment",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 0",
+            "FirstAdmission-only fresh replenishment",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "after \\in AsyncTimeoutRecoveryEpisodes'",
+            "after \\in AsyncTimeoutRecoveryEpisodes",
+            "finite retained producer episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "TRUE",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "TRUE",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "DEF AsyncStrongTypeInvariant,",
+            "DEF AsyncTypeInvariant,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncSchedulerTypeInvariant,",
+            "AsyncTypeInvariant,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncRuntimeTypeInvariant,",
+            "AsyncTypeInvariant,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncRuntimeScalarTypeInvariant,",
+            "AsyncTypeInvariant,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep,",
+            "AsyncTimeoutRecoveryVoteAdmissionRequired,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AdequateLeaderTargetCountIncreasingReplenishmentAction,",
+            "AdequateLeaderTargetEqualCountOwnerReplacementAction,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AdequateLeaderFrozenTargetCorridor,",
+            "AdequateLeaderFreshTargetLeaderServiceWindow,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
+            "AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepFollowsProviders",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "TRUE",
+            "must cite the exact finite timeout replenishment bridge",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
+            "AdequateLeaderFixedSelectedActionsCarryPipelineRank",
+            "BY AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,",
+            "BY AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode,\n"
+            "   AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,",
+            "must rely transitively and may not cite",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
+            "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStep",
+            "AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepFollowsProviders",
+            "TRUE",
+            "must consume the exact origin-episode provider transitively",
+        ),
+    ),
+)
+def test_timeout_vote_episode_adequate_leader_bridge_mutations(
+    tmp_path: Path,
+    filename: str,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Fresh timeout replenishment is retained and consumed by every provider."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = formal_dir / filename
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_theorem(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(expected_error in error for error in errors), errors
+
+
 def test_producer_continuation_physical_cut_mutation_contract_rejects_skips(
     tmp_path: Path,
 ) -> None:
@@ -26034,6 +27970,87 @@ def test_adequate_leader_selected_owner_continuation_rejects_weakening(
         errors = check(tmp_path)
         assert any(
             operator in error and expected in error for error in errors
+        ), errors
+
+    nested_dependent_binder = (
+        "    => \\A target \\in ValidatorIds:\n"
+        "         \\A leaderContext \\in ContextRecords:\n"
+        "           \\A leader \\in ValidatorIds:\n"
+        "             \\A leaderView \\in Views:\n"
+        "               \\A subject \\in Subjects:\n"
+        "                 \\A sourceOccurrenceRank \\in\n"
+        "                      AdequateLeaderTargetOccurrenceRankCarrier:\n"
+        "                   \\A known \\in\n"
+        "                        SUBSET AdequateLeaderFrozenOwnerUniverse(\n"
+        "                          target, leaderContext, leader, leaderView, "
+        "subject):\n"
+        "                     \\A owner \\in\n"
+        "                          AdequateLeaderFrozenCandidateOwnerUniverse(\n"
+        "                            target, leaderContext, leader, leaderView, "
+        "subject):\n"
+        "                       \\A sourceCandidates \\in SUBSET "
+        "AsyncCandidateSet:\n"
+    )
+    simultaneous_dependent_binder = (
+        "    => \\A target \\in ValidatorIds,\n"
+        "          leaderContext \\in ContextRecords,\n"
+        "          leader \\in ValidatorIds,\n"
+        "          leaderView \\in Views,\n"
+        "          subject \\in Subjects,\n"
+        "          sourceOccurrenceRank \\in\n"
+        "            AdequateLeaderTargetOccurrenceRankCarrier,\n"
+        "          known \\in\n"
+        "            SUBSET AdequateLeaderFrozenOwnerUniverse(\n"
+        "              target, leaderContext, leader, leaderView, subject),\n"
+        "          owner \\in\n"
+        "            AdequateLeaderFrozenCandidateOwnerUniverse(\n"
+        "              target, leaderContext, leader, leaderView, subject),\n"
+        "          sourceCandidates \\in SUBSET AsyncCandidateSet:\n"
+    )
+    for operator in (
+        "AdequateLeaderTargetSelectedOwnerContinuationOriginExposureProperty",
+        "AdequateLeaderTargetSelectedOwnerReservedContinuationStepProperty",
+        "AdequateLeaderTargetSelectedOwnerMaterializedContinuationClosureProperty",
+        "AdequateLeaderTargetSelectedOwnerMaterializedContinuationStepProperty",
+        "AdequateLeaderTargetSelectedOwnerTerminalContinuationProjectionProperty",
+        "AdequateLeaderTargetSelectedOwnerActiveContinuationClosureProperty",
+    ):
+        target_path.write_text(
+            mutate_tla_operator(
+                source,
+                operator,
+                nested_dependent_binder,
+                simultaneous_dependent_binder,
+            ),
+            encoding="utf-8",
+        )
+        errors = check(tmp_path)
+        assert any(
+            operator in error
+            and "exact nested dependent selected-owner binder" in error
+            for error in errors
+        ), errors
+
+    for theorem in (
+        "AdequateLeaderReservedContinuationStartsFiniteFrozenPrefix",
+        "AdequateLeaderMaterializedContinuationStartsFiniteFrozenPrefix",
+    ):
+        target_path.write_text(
+            mutate_tla_theorem(
+                source,
+                theorem,
+                "      => \\E candidate \\in sourceCandidates:\n"
+                "           \\E record \\in\n",
+                "      => \\E candidate \\in sourceCandidates,\n"
+                "            record \\in\n",
+            ),
+            encoding="utf-8",
+        )
+        errors = check(tmp_path)
+        assert any(
+            theorem in error
+            and "frozen-context selected-owner voter entry" in error
+            for error in errors
         ), errors
 
     target_path.write_text(
@@ -28467,14 +30484,13 @@ def test_receipt_agreement_proof_cannot_use_chain_history_as_oracle() -> None:
             "TRUE",
         ),
         (
-            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "SumeragiV2AdequateLeaderProducerTransportClosureProofs",
             "AdequateLeaderTargetRanksReachIndexedDecision",
             (
-                "         /\\ AdequateLeaderTargetProtocolSubjectSource(\n"
-                "              target, leaderContext, leader,\n"
-                "              leaderView, subject)"
+                "               /\\ AdequateLeaderTargetProtocolSubjectSource(\n"
+                "                    target, leaderContext, leader, leaderView, subject)"
             ),
-            "         /\\ TRUE",
+            "               /\\ TRUE",
         ),
         (
             "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -28795,6 +30811,43 @@ def test_receipt_agreement_proof_cannot_use_chain_history_as_oracle() -> None:
             "  => IndexedHistoricalDecisionTargetOwnerRankProgressProperty",
             "  => TRUE",
         ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedCandidateFairnessAndRawRouteClosureSupplyEpisodeStep",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+            "AdequateLeaderAsyncNextBehaviorProperty(\n"
+            "      AsyncLiveSpecAt(initialContext))",
+            "TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedGlobalBlockerProvidersSupplyProducerEpisodeStep",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedGlobalBlockerProvidersSupplyRankStep",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderRetainedProducerPacketProvidersSupplyRankStep",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
     ),
 )
 def test_new_obligation_supporting_theorem_statements_fail_closed(
@@ -28826,8 +30879,454 @@ def test_new_obligation_supporting_theorem_statements_fail_closed(
 
 
 @pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AdequateLeaderAsyncNextBehaviorProperty",
+            "[][AsyncNext]_AsyncAllVars",
+            "[]TRUE",
+        ),
+        (
+            "AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+    ),
+)
+def test_adequate_leader_async_next_behavior_mutations_fail_closed(
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    sources = {
+        target_module: mutate_tla_operator(source, symbol, old, new),
+    }
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        sources,
+    )
+
+    assert any(f"{symbol} must equal only" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty",
+            (
+                "[][AdequateLeaderAuthorityDeadline"
+                "NoPrematureExitStepProvider]_AsyncAllVars"
+            ),
+            "[]AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider",
+        ),
+        (
+            "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty",
+            (
+                "[][AdequateLeaderAuthorityDeadline"
+                "DecisionRetentionStepProvider]_AsyncAllVars"
+            ),
+            "[]AdequateLeaderAuthorityDeadlineDecisionRetentionStepProvider",
+        ),
+        (
+            (
+                "AdequateLeaderFixedPipelineOriginHistoryAnd"
+                "NoResurrectionProviderProperty"
+            ),
+            (
+                "[][AdequateLeaderFixedPipelineOriginHistoryAnd"
+                "NoResurrectionProvider]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedPipelineOriginHistoryAnd"
+                "NoResurrectionProvider"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedCutPerActionProviderProperty",
+            "[][AdequateLeaderFixedCutPerActionProvider]_AsyncAllVars",
+            "[]AdequateLeaderFixedCutPerActionProvider",
+        ),
+        (
+            (
+                "AdequateLeaderFixedPipelineOriginEpisode"
+                "SelectedOwnerStepProviderProperty"
+            ),
+            (
+                "[][AdequateLeaderFixedPipelineOriginEpisode"
+                "SelectedOwnerStepProvider]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedPipelineOriginEpisode"
+                "SelectedOwnerStepProvider"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty",
+            (
+                "[][AdequateLeaderFixedPreCandidate"
+                "SelectedOwnerStepProvider]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedPreCandidate"
+                "SelectedOwnerStepProvider"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedSelectedActionClockCarryProviderProperty",
+            (
+                "[][AdequateLeaderFixedSelectedCandidateActionCarries"
+                "AbsoluteCeiling]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedSelectedCandidateActionCarries"
+                "AbsoluteCeiling"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedSelectedActionClockCarryProviderProperty",
+            (
+                "[][AdequateLeaderFixedSelectedEntryActionCarries"
+                "AbsoluteCeiling]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedSelectedEntryActionCarries"
+                "AbsoluteCeiling"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedGlobalBlockerProviderProperty",
+            "[][(/\\ AdequateLeaderFixedGlobalBlockerEntryProvider",
+            "[](/\\ AdequateLeaderFixedGlobalBlockerEntryProvider",
+        ),
+        (
+            "AdequateLeaderFixedSubjectReplacementCutCarryProviderProperty",
+            (
+                "[][AdequateLeaderFixedSubjectReplacement"
+                "CutCarryProvider]_AsyncAllVars"
+            ),
+            "[]AdequateLeaderFixedSubjectReplacementCutCarryProvider",
+        ),
+        (
+            "AdequateLeaderRetainedProducerPacketActionProviderProperty",
+            (
+                "[][(/\\ "
+                "AdequateLeaderRetainedProducerPacketPrefixEntryProvider("
+            ),
+            (
+                "[](/\\ "
+                "AdequateLeaderRetainedProducerPacketPrefixEntryProvider("
+            ),
+        ),
+    ),
+)
+def test_authority_provider_temporal_shapes_fail_closed(
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_operator(source, symbol, old, new)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain the reviewed temporal action shape" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("target_module", "symbol", "anchor", "description"),
+    (
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+            (
+                "            => "
+                "AdequateLeaderFixedPreCandidateEntryStrictRankGoal(\n"
+            ),
+            "selected-owner action implication",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+            (
+                "             /\\ [AsyncNext]_AsyncAllVars\n"
+                "            => \\/ "
+                "AdequateLeaderFixedPreCandidateEntryStrictRankGoal("
+            ),
+            "AsyncNext frame implication",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedChainSpecKeepsServiceActivationRestrictionIrreversible",
+            (
+                "            /\\ [IndexedChainNext]_IndexedChainVars\n"
+                "            => (IndexedAsync(initialContext)!"
+            ),
+            "service-activation irreversible implication",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedPostGstTickFairnessTransfersLocally",
+            (
+                "             /\\ IndexedTickStep(initialContext)\n"
+                "             => <<IndexedPostGstTick(initialContext)>>_("
+            ),
+            "post-GST tick projection implication",
+        ),
+    ),
+)
+def test_direct_action_proof_steps_reject_temporal_boxing(
+    target_module: str,
+    symbol: str,
+    anchor: str,
+    description: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = wrap_tla_theorem_proof_step(source, symbol, anchor)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and f"direct action proof step {description}" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "IndexedChainSpecKeepsServiceActivationRestrictionIrreversible",
+            (
+                "  IndexedChainSpec\n"
+                "    => \\A initialContext \\in AdmissibleContextRecords:"
+            ),
+            (
+                "  TRUE\n"
+                "    => \\A initialContext \\in AdmissibleContextRecords:"
+            ),
+        ),
+        (
+            "IndexedPostGstTickFairnessTransfersLocally",
+            "    IndexedChainSpec\n      => WF_",
+            "    TRUE\n      => WF_",
+        ),
+        (
+            "IndexedSuccessorActivationStepPreservesHistoricalRecoveryTargets",
+            "UNCHANGED IndexedScheduler(initialContext, 44)",
+            "UNCHANGED IndexedScheduler(initialContext, 46)",
+        ),
+    ),
+)
+def test_action_temporal_chain_theorem_statements_fail_closed(
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2ChainEpochRefinement"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(source, symbol, old, new)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain the exact reviewed action-temporal statement" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
     ("target_module", "symbol", "proof_dependency"),
     (
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedSuccessorActivationStepPreservesHistoricalRecoveryTargets",
+            "IndexedAsync!AsyncServiceActivationFrameVars",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedSuccessorActivationStepPreservesHistoricalRecoveryTargets",
+            "IndexedAsync!AsyncSchedulerExceptServiceActivation",
+        ),
+        (
+            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+            "IndexedNonOpenProductStepCannotCreateHistoricalTarget",
+            "IndexedSuccessorActivationStepPreservesHistoricalRecoveryTargets",
+        ),
+        (
+            "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+            "IndexedHistoricalLowerAuthorityProgressGivesStrictAncestorAdvance",
+            "IndexedAdmissibleTargetHasAdmissibleAncestors",
+        ),
+    ),
+)
+def test_historical_target_successor_frame_dependencies_fail_closed(
+    target_module: str,
+    symbol: str,
+    proof_dependency: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = delete_tla_theorem_token(source, symbol, proof_dependency)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain reviewed proof dependencies" in error
+        and proof_dependency in error
+        for error in errors
+    ), errors
+
+
+def test_historical_strict_ancestor_context_binder_fails_closed() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedHistoricalLowerAuthorityProgressGivesStrictAncestorAdvance"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "\\A targetContext \\in AdmissibleContextRecords:",
+        "\\A targetContext \\in ContextRecords:",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain the exact reviewed action-temporal statement" in error
+        for error in errors
+    ), errors
+
+
+def test_historical_certificate_request_projection_dependency_fails_closed() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedHistoricalDiscoveryOwnedOutcomeDropsCertificateRankFour"
+    proof_dependency = "IndexedScheduler"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = delete_tla_theorem_token(source, symbol, proof_dependency)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain reviewed proof dependencies" in error
+        and proof_dependency in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("target_module", "symbol", "proof_dependency"),
+    (
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedCandidateFairnessAndRawRouteClosureSupplyEpisodeStep",
+            "AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+            "AdequateLeaderFixedSelectedPreCandidateEntryFrontier",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedGlobalBlockerProvidersSupplyProducerEpisodeStep",
+            "AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderRetainedProducerPacketProvidersSupplyRankStep",
+            "AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+            "AsyncLiveSpecProjectsAsyncSpec",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AsyncLiveProvidesAdequateLeaderRetainedProducerNonDescentEpisodeStep",
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginNonDescentEpisodeStep",
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            (
+                "AsyncLiveSpecSuppliesAdequateLeaderAuthorityDeadline"
+                "FreshSelfQuantitativeProviderBundle"
+            ),
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedChainSpecKeepsServiceActivationRestrictionIrreversible",
+            "IndexedStepKeepsServiceActivationRestrictionIrreversible",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedPostGstTickFairnessTransfersLocally",
+            "IndexedPostGstTickProductStepProjectsExactOccurrence",
+        ),
         (
             "SumeragiV2ChainReceiptAgreementProofs",
             "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
@@ -30676,6 +33175,119 @@ def test_historical_local_gst_requires_exact_responsive_active_roster(
     ), errors
 
 
+def test_historical_certificate_rank_rejects_selected_gst_stage_projection(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedChainSpecClosesHistoricalCertificateDiscoveryRank"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "                => /\\ IndexedCore(initialContext, 7)\n",
+        "                => /\\ "
+        "IndexedHistoricalTransport(initialContext)!gst\n",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "certificate-stage GST core projection" in error
+        for error in errors
+    ), errors
+
+
+def test_historical_certificate_rank_rejects_selected_gst_corridor_projection(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedChainSpecClosesHistoricalCertificateDiscoveryRank"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "      <3>2. (IndexedCore(initialContext, 7)\n",
+        "      <3>2. (IndexedHistoricalTransport(initialContext)!gst\n",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "owned-discovery GST core projection" in error
+        for error in errors
+    ), errors
+
+
+def test_adequate_leader_tick_fairness_rejects_selected_gst_projection(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedAdequateLeaderLocalFairBehaviorAt"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_operator(
+        source,
+        symbol,
+        "       IndexedCore(initialContext, 7)\n",
+        "       IndexedAdequateLeaderWitness(initialContext)!gst\n",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "adequate-leader Tick GST core projection" in error
+        for error in errors
+    ), errors
+
+
+def test_adequate_leader_local_source_rejects_selected_gst_projection(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "    <2>1. IndexedCore(initialContext, 7)\n",
+        "    <2>1. IndexedAsync(initialContext)!gst\n",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "local-source GST core projection" in error
+        for error in errors
+    ), errors
+
+
 def test_historical_local_gst_rejects_weakened_async_set_gst_guard(
 ) -> None:
     module = load_checker()
@@ -32235,6 +34847,7 @@ def test_authority_deadline_retired_seams_cannot_be_resurrected(
 @pytest.mark.parametrize(
     "dependency",
     (
+        "AdequateLeaderAsyncNextBehaviorProperty",
         "AdequateLeaderFixedSelectedOwnerFairnessProperty",
         "AdequateLeaderFixedSubjectReplacementProviderProperties",
         (
@@ -34299,6 +36912,27 @@ Safe == "OMITTED"
     assert module.tla_shortcut_errors(path, source) == []
 
 
+def test_tla_shortcut_scan_rejects_obsolete_unsound_tlaps_rules(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    path = tmp_path / "ObsoleteRules.tla"
+    source = r"""---- MODULE ObsoleteRules ----
+THEOREM BareFairness == TRUE BY WF1
+THEOREM UndefinedFairness == TRUE BY RuleWF1
+THEOREM UndefinedInvariant == TRUE BY RuleINV1
+\* WF1 RuleWF1 RuleINV1 in comments must not trigger the scanner.
+IgnoredStrings == "WF1 RuleWF1 RuleINV1"
+=============================================================================
+"""
+
+    errors = module.tla_shortcut_errors(path, source)
+    assert len(errors) == 3
+    assert all("obsolete or undefined TLAPS rule" in error for error in errors)
+    for token in ("WF1", "RuleWF1", "RuleINV1"):
+        assert any(f"rule {token} is prohibited" in error for error in errors)
+
+
 def test_retired_favourable_network_liveness_corridor_is_rejected(
     tmp_path: Path,
 ) -> None:
@@ -34591,6 +37225,7 @@ Init == InitAt(ContextRecord(0, <<>>))
         "FiniteSetTheorems",
         "NaturalsInduction",
         "WellFoundedInduction",
+        "SequenceTheorems",
         "SumeragiV2QuorumProofs",
     ),
 )
@@ -34607,12 +37242,16 @@ def test_async_source_fidelity_requires_tlaps_aware_module_header(
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     source = path.read_text(encoding="utf-8")
     checker = module._async_source_fidelity_errors
-    assert checker(formal_dir) == []
+    baseline_errors = checker(formal_dir)
+    assert not any(
+        "exact TLAPS-aware module header" in error
+        for error in baseline_errors
+    ), baseline_errors
 
     exact_header = (
         "EXTENDS SumeragiV2Inductive, Sequences, FiniteSets, Naturals, "
         "Functions, TLAPS, FiniteSetTheorems, NaturalsInduction, "
-        "WellFoundedInduction, SumeragiV2QuorumProofs"
+        "WellFoundedInduction, SequenceTheorems, SumeragiV2QuorumProofs"
     )
     assert source.count(exact_header) == 1
     dependency_token = f", {proof_dependency}"
@@ -40563,6 +43202,7 @@ def test_async_source_fidelity_rejects_an_unreviewed_model_local_theorem(
         "AsyncCandidateServiceStageOrdinalIsBounded",
         "AsyncCandidateProducerContinuationRunnerSelectionIsTwoStageLogicalMinimum",
         "AsyncRetransmitFreshEpisodeConsumesSharedLifecycleOrdinal",
+        "AsyncOlderRetransmitLifecycleCannotAloneBlockDueTimeout",
         "AsyncTimeoutLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
     ),
 )

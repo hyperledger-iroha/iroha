@@ -461,6 +461,16 @@ Stage6OwedCausalReady(candidate, position) ==
   /\ CausalAdmissionDebtActive(candidate.node)
   /\ CausalHeadCanAdvance(candidate.node)
 
+Stage6NonCompletionCapacityBlocked(candidate, position) ==
+  /\ ProtectedStage6Pending(candidate, position)
+  /\ NonCompletionCausalAdmissionDebt(candidate.node)
+  /\ ~CausalHeadCanAdvance(candidate.node)
+
+Stage6CompletionCapacityBlocked(candidate, position) ==
+  /\ ProtectedStage6Pending(candidate, position)
+  /\ CompletionCausalAdmissionDebt(candidate.node)
+  /\ ~CausalHeadCanAdvance(candidate.node)
+
 Stage6NonCompletionCapacityBlockedAtRank(candidate, position, rank) ==
   /\ ProtectedStage6Pending(candidate, position)
   /\ NonCompletionCausalAdmissionDebt(candidate.node)
@@ -2715,16 +2725,6 @@ PROOF
          WellFoundedLeadsTo
     <2> QED BY <2>2, <2>4, PTL
   <1> QED BY <1>1
-
-Stage6NonCompletionCapacityBlocked(candidate, position) ==
-  /\ ProtectedStage6Pending(candidate, position)
-  /\ NonCompletionCausalAdmissionDebt(candidate.node)
-  /\ ~CausalHeadCanAdvance(candidate.node)
-
-Stage6CompletionCapacityBlocked(candidate, position) ==
-  /\ ProtectedStage6Pending(candidate, position)
-  /\ CompletionCausalAdmissionDebt(candidate.node)
-  /\ ~CausalHeadCanAdvance(candidate.node)
 
 Stage6PreAdmissionGoal(candidate, position) ==
   \/ ProtectedRankProgressExit(candidate, <<6, position>>)

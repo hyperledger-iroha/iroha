@@ -1141,26 +1141,6 @@ BY AsyncStrongTypeProjectsAsyncType,
        AsyncQueueTyped, AsyncIoSequenceTyped,
        AsyncConfiguration, ModelConfiguration, ValidatorIds
 
-THEOREM HistoricalDiscoveryPacketOccurrenceDebtRanksInCarrier ==
-  \A packet \in OverdueResponsivePackets:
-    AsyncStrongTypeInvariant
-      => /\ IsFiniteSet(
-              HistoricalDiscoveryPacketCandidateOwners(packet))
-         /\ IsFiniteSet(
-              HistoricalDiscoveryPacketServeOwners(packet))
-         /\ HistoricalDiscoveryPacketCandidateOccurrenceDebtRank(packet)
-              \in HistoricalDiscoveryOccurrenceDebtCarrier
-         /\ HistoricalDiscoveryPacketServeOccurrenceDebtRank(packet)
-              \in HistoricalDiscoveryOccurrenceDebtCarrier
-BY StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
-   HistoricalDiscoveryPacketDebtRanksInCarrier,
-   FS_Subset, FS_CardinalityType, Isa
-   DEF HistoricalDiscoveryPacketCandidateOwners,
-       HistoricalDiscoveryPacketServeOwners,
-       HistoricalDiscoveryPacketCandidateOccurrenceDebtRank,
-       HistoricalDiscoveryPacketServeOccurrenceDebtRank,
-       HistoricalDiscoveryOccurrenceDebtCarrier
-
 THEOREM HistoricalDiscoveryPacketServeRanksHaveConcreteBound ==
   \A packet \in OverdueResponsivePackets:
     AsyncStrongTypeInvariant
@@ -1207,12 +1187,12 @@ BY AsyncStrongTypeProjectsAsyncType,
        ProtectedCandidateOwned
 
 THEOREM HistoricalDiscoveryPacketServeOwnerRankInCarrier ==
-  \A packet \in OverdueResponsivePackets,
-     job \in HistoricalDiscoveryPacketServeOwners(packet):
-    AsyncStrongTypeInvariant
-      => ServeJobRank(
-           packet.item.envelope.recipient, job)
-           \in OwnedServiceRankCarrier
+  \A packet \in OverdueResponsivePackets:
+    \A job \in HistoricalDiscoveryPacketServeOwners(packet):
+      AsyncStrongTypeInvariant
+        => ServeJobRank(
+             packet.item.envelope.recipient, job)
+             \in OwnedServiceRankCarrier
 BY ServeOccurrenceIndexCharacterization,
    ServeJobIndexMatchesOccurrenceIndex,
    AsyncStrongTypeProjectsAsyncType,
@@ -1253,6 +1233,26 @@ BY HistoricalDiscoveryPacketCandidateRanksInCarrier,
        HistoricalDiscoveryCandidateDebtBottom,
        HistoricalDiscoveryServeDebtBottom,
        OwnedServiceRankCarrier
+
+THEOREM HistoricalDiscoveryPacketOccurrenceDebtRanksInCarrier ==
+  \A packet \in OverdueResponsivePackets:
+    AsyncStrongTypeInvariant
+      => /\ IsFiniteSet(
+              HistoricalDiscoveryPacketCandidateOwners(packet))
+         /\ IsFiniteSet(
+              HistoricalDiscoveryPacketServeOwners(packet))
+         /\ HistoricalDiscoveryPacketCandidateOccurrenceDebtRank(packet)
+              \in HistoricalDiscoveryOccurrenceDebtCarrier
+         /\ HistoricalDiscoveryPacketServeOccurrenceDebtRank(packet)
+              \in HistoricalDiscoveryOccurrenceDebtCarrier
+BY StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
+   HistoricalDiscoveryPacketDebtRanksInCarrier,
+   FS_Subset, FS_CardinalityType, Isa
+   DEF HistoricalDiscoveryPacketCandidateOwners,
+       HistoricalDiscoveryPacketServeOwners,
+       HistoricalDiscoveryPacketCandidateOccurrenceDebtRank,
+       HistoricalDiscoveryPacketServeOccurrenceDebtRank,
+       HistoricalDiscoveryOccurrenceDebtCarrier
 
 THEOREM HistoricalDiscoveryEmptyPacketDebtUsesExactBottoms ==
   \A packet:

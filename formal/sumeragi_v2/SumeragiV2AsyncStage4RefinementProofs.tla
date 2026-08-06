@@ -678,12 +678,14 @@ PROOF
 THEOREM SerializedFifoRemovesOneCommand ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
     => AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
          PROVE AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
@@ -903,6 +905,7 @@ PROOF
 THEOREM SerializedFifoRetainsExistingCausalHead ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ CausalQueueNonempty(node)
     /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
@@ -911,6 +914,7 @@ THEOREM SerializedFifoRetainsExistingCausalHead ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 CausalQueueNonempty(node),
                 SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
@@ -1016,6 +1020,7 @@ PROOF
 THEOREM SerializedFifoRetainsNonCompletionCausalDebt ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ NonCompletionCausalAdmissionDebt(node)
     /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
@@ -1025,6 +1030,7 @@ THEOREM SerializedFifoRetainsNonCompletionCausalDebt ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 NonCompletionCausalAdmissionDebt(node),
                 SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
@@ -1082,6 +1088,7 @@ BY SequenceWithoutIndexFacts, FS_CardinalityType, IsaT(7200)
 THEOREM NonCompletionDebtFifoCapacityProgress ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ NonCompletionCausalAdmissionDebt(node)
     /\ SerializedRunnerRuntimeStep(node)
@@ -1092,6 +1099,7 @@ THEOREM NonCompletionDebtFifoCapacityProgress ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 AsyncProgressOwnershipInvariant,
                 NonCompletionCausalAdmissionDebt(node),
                 SerializedRunnerRuntimeStep(node),

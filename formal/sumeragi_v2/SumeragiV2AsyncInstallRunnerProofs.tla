@@ -594,17 +594,20 @@ BY SMT DEF NextCommandClass, AsyncCommandClasses
 
 THEOREM SelectedCommandClassFacts ==
   \A node \in ValidatorIds:
-    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncSchedulerTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ NodeQueueNonempty(node)
     => /\ SelectedCommandClass(node) \in AsyncCommandClasses
-       /\ CommandClassIndices(node, SelectedCommandClass(node)) # {}
+       /\ CommandClassOwnsOldestLifecycle(
+            node, SelectedCommandClass(node))
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
-                AsyncRuntimeScalarTypeInvariant,
+                AsyncSchedulerTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 NodeQueueNonempty(node)
          PROVE /\ SelectedCommandClass(node) \in AsyncCommandClasses
-               /\ CommandClassIndices(
-                    node, SelectedCommandClass(node)) # {}
+               /\ CommandClassOwnsOldestLifecycle(
+                    node, SelectedCommandClass(node))
     <2> DEFINE First == asyncNextCommandClass[node]
     <2> DEFINE Second == NextCommandClass(First)
     <2> DEFINE Third == NextCommandClass(Second)
@@ -613,16 +616,34 @@ PROOF
            /\ Third \in AsyncCommandClasses
            /\ {First, Second, Third} = AsyncCommandClasses
       BY <1>1, NextCommandClassCycleFacts, SMT
-         DEF AsyncRuntimeScalarTypeInvariant, First, Second, Third
+         DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, First, Second, Third
     <2>2. /\ 1 \in 1..Len(asyncCommandQueues[node])
            /\ asyncCommandQueues[node][1].class \in AsyncCommandClasses
+           /\ NodeCommandLifecycleOrdinals(node) # {}
       BY <1>1, SMT
-         DEF AsyncRuntimeScalarTypeInvariant, NodeQueueNonempty,
+         DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, NodeQueueNonempty,
+             NodeCommandLifecycleOrdinals,
              AsyncQueueTyped, AsyncCandidateTyped
-    <2>3. \/ CommandClassIndices(node, First) # {}
-           \/ CommandClassIndices(node, Second) # {}
-           \/ CommandClassIndices(node, Third) # {}
-      BY <2>1, <2>2, SMT DEF CommandClassIndices
+    <2>3. \/ CommandClassOwnsOldestLifecycle(node, First)
+           \/ CommandClassOwnsOldestLifecycle(node, Second)
+           \/ CommandClassOwnsOldestLifecycle(node, Third)
+      BY <1>1, <2>1, <2>2, IsaT(1200)
+         DEF CommandClassOwnsOldestLifecycle,
+             OldestCommandClassIndices,
+             OldestNodeCommandLifecycleOrdinal,
+             NodeCommandLifecycleOrdinals,
+             CommandClassIndices,
+             AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, AsyncQueueTyped,
+             AsyncCandidateTyped, AsyncCandidateLifecycleOrdinal,
+             AsyncCandidateLifecycleRecordsFor,
+             AsyncCandidateLifecycleAdmissions,
+             AsyncCandidateLifecycleAdmissionSet,
+             AsyncCandidateLifecycleAdmission,
+             AsyncNextCandidateLifecycleOrdinal,
+             AsyncControlServiceStateTypeInvariant
     <2> QED BY <2>1, <2>3, SMT
          DEF SelectedCommandClass, First, Second, Third
   <1> QED BY <1>1
@@ -662,38 +683,77 @@ PROOF
     <2> QED BY <2>5, <2>6 DEF NaturalIndexBelongs
   <1> QED BY <1>1
 
-THEOREM FirstCommandClassIndexIsMember ==
+THEOREM OldestNodeCommandLifecycleOrdinalFacts ==
+  \A node \in ValidatorIds:
+    /\ AsyncSchedulerTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ NodeQueueNonempty(node)
+    => /\ OldestNodeCommandLifecycleOrdinal(node)
+              \in NodeCommandLifecycleOrdinals(node)
+       /\ \A other \in NodeCommandLifecycleOrdinals(node):
+            OldestNodeCommandLifecycleOrdinal(node) <= other
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncSchedulerTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
+                NodeQueueNonempty(node)
+         PROVE /\ OldestNodeCommandLifecycleOrdinal(node)
+                       \in NodeCommandLifecycleOrdinals(node)
+               /\ \A other \in NodeCommandLifecycleOrdinals(node):
+                    OldestNodeCommandLifecycleOrdinal(node) <= other
+    <2>1. /\ NodeCommandLifecycleOrdinals(node) # {}
+           /\ NodeCommandLifecycleOrdinals(node) \subseteq Nat
+      BY <1>1, Isa
+         DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, NodeQueueNonempty,
+             NodeCommandLifecycleOrdinals, AsyncQueueTyped,
+             AsyncCandidateTyped, AsyncCandidateLifecycleOrdinal,
+             AsyncCandidateLifecycleRecordsFor,
+             AsyncCandidateLifecycleAdmissions,
+             AsyncCandidateLifecycleAdmissionSet,
+             AsyncCandidateLifecycleAdmission,
+             AsyncControlServiceStateTypeInvariant,
+             AsyncNextCandidateLifecycleOrdinal
+    <2>2. \E least \in NodeCommandLifecycleOrdinals(node):
+             \A other \in NodeCommandLifecycleOrdinals(node): least <= other
+      BY <2>1, NonemptyNaturalSetHasLeast
+    <2> QED BY <2>2, Zenon DEF OldestNodeCommandLifecycleOrdinal
+  <1> QED BY <1>1
+
+THEOREM FirstOldestCommandClassIndexIsMember ==
   \A node, commandClass:
-    CommandClassIndices(node, commandClass) # {}
-      => /\ FirstCommandClassIndex(node, commandClass)
-                \in CommandClassIndices(node, commandClass)
-         /\ \A other \in CommandClassIndices(node, commandClass):
-              FirstCommandClassIndex(node, commandClass) <= other
+    OldestCommandClassIndices(node, commandClass) # {}
+      => /\ FirstOldestCommandClassIndex(node, commandClass)
+                \in OldestCommandClassIndices(node, commandClass)
+         /\ \A other \in OldestCommandClassIndices(node, commandClass):
+              FirstOldestCommandClassIndex(node, commandClass) <= other
 PROOF
   <1>1. ASSUME NEW node, NEW commandClass,
-                CommandClassIndices(node, commandClass) # {}
-         PROVE /\ FirstCommandClassIndex(node, commandClass)
-                       \in CommandClassIndices(node, commandClass)
-               /\ \A other \in CommandClassIndices(node, commandClass):
-                    FirstCommandClassIndex(node, commandClass) <= other
-    <2>1. CommandClassIndices(node, commandClass) \subseteq Nat
-      BY SMT DEF CommandClassIndices
-    <2>2. \E least \in CommandClassIndices(node, commandClass):
-             \A other \in CommandClassIndices(node, commandClass):
+                OldestCommandClassIndices(node, commandClass) # {}
+         PROVE /\ FirstOldestCommandClassIndex(node, commandClass)
+                       \in OldestCommandClassIndices(node, commandClass)
+               /\ \A other \in OldestCommandClassIndices(
+                                  node, commandClass):
+                    FirstOldestCommandClassIndex(node, commandClass) <= other
+    <2>1. OldestCommandClassIndices(node, commandClass) \subseteq Nat
+      BY SMT DEF OldestCommandClassIndices, CommandClassIndices
+    <2>2. \E least \in OldestCommandClassIndices(node, commandClass):
+             \A other \in OldestCommandClassIndices(node, commandClass):
                least <= other
       BY <1>1, <2>1, NonemptyNaturalSetHasLeast
-    <2> QED BY <2>2, Zenon DEF FirstCommandClassIndex
+    <2> QED BY <2>2, Zenon DEF FirstOldestCommandClassIndex
   <1> QED BY <1>1
 
 THEOREM NextNodeCommandIndexFacts ==
   \A node \in ValidatorIds:
-    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncSchedulerTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ NodeQueueNonempty(node)
     => LET index == NextNodeCommandIndex(node)
        IN /\ index \in 1..Len(asyncCommandQueues[node])
           /\ asyncCommandQueues[node][index].class
                = SelectedCommandClass(node)
-          /\ \A other \in CommandClassIndices(
+          /\ \A other \in OldestCommandClassIndices(
                            node, SelectedCommandClass(node)):
                index <= other
           /\ NextNodeCommand(node) = asyncCommandQueues[node][index]
@@ -701,13 +761,14 @@ THEOREM NextNodeCommandIndexFacts ==
           /\ NextNodeCommand(node).node = node
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
-                AsyncRuntimeScalarTypeInvariant,
+                AsyncSchedulerTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 NodeQueueNonempty(node)
          PROVE LET index == NextNodeCommandIndex(node)
                IN /\ index \in 1..Len(asyncCommandQueues[node])
                   /\ asyncCommandQueues[node][index].class
                        = SelectedCommandClass(node)
-                  /\ \A other \in CommandClassIndices(
+                  /\ \A other \in OldestCommandClassIndices(
                                    node, SelectedCommandClass(node)):
                        index <= other
                   /\ NextNodeCommand(node)
@@ -717,20 +778,21 @@ PROOF
     <2> DEFINE Class == SelectedCommandClass(node)
     <2> DEFINE Index == NextNodeCommandIndex(node)
     <2>1. /\ Class \in AsyncCommandClasses
-           /\ CommandClassIndices(node, Class) # {}
+           /\ OldestCommandClassIndices(node, Class) # {}
       BY <1>1, SelectedCommandClassFacts DEF Class
-    <2>2. /\ Index \in CommandClassIndices(node, Class)
-           /\ \A other \in CommandClassIndices(node, Class):
+    <2>2. /\ Index \in OldestCommandClassIndices(node, Class)
+           /\ \A other \in OldestCommandClassIndices(node, Class):
                 Index <= other
-      BY <2>1, FirstCommandClassIndexIsMember
+      BY <2>1, FirstOldestCommandClassIndexIsMember
          DEF Index, NextNodeCommandIndex
     <2>3. /\ Index \in 1..Len(asyncCommandQueues[node])
            /\ asyncCommandQueues[node][Index].class = Class
-      BY <2>2 DEF CommandClassIndices
+      BY <2>2 DEF OldestCommandClassIndices, CommandClassIndices
     <2>4. /\ AsyncCandidateTyped(asyncCommandQueues[node][Index])
            /\ asyncCommandQueues[node][Index].node = node
       BY <1>1, <2>3, SMT
-         DEF AsyncRuntimeScalarTypeInvariant, AsyncQueueTyped,
+         DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, AsyncQueueTyped,
              AsyncCommandQueueOwnership, SequenceSet
     <2> QED BY <2>2, <2>3, <2>4
          DEF Index, Class, NextNodeCommandIndex, NextNodeCommand
@@ -1019,12 +1081,14 @@ BY AsyncSharedSchedulerHighWatermarkIsMonotone, IsaT(900)
 THEOREM SerializedRuntimePreservesScalarType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ RunNodeWork(node)
     /\ SerializedRunnerRuntimeStep(node)
     => AsyncRuntimeScalarTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 RunNodeWork(node),
                 SerializedRunnerRuntimeStep(node)
          PROVE AsyncRuntimeScalarTypeInvariant'
@@ -1303,7 +1367,8 @@ PROOF
 
 THEOREM RuntimeSelectedCommandsAreTyped ==
   \A node \in ValidatorIds:
-    AsyncTypeInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
       => /\ (NodeQueueNonempty(node)
                 => /\ AsyncCandidateTyped(NextNodeCommand(node))
                    /\ NextNodeCommand(node).node = node)
@@ -1312,7 +1377,8 @@ THEOREM RuntimeSelectedCommandsAreTyped ==
                    /\ NextDeferredCommand(node).node = node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
-                AsyncTypeInvariant
+                AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant
          PROVE /\ (NodeQueueNonempty(node)
                        => /\ AsyncCandidateTyped(NextNodeCommand(node))
                           /\ NextNodeCommand(node).node = node)
@@ -2034,6 +2100,7 @@ PROOF
 THEOREM SerializedRuntimeCausalFrame ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ SerializedRunnerRuntimeStep(node)
     => \/ LeaveCausalQueues
        \/ AppendCausalSuccessors(TimeoutCausalCommand(node))
@@ -2055,12 +2122,14 @@ THEOREM SerializedRuntimePreservesCausalType ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ SerializedRunnerRuntimeStep(node)
     => AsyncCausalTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 SerializedRunnerRuntimeStep(node)
          PROVE AsyncCausalTypeInvariant'
     <2>1. /\ node \in ValidatorIds
@@ -2256,6 +2325,7 @@ BY FunctionalUpdatePreservesType, RunnerServiceFramePreservesClockType,
 THEOREM SerializedRuntimePreservesDeferredType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ SerializedRunnerRuntimeStep(node)
     => AsyncDeferredTypeInvariant'
 BY RuntimeSelectedCommandsAreTyped,
@@ -5069,12 +5139,14 @@ THEOREM FifoRuntimePreservesTransportContentType ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ FifoRuntimeStep(node)
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 FifoRuntimeStep(node)
          PROVE AsyncTransportContentTypeInvariant'
     <2> DEFINE Command == NextNodeCommand(node)
@@ -5103,12 +5175,14 @@ THEOREM DeferredDrainRuntimePreservesTransportContentType ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ DeferredDrainStep(node)
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 DeferredDrainStep(node)
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. CASE ~DeferredQueueNonempty(node)
@@ -5146,12 +5220,14 @@ THEOREM SerializedRuntimePreservesTransportContentType ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ SerializedRunnerRuntimeStep(node)
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 SerializedRunnerRuntimeStep(node)
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. node \in ValidatorIds
@@ -5442,8 +5518,7 @@ THEOREM SerializedCertifiedPacemakerPreservesSchedulerType ==
     /\ RunNodeWork(node)
     /\ SerializedCertifiedPacemakerStep(node)
     => AsyncSchedulerTypeInvariant'
-BY FreshCommandSuccessorsFormSequence,
-   ExecutedFreshCommandSuccessorsTypedAndOwned,
+BY ExecutedFreshCommandSuccessorsTypedAndOwned,
    ExecuteCommandLeavesIngress,
    ExecuteCommandOnlyRetiresCertifiedResponseClaim,
    FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType,

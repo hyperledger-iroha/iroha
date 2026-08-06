@@ -227,6 +227,17 @@ AdequateLeaderAuthenticatedTcEpisodeStageRank(target, tc) ==
 AdequateLeaderAuthenticatedTcEpisodeOwnsStage(target, tc, stage) ==
   stage \in AdequateLeaderAuthenticatedTcEpisodeStageSet(target, tc)
 
+\* Retirement is semantic and durable.  A volatile candidate Terminal marker
+\* is deliberately insufficient: crash/restart may reopen that same physical
+\* work, which is replay of this identity rather than resurrection.  Decision
+\* and strict installed-view advance are both persistent Core milestones.
+AdequateLeaderDurableExactTcEpisodeRetired(target, tc) ==
+  \/ NodeHasDecision(target)
+  \/ nodeView[target] > tc.view
+
+AdequateLeaderAuthenticatedTcEpisodeRetired(target, tc) ==
+  AdequateLeaderDurableExactTcEpisodeRetired(target, tc)
+
 AdequateLeaderAuthenticatedTcEpisodeBoundaryHandoff(
     target, tc, sourceStage) ==
   \/ AdequateLeaderAuthenticatedTcEpisodeRetired(target, tc)'
@@ -268,17 +279,6 @@ AdequateLeaderAuthenticatedTcEpisodeSameStageReplacement(
        target, residentTcs, residentOrigins)' = sourceRank
   /\ (AdequateLeaderAuthenticatedTcEpisodeStageRank(target, tc))'
        = budget
-
-\* Retirement is semantic and durable.  A volatile candidate Terminal marker
-\* is deliberately insufficient: crash/restart may reopen that same physical
-\* work, which is replay of this identity rather than resurrection.  Decision
-\* and strict installed-view advance are both persistent Core milestones.
-AdequateLeaderDurableExactTcEpisodeRetired(target, tc) ==
-  \/ NodeHasDecision(target)
-  \/ nodeView[target] > tc.view
-
-AdequateLeaderAuthenticatedTcEpisodeRetired(target, tc) ==
-  AdequateLeaderDurableExactTcEpisodeRetired(target, tc)
 
 AdequateLeaderSameRoundUpgradeRemainingBudget(target) ==
   IF highestRank[target] = NoRank
@@ -1497,7 +1497,7 @@ THEOREM AdequateLeaderSameRoundPersistStrictlyLowersUpgradeBudget ==
       => /\ nodeView'[target] = nodeView[target]
          /\ AdequateLeaderSameRoundUpgradeRemainingBudget(target)'
               < AdequateLeaderSameRoundUpgradeRemainingBudget(target)
-BY ValidInstallSelectedRankDoesNotExceedTcView, IsaT(600)
+BY ValidTimeoutCertificateSelectsMember, IsaT(600)
    DEF AdequateLeaderSameRoundUpgradeRemainingBudget,
        ExactPersistInstallTcCommand,
        ExecutePersistInstall, PersistInstallTC,
@@ -1870,8 +1870,8 @@ THEOREM AdequateLeaderResidentTcSkipStrictlyLowersExposureRank ==
   \A command:
     \A target \in AsyncCurrentResponsiveVoters,
        residentTcs \in SUBSET TcRecordSet,
-       residentOrigins \in SUBSET TimeoutVoteRecordSet,
-       tc \in residentTcs:
+       residentOrigins \in SUBSET TimeoutVoteRecordSet:
+      \A tc \in residentTcs:
     /\ AsyncStrongTypeInvariant
     /\ AsyncStrongTypeInvariant'
     /\ ViewDomain = Nat
@@ -1908,8 +1908,8 @@ THEOREM AdequateLeaderResidentOriginSkipStrictlyLowersExposureRank ==
     \A target \in AsyncCurrentResponsiveVoters,
        residentTcs \in SUBSET TcRecordSet,
        residentOrigins \in SUBSET TimeoutVoteRecordSet,
-       tc \in TcRecordSet,
-       vote \in residentOrigins:
+       tc \in TcRecordSet:
+      \A vote \in residentOrigins:
     /\ AsyncStrongTypeInvariant
     /\ AsyncStrongTypeInvariant'
     /\ ViewDomain = Nat

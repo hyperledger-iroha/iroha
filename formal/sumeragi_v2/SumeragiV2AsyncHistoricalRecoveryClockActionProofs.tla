@@ -745,7 +745,9 @@ THEOREM HistoricalDiscoveryCandidateInsertionHasExactMinimum ==
                \in HistoricalDiscoveryPacketCandidateOwners(packet)'
           /\ witness
                \notin HistoricalDiscoveryPacketCandidateOwners(packet)
-          /\ CandidateServiceRank(witness)' = insertedRank
+          /\ witness
+               \in {candidate \in inserted:
+                      CandidateServiceRank(candidate)' = insertedRank}
           /\ insertedRank \in OwnedServiceRankCarrier
           /\ \A other
                   \in
@@ -797,7 +799,9 @@ THEOREM HistoricalDiscoveryServeInsertionHasExactMinimum ==
           /\ witness \in HistoricalDiscoveryPacketServeOwners(packet)'
           /\ witness
                \notin HistoricalDiscoveryPacketServeOwners(packet)
-          /\ ServeJobRank(recipient, witness)' = insertedRank
+          /\ witness
+               \in {job \in inserted:
+                      ServeJobRank(recipient, job)' = insertedRank}
           /\ insertedRank \in OwnedServiceRankCarrier
           /\ \A other
                   \in HistoricalDiscoveryPacketServeInsertedRanks(

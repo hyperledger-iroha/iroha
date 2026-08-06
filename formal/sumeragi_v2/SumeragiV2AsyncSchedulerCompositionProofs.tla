@@ -74,6 +74,7 @@ THEOREM FifoRuntimePreservesProgressCommitSlotInvariantExact ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ TypeInvariant'
 
     /\ LockWithinNodeViewInvariant
@@ -91,6 +92,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 TypeInvariant',
                 LockWithinNodeViewInvariant,
                 QueuedProgressCommitHistoryInvariant,
@@ -196,6 +198,7 @@ THEOREM DeferredDrainPreservesProgressCommitSlotInvariant ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ TypeInvariant'
     /\ LockWithinNodeViewInvariant
     /\ QueuedProgressCommitHistoryInvariant
@@ -212,6 +215,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 TypeInvariant',
                 LockWithinNodeViewInvariant,
                 QueuedProgressCommitHistoryInvariant,
@@ -432,6 +436,7 @@ THEOREM RuntimeStepPreservesProgressCommitSlotInvariant ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ TypeInvariant'
     /\ LockWithinNodeViewInvariant
     /\ QueuedProgressCommitHistoryInvariant
@@ -448,6 +453,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 TypeInvariant',
                 LockWithinNodeViewInvariant,
                 QueuedProgressCommitHistoryInvariant,
@@ -630,6 +636,7 @@ THEOREM ReplayRunNodeContinuationPreservesProgressCommitSlotInvariant ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ TypeInvariant'
     /\ LockWithinNodeViewInvariant
     /\ QueuedProgressCommitHistoryInvariant
@@ -646,6 +653,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 TypeInvariant',
                 LockWithinNodeViewInvariant,
                 QueuedProgressCommitHistoryInvariant,
@@ -726,6 +734,7 @@ THEOREM RunNodeWorkPreservesProgressCommitSlotInvariant ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ TypeInvariant'
     /\ LockWithinNodeViewInvariant
     /\ QueuedProgressCommitHistoryInvariant
@@ -742,6 +751,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 TypeInvariant',
                 LockWithinNodeViewInvariant,
                 QueuedProgressCommitHistoryInvariant,
@@ -932,6 +942,7 @@ BY RunHistoricalServerLeavesProgressCarriers,
 THEOREM AsyncRunnerStepPreservesProgressCommitSlotInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncTypeInvariant
+  /\ AsyncControlServiceStateTypeInvariant
   /\ TypeInvariant'
   /\ LockWithinNodeViewInvariant
   /\ QueuedProgressCommitHistoryInvariant
@@ -947,6 +958,7 @@ THEOREM AsyncRunnerStepPreservesProgressCommitSlotInvariant ==
 PROOF
   <1>1. ASSUME StrongInductiveInvariant,
               AsyncTypeInvariant,
+              AsyncControlServiceStateTypeInvariant,
               TypeInvariant',
               LockWithinNodeViewInvariant,
               QueuedProgressCommitHistoryInvariant,
@@ -1297,12 +1309,14 @@ PROOF
          PROVE ProgressCommitSlotInvariant'
     <2>1. /\ StrongInductiveInvariant
            /\ AsyncTypeInvariant
+           /\ AsyncControlServiceStateTypeInvariant
            /\ LockWithinNodeViewInvariant
            /\ QueuedProgressCommitHistoryInvariant
            /\ DeferredProgressCommitHistoryInvariant
            /\ CausalProgressCommitHistoryInvariant
            /\ ProtectedDeferredProgressInvariant
-      BY <1>1, AsyncStrongTypeProjectsAsyncType
+      BY <1>1, AsyncStrongTypeProjectsAsyncType,
+         AsyncStrongTypeProjectsControlServiceStateType
          DEF AsyncStrongTypeInvariant, ProgressCommitSlotInvariant
     <2>2. AsyncStrongTypeInvariant'
       BY <1>1, AsyncNextPreservesStrongTypeInvariant

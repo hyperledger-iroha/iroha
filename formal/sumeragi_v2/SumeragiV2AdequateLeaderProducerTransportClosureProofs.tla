@@ -240,14 +240,14 @@ AdequateLeaderTargetProducerOriginExposureProperty(specification) ==
              leaderView \in Views,
              subject \in Subjects,
              sourceOccurrenceRank \in
-               AdequateLeaderTargetOccurrenceRankCarrier,
-             known \in
-               SUBSET AdequateLeaderFrozenOwnerUniverse(
-                 target, leaderContext, leader, leaderView, subject),
-             budget \in Nat,
-             owner \in
-               AdequateLeaderFrozenCandidateOwnerUniverse(
-                 target, leaderContext, leader, leaderView, subject):
+               AdequateLeaderTargetOccurrenceRankCarrier:
+            \A known \in
+              SUBSET AdequateLeaderFrozenOwnerUniverse(
+                target, leaderContext, leader, leaderView, subject),
+              budget \in Nat,
+              owner \in
+                AdequateLeaderFrozenCandidateOwnerUniverse(
+                  target, leaderContext, leader, leaderView, subject):
             AdequateLeaderTargetProducerTransportOccurrenceSource(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank, known, budget, owner)
@@ -262,14 +262,14 @@ AdequateLeaderTargetProducerOriginExposureOrGoalProperty(specification) ==
              leaderView \in Views,
              subject \in Subjects,
              sourceOccurrenceRank \in
-               AdequateLeaderTargetOccurrenceRankCarrier,
-             known \in
-               SUBSET AdequateLeaderFrozenOwnerUniverse(
-                 target, leaderContext, leader, leaderView, subject),
-             budget \in Nat,
-             owner \in
-               AdequateLeaderFrozenCandidateOwnerUniverse(
-                 target, leaderContext, leader, leaderView, subject):
+               AdequateLeaderTargetOccurrenceRankCarrier:
+            \A known \in
+              SUBSET AdequateLeaderFrozenOwnerUniverse(
+                target, leaderContext, leader, leaderView, subject),
+              budget \in Nat,
+              owner \in
+                AdequateLeaderFrozenCandidateOwnerUniverse(
+                  target, leaderContext, leader, leaderView, subject):
             AdequateLeaderTargetProducerTransportOccurrenceSource(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank, known, budget, owner)
@@ -299,14 +299,14 @@ AdequateLeaderTargetConcreteProducerTransportOccurrenceClosureProperty(
           leaderView \in Views,
           subject \in Subjects,
           sourceOccurrenceRank \in
-            AdequateLeaderTargetOccurrenceRankCarrier,
-          known \in
-            SUBSET AdequateLeaderFrozenOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          budget \in Nat,
-          owner \in
-            AdequateLeaderFrozenCandidateOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject):
+            AdequateLeaderTargetOccurrenceRankCarrier:
+         \A known \in
+           SUBSET AdequateLeaderFrozenOwnerUniverse(
+             target, leaderContext, leader, leaderView, subject),
+           budget \in Nat,
+           owner \in
+             AdequateLeaderFrozenCandidateOwnerUniverse(
+               target, leaderContext, leader, leaderView, subject):
          /\ AdequateLeaderTargetProducerTransportOccurrenceSource(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank, known, budget, owner)

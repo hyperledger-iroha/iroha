@@ -1098,43 +1098,6 @@ BY CandidateIoIndexCharacterization, Isa
        CausalCandidates, TrackedWorkCandidates, CandidateScheduled,
        CandidateInReadyQueue, SequenceSet, AsyncIoQueueDepth
 
-THEOREM QueuedIoServiceIsNonstuttering ==
-  \A node \in AsyncArchiveIoServiceNodes:
-    /\ AsyncTypeInvariant
-    /\ AsyncIoQueueDepth(node) > 0
-    /\ PostGstServiceIoWorker(node)
-    => <<PostGstServiceIoWorker(node)>>_AsyncAllVars
-PROOF
-  <1>1. ASSUME NEW node \in AsyncArchiveIoServiceNodes,
-                AsyncTypeInvariant,
-                AsyncIoQueueDepth(node) > 0,
-                PostGstServiceIoWorker(node)
-         PROVE <<PostGstServiceIoWorker(node)>>_AsyncAllVars
-    <2>1. /\ node \in ValidatorIds
-           /\ AsyncIoSequenceTyped(asyncIoQueues[node])
-      BY <1>1, AsyncArchiveIoServiceNodesAreValidators
-         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-             AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
-             AsyncIoQueueContentTypeInvariant
-    <2>2. /\ asyncIoQueues[node] \in Seq(Range(asyncIoQueues[node]))
-           /\ Len(asyncIoQueues[node]) > 0
-      BY <1>1, <2>1
-         DEF AsyncIoSequenceTyped, AsyncIoQueueDepth
-    <2>3. /\ asyncIoQueues[node] # <<>>
-           /\ Len(Tail(asyncIoQueues[node]))
-                = Len(asyncIoQueues[node]) - 1
-      BY <2>2, PositiveSequenceIsNonempty, HeadTailProperties
-    <2>4. Tail(asyncIoQueues[node]) # asyncIoQueues[node]
-      BY <2>2, <2>3, LenProperties, Isa
-    <2>5. asyncIoQueues'[node] = Tail(asyncIoQueues[node])
-      BY <1>1, <2>1
-         DEF PostGstServiceIoWorker, ServiceIoWorker
-    <2>6. asyncIoQueues' # asyncIoQueues
-      BY <2>4, <2>5, Isa
-    <2> QED BY <1>1, <2>6, Isa
-         DEF AsyncAllVars, AsyncSchedulerVars
-  <1> QED BY <1>1
-
 THEOREM ProtectedStage5EnablesFairWorker ==
   \A candidate, position:
     ProtectedStage5Pending(candidate, position)
@@ -2409,18 +2372,20 @@ successors appear only in the separately weighted causal tail.
 ***************************************************************************)
 
 CertifiedResponseClaimDirectPacemakerWorkTokens(node) ==
-  {<<"Runtime", index, token>>:
-     index \in CertifiedPacemakerRootIndices(node),
-     token \in
-       1..AsyncCausalExactRemainingOccurrenceBudget(
-            asyncCommandQueues[node][index].kind)}
+  UNION {
+    {<<"Runtime", index, token>>:
+       token \in
+         1..AsyncCausalExactRemainingOccurrenceBudget(
+              asyncCommandQueues[node][index].kind)}:
+    index \in CertifiedPacemakerRootIndices(node)}
 
 CertifiedResponseClaimCausalPacemakerWorkTokens(node) ==
-  {<<"Causal", index, token>>:
-     index \in CertifiedPacemakerCausalIndices(node),
-     token \in
-       1..AsyncCausalExactRemainingOccurrenceBudget(
-            asyncCausalQueues[node][index].kind)}
+  UNION {
+    {<<"Causal", index, token>>:
+       token \in
+         1..AsyncCausalExactRemainingOccurrenceBudget(
+              asyncCausalQueues[node][index].kind)}:
+    index \in CertifiedPacemakerCausalIndices(node)}
 
 CertifiedResponseClaimPacemakerWorkDebt(node) ==
   Cardinality(
