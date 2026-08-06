@@ -731,6 +731,54 @@ fn lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary() {
 }
 
 #[test]
+fn globally_admitted_transaction_commits_from_a_later_reservation_height() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Queue::test(config_factory(), &time_source);
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let binding = push_globally_bound_lane_reservation_candidate(
+        &queue,
+        &state,
+        &dir,
+        accepted_tx_by_someone(&time_source),
+    );
+    assert_eq!(
+        binding.admission_context.proposal_height, 1,
+        "the durable admission is certified for the first proposal height"
+    );
+
+    seed_committed_height_for_queue_test(&state, 4);
+    let mut later_scope = lane_reservation_scope(
+        &state,
+        b"delayed-reservation-owner",
+        b"delayed-reservation-proposal",
+    );
+    later_scope.proposal_height = 5;
+    later_scope.lane_incarnation = state
+        .lane_incarnation_at_height(LaneId::SINGLE, later_scope.proposal_height)
+        .expect("the canonical lane remains active at the later proposal height");
+    let reserved = queue
+        .reserve_transactions_for_lane(&state, later_scope, nonzero!(1_usize))
+        .expect("reserve the still-owned globally admitted transaction at a later height");
+    assert_eq!(reserved.len(), 1);
+    let key = *reserved[0].key();
+    assert_eq!(key.proposal_height, 5);
+    assert_ne!(
+        key.proposal_height, binding.admission_context.proposal_height,
+        "the reservation slot height and admission-certification height are distinct domains"
+    );
+
+    assert_eq!(
+        queue
+            .commit_lane_reservation(&key)
+            .expect("the later exact reservation must consume its durable admission claim"),
+        LaneQueueReservationOutcome::Finalized
+    );
+    assert!(!queue.transaction_selection_durability_faulted());
+}
+
+#[test]
 fn lane_reservation_group_diagnostics_rechecks_fault_after_store_lock_handoff() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();

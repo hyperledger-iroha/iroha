@@ -89,10 +89,9 @@ impl QueuePlanJournalLivePosition {
     ) -> io::Result<()> {
         if self.record.entrypoint_hash != key.entrypoint_hash
             || self.plan_digest != key.routing_plan_digest
-            || self.record.admission_context.proposal_height != key.proposal_height
         {
             return Err(invalid_data(
-                "queue plan journal global-admission tombstone does not match the live entrypoint, routing plan, or admitting height",
+                "queue plan journal global-admission tombstone does not match the live entrypoint or routing plan",
             ));
         }
         self.global_admission_binding()?
