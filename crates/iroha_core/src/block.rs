@@ -23582,11 +23582,7 @@ pub(crate) mod valid {
                         signed.header().height().get(),
                     ),
                 ));
-                with_current_state_confidential_features(
-                    signed,
-                    &state,
-                    &[(0, &leader_private)],
-                )
+                with_current_state_confidential_features(signed, &state, &[(0, &leader_private)])
             };
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
@@ -23728,11 +23724,12 @@ pub(crate) mod valid {
             let candidate_at = |creation_time_ms: u64, label: &str| {
                 let (_clock, candidate_time) =
                     TimeSource::new_mock(Duration::from_millis(creation_time_ms));
+                let transaction_time = TimeSource::new_fixed(Duration::from_millis(999_999));
                 let (authority, signer) = gen_account_in(label);
                 let transaction = TransactionBuilder::new_with_time_source(
                     state.chain_id.clone(),
                     authority,
-                    &candidate_time,
+                    &transaction_time,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(Level::INFO, label.to_owned())])
@@ -23805,17 +23802,21 @@ pub(crate) mod valid {
                 &mut noncanonical_voting_block,
             )
             .unpack(|_| {});
-            assert!(matches!(
-                rejected,
-                Err(error)
-                    if matches!(
-                        *error.1,
-                        BlockValidationError::NonCanonicalV2BlockTime {
-                            expected_ms: 1_000_000,
-                            actual_ms: 1_000_001,
-                        }
-                    )
-            ));
+            let error = match rejected {
+                Err(error) => error,
+                Ok(_) => panic!("non-canonical V2 block time must be rejected"),
+            };
+            assert!(
+                matches!(
+                    *error.1,
+                    BlockValidationError::NonCanonicalV2BlockTime {
+                        expected_ms: 1_000_000,
+                        actual_ms: 1_000_001,
+                    }
+                ),
+                "expected non-canonical V2 block time rejection, got {:?}",
+                error.1
+            );
         }
 
         #[test]
@@ -23861,10 +23862,25 @@ pub(crate) mod valid {
                 snapshot_block_creation_time_ms: 2,
                 snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state),
             };
-            let roster = vec![consensus_v2::ValidatorPower {
-                validator: peer,
-                power: 1,
-            }];
+            let mut roster_peers = vec![peer];
+            roster_peers.extend(
+                core::iter::repeat_with(|| {
+                    PeerId::new(
+                        crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    )
+                })
+                .take(3),
+            );
+            roster_peers.sort();
+            let roster = roster_peers
+                .into_iter()
+                .map(|validator| consensus_v2::ValidatorPower {
+                    validator,
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
             let context = consensus_v2::HeightContext {
                 chain_id: state.chain_id_ref().clone(),
                 protocol_version: consensus_v2::PROTOCOL_VERSION,
@@ -23893,11 +23909,12 @@ pub(crate) mod valid {
             let candidate_at = |creation_time_ms: u64| {
                 let (_clock, candidate_time) =
                     TimeSource::new_mock(Duration::from_millis(creation_time_ms));
+                let transaction_time = TimeSource::new_fixed(Duration::from_millis(11));
                 let (authority, signer) = gen_account_in("v2-snapshot-parent-work");
                 let transaction = TransactionBuilder::new_with_time_source(
                     state.chain_id.clone(),
                     authority,
-                    &candidate_time,
+                    &transaction_time,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(Level::INFO, "v2-snapshot-parent-work".to_owned())])
