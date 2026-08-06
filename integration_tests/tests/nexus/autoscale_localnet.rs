@@ -5431,29 +5431,9 @@ fn evict_historical_block_body_offline(peer: &NetworkPeer, height: u64) -> Resul
     Ok(payload_len)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FourPeerByzantineFault {
-    ConflictingReady,
-    DuplicateInits,
-}
-
-fn four_peer_byzantine_fault_layer(fault: FourPeerByzantineFault) -> Table {
-    let mut rbc = Table::new();
-    match fault {
-        FourPeerByzantineFault::ConflictingReady => {
-            rbc.insert(
-                "conflicting_ready_mask".to_owned(),
-                TomlValue::Integer((1_i64 << TOTAL_PEERS) - 1),
-            );
-        }
-        FourPeerByzantineFault::DuplicateInits => {
-            rbc.insert("duplicate_inits".to_owned(), TomlValue::Boolean(true));
-        }
-    }
-    let mut debug = Table::new();
-    debug.insert("rbc".to_owned(), TomlValue::Table(rbc));
+fn four_peer_observer_omission_layer() -> Table {
     let mut sumeragi = Table::new();
-    sumeragi.insert("debug".to_owned(), TomlValue::Table(debug));
+    sumeragi.insert("role".to_owned(), TomlValue::String("observer".to_owned()));
     let mut layer = Table::new();
     layer.insert("sumeragi".to_owned(), TomlValue::Table(sumeragi));
     layer
@@ -6187,9 +6167,9 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
 fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts_impl()
 -> Result<()> {
     const TARGET_LANE: LaneId = LaneId::new(ELASTIC_LANE_ID);
-    const FIRST_BYZANTINE_PEER: usize = 3;
+    const FIRST_OMISSION_PEER: usize = 3;
     const RECREATION_RESTART_PEER: usize = 2;
-    const SECOND_BYZANTINE_PEER: usize = 1;
+    const SECOND_OMISSION_PEER: usize = 1;
     const OFFLINE_DRAIN_PEER: usize = 0;
 
     let context = stringify!(
@@ -6243,13 +6223,11 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     restart_four_peer_validator(
         &network,
         &runtime,
-        FIRST_BYZANTINE_PEER,
+        FIRST_OMISSION_PEER,
         &base_layers,
-        Some(four_peer_byzantine_fault_layer(
-            FourPeerByzantineFault::ConflictingReady,
-        )),
+        Some(four_peer_observer_omission_layer()),
         initial_height,
-        "install first rotating Byzantine validator",
+        "install first rotating omission validator",
     )?;
     submitters = network
         .peers()
@@ -6259,7 +6237,7 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     wait_for_submission_ready(
         &submitters,
         SUBMISSION_READY_TIMEOUT,
-        "first Byzantine window",
+        "first rotating omission window",
     )?;
 
     let marker_a =
@@ -6324,11 +6302,11 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     restart_four_peer_validator(
         &network,
         &runtime,
-        FIRST_BYZANTINE_PEER,
+        FIRST_OMISSION_PEER,
         &base_layers,
         None,
         retirement_a_height,
-        "heal first rotating Byzantine validator",
+        "heal first rotating omission validator",
     )?;
     submitters = network
         .peers()
@@ -6342,12 +6320,12 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     )?;
     ensure!(
         wait_for_committed_transaction(
-            &submitters[FIRST_BYZANTINE_PEER],
+            &submitters[FIRST_OMISSION_PEER],
             autonomous_a.entrypoint_hash,
             SCALE_IN_WAIT_TIMEOUT,
-            "healed first Byzantine autonomous proof",
+            "healed first omission autonomous proof",
         )? == autonomous_a.committed,
-        "healed first Byzantine peer reconstructed another autonomous proof"
+        "healed first omission peer reconstructed another autonomous proof"
     );
 
     let marker_b =
@@ -6420,13 +6398,11 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     restart_four_peer_validator(
         &network,
         &runtime,
-        SECOND_BYZANTINE_PEER,
+        SECOND_OMISSION_PEER,
         &base_layers,
-        Some(four_peer_byzantine_fault_layer(
-            FourPeerByzantineFault::DuplicateInits,
-        )),
+        Some(four_peer_observer_omission_layer()),
         pre_second_fault_height,
-        "rotate Byzantine behavior to a second validator",
+        "rotate omission behavior to a second validator",
     )?;
     submitters = network
         .peers()
@@ -6436,7 +6412,7 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     wait_for_submission_ready(
         &submitters,
         SUBMISSION_READY_TIMEOUT,
-        "second Byzantine window",
+        "second rotating omission window",
     )?;
     let autonomous_b =
         execute_autonomous_release_cycle_transaction(&network, &submitters, marker_b.clone(), 2)?;
@@ -6449,11 +6425,11 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     restart_four_peer_validator(
         &network,
         &runtime,
-        SECOND_BYZANTINE_PEER,
+        SECOND_OMISSION_PEER,
         &base_layers,
         None,
         autonomous_b.merge_entry.merge_qc.carrier_height,
-        "heal second rotating Byzantine validator",
+        "heal second rotating omission validator",
     )?;
     submitters = network
         .peers()
@@ -6462,12 +6438,12 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         .collect();
     ensure!(
         wait_for_committed_transaction(
-            &submitters[SECOND_BYZANTINE_PEER],
+            &submitters[SECOND_OMISSION_PEER],
             autonomous_b.entrypoint_hash,
             SCALE_IN_WAIT_TIMEOUT,
-            "healed second Byzantine autonomous proof",
+            "healed second omission autonomous proof",
         )? == autonomous_b.committed,
-        "healed second Byzantine peer reconstructed another autonomous proof"
+        "healed second omission peer reconstructed another autonomous proof"
     );
 
     let intent_b = wait_for_new_uncommitted_lane_drain_intent_on_all_peers(
@@ -8046,27 +8022,26 @@ mod tests {
         AutoscaleSoakCycleEvent, AutoscaleSoakReporter, AutoscaleSoakRunSummary,
         AutoscaleTransitionStats, CommitQuorumObservation, CommitQuorumSource,
         CommittedLaneBlockSnapshot, ElasticLaneStorageStats, ExpandContractCycleOutcome,
-        FourPeerByzantineFault, LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence,
-        LaneDrainIntentLogEvidence, LaneDrainLifecycleLogEvidence, LaneIncarnationMarkerV3,
-        LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
-        PUBLIC_PROFILE_ELASTIC_LANE_ID, PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
-        PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES, PeerStatusSnapshot, SoakTimingSummary,
-        autoscale_soak_duration_from_env_value, commit_quorum_observation,
-        committed_lane_block_has_canonical_quorum_metadata, committed_lane_block_is_certified,
-        contraction_observed_on_quorum_peers, contraction_observed_on_quorum_peers_for_profile,
-        decode_block_index_entry, elastic_lane_storage_progressed,
-        expansion_observed_on_quorum_or_scale_out_transition,
+        LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence, LaneDrainIntentLogEvidence,
+        LaneDrainLifecycleLogEvidence, LaneIncarnationMarkerV3, LaneRelaySnapshot,
+        LaneStatusSnapshot, LaneValidatorSnapshot, PUBLIC_PROFILE_ELASTIC_LANE_ID,
+        PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES, PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+        PeerStatusSnapshot, SoakTimingSummary, autoscale_soak_duration_from_env_value,
+        commit_quorum_observation, committed_lane_block_has_canonical_quorum_metadata,
+        committed_lane_block_is_certified, contraction_observed_on_quorum_peers,
+        contraction_observed_on_quorum_peers_for_profile, decode_block_index_entry,
+        elastic_lane_storage_progressed, expansion_observed_on_quorum_or_scale_out_transition,
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
         expansion_observed_on_storage_for_lane_count, expansion_probe_ready,
         expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
-        expansion_top_up_tx_count, first_retirement_height_after, four_peer_byzantine_fault_layer,
-        is_autoscale_elastic_storage_segment, lifecycle_advanced_after_intent,
-        parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
-        parse_lane_drain_lifecycle_log_evidence, peer_committed_lane_block_snapshot,
-        peer_direct_applied_committed_lane_block_snapshot, peer_lane_commitment_snapshot,
-        peer_lane_status, peer_lane_validator_snapshot,
+        expansion_top_up_tx_count, first_retirement_height_after,
+        four_peer_observer_omission_layer, is_autoscale_elastic_storage_segment,
+        lifecycle_advanced_after_intent, parse_autoscale_transition_stats,
+        parse_autoscale_transition_stats_for_lane, parse_lane_drain_lifecycle_log_evidence,
+        peer_committed_lane_block_snapshot, peer_direct_applied_committed_lane_block_snapshot,
+        peer_lane_commitment_snapshot, peer_lane_status, peer_lane_validator_snapshot,
         peers_with_direct_applied_committed_lane_block_for_lane,
         peers_with_elastic_storage_progress, peers_with_expanded_lane_signal,
         peers_with_scale_in_transition, peers_with_scale_out_transition,
@@ -13639,40 +13614,19 @@ mod tests {
     }
 
     #[test]
-    fn four_peer_byzantine_layers_enable_one_exact_fault_class() {
-        let conflicting = four_peer_byzantine_fault_layer(FourPeerByzantineFault::ConflictingReady);
-        let conflicting_rbc = conflicting
+    fn four_peer_observer_omission_layer_selects_only_the_supported_role() {
+        let omission = four_peer_observer_omission_layer();
+        assert_eq!(omission.len(), 1);
+        let sumeragi = omission
             .get("sumeragi")
             .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| sumeragi.get("debug"))
-            .and_then(toml::Value::as_table)
-            .and_then(|debug| debug.get("rbc"))
-            .and_then(toml::Value::as_table)
-            .expect("conflicting READY layer has an RBC table");
+            .expect("omission layer has a Sumeragi table");
+        assert_eq!(sumeragi.len(), 1);
         assert_eq!(
-            conflicting_rbc
-                .get("conflicting_ready_mask")
-                .and_then(toml::Value::as_integer),
-            Some(0b1111)
+            sumeragi.get("role").and_then(toml::Value::as_str),
+            Some("observer")
         );
-        assert!(!conflicting_rbc.contains_key("duplicate_inits"));
-
-        let duplicate = four_peer_byzantine_fault_layer(FourPeerByzantineFault::DuplicateInits);
-        let duplicate_rbc = duplicate
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| sumeragi.get("debug"))
-            .and_then(toml::Value::as_table)
-            .and_then(|debug| debug.get("rbc"))
-            .and_then(toml::Value::as_table)
-            .expect("duplicate INIT layer has an RBC table");
-        assert_eq!(
-            duplicate_rbc
-                .get("duplicate_inits")
-                .and_then(toml::Value::as_bool),
-            Some(true)
-        );
-        assert!(!duplicate_rbc.contains_key("conflicting_ready_mask"));
+        assert!(!sumeragi.contains_key("debug"));
     }
 
     #[test]
