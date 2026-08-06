@@ -9258,10 +9258,30 @@ impl RuntimeDriver for SumeragiV2Adapter {
         ownership: &RuntimeEffectOwnership,
     ) -> bool {
         let (round, subject) = match command {
+            AdapterCommand::LocalProposalReady {
+                manifest,
+                durable_receipt,
+                validated_receipt,
+            } => {
+                let predecessor = AdapterEffect::ValidateBody {
+                    tag,
+                    round: manifest.round,
+                    subject: manifest.subject,
+                };
+                let successor = BodyPipelineCompletionEvidence::LocalProposalReady {
+                    manifest: manifest.clone(),
+                    durable_receipt: durable_receipt.clone(),
+                    validated_receipt: validated_receipt.clone(),
+                };
+                return ownership.exactly_authorizes_body_pipeline_successor(
+                    &predecessor,
+                    tag,
+                    &successor,
+                );
+            }
             AdapterCommand::ValidationSucceeded { round, subject, .. }
             | AdapterCommand::ValidationFailed { round, subject } => (*round, *subject),
             AdapterCommand::Authenticated(_)
-            | AdapterCommand::LocalProposalReady { .. }
             | AdapterCommand::BodyAvailable { .. }
             | AdapterCommand::BodyStored { .. }
             | AdapterCommand::SignatureCompleted(_)
@@ -30738,6 +30758,107 @@ mod tests {
         assert_eq!(runtime.queued_commands(), 0);
         assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
         assert_eq!(["local_proposal_ready"], PHASE_INVENTORY);
+    }
+
+    #[test]
+    fn durable_timeout_coalesces_late_local_proposal_validate_owner() {
+        let directory = TempDir::new().expect("temporary timeout-race directory");
+        let (fixture_context, _) = authenticated_runtime_context();
+        let leader = fixture_context.leader(0);
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(leader),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime while local proposal validation is in flight");
+        let tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x9D);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable.clone());
+        let validate_effect = AdapterEffect::ValidateBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let exact_validate_owner = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&validate_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 90_013)],
+        )
+        .expect("bind the late ValidateBody capability")
+        .pop()
+        .expect("one ValidateBody effect retains one owner");
+
+        let deadline = now + runtime.round_timeout();
+        let RuntimeStep::Advanced(timeout_effects) = runtime
+            .step(deadline)
+            .expect("durably install the timeout intent")
+        else {
+            panic!("timeout dispatch unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("timeout dispatch retains exact scheduler ownership");
+        let timeout_ownership = runtime
+            .take_effect_ownership(timeout_effects.len())
+            .expect("timeout Sign retains its lifecycle owner");
+        assert_eq!(timeout_ownership.len(), 1);
+        let (sign_tag, signature_preimage) = match timeout_effects.as_slice() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(vote),
+                },
+            ] => (*tag, vote.signature_preimage()),
+            effects => panic!("unexpected timeout effects: {effects:?}"),
+        };
+        let signature = Signature::new(
+            keys[usize::try_from(leader).expect("leader index fits usize")].private_key(),
+            &signature_preimage,
+        )
+        .payload()
+        .to_vec();
+        let signed_timeout = runtime
+            .driver
+            .signature_completed(sign_tag, signature)
+            .expect("finish the durable timeout signature");
+        assert_eq!(
+            signed_timeout.disposition(),
+            crate::sumeragi::v2_core::StepDisposition::Applied,
+        );
+
+        let next_ordinal = runtime.ingress.next_admission_ordinal;
+        assert_eq!(
+            runtime.driver.preflight_runtime_command_admission(
+                tag,
+                &AdapterCommand::LocalProposalReady {
+                    manifest: manifest.clone(),
+                    durable_receipt: durable.clone(),
+                    validated_receipt: validated.clone(),
+                },
+            ),
+            RuntimeCommandAdmissionPreflight::Coalesce,
+        );
+
+        runtime
+            .enqueue_local_proposal_with_owner(
+                tag,
+                manifest,
+                durable,
+                validated,
+                &exact_validate_owner,
+            )
+            .expect("the exact late ValidateBody owner terminates at the closed view");
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
+        assert!(!runtime.fail_closed);
     }
 
     #[test]
