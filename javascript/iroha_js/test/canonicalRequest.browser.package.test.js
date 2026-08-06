@@ -101,18 +101,18 @@ test("packed canonical-request subpath executes securely and has strict DOM type
     });
     const inputs = Object.keys(result.metafile.inputs);
     assert.deepEqual(findForbiddenBrowserInputs(inputs), []);
-    assert.ok(inputs.some((input) => /dist[/\\]canonicalRequest\.js$/u.test(input)));
-    assert.ok(inputs.some((input) => /dist[/\\]cryptoHash\.browser\.js$/u.test(input)));
-    assert.ok(inputs.some((input) => /dist[/\\]crypto\.browser\.js$/u.test(input)));
+    assert.ok(inputs.some((input) => /src[/\\]canonicalRequest\.js$/u.test(input)));
+    assert.ok(inputs.some((input) => /src[/\\]cryptoHash\.browser\.js$/u.test(input)));
+    assert.ok(inputs.some((input) => /src[/\\]crypto\.browser\.js$/u.test(input)));
     assert.equal(
-      inputs.some((input) => /dist[/\\]cryptoHash\.js$/u.test(input)),
+      inputs.some((input) => /src[/\\]cryptoHash\.js$/u.test(input)),
       false,
     );
     const target = BUNDLE_TARGETS.find(({ label }) =>
       label.includes("canonicalRequest"),
     );
     assert.ok(target);
-    assert.equal(result.outputFiles[0].contents.byteLength, 98_090);
+    assert.equal(result.outputFiles[0].contents.byteLength, 98_089);
     assert.ok(
       result.outputFiles[0].contents.byteLength <= Math.floor(97_869 * 1.05),
       "packed canonical-request regressed more than 5% from the protected pre-reset tree",

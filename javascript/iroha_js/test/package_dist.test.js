@@ -357,6 +357,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     ".",
     "./address",
     "./blake2b",
+    "./bootle-lantern-issuance",
     "./browser",
     "./canonical-request",
     "./connect-browser",
@@ -380,8 +381,8 @@ test("package publishes the exact general-purpose subpath inventory", () => {
 
 test("package privacy capability policy is isolated behind its explicit subpath", () => {
   assert.deepEqual(packageJson.exports["./privacy-capabilities"], {
-    browser: "./dist/privacyCapabilities.js",
-    import: "./dist/privacyCapabilities.js",
+    browser: "./src/privacyCapabilities.js",
+    import: "./src/privacyCapabilities.js",
     types: "./privacy-capabilities.d.ts",
   });
   const optionalExports = [
@@ -499,8 +500,8 @@ test("package SCCP exports reject retired TON and diagnostic helper surfaces", (
 test("package Nexus browser export has an enforced browser-only dependency graph", async () => {
   const configured = packageJson.exports["./nexus-app"];
   assert.deepEqual(configured, {
-    browser: "./dist/nexusApp.js",
-    import: "./dist/nexusApp.js",
+    browser: "./src/nexusApp.js",
+    import: "./src/nexusApp.js",
     types: "./nexus-app.d.ts",
   });
   const result = await buildWithEsbuild({
@@ -527,27 +528,29 @@ test("package Nexus browser export has an enforced browser-only dependency graph
   ];
   assert.deepEqual(findForbiddenBrowserInputs(forbiddenProbe), forbiddenProbe);
   assert.deepEqual(
-    inputs.filter((input) => input.startsWith("dist/")).sort(),
+    inputs.filter((input) => input.startsWith("src/")).sort(),
     [
-      "dist/address.js",
-      "dist/blake2b.js",
-      "dist/connect.browser.js",
-      "dist/contractAddress.js",
-      "dist/crypto.browser.js",
-      "dist/curveRegistry.js",
-      "dist/ed25519Strict.js",
-      "dist/entrypointSchema.js",
-      "dist/kotodamaIdentifiers.js",
-      "dist/multisig.js",
-      "dist/native.browser.js",
-      "dist/nexusApp.js",
-      "dist/norito.js",
-      "dist/normalizers.js",
-      "dist/numericV1.js",
-      "dist/ordering.js",
-      "dist/proofAttachment.js",
-      "dist/transactionCodec.js",
-      "dist/validationError.js",
+      "src/address.js",
+      "src/blake2b.js",
+      "src/connect.browser.js",
+      "src/contractAddress.js",
+      "src/crypto.browser.js",
+      "src/curveRegistry.js",
+      "src/ed25519Strict.js",
+      "src/entrypointSchema.js",
+      "src/governanceSelector.js",
+      "src/kotodamaIdentifiers.js",
+      "src/multisig.js",
+      "src/native.browser.js",
+      "src/nexusApp.js",
+      "src/norito.js",
+      "src/normalizers.js",
+      "src/numericV1.js",
+      "src/ordering.js",
+      "src/proofAttachment.js",
+      "src/strictLosslessJson.js",
+      "src/transactionCodec.js",
+      "src/validationError.js",
     ],
   );
   const output = result.outputFiles?.[0];

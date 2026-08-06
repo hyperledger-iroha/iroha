@@ -153,7 +153,7 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
     });
     const inputs = Object.keys(bundle.metafile.inputs);
     assert.deepEqual(findForbiddenBrowserInputs(inputs), []);
-    assert.ok(inputs.some((input) => /dist[/\\]ivmArtifact\.js$/u.test(input)));
+    assert.ok(inputs.some((input) => /src[/\\]ivmArtifact\.js$/u.test(input)));
     assert.equal(inputs.some((input) => /^node:/u.test(input)), false);
     assert.doesNotMatch(
       bundle.outputFiles[0].text,

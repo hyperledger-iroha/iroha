@@ -78,3 +78,67 @@ test("npm package surface includes exact license and no backup documentation", (
     `package contains backup or non-canonical README artifacts: ${forbiddenArtifacts.join(", ")}`,
   );
 });
+
+test("script-disabled source archives contain every declared runtime entrypoint", () => {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
+  );
+  const manifestPaths = new Set(
+    readPackManifest().files.map((entry) => entry.path.replaceAll("\\", "/")),
+  );
+  const tracked = spawnSync(
+    "git",
+    ["ls-files", "-z", "--", "javascript/iroha_js/package.json", "javascript/iroha_js/src"],
+    { cwd: REPOSITORY_ROOT, encoding: "buffer" },
+  );
+  assert.equal(
+    tracked.status,
+    0,
+    `git ls-files failed:\n${tracked.stderr.toString("utf8")}`,
+  );
+  const trackedPaths = new Set(
+    tracked.stdout
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean),
+  );
+  assert.equal(
+    trackedPaths.has("javascript/iroha_js/package.json"),
+    true,
+    "source-archive package manifest must be tracked",
+  );
+  const runtimeTargets = new Set([packageJson.main]);
+
+  for (const descriptor of Object.values(packageJson.exports)) {
+    runtimeTargets.add(descriptor.import);
+    if (descriptor.browser !== undefined) runtimeTargets.add(descriptor.browser);
+  }
+  for (const [source, replacement] of Object.entries(packageJson.browser)) {
+    runtimeTargets.add(source);
+    runtimeTargets.add(replacement);
+  }
+
+  for (const target of runtimeTargets) {
+    assert.match(
+      target,
+      /^\.\/src\//u,
+      `${target} must resolve tracked source without a package lifecycle build`,
+    );
+    const packagePath = target.slice(2);
+    assert.equal(
+      manifestPaths.has(packagePath),
+      true,
+      `${target} is absent from an npm pack --ignore-scripts archive`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(PACKAGE_ROOT, packagePath)),
+      true,
+      `${target} is absent from the source checkout`,
+    );
+    assert.equal(
+      trackedPaths.has(`javascript/iroha_js/${packagePath}`),
+      true,
+      `${target} is absent from the Git source archive`,
+    );
+  }
+});

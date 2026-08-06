@@ -43,13 +43,13 @@ test("package browser field maps only the local crypto adapter", () => {
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.equal(
-    packageJson.browser["./dist/cryptoHash.js"],
-    "./dist/cryptoHash.browser.js",
+    packageJson.browser["./src/cryptoHash.js"],
+    "./src/cryptoHash.browser.js",
   );
   assert.equal(packageJson.browser["node:crypto"], undefined);
   assert.equal(
     packageJson.exports["./canonical-request"].browser,
-    "./dist/canonicalRequest.js",
+    "./src/canonicalRequest.js",
   );
   assert.equal(packageJson.dependencies.buffer, "^6.0.3");
   assert.equal(packageJson.dependencies["@noble/hashes"], "^1.5.0");
