@@ -191,7 +191,7 @@
     "javascript/iroha_js/test/toriiClient.test.js": 27992,
     "javascript/iroha_js/test/transactionBuilder.test.js": 3950,
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt": 4577,
-    "mochi/mochi-core/src/supervisor.rs": 5839,
+    "mochi/mochi-core/src/supervisor.rs": 5769,
     "mochi/mochi-core/src/torii.rs": 9881,
     "mochi/mochi-ui-egui/src/gui.rs": 15779,
     "pytests/scripts/iso_audit_notary_adapter_test.py": 6588,

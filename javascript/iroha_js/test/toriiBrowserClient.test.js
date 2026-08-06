@@ -27,6 +27,13 @@ const FIXTURE_BOB_ID = AccountAddress.fromAccount({
     "hex",
   ),
 }).toI105();
+const FIXTURE_ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+const FIXTURE_ASSET_HOLDING_ID = `${FIXTURE_ASSET_DEFINITION_ID}#${FIXTURE_ALICE_ID}`;
+const FIXTURE_CORRUPT_ALICE_ID = `${FIXTURE_ALICE_ID.slice(0, -1)}${
+  FIXTURE_ALICE_ID.endsWith("1") ? "2" : "1"
+}`;
+const FIXTURE_CORRUPT_ASSET_HOLDING_ID =
+  `${FIXTURE_ASSET_DEFINITION_ID}#${FIXTURE_CORRUPT_ALICE_ID}`;
 const AUTHORITY_FEE_PAYMENT = Object.freeze({
   payer: "authority",
   value: Object.freeze({ charge_limits: Object.freeze([]), gas_limit: null }),
@@ -279,10 +286,65 @@ test("ToriiBrowserClient uses opaque cursors for world Explorer lists", async ()
   }
 });
 
+test("ToriiBrowserClient account list and detail send no unsupported address-format query", async () => {
+  const accountId = FIXTURE_ALICE_ID;
+  const seen = [];
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url) => {
+      seen.push(String(url));
+      return new URL(url).pathname === "/v1/explorer/accounts"
+        ? jsonResponse({
+          pagination: { limit: 10, next_cursor: null, has_more: false },
+          items: [],
+        })
+        : jsonResponse({ id: accountId });
+    },
+  });
+
+  await client.listExplorerAccounts({
+    limit: 10,
+    addressFormat: "i105",
+    address_format: "i105",
+  });
+  await client.getExplorerAccount(accountId, {
+    addressFormat: "i105",
+    address_format: "i105",
+  });
+  assert.deepEqual(seen, [
+    "https://localhost:8080/v1/explorer/accounts?limit=10",
+    `https://localhost:8080/v1/explorer/accounts/${encodeURIComponent(accountId)}`,
+  ]);
+});
+
+test("ToriiBrowserClient never sends the retired Explorer address-format query", async () => {
+  const seen = [];
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      assert.equal(parsed.searchParams.has("address_format"), false);
+      seen.push(parsed.pathname);
+      return jsonResponse({});
+    },
+  });
+  const retiredOption = { addressFormat: "i105", address_format: "i105" };
+
+  await client.listExplorerTransactions(retiredOption);
+  await client.listLatestExplorerTransactions(retiredOption);
+  await client.getExplorerTransaction("0".repeat(64), retiredOption);
+  await client.listExplorerInstructions(retiredOption);
+  await client.listLatestExplorerInstructions(retiredOption);
+  await client.getExplorerInstruction("0".repeat(64), 0, retiredOption);
+
+  assert.equal(seen.length, 6);
+});
+
 test("ToriiBrowserClient uses explicit asset-definition ownership fields", async () => {
   const item = {
-    id: "11111111-1111-4111-8111-111111111111",
+    id: FIXTURE_ASSET_DEFINITION_ID,
     owning_domain: null,
+    name: "rose",
+    description: null,
+    alias: null,
     mintable: "Infinitely",
     logo: null,
     metadata: {},
@@ -322,6 +384,208 @@ test("ToriiBrowserClient uses explicit asset-definition ownership fields", async
   await assert.rejects(
     invalidClient.listExplorerAssetDefinitions({ limit: 10 }),
     /missing or unsupported fields/u,
+  );
+});
+
+test("ToriiBrowserClient strictly normalizes Explorer asset-definition detail and lists", async () => {
+  const payload = {
+    id: FIXTURE_ASSET_DEFINITION_ID,
+    owning_domain: "xn--bcher-kva.example.main",
+    name: "Rose",
+    description: "  Reserve asset  ",
+    alias: "Rose#Treasury.Universal",
+    mintable: "Limited(42)",
+    logo: null,
+    metadata: {},
+    owned_by: FIXTURE_ALICE_ID,
+    assets: 1,
+    total_quantity: "42.5",
+    locked_quantity: null,
+    circulating_quantity: "42.5",
+  };
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url, init) => {
+      assert.equal(
+        String(url),
+        `https://localhost:8080/v1/explorer/asset-definitions/${FIXTURE_ASSET_DEFINITION_ID}`,
+      );
+      assert.equal(new Headers(init.headers).get("x-explorer-read"), "strict");
+      return jsonResponse(payload, { status: 206 });
+    },
+  });
+  assert.deepEqual(
+    await client.getExplorerAssetDefinition(FIXTURE_ASSET_DEFINITION_ID, {
+      headers: { "x-explorer-read": "strict" },
+      successStatuses: [206],
+    }),
+    payload,
+  );
+
+  const invalidDefinitions = [
+    { ...payload, id: "11111111-1111-4111-8111-111111111111" },
+    { ...payload, owned_by: "alice" },
+    { ...payload, owned_by: FIXTURE_CORRUPT_ALICE_ID },
+    { ...payload, owning_domain: "Treasury.universal" },
+    { ...payload, owning_domain: "ab--cd.main" },
+    { ...payload, owning_domain: "treasury..main" },
+    { ...payload, mintable: "Limited(0)" },
+    { ...payload, mintable: "Limited(4294967296)" },
+    { ...payload, mintable: "anything" },
+  ];
+  for (const invalidPayload of invalidDefinitions) {
+    for (const route of ["detail", "list"]) {
+      const invalidClient = new ToriiBrowserClient("https://localhost:8080", {
+        fetchImpl: async () => route === "detail"
+          ? jsonResponse(invalidPayload)
+          : jsonResponse({
+            pagination: { limit: 10, next_cursor: null, has_more: false },
+            items: [invalidPayload],
+          }),
+      });
+      const request = route === "detail"
+        ? invalidClient.getExplorerAssetDefinition(FIXTURE_ASSET_DEFINITION_ID)
+        : invalidClient.listExplorerAssetDefinitions({ limit: 10 });
+      await assert.rejects(request, undefined, `${route} must reject invalid definitions`);
+    }
+  }
+});
+
+test("ToriiBrowserClient strictly normalizes authoritative Explorer asset records", async () => {
+  const assetId = FIXTURE_ASSET_HOLDING_ID;
+  const payload = {
+    id: assetId,
+    definition_id: FIXTURE_ASSET_DEFINITION_ID,
+    account_id: FIXTURE_ALICE_ID,
+    asset_name: "Rose",
+    asset_alias: "Rose#treasury.universal",
+    value: "42.5",
+  };
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url) => {
+      assert.equal(String(url), `https://localhost:8080/v1/explorer/assets/${encodeURIComponent(assetId)}`);
+      return jsonResponse(payload);
+    },
+  });
+
+  assert.deepEqual(await client.getExplorerAsset(assetId), payload);
+
+  let invalidRequestFetches = 0;
+  const invalidRequestClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => {
+      invalidRequestFetches += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  await assert.rejects(
+    async () => invalidRequestClient.getExplorerAsset(FIXTURE_CORRUPT_ASSET_HOLDING_ID),
+    /canonical I105/u,
+  );
+  assert.equal(invalidRequestFetches, 0);
+
+  const invalidRecords = [
+    { label: "missing", payload: Object.fromEntries(Object.entries(payload).slice(1)) },
+    { label: "extra", payload: { ...payload, quantity: payload.value } },
+    { label: "wrong type", payload: { ...payload, value: 42.5 } },
+    {
+      label: "noncanonical dataspace",
+      payload: { ...payload, id: `${assetId}#dataspace:01` },
+    },
+    {
+      label: "overflow dataspace",
+      payload: { ...payload, id: `${assetId}#dataspace:18446744073709551616` },
+    },
+    {
+      label: "checksum-corrupt account binding",
+      payload: {
+        ...payload,
+        id: FIXTURE_CORRUPT_ASSET_HOLDING_ID,
+        account_id: FIXTURE_CORRUPT_ALICE_ID,
+      },
+    },
+  ];
+  for (const { label, payload: invalidPayload } of invalidRecords) {
+    for (const route of ["detail", "list"]) {
+      const invalidClient = new ToriiBrowserClient("https://localhost:8080", {
+        fetchImpl: async () => route === "detail"
+          ? jsonResponse(invalidPayload)
+          : jsonResponse({
+            pagination: { limit: 10, next_cursor: null, has_more: false },
+            items: [invalidPayload],
+          }),
+      });
+      const request = route === "detail"
+        ? invalidClient.getExplorerAsset(assetId)
+        : invalidClient.listExplorerAssets({ limit: 10 });
+      await assert.rejects(request, undefined, `${route} must reject ${label} asset records`);
+    }
+  }
+});
+
+test("ToriiBrowserClient preserves valid padded asset display text", async () => {
+  const item = {
+    id: FIXTURE_ASSET_DEFINITION_ID,
+    owning_domain: null,
+    name: "  Rose  ",
+    description: "  Reserve-backed instrument  ",
+    alias: null,
+    mintable: "Infinitely",
+    logo: null,
+    metadata: {},
+    owned_by: FIXTURE_ALICE_ID,
+    assets: 0,
+    total_quantity: "0",
+    locked_quantity: null,
+    circulating_quantity: null,
+  };
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: { limit: 10, next_cursor: null, has_more: false },
+      items: [item],
+    }),
+  });
+
+  const page = await client.listExplorerAssetDefinitions({ limit: 10 });
+  assert.equal(page.items[0].name, item.name);
+  assert.equal(page.items[0].description, item.description);
+});
+
+test("ToriiBrowserClient mirrors Rust whitespace edges for asset display text", async () => {
+  const byteOrderMark = "\uFEFF";
+  const payload = {
+    id: FIXTURE_ASSET_DEFINITION_ID,
+    owning_domain: "treasury.universal",
+    name: `${byteOrderMark}Rose`,
+    description: byteOrderMark,
+    alias: `${byteOrderMark}Rose#Treasury.Universal`,
+    mintable: "Infinitely",
+    logo: null,
+    metadata: {},
+    owned_by: FIXTURE_ALICE_ID,
+    assets: 0,
+    total_quantity: "0",
+    locked_quantity: null,
+    circulating_quantity: null,
+  };
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: { limit: 25, next_cursor: null, has_more: false },
+      items: [payload],
+    }),
+  });
+  assert.deepEqual(await client.listExplorerAssetDefinitions(), {
+    pagination: { limit: 25, next_cursor: null, has_more: false },
+    items: [payload],
+  });
+
+  const invalidClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: { limit: 25, next_cursor: null, has_more: false },
+      items: [{ ...payload, name: `${byteOrderMark}${"a".repeat(128)}`, alias: null }],
+    }),
+  });
+  await assert.rejects(
+    invalidClient.listExplorerAssetDefinitions(),
+    /128-byte limit/u,
   );
 });
 
@@ -981,6 +1245,7 @@ test("ToriiBrowserClient preserves error responses for callers", async () => {
 
 test("browser aggregate exports reusable browser-safe SDK APIs", () => {
   assert.equal(typeof browserSdk.AccountAddress, "function");
+  assert.equal(typeof browserSdk.canonicalizeDomainLabel, "function");
   assert.equal(typeof browserSdk.ToriiBrowserClient, "function");
   assert.equal(typeof browserSdk.ToriiBrowserStreamGapError, "function");
   assert.equal(typeof browserDistSdk.ToriiBrowserStreamGapError, "function");
@@ -1013,7 +1278,14 @@ test("ToriiBrowserClient rejects noncanonical asset and RWA quantity readbacks",
     {
       payload: {
         pagination: { limit: 25, next_cursor: null, has_more: false },
-        items: [{ id: "asset", value: "01" }],
+        items: [{
+          id: FIXTURE_ASSET_HOLDING_ID,
+          definition_id: FIXTURE_ASSET_DEFINITION_ID,
+          account_id: FIXTURE_ALICE_ID,
+          asset_name: "Rose",
+          asset_alias: "Rose#treasury.universal",
+          value: "01",
+        }],
       },
       invoke: (client) => client.listExplorerAssets(),
     },

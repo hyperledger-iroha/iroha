@@ -849,26 +849,26 @@ export function canonicalizeDomainLabel(domain) {
       "domain label must be a string",
     );
   }
-  const trimmed = domain.trim();
-  if (trimmed !== domain) {
+  const rustTrimmed = domain.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  if (rustTrimmed !== domain) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
       "domain label must not contain surrounding whitespace",
     );
   }
-  if (trimmed.length === 0) {
+  if (domain.length === 0) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
       "domain label must be a non-empty string",
     );
   }
-  if (/\s/.test(trimmed)) {
+  if (/\p{White_Space}/u.test(domain)) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
       "domain label must not contain whitespace",
     );
   }
-  if (/[@#$]/.test(trimmed)) {
+  if (/[@#$]/.test(domain)) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
       "domain label must not contain reserved address characters",
@@ -877,12 +877,18 @@ export function canonicalizeDomainLabel(domain) {
 
   let normalized;
   try {
-    normalized = trimmed.normalize("NFC");
+    normalized = domain.normalize("NFC");
   } catch (error) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
       "domain label normalization failed",
       { cause: error },
+    );
+  }
+  if (encoder.encode(domain).length > 255 || encoder.encode(normalized).length > 255) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+      "domain name exceeds the 255-byte Iroha Name limit",
     );
   }
   if (/[\u1E00-\u1EFF]/u.test(normalized)) {
@@ -912,58 +918,83 @@ export function canonicalizeDomainLabel(domain) {
     }
   }
 
-  let ascii;
-  try {
-    ascii = new URL(`http://${normalized}/`).hostname;
-  } catch (error) {
+  const inputLabels = normalized.replace(/[\u3002\uFF0E\uFF61]/gu, ".").split(".");
+  if (inputLabels.some((label) => label.length === 0)) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label failed UTS-46 ASCII canonicalization",
-      { cause: error },
+      "domain name must not contain empty labels",
     );
   }
-  if (typeof ascii !== "string" || ascii.length === 0) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label failed UTS-46 ASCII canonicalization",
-    );
-  }
-
-  const canonical = ascii.toLowerCase();
-  if (canonical.length === 0 || canonical.length > 63) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label length must be between 1 and 63 characters",
-    );
-  }
-  if (canonical.startsWith("-") || canonical.endsWith("-")) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not start or end with a hyphen",
-    );
-  }
-  if (
-    canonical.length >= 4 &&
-    canonical[2] === "-" &&
-    canonical[3] === "-" &&
-    !canonical.startsWith("xn--")
-  ) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not contain a double hyphen in the third and fourth position",
-    );
-  }
-  for (let index = 0; index < canonical.length; index += 1) {
-    const code = canonical.charCodeAt(index);
-    const isDigit = code >= 0x30 && code <= 0x39;
-    const isLower = code >= 0x61 && code <= 0x7a;
-    const isAllowed =
-      isDigit || isLower || canonical[index] === "-" || canonical[index] === "_";
-    if (!isAllowed) {
+  const canonicalLabels = inputLabels.map((label) => {
+    let sentinelHost;
+    try {
+      // A non-numeric terminal label prevents WHATWG's host parser from rewriting numeric
+      // Iroha names as IPv4 addresses while retaining its browser-safe UTS-46 conversion.
+      sentinelHost = new URL(`http://${label}.x/`).hostname;
+    } catch (error) {
       throw new AccountAddressError(
         AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-        "domain label contains unsupported characters",
+        "domain label failed UTS-46 ASCII canonicalization",
+        { cause: error },
       );
+    }
+    if (!sentinelHost.endsWith(".x")) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+        "domain label failed UTS-46 ASCII canonicalization",
+      );
+    }
+    const canonicalLabel = sentinelHost.slice(0, -2).toLowerCase();
+    if (!canonicalLabel || canonicalLabel.includes(".")) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+        "domain label failed UTS-46 ASCII canonicalization",
+      );
+    }
+    return canonicalLabel;
+  });
+  const canonical = canonicalLabels.join(".");
+  if (canonical.length === 0 || canonical.length > 253) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+      "domain name length must be between 1 and 253 characters",
+    );
+  }
+  for (const label of canonicalLabels) {
+    if (label.length > 63) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+        "domain label length must be between 1 and 63 characters",
+      );
+    }
+    if (label.startsWith("-") || label.endsWith("-")) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+        "domain label must not start or end with a hyphen",
+      );
+    }
+    if (
+      label.length >= 4 &&
+      label[2] === "-" &&
+      label[3] === "-" &&
+      !label.startsWith("xn--")
+    ) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+        "domain label must not contain a double hyphen in the third and fourth position",
+      );
+    }
+    for (let index = 0; index < label.length; index += 1) {
+      const code = label.charCodeAt(index);
+      const isDigit = code >= 0x30 && code <= 0x39;
+      const isLower = code >= 0x61 && code <= 0x7a;
+      const isAllowed = isDigit || isLower || label[index] === "-" || label[index] === "_";
+      if (!isAllowed) {
+        throw new AccountAddressError(
+          AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+          "domain label contains unsupported characters",
+        );
+      }
     }
   }
   return canonical;

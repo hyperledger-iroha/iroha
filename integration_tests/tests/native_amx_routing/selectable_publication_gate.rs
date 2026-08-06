@@ -10,23 +10,8 @@ fn musubi_selectable_fault_localnet_builder() -> NetworkBuilder {
         .expect("canonical SoraFS pin-fee treasury");
     musubi_fault_localnet_builder()
         .with_consensus_message_control()
-        .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanRegisterSorafsPin),
-            ALICE_ID.clone(),
-        ))
-        .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanIssueSorafsReplicationOrder),
-            ALICE_ID.clone(),
-        ))
-        .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanCompleteSorafsReplicationOrder),
-            ALICE_ID.clone(),
-        ))
         .with_config_layer(move |layer| {
-            layer.write(
-                ["governance", "sorafs_pin_fee_treasury_account"],
-                treasury.clone(),
-            );
+            layer.write(["gov", "sorafs_pin_fee_treasury_account"], treasury.clone());
         })
 }
 
@@ -358,14 +343,13 @@ async fn run_selectable_musubi_publication_phase_cut(
             }
         };
 
-        let barrier_transaction = live_submitter.build_transaction(
+        let barrier_transaction = build_quoted_transaction(
+            &live_submitter,
             [InstructionBox::from(Log::new(
                 Level::INFO,
                 format!("Musubi selectable publication {phase_label} restart barrier"),
             ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         submit_approved_and_wait_for_all_peers(
             &network,
             &live_submitter,
@@ -487,6 +471,7 @@ pub(super) async fn run() -> Result<()> {
     if !multilane_release_gate_requested(context)? {
         return Ok(());
     }
+    eprintln!("[multilane-release-gate] started: {context}");
     for (phase, label) in [
         (NativeAmxFaultPhase::AfterPrepareQc, "after-prepare-qc"),
         (NativeAmxFaultPhase::AfterCommitQc, "after-commit-qc"),
@@ -500,5 +485,7 @@ pub(super) async fn run() -> Result<()> {
             "{context}: sandbox restrictions skipped required phase {label}"
         );
     }
+    eprintln!("{EX297_PHASE_CUT_RELEASE_MARKER}");
+    eprintln!("[multilane-release-gate] completed: {context}");
     Ok(())
 }

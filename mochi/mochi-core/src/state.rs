@@ -905,7 +905,7 @@ mod tests {
         let encoded = to_bytes(&output).expect("encode query output");
 
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
 
@@ -938,7 +938,7 @@ mod tests {
         let encoded = to_bytes(&output).expect("encode query output");
 
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
 
@@ -964,8 +964,8 @@ mod tests {
         );
         let encoded = to_bytes(&output).expect("encode query output");
 
-        server.mock(|when, then| {
-            when.method(POST).path("/query");
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
 
@@ -973,7 +973,14 @@ mod tests {
         let err = run_state_query(client, StateQueryKind::Accounts, None, None)
             .await
             .expect_err("unexpected batch kind should error");
-        matches!(err, StateQueryError::UnexpectedBatch { .. });
+        assert!(matches!(
+            err,
+            StateQueryError::UnexpectedBatch {
+                kind: StateQueryKind::Accounts,
+                actual: "Asset",
+            }
+        ));
+        mock.assert();
     }
 
     #[test]

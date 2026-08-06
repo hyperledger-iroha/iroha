@@ -312,7 +312,7 @@ fn build_mochi_ui(profile: &str) -> Result<(), Box<dyn Error>> {
     let status = command.status()?;
     if !status.success() {
         return Err(format!(
-            "cargo build --manifest-path {MOCHI_UI_MANIFEST_REL} --features {MOCHI_UI_FEATURE} --bin {MOCHI_BIN_NAME} failed"
+            "cargo build --locked --manifest-path {MOCHI_UI_MANIFEST_REL} --features {MOCHI_UI_FEATURE} --bin {MOCHI_BIN_NAME} failed"
         )
         .into());
     }
@@ -320,12 +320,7 @@ fn build_mochi_ui(profile: &str) -> Result<(), Box<dyn Error>> {
 }
 
 fn mochi_ui_build_args(profile: &str) -> Vec<OsString> {
-    let mut args = vec![OsString::from("build")];
-    if profile == "release" {
-        args.push(OsString::from("--release"));
-    } else if profile != "debug" {
-        args.extend([OsString::from("--profile"), OsString::from(profile)]);
-    }
+    let mut args = cargo_build_args(profile);
     args.extend([
         OsString::from("--manifest-path"),
         mochi_ui_manifest_path().into_os_string(),
@@ -337,23 +332,28 @@ fn mochi_ui_build_args(profile: &str) -> Vec<OsString> {
     args
 }
 
+fn cargo_build_args(profile: &str) -> Vec<OsString> {
+    let mut args = vec![OsString::from("build"), OsString::from("--locked")];
+    if profile == "release" {
+        args.push(OsString::from("--release"));
+    } else if profile != "debug" {
+        args.extend([OsString::from("--profile"), OsString::from(profile)]);
+    }
+    args
+}
+
 fn mochi_ui_manifest_path() -> PathBuf {
     workspace_root().join(MOCHI_UI_MANIFEST_REL)
 }
 
 fn build_kagami(profile: &str) -> Result<(), Box<dyn Error>> {
     let mut command = Command::new("cargo");
-    command.arg("build");
-    if profile == "release" {
-        command.arg("--release");
-    } else if profile != "debug" {
-        command.args(["--profile", profile]);
-    }
+    command.args(cargo_build_args(profile));
     command.args(["-p", "iroha_kagami"]);
     command.current_dir(workspace_root());
     let status = command.status()?;
     if !status.success() {
-        return Err("cargo build -p iroha_kagami failed".into());
+        return Err("cargo build --locked -p iroha_kagami failed".into());
     }
     Ok(())
 }
@@ -534,8 +534,8 @@ fn create_archive(
 mod tests {
     use super::{
         MOCHI_BIN_NAME, MOCHI_HELP_HEADER, MOCHI_SANDBOX_HELP, MOCHI_UI_FEATURE,
-        MOCHI_UI_MANIFEST_REL, create_archive, mochi_ui_build_args, mochi_ui_manifest_path,
-        validate_mochi_help_output,
+        MOCHI_UI_MANIFEST_REL, cargo_build_args, create_archive, mochi_ui_build_args,
+        mochi_ui_manifest_path, validate_mochi_help_output,
     };
     use std::{ffi::OsString, fs, process::Command};
 
@@ -570,7 +570,12 @@ mod tests {
             OsString::from(MOCHI_BIN_NAME),
         ];
 
-        assert_eq!(args.first(), Some(&OsString::from("build")));
+        assert_eq!(
+            args.get(0..2),
+            Some(
+                [OsString::from("build"), OsString::from("--locked")].as_slice()
+            )
+        );
         assert_eq!(
             args.get(args.len() - expected_tail.len()..),
             Some(expected_tail.as_slice())
@@ -582,10 +587,11 @@ mod tests {
         let args = mochi_ui_build_args("profiling");
 
         assert_eq!(
-            args.get(0..3),
+            args.get(0..4),
             Some(
                 [
                     OsString::from("build"),
+                    OsString::from("--locked"),
                     OsString::from("--profile"),
                     OsString::from("profiling"),
                 ]
@@ -599,8 +605,40 @@ mod tests {
         let args = mochi_ui_build_args("release");
 
         assert_eq!(
-            args.get(0..2),
-            Some([OsString::from("build"), OsString::from("--release")].as_slice())
+            args.get(0..3),
+            Some(
+                [
+                    OsString::from("build"),
+                    OsString::from("--locked"),
+                    OsString::from("--release"),
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn cargo_build_args_are_lockfile_bound_for_all_profiles() {
+        assert_eq!(
+            cargo_build_args("debug"),
+            [OsString::from("build"), OsString::from("--locked")]
+        );
+        assert_eq!(
+            cargo_build_args("release"),
+            [
+                OsString::from("build"),
+                OsString::from("--locked"),
+                OsString::from("--release"),
+            ]
+        );
+        assert_eq!(
+            cargo_build_args("profiling"),
+            [
+                OsString::from("build"),
+                OsString::from("--locked"),
+                OsString::from("--profile"),
+                OsString::from("profiling"),
+            ]
         );
     }
 

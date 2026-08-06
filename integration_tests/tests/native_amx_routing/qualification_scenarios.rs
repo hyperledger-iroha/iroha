@@ -23,7 +23,8 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
             DomainId::try_new("bankvault", "bank").expect("bank vault domain");
         let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
         let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
-        let transaction = submitter.build_transaction(
+        let transaction = build_quoted_transaction(
+            &submitter,
             [
                 dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
                 dataspace_setup_instruction("bank", bank_dataspace, &submitter.account)?,
@@ -38,9 +39,7 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
                     &submitter.account,
                 )?,
             ],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         let entrypoint_hash = transaction.hash_as_entrypoint();
 
         let approved_route =
@@ -113,7 +112,8 @@ pub(super) async fn run_native_amx_queue_journal_replays_plan_after_restart() ->
             DomainId::try_new("journalbankvault", "bank").expect("bank vault domain");
         let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
         let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
-        let transaction = submitter.build_transaction(
+        let transaction = build_quoted_transaction(
+            &submitter,
             [
                 dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
                 dataspace_setup_instruction("bank", bank_dataspace, &submitter.account)?,
@@ -128,9 +128,7 @@ pub(super) async fn run_native_amx_queue_journal_replays_plan_after_restart() ->
                     &submitter.account,
                 )?,
             ],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         let entrypoint_hash = transaction.hash_as_entrypoint();
 
         let submitter_for_submit = submitter.clone();
@@ -208,15 +206,14 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             .ok_or_else(|| eyre!("Musubi crash replay has no admitting peer"))?;
         let submitter = admitting_peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
 
-        let provider_transaction = submitter.build_transaction(
+        let provider_transaction = build_quoted_transaction(
+            &submitter,
             [Box::new(RegisterProviderOwner::new(
                 musubi_fault_provider(),
                 submitter.account.clone(),
             ))
             .into_instruction_box()],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         submit_approved_and_wait_for_all_peers(
             &network,
             &submitter,
@@ -228,14 +225,13 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
         let domain =
             DomainId::try_new(MUSUBI_FAULT_DOMAIN, "acme").expect("Musubi fault namespace domain");
-        let namespace_home_transaction = submitter.build_transaction(
+        let namespace_home_transaction = build_quoted_transaction(
+            &submitter,
             [
                 dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
                 domain_setup_instruction_in_dataspace(&domain, acme_dataspace, &submitter.account)?,
             ],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         submit_approved_and_wait_for_all_peers(
             &network,
             &submitter,
@@ -245,14 +241,13 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         .await?;
 
         let binding = musubi_fault_namespace_binding();
-        let binding_transaction = submitter.build_transaction(
+        let binding_transaction = build_quoted_transaction(
+            &submitter,
             [InstructionBox::from(RegisterMusubiNamespaceBindingV1::new(
                 binding.clone(),
                 1,
             ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         let binding_block = submit_approved_and_wait_for_all_peers(
             &network,
             &submitter,
@@ -273,15 +268,14 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             &commitment,
             &manifest,
         );
-        let archive_transaction = submitter.build_transaction(
+        let archive_transaction = build_quoted_transaction(
+            &submitter,
             [InstructionBox::from(RegisterMusubiArchiveV1::new(
                 commitment,
                 staging_receipt,
                 1,
             ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         submit_approved_and_wait_for_all_peers(
             &network,
             &submitter,
@@ -308,7 +302,8 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             )?;
         }
 
-        let publish_transaction = submitter.build_transaction(
+        let publish_transaction = build_quoted_transaction(
+            &submitter,
             [InstructionBox::from(PublishMusubiReleaseV1::new(
                 binding.namespace,
                 publication,
@@ -316,9 +311,7 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
                 1,
                 None,
             ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         let publish_entrypoint = publish_transaction.hash_as_entrypoint();
 
         // Stop every other validator before Torii acceptance so the publication cannot
@@ -355,14 +348,13 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         )
         .await?;
 
-        let barrier_transaction = restarted_client.build_transaction(
+        let barrier_transaction = build_quoted_transaction(
+            &restarted_client,
             [InstructionBox::from(Log::new(
                 Level::INFO,
                 "Musubi publication crash-replay visibility barrier".to_owned(),
             ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        );
+        )?;
         submit_approved_and_wait_for_all_peers(
             &network,
             &restarted_client,

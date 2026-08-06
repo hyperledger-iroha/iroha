@@ -1306,7 +1306,8 @@ args = "r10=&Quantity, r11=&Quantity"
 ret = "r10=0/1"
 gas = "G_numeric_staged"
 
-# Exact numeric JSON getters accept canonical base-10 strings only.
+# The exact int JSON getter accepts i64/u64 number tokens; decimal and quantity
+# getters accept canonical base-10 strings only.
 [[syscall]]
 number = "0x010160"
 args = "r10=&Json(object), r11=&Name(key)"

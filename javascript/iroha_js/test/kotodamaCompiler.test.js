@@ -1750,7 +1750,7 @@ test("browser condition precedes the Node import condition", () => {
   ]);
   assert.equal(
     packageJson.exports["./kotodama-compiler"].browser,
-    "./dist/kotodamaCompiler/browser.js",
+    "./src/kotodamaCompiler/browser.js",
   );
 });
 

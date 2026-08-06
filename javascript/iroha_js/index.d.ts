@@ -293,6 +293,7 @@ export interface CurveSupportOptions {
 }
 
 export function configureCurveSupport(options?: CurveSupportOptions): void;
+export function canonicalizeDomainLabel(domain: string): string;
 
 export class AccountAddress {
   static fromAccount(options: {
@@ -9997,7 +9998,6 @@ export interface ToriiBrowserExplorerAccountsOptions
   extends ToriiBrowserExplorerCursorOptions {
   domain?: string;
   withAsset?: string;
-  addressFormat?: string;
 }
 
 export interface ToriiBrowserExplorerDomainsOptions
@@ -10040,6 +10040,9 @@ export interface ToriiBrowserExplorerAssetDefinition {
   readonly id: string;
   /** Null denotes an intentionally unowned global definition. */
   readonly owning_domain: string | null;
+  readonly name: string;
+  readonly description: string | null;
+  readonly alias: string | null;
   readonly mintable: string;
   readonly logo: string | null;
   readonly metadata: Readonly<Record<string, unknown>>;
@@ -10048,6 +10051,15 @@ export interface ToriiBrowserExplorerAssetDefinition {
   readonly total_quantity: string;
   readonly locked_quantity: string | null;
   readonly circulating_quantity: string | null;
+}
+
+export interface ToriiBrowserExplorerAsset {
+  readonly id: string;
+  readonly definition_id: string;
+  readonly account_id: string;
+  readonly asset_name: string;
+  readonly asset_alias: string | null;
+  readonly value: string;
 }
 
 export interface ToriiLedgerHeadersOptions {
@@ -10370,13 +10382,13 @@ export declare class ToriiBrowserClient {
     domainId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerAssets<T = unknown>(
+  listExplorerAssets<T = ToriiBrowserExplorerAsset>(
     options?: ToriiBrowserExplorerAssetsOptions,
   ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAsset(
     assetId: string,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<ToriiBrowserExplorerAsset>;
   listAccountAssets(
     accountId: string,
     options?: Record<string, unknown>,
@@ -10429,6 +10441,10 @@ export declare class ToriiBrowserClient {
   listExplorerAssetDefinitions<T = ToriiBrowserExplorerAssetDefinition>(
     options?: ToriiBrowserExplorerAssetDefinitionsOptions,
   ): Promise<ToriiBrowserExplorerCursorPage<T>>;
+  getExplorerAssetDefinition(
+    assetDefinitionId: string,
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<ToriiBrowserExplorerAssetDefinition>;
   getExplorerAssetDefinitionEconometrics(
     assetDefinitionId: string,
     options?: Record<string, unknown>,

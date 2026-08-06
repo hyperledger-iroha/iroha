@@ -46,6 +46,189 @@ def canonical_models() -> list[dict]:
     return copy.deepcopy(ledger["models"])
 
 
+def canonical_queue_plan_model() -> dict:
+    """Return the reviewed QueuePlan admission-registry source contract."""
+
+    matches = [
+        model
+        for model in canonical_models()
+        if model["module"] == "SumeragiV2QueuePlanAdmissionRegistry"
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def copy_queue_plan_model_fixture(
+    tmp_path: Path, module, model: dict
+) -> Path:
+    """Copy the QueuePlan model and every bound production source."""
+
+    formal_dir = tmp_path / module.FORMAL_RELATIVE
+    relatives = {
+        module.FORMAL_RELATIVE / f"{model['module']}.tla",
+        module.FORMAL_RELATIVE / model["positive_config"],
+    }
+    relatives.update(
+        module.FORMAL_RELATIVE / mutation["config"]
+        for mutation in model["mutations"]
+    )
+    relatives.update(
+        Path(binding["path"]) for binding in model["production_symbols"]
+    )
+    relatives.update(
+        Path(relative)
+        for relative, _symbol, _tokens in module.QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS
+    )
+    for relative in relatives:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    return formal_dir
+
+
+def validate_queue_plan_model_fixture(
+    tmp_path: Path, module, model: dict, formal_dir: Path
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    module._validate_model(tmp_path, formal_dir, model, errors)
+    module._validate_queue_plan_startup_replay_contract(
+        tmp_path, [model], errors
+    )
+    return tuple(errors)
+
+
+def test_queue_plan_future_source_bindings_accept_current_production(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    model = canonical_queue_plan_model()
+    formal_dir = copy_queue_plan_model_fixture(tmp_path, module, model)
+    assert validate_queue_plan_model_fixture(
+        tmp_path, module, model, formal_dir
+    ) == ()
+
+
+@pytest.mark.parametrize(
+    ("relative", "region", "old", "new", "symbol", "required_token"),
+    (
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+            "fn accept_queue_plan_admission_certificate(",
+            "PendingQueuePlanAdmissionDisposition::Future => {",
+            "PendingQueuePlanAdmissionDisposition::Stale => {",
+            "V2LaneWorkAdapter::accept_queue_plan_admission_certificate",
+            "PendingQueuePlanAdmissionDisposition::Future",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+            "fn refresh_merge_candidates(",
+            "PendingQueuePlanAdmissionDisposition::Future => {",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent => {",
+            "refresh_merge_candidates",
+            "PendingQueuePlanAdmissionDisposition::Future",
+        ),
+        (
+            Path("crates/iroha_torii/src/lib.rs"),
+            "fn validate_queue_plan_admission_publication(",
+            "PendingQueuePlanAdmissionDisposition::Future => {",
+            "PendingQueuePlanAdmissionDisposition::Stale => {",
+            "validate_queue_plan_admission_publication",
+            "PendingQueuePlanAdmissionDisposition::Future",
+        ),
+        (
+            Path("crates/iroha_torii/src/lib.rs"),
+            "fn ingest_queue_plan_admission_publication(",
+            "validate_queue_plan_admission_publication(app, publication)?",
+            "validate_queue_plan_admission_publication(app, publication).unwrap()",
+            "ingest_queue_plan_admission_publication",
+            "validate_queue_plan_admission_publication(app, publication)?",
+        ),
+    ),
+    ids=(
+        "sumeragi-ingress-rejects-future",
+        "durable-recovery-retains-future",
+        "torii-ingress-rejects-future",
+        "torii-validates-before-persisting",
+    ),
+)
+def test_queue_plan_future_source_bindings_reject_mutations(
+    tmp_path: Path,
+    relative: Path,
+    region: str,
+    old: str,
+    new: str,
+    symbol: str,
+    required_token: str,
+) -> None:
+    module = load_checker()
+    model = canonical_queue_plan_model()
+    formal_dir = copy_queue_plan_model_fixture(tmp_path, module, model)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    region_start = source.index(region)
+    mutation = source.index(old, region_start)
+    path.write_text(
+        source[:mutation] + new + source[mutation + len(old) :],
+        encoding="utf-8",
+    )
+    errors = validate_queue_plan_model_fixture(
+        tmp_path, module, model, formal_dir
+    )
+    assert any(
+        symbol in error and repr(required_token) in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    "symbol",
+    tuple(
+        binding[2]
+        for binding in (
+            (
+                "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+                "method",
+                "V2LaneWorkAdapter::accept_queue_plan_admission_certificate",
+            ),
+            (
+                "crates/iroha_torii/src/lib.rs",
+                "fn",
+                "validate_queue_plan_admission_publication",
+            ),
+            (
+                "crates/iroha_torii/src/lib.rs",
+                "fn",
+                "ingest_queue_plan_admission_publication",
+            ),
+            (
+                "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+                "fn",
+                "refresh_merge_candidates",
+            ),
+        )
+    ),
+)
+def test_queue_plan_future_source_bindings_require_every_reviewed_member(
+    tmp_path: Path, symbol: str
+) -> None:
+    module = load_checker()
+    model = canonical_queue_plan_model()
+    formal_dir = copy_queue_plan_model_fixture(tmp_path, module, model)
+    model["production_symbols"] = [
+        binding
+        for binding in model["production_symbols"]
+        if binding["symbol"] != symbol
+    ]
+    errors = validate_queue_plan_model_fixture(
+        tmp_path, module, model, formal_dir
+    )
+    assert any(
+        "reviewed startup replay binding" in error
+        and symbol in error
+        and "found 0" in error
+        for error in errors
+    ), errors
+
+
 def copy_layout_fixture(tmp_path: Path, module, contract: dict) -> None:
     """Copy every file consumed by the isolated layout-contract validator."""
 

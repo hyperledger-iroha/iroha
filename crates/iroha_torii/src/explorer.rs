@@ -326,6 +326,9 @@ pub(crate) struct ExplorerAssetDefinitionDto {
     pub id: String,
     /// Immutable domain ownership, or `None` for an intentionally unowned global definition.
     pub owning_domain: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub alias: Option<String>,
     pub mintable: String,
     pub logo: Option<String>,
     pub metadata: Value,
@@ -344,6 +347,9 @@ impl ExplorerAssetDefinitionDto {
         Self {
             id: definition.id().to_string(),
             owning_domain: definition.owning_domain().as_ref().map(ToString::to_string),
+            name: definition.name().to_owned(),
+            description: definition.description().clone(),
+            alias: definition.alias().as_ref().map(ToString::to_string),
             mintable: mintable_label(definition.mintable()),
             logo: definition.logo().as_ref().map(ToString::to_string),
             metadata: metadata_to_json(definition.metadata()),
@@ -457,15 +463,20 @@ pub(crate) struct ExplorerAssetDto {
     pub id: String,
     pub definition_id: String,
     pub account_id: String,
+    pub asset_name: String,
+    pub asset_alias: Option<String>,
     pub value: Quantity,
 }
 
 impl ExplorerAssetDto {
-    pub(crate) fn from_entry(entry: AssetEntry<'_>) -> Self {
+    pub(crate) fn from_entry(entry: AssetEntry<'_>, definition: &AssetDefinition) -> Self {
+        debug_assert_eq!(entry.id().definition(), definition.id());
         Self {
             id: entry.id().to_string(),
             definition_id: entry.id().definition().to_string(),
             account_id: entry.id().account().to_string(),
+            asset_name: definition.name().to_owned(),
+            asset_alias: definition.alias().as_ref().map(ToString::to_string),
             value: entry.value().as_ref().clone(),
         }
     }
@@ -1997,8 +2008,11 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
             }) && owner_filter.is_none_or(|owner| definition.owned_by() == owner)
         },
         |definition| {
+            let definition = world
+                .asset_definition(definition.id())
+                .expect("world invariant: indexed asset definition must remain addressable");
             ExplorerAssetDefinitionDto::from_definition_with_asset_count(
-                definition,
+                &definition,
                 definition_instance_count_from_world(world, definition.id()),
             )
         },
@@ -2119,7 +2133,12 @@ pub(crate) fn assets_page_for_filters<'world>(
                 && owned_by.is_none_or(|owner| asset.id().account() == owner)
                 && definition_filter.is_none_or(|definition| asset.id().definition() == definition)
         },
-        ExplorerAssetDto::from_entry,
+        |asset| {
+            let definition = world
+                .asset_definition(asset.id().definition())
+                .expect("world invariant: every asset must reference an asset definition");
+            ExplorerAssetDto::from_entry(asset, &definition)
+        },
     );
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::Assets,
@@ -2337,7 +2356,9 @@ mod tests {
     use iroha_data_model::{
         ChainId, Registrable, ValidationFail,
         account::{Account, AccountDetails},
-        asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId, definition::MintabilityTokens},
+        asset::{
+            Asset, AssetDefinitionAlias, AssetDefinitionId, AssetId, definition::MintabilityTokens,
+        },
         block::{BlockHeader, builder::BlockBuilder},
         common::{Owned, Ref},
         domain::{Domain, DomainId},
@@ -2396,13 +2417,15 @@ mod tests {
             iroha_data_model::asset::AssetBalancePolicy::Global,
             Some(domain_id.clone()),
         )
-        .with_alias(Some(alias))
+        .with_description(Some("Explorer coin".to_owned()))
+        .with_alias(Some(alias.clone()))
         .build(&ALICE_ID);
+        let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
         let world = World::with_assets(
             [Domain::new(domain_id.clone()).build(&ALICE_ID)],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [definition],
-            [],
+            [Asset::new(asset_id.clone(), Quantity::from(17_u32))],
             [],
         );
         let view = world.view();
@@ -2420,6 +2443,12 @@ mod tests {
             .expect("domain-filtered page");
         assert_eq!(domain_page.items.len(), 1);
         assert_eq!(domain_page.items[0].id, definition_id.to_string());
+        assert_eq!(domain_page.items[0].name, "coin");
+        assert_eq!(
+            domain_page.items[0].description.as_deref(),
+            Some("Explorer coin")
+        );
+        assert_eq!(domain_page.items[0].alias.as_deref(), Some(alias.as_ref()));
         let domain_text = domain_id.to_string();
         assert_eq!(
             domain_page.items[0].owning_domain.as_deref(),
@@ -2431,6 +2460,23 @@ mod tests {
                 .expect("domain-and-owner-filtered page");
         assert_eq!(domain_and_owner_page.items.len(), 1);
         assert_eq!(domain_and_owner_page.items[0].id, definition_id.to_string());
+
+        let asset_page = assets_page_for_filters(
+            &view,
+            Some(&ALICE_ID),
+            Some(&definition_id),
+            Some(&asset_id),
+            &query,
+        )
+        .expect("asset page");
+        assert_eq!(asset_page.items.len(), 1);
+        assert_eq!(asset_page.items[0].id, asset_id.to_string());
+        assert_eq!(asset_page.items[0].asset_name, "coin");
+        assert_eq!(
+            asset_page.items[0].asset_alias.as_deref(),
+            Some(alias.as_ref())
+        );
+        assert_eq!(asset_page.items[0].value, Quantity::from(17_u32));
     }
     use nonzero_ext::nonzero;
 
@@ -2749,6 +2795,9 @@ mod tests {
             json::Value::String("ROSE".into()),
         );
         let dto = ExplorerAssetDefinitionDto::from_definition_with_asset_count(&definition, 7);
+        assert_eq!(dto.name, "rose");
+        assert_eq!(dto.description, None);
+        assert_eq!(dto.alias, None);
         assert_eq!(dto.mintable, "Once");
         assert_eq!(dto.assets, 7);
         assert_eq!(dto.total_quantity, Quantity::from(100_u32));
@@ -2765,11 +2814,20 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
+        let definition = iroha_data_model::asset::definition::AssetDefinition::numeric(
+            def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let asset_id = AssetId::new(def_id, ALICE_ID.clone());
         let value = Owned::new(Quantity::from(42u32));
         let entry = Ref::new(&asset_id, &value);
-        let dto = ExplorerAssetDto::from_entry(entry);
+        let dto = ExplorerAssetDto::from_entry(entry, &definition);
         assert_eq!(dto.id, asset_id.to_string());
+        assert_eq!(dto.asset_name, "rose");
+        assert_eq!(dto.asset_alias, None);
         assert_eq!(dto.value, Quantity::from(42_u32));
         assert_eq!(dto.account_id, ALICE_ID.to_string());
     }

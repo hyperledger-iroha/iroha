@@ -153,17 +153,19 @@ fn random_soranet_transport_key_pair_distinct_from(streaming: &KeyPair) -> KeyPa
 }
 
 pub use crate::config::genesis as genesis_factory;
-/// Build the default minimal genesis with additional post-topology transactions.
+/// Build an unexecuted default minimal genesis with additional post-topology transactions.
 ///
-/// This is useful for tests that need to execute instructions after peers/topology are registered,
-/// while still reusing the deterministic \"minimal\" genesis produced by this crate.
+/// This helper is intended for [`NetworkBuilder::with_genesis_block`] callbacks that need to
+/// execute instructions after peers/topology are registered while still reusing the deterministic
+/// \"minimal\" genesis produced by this crate. Execution is deliberately deferred until the
+/// builder has resolved the exact final pipeline, Nexus, and ZK runtime configuration.
 pub fn genesis_factory_with_post_topology(
     extra_transactions: Vec<Vec<InstructionBox>>,
     post_topology_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
 ) -> GenesisBlock {
-    crate::config::genesis_with_keypair_and_post_topology(
+    crate::config::genesis_unexecuted_with_keypair_and_post_topology(
         extra_transactions,
         post_topology_transactions,
         topology,
@@ -450,6 +452,10 @@ pub fn submit_ensure_domain_for_network(
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
 // Fast signed cadence for local test networks; callers can opt into Sumeragi defaults.
 const LOCALNET_BLOCK_CADENCE: Duration = Duration::from_millis(333);
+// Keep each test peer's storage deterministic on thin-provisioned filesystems whose advertised
+// capacity is much larger than currently available space. The production runtime still derives
+// its budget.
+const LOCALNET_NEXUS_STORAGE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 // Sumeragi default, used only when the builder is explicitly told to keep it.
 const DEFAULT_BLOCK_CADENCE: Duration =
     Duration::from_millis(iroha_config::parameters::defaults::sumeragi::BLOCK_CADENCE_MS);
@@ -6180,6 +6186,10 @@ fn parse_actual_config_for_genesis(
     config_layers: &[Table],
 ) -> Option<iroha_config::parameters::actual::Root> {
     ensure_non_runtime_genesis_expected_hash_for_config_projection(&mut merged);
+    let sorafs_storage_enabled_is_explicit =
+        get_nested_value(&merged, &["sorafs", "storage", "enabled"]).is_some();
+    let sorafs_discovery_enabled_is_explicit =
+        get_nested_value(&merged, &["sorafs", "discovery", "discovery_enabled"]).is_some();
     let reader = ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(merged));
@@ -6193,7 +6203,17 @@ fn parse_actual_config_for_genesis(
     match user.parse() {
         Ok(mut config) => {
             if config_requires_sora_profile(config_layers) {
+                let configured_sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
+                let configured_sorafs_discovery_enabled =
+                    config.torii.sorafs_discovery.discovery_enabled;
                 config.apply_sora_profile();
+                if sorafs_storage_enabled_is_explicit {
+                    config.torii.sorafs_storage.enabled = configured_sorafs_storage_enabled;
+                }
+                if sorafs_discovery_enabled_is_explicit {
+                    config.torii.sorafs_discovery.discovery_enabled =
+                        configured_sorafs_discovery_enabled;
+                }
             }
             config.apply_storage_budget();
             Some(config)
@@ -6668,6 +6688,31 @@ impl NetworkBuilder {
             i64::try_from(test_concurrency_threads()).expect("test concurrency threads fit in i64");
         writer
             .write(["nexus", "enabled"], false)
+            .write(
+                ["nexus", "storage", "local_budget_bytes"],
+                i64::try_from(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
+                    .expect("localnet Nexus storage budget fits in i64"),
+            )
+            // Multi-lane tests require the Sora profile but do not implicitly provision the
+            // governed gateway controller required by embedded SoraFS storage. Callers that test
+            // storage must explicitly enable it together with its authoritative policy.
+            .write(["sorafs", "storage", "enabled"], false)
+            // Keep real SoraNet admission enabled, but use the protocol-supported Argon2 floor
+            // so concurrent four-peer test startups do not queue valid tickets past their TTL.
+            .write(
+                [
+                    "network",
+                    "soranet_handshake",
+                    "pow",
+                    "puzzle",
+                    "memory_kib",
+                ],
+                i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+            )
+            .write(
+                ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                1_i64,
+            )
             .write(["telemetry_enabled"], true)
             .write(
                 ["concurrency", "scheduler_min_threads"],
@@ -12108,9 +12153,9 @@ mod tests {
 
         let incomplete = expected[..expected.len() - 1].to_vec();
         assert!(
-            std::panic::catch_unwind(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 assert_genesis_voting_roster_matches_network(&genesis, &incomplete);
-            })
+            }))
             .is_err(),
             "a custom signed roster that differs from the guarded topology must fail closed"
         );
@@ -13879,12 +13924,31 @@ exit 0
     }
 
     #[test]
-    fn resolve_actual_config_applies_sora_profile_non_consensus_settings() {
-        let config_layers = vec![Table::new().write(["sorafs", "storage", "enabled"], true)];
+    fn resolve_actual_config_preserves_sorafs_opt_out_under_sora_profile() {
+        let NetworkBuilder {
+            mut config_layers, ..
+        } = NetworkBuilder::new();
+        let mut lane0 = Table::new();
+        lane0.insert("index".into(), Value::Integer(0));
+        lane0.insert("alias".into(), Value::String("alpha".to_owned()));
+        lane0.insert("metadata".into(), Value::Table(Table::new()));
+        let mut lane1 = Table::new();
+        lane1.insert("index".into(), Value::Integer(1));
+        lane1.insert("alias".into(), Value::String("beta".to_owned()));
+        lane1.insert("metadata".into(), Value::Table(Table::new()));
+        config_layers.push(
+            Table::new()
+                .write(["nexus", "enabled"], true)
+                .write(["nexus", "lane_count"], 2_i64)
+                .write(
+                    ["nexus", "lane_catalog"],
+                    Value::Array(vec![Value::Table(lane0), Value::Table(lane1)]),
+                ),
+        );
 
         assert!(
             config_requires_sora_profile(&config_layers),
-            "SoraFS-enabled configs should trigger --sora profile detection"
+            "multi-lane configs should trigger --sora profile detection"
         );
 
         let mut merged = sora_profile_detection_defaults();
@@ -13903,6 +13967,28 @@ exit 0
         assert!(
             actual.nexus.lane_config.entries().len() > 1,
             "Sora profile should expand lane catalog beyond single-lane defaults"
+        );
+        assert!(
+            !actual.torii.sorafs_storage.enabled,
+            "the explicit localnet storage opt-out must survive Sora profile application"
+        );
+    }
+
+    #[test]
+    fn later_config_layer_can_explicitly_enable_governed_sorafs_storage() {
+        let NetworkBuilder {
+            mut config_layers, ..
+        } = NetworkBuilder::new();
+        config_layers.push(Table::new().write(["sorafs", "storage", "enabled"], true));
+        let mut merged = Table::new();
+        for layer in config_layers {
+            merge_tables(&mut merged, &layer);
+        }
+
+        assert_eq!(
+            read_bool(&merged, &["sorafs", "storage", "enabled"]),
+            Some(true),
+            "a caller may override the localnet default when it also supplies governed storage policy"
         );
     }
 
@@ -14646,6 +14732,64 @@ exit 0
     }
 
     #[test]
+    fn default_builder_bounds_nexus_storage_budget() {
+        let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
+        let local_budget_bytes = config_layers.iter().find_map(|layer| {
+            get_nested_value(layer, &["nexus", "storage", "local_budget_bytes"])
+                .and_then(Value::as_integer)
+        });
+
+        assert_eq!(
+            local_budget_bytes,
+            Some(
+                i64::try_from(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
+                    .expect("localnet Nexus storage budget fits in i64")
+            )
+        );
+    }
+
+    #[test]
+    fn default_builder_disables_unconfigured_sorafs_storage() {
+        let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
+        let storage_enabled = config_layers.iter().find_map(|layer| {
+            get_nested_value(layer, &["sorafs", "storage", "enabled"]).and_then(Value::as_bool)
+        });
+
+        assert_eq!(storage_enabled, Some(false));
+    }
+
+    #[test]
+    fn default_builder_uses_minimum_supported_soranet_puzzle_cost() {
+        let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
+        let memory_kib = config_layers.iter().find_map(|layer| {
+            get_nested_value(
+                layer,
+                &[
+                    "network",
+                    "soranet_handshake",
+                    "pow",
+                    "puzzle",
+                    "memory_kib",
+                ],
+            )
+            .and_then(Value::as_integer)
+        });
+        let time_cost = config_layers.iter().find_map(|layer| {
+            get_nested_value(
+                layer,
+                &["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+            )
+            .and_then(Value::as_integer)
+        });
+
+        assert_eq!(
+            memory_kib,
+            Some(i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB))
+        );
+        assert_eq!(time_cost, Some(1));
+    }
+
+    #[test]
     fn default_builder_scales_concurrency_defaults() {
         let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
         let base = config_layers
@@ -14720,6 +14864,9 @@ exit 0
                 .write(["trusted_peers_pop"], trusted_peers_pop),
         );
         layers.extend(config_layers);
+        // Native qualification enables Nexus after the builder defaults are written. Preserve the
+        // nested storage cap across that later merge, matching the generated peer configuration.
+        layers.push(Table::new().write(["nexus", "enabled"], true));
 
         let actual = resolve_actual_config(&peer, &layers)
             .expect("builder config layers should parse once chain/genesis are provided");
@@ -14728,6 +14875,40 @@ exit 0
             NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
             "pre-genesis projection must receive only the non-runtime schema sentinel"
         );
+        assert!(actual.nexus.enabled);
+        assert!(
+            !actual.torii.sorafs_storage.enabled,
+            "later Nexus enablement must preserve the explicit localnet SoraFS storage opt-out"
+        );
+        assert_eq!(
+            actual
+                .nexus
+                .storage
+                .local_budget_bytes
+                .map(|budget| budget.get()),
+            Some(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
+        );
+        assert_eq!(
+            actual
+                .nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(|budget| budget.get()),
+            Some(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
+        );
+        let pow = &actual.network.soranet_handshake.pow;
+        let puzzle = pow
+            .puzzle
+            .expect("test-network SoraNet admission must retain the Argon2 puzzle");
+        assert!(
+            pow.required,
+            "test-network SoraNet admission must remain enabled"
+        );
+        assert_eq!(
+            puzzle.memory_kib.get(),
+            iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
+        );
+        assert_eq!(puzzle.time_cost.get(), 1);
     }
 
     fn assert_network_config_binds_exact_signed_genesis_hash(network: &Network) {
@@ -16177,12 +16358,18 @@ exit 0
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
                 .with_genesis_block(|topology, topology_entries| {
-                    genesis_factory_with_post_topology(
+                    let genesis = genesis_factory_with_post_topology(
                         Vec::new(),
                         Vec::new(),
                         topology,
                         topology_entries,
-                    )
+                    );
+                    assert_eq!(
+                        genesis.0.results().count(),
+                        0,
+                        "custom genesis execution must wait for the resolved runtime config"
+                    );
+                    genesis
                 }),
         );
 

@@ -859,12 +859,15 @@ g4p_names = (
     "run-01-nexus_and_streaming.log",
     "run-02-nexus_and_streaming.log",
     "run-03-native_amx_routing.log",
+    "run-04-consensus_and_da.log",
+    "run-05-native_amx_routing.log",
 )
 g4p_logs = [
     evidence_file(g4p_root, name, (name + "\\n").encode()) for name in g4p_names
 ]
 g4p_evidence = {{
     "schema_version": 1,
+    "observer_omission_evidence": "passed",
     "completion": full_artifact(g4p_completion),
     "run_summary": full_artifact(g4p_summary),
     "run_logs": [full_artifact(path) for path in g4p_logs],
@@ -2517,13 +2520,6 @@ def test_full_bootstrap_succeeds_with_real_terminal_receipt_validator(
     ).strip()
     sealed_identity_json = sealed_source.read_text(encoding="utf-8").strip()
 
-    staged_bootstrap = fixture_root / "prepared-bootstrap"
-    shutil.move(str(bootstrap_evidence), staged_bootstrap)
-    staged_release_runner = staged_bootstrap / "release-runner"
-    assert staged_release_runner.is_dir()
-    assert not bootstrap_evidence.exists()
-    release_fixture.evidence = bootstrap_evidence
-
     release_fixture.manifest = _write(
         release_fixture.trust / "fixed-release-identity.py",
         f'''#!/usr/bin/env python3
@@ -2593,6 +2589,13 @@ else:
         + "\n",
         0o400,
     )
+
+    staged_bootstrap = fixture_root / "prepared-bootstrap"
+    shutil.move(str(bootstrap_evidence), staged_bootstrap)
+    staged_release_runner = staged_bootstrap / "release-runner"
+    assert staged_release_runner.is_dir()
+    assert not bootstrap_evidence.exists()
+    release_fixture.evidence = bootstrap_evidence
 
     def evidence_path(name: str) -> str:
         path = evidence[name]

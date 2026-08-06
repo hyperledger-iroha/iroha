@@ -149,8 +149,13 @@ Run every required DA/RBC case with skips treated as failures:
 3. Exercise grouped and mixed-role Native AMX, including same-route
    coordinator handling, wrong predecessor, stale incarnation, body pruning,
    missing-sidecar recovery from authenticated holders, and forged evidence.
-4. Rotate one validator offline and one Byzantine input source while committees
-   and global leaders change.
+4. Rotate one validator offline and rotate the supported observer-omission role
+   across two validators while committees and global leaders change. The
+   `G-4P` receipt must prove that each observer is absent from the exact
+   three-of-four signer bitmap by retaining the exact post-assertion lifecycle
+   marker and `observer_omission_evidence=passed` completion field; this gate
+   does not claim Byzantine input injection, which requires separately named
+   adversarial evidence.
 5. Drain only after ordinary queue work, reservations, certified-unmerged
    bundles, delayed work, pending merge entries, and unverifiable Native
    controls clear. Carry the exact drain certificate, retire in a later block,
@@ -160,6 +165,15 @@ Run every required DA/RBC case with skips treated as failures:
    artifact from the retired incarnations.
 7. Require peer convergence on canonical Kura/WSV state, transaction queries,
    Native receipts, queue ownership, and all endpoint projections.
+8. Hold one settled canonical tip across the signed-cadence, retransmission,
+   and commit-quorum windows, then prove that external and internal-only work
+   each advance the chain through non-empty commits. Raw finalized height is
+   not a workload counter; retain converged `blocks_non_empty` evidence.
+9. Cut Native AMX publication independently after Prepare QC, after Commit QC,
+   and before world-state commit. After each restart, prove exact-once
+   application. An explicitly armed recovery may admit at most one empty
+   heartbeat carrier, which must not increment `blocks_non_empty`; ordinary
+   non-empty publication must resume afterward.
 
 ### Fresh 13-peer corridor and soak (`G-12P`)
 

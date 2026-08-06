@@ -1827,6 +1827,54 @@ impl RuntimeCandidateSemanticStatement {
         self.fetch_authority_relation_to(incoming)
     }
 
+    /// Compare two owners of one completed body-pipeline stage without
+    /// allowing quorum authority to detach from the terminal evidence.
+    ///
+    /// Stored bodies retain the closed ordinary/Prepare/Commit FetchBody
+    /// lattice. Successful validation additionally binds every carried
+    /// execution commitment to the deterministic receipt, while a failed
+    /// validation has no receipt and therefore admits only an identical
+    /// authority statement.
+    fn body_pipeline_completion_authority_relation_to(
+        self,
+        incoming: Self,
+        completion: &BodyPipelineCompletionEvidence,
+    ) -> Option<RuntimeFetchAuthorityRelation> {
+        if matches!(
+            completion,
+            BodyPipelineCompletionEvidence::ValidationFailed { .. }
+        ) {
+            return (self.validate_exact() && incoming.validate_exact() && self == incoming)
+                .then_some(RuntimeFetchAuthorityRelation::Same);
+        }
+
+        let relation = self.fetch_authority_relation_to(incoming)?;
+        let receipt_commitment = match completion {
+            BodyPipelineCompletionEvidence::ValidationSucceeded { receipt, .. } => {
+                Some(receipt.execution_commitment())
+            }
+            BodyPipelineCompletionEvidence::LocalProposalReady {
+                validated_receipt, ..
+            } => Some(validated_receipt.execution_commitment()),
+            BodyPipelineCompletionEvidence::BodyAvailable { .. }
+            | BodyPipelineCompletionEvidence::BodyStored { .. } => None,
+            BodyPipelineCompletionEvidence::ValidationFailed { .. } => unreachable!(
+                "receipt-free validation failures are handled before authority refinement"
+            ),
+        };
+        if let Some(commitment) = receipt_commitment
+            && (!self
+                .execution_commitment
+                .is_none_or(|authority| authority == commitment)
+                || !incoming
+                    .execution_commitment
+                    .is_none_or(|authority| authority == commitment))
+        {
+            return None;
+        }
+        Some(relation)
+    }
+
     fn semantic_identity(self) -> Vec<u8> {
         let mut identity = Vec::new();
         identity.extend_from_slice(b"iroha:sumeragi:v2:tla-candidate-semantic:v2");
@@ -14646,9 +14694,13 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 self.latch_fail_closed("body completion retry changed its exact predecessor stage");
                 return Err(EnqueueError::FailClosed);
             }
-            let Some(relation) = retained_statement
-                .zip(incoming_statement)
-                .and_then(|(incumbent, incoming)| incumbent.fetch_authority_relation_to(incoming))
+            let Some(relation) =
+                retained_statement
+                    .zip(incoming_statement)
+                    .and_then(|(incumbent, incoming)| {
+                        incumbent
+                            .body_pipeline_completion_authority_relation_to(incoming, candidate)
+                    })
             else {
                 self.latch_fail_closed(
                     "body completion retry changed its exact authority statement",
@@ -17964,6 +18016,39 @@ mod tests {
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate runtime fixture certificate"),
         }
+    }
+
+    fn resign_runtime_quorum_certificate(
+        mut certificate: wire::QuorumCertificate,
+        keys: &[KeyPair],
+    ) -> wire::QuorumCertificate {
+        let preimage = wire::Vote {
+            round: certificate.round,
+            proposal_round: certificate.proposal_round,
+            phase: certificate.phase,
+            subject: certificate.subject,
+            execution_commitment: certificate.execution_commitment,
+            signer: certificate.signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = certificate
+            .signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("small signer index")].private_key(),
+                    &preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        certificate.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                .expect("aggregate resigned runtime fixture certificate");
+        certificate
     }
 
     fn signed_runtime_timeout_certificate(
@@ -29438,6 +29523,611 @@ mod tests {
             tag,
             &evidence,
         ));
+    }
+
+    #[test]
+    fn queued_body_terminals_coalesce_commit_and_authority_free_owners_in_both_orders() {
+        for validate in [false, true] {
+            for terminal_is_commit in [false, true] {
+                let directory =
+                    TempDir::new().expect("temporary body-terminal authority directory");
+                let (mut runtime, context, keys) =
+                    authenticated_network_runtime_with_local_validator(
+                        &directory,
+                        RuntimeQueueConfig::new(8, 1, 1),
+                        Some(0),
+                    );
+                let body = vec![0xA2; 4];
+                let mut commit = signed_runtime_quorum_certificate(&context, &keys, 0xA1);
+                commit.subject.payload_hash = Hash::new(&body);
+                let commit = resign_runtime_quorum_certificate(commit, &keys);
+                let commit_commitment = commit.execution_commitment;
+                let tag = runtime.round_tag();
+                let round = commit.proposal_round;
+                let subject = commit.subject;
+                let stage = if validate {
+                    AdapterEffect::ValidateBody {
+                        tag,
+                        round,
+                        subject,
+                    }
+                } else {
+                    AdapterEffect::StoreBody {
+                        tag,
+                        round,
+                        subject,
+                    }
+                };
+
+                let commit_ordinal = runtime
+                    .ingress
+                    .mint_non_fifo_lifecycle_ordinal()
+                    .expect("mint a source-recognized Commit body owner");
+                let commit_fetch = AdapterEffect::FetchBody {
+                    tag,
+                    round,
+                    subject,
+                    manifest: None,
+                    certified_sources: Vec::new(),
+                    certificate: Some(commit),
+                };
+                let commit_fetch_owner = bind_adapter_effect_batch_ownership(
+                    std::slice::from_ref(&commit_fetch),
+                    vec![RuntimeEffectOwnership::fresh_for_test(tag, commit_ordinal)],
+                )
+                .expect("bind a Commit-authorized FetchBody owner")
+                .pop()
+                .expect("one Commit FetchBody has one owner");
+                let commit_stage_owner = commit_fetch_owner
+                    .rebind_as_inherited_adapter_effect(&stage)
+                    .expect("carry Commit authority into the body stage");
+
+                let ordinary_ordinal = runtime
+                    .ingress
+                    .mint_non_fifo_lifecycle_ordinal()
+                    .expect("mint a source-recognized authority-free body owner");
+                let ordinary_stage_owner = bind_adapter_effect_batch_ownership(
+                    std::slice::from_ref(&stage),
+                    vec![RuntimeEffectOwnership::fresh_for_test(
+                        tag,
+                        ordinary_ordinal,
+                    )],
+                )
+                .expect("bind an authority-free body-stage owner")
+                .pop()
+                .expect("one authority-free body stage has one owner");
+                assert_ne!(
+                    commit_stage_owner.candidate_semantic_statement(),
+                    ordinary_stage_owner.candidate_semantic_statement(),
+                    "the regression requires distinct authority statements"
+                );
+                let commit_statement = commit_stage_owner
+                    .candidate_semantic_statement()
+                    .expect("the Commit body owner has one exact statement");
+
+                let (terminal_owner, incoming_owner) = if terminal_is_commit {
+                    (&commit_stage_owner, &ordinary_stage_owner)
+                } else {
+                    (&ordinary_stage_owner, &commit_stage_owner)
+                };
+                let terminal_statement = terminal_owner
+                    .candidate_semantic_statement()
+                    .expect("the terminal owner has one exact statement");
+                let manifest = encode_payload(&context, round, subject, &body)
+                    .expect("encode the exact body-terminal payload")
+                    .manifest()
+                    .clone();
+                assert!(commit_fetch_owner.binds_exact_fetch_body_manifest(&manifest));
+                let durable = DurableBodyReceipt::for_test(
+                    context.id(),
+                    round,
+                    subject,
+                    HashOf::new(&manifest),
+                );
+                let terminal = if validate {
+                    AdapterCommand::ValidationSucceeded {
+                        round,
+                        subject,
+                        receipt: ValidatedBodyReceipt::for_test_with_commitment(
+                            durable,
+                            commit_commitment,
+                        ),
+                    }
+                } else {
+                    AdapterCommand::BodyStored {
+                        round,
+                        subject,
+                        receipt: durable,
+                    }
+                };
+                stage_completion_for_queue_test(&mut runtime, tag, terminal);
+                runtime
+                    .ingress
+                    .commands
+                    .back_mut()
+                    .expect("the staged body terminal is queued")
+                    .candidate_semantic_statement = Some(terminal_statement);
+
+                assert!(
+                    runtime
+                        .body_pipeline_candidate_has_terminal(&stage, incoming_owner)
+                        .expect("compatible body authority coalesces with the terminal")
+                );
+                assert_eq!(runtime.queued_commands(), 1);
+                assert_eq!(
+                    runtime
+                        .ingress
+                        .commands
+                        .front()
+                        .and_then(|queued| queued.candidate_semantic_statement),
+                    Some(commit_statement),
+                    "coalescence retains or refines to the strongest compatible authority"
+                );
+                assert!(!runtime.fail_closed);
+            }
+        }
+    }
+
+    #[test]
+    fn validation_terminals_bind_incoming_authority_to_the_exact_receipt() {
+        for local_proposal in [false, true] {
+            for receipt_matches in [false, true] {
+                let directory =
+                    TempDir::new().expect("temporary validation-terminal receipt directory");
+                let (mut runtime, context, keys) =
+                    authenticated_network_runtime_with_local_validator(
+                        &directory,
+                        RuntimeQueueConfig::new(8, 1, 1),
+                        Some(0),
+                    );
+                let body = vec![0xA5; 4];
+                let mut commit = signed_runtime_quorum_certificate(&context, &keys, 0xA5);
+                commit.subject.payload_hash = Hash::new(&body);
+                let commit = resign_runtime_quorum_certificate(commit, &keys);
+                let tag = runtime.round_tag();
+                let round = commit.proposal_round;
+                let subject = commit.subject;
+                let stage = AdapterEffect::ValidateBody {
+                    tag,
+                    round,
+                    subject,
+                };
+
+                let commit_ordinal = runtime
+                    .ingress
+                    .mint_non_fifo_lifecycle_ordinal()
+                    .expect("mint a source-recognized Commit validation owner");
+                let commit_fetch = AdapterEffect::FetchBody {
+                    tag,
+                    round,
+                    subject,
+                    manifest: None,
+                    certified_sources: Vec::new(),
+                    certificate: Some(commit.clone()),
+                };
+                let commit_fetch_owner = bind_adapter_effect_batch_ownership(
+                    std::slice::from_ref(&commit_fetch),
+                    vec![RuntimeEffectOwnership::fresh_for_test(tag, commit_ordinal)],
+                )
+                .expect("bind a Commit-authorized validation FetchBody owner")
+                .pop()
+                .expect("one Commit validation FetchBody has one owner");
+                let incoming_owner = commit_fetch_owner
+                    .rebind_as_inherited_adapter_effect(&stage)
+                    .expect("carry incoming Commit authority into validation");
+
+                let ordinary_ordinal = runtime
+                    .ingress
+                    .mint_non_fifo_lifecycle_ordinal()
+                    .expect("mint a source-recognized ordinary validation owner");
+                let ordinary_owner = bind_adapter_effect_batch_ownership(
+                    std::slice::from_ref(&stage),
+                    vec![RuntimeEffectOwnership::fresh_for_test(
+                        tag,
+                        ordinary_ordinal,
+                    )],
+                )
+                .expect("bind the ordinary validation terminal owner")
+                .pop()
+                .expect("one ordinary validation stage has one owner");
+                let ordinary_statement = ordinary_owner
+                    .candidate_semantic_statement()
+                    .expect("the ordinary terminal has one exact statement");
+
+                let manifest = encode_payload(&context, round, subject, &body)
+                    .expect("encode the exact validation-terminal payload")
+                    .manifest()
+                    .clone();
+                assert!(commit_fetch_owner.binds_exact_fetch_body_manifest(&manifest));
+                let durable = DurableBodyReceipt::for_test(
+                    context.id(),
+                    round,
+                    subject,
+                    HashOf::new(&manifest),
+                );
+                let validated = if receipt_matches {
+                    ValidatedBodyReceipt::for_test_with_commitment(
+                        durable.clone(),
+                        commit.execution_commitment,
+                    )
+                } else {
+                    ValidatedBodyReceipt::for_test(durable.clone())
+                };
+                assert_eq!(
+                    validated.execution_commitment() == commit.execution_commitment,
+                    receipt_matches,
+                    "the fixture must exercise the requested receipt relation"
+                );
+                let terminal = if local_proposal {
+                    AdapterCommand::LocalProposalReady {
+                        manifest,
+                        durable_receipt: durable,
+                        validated_receipt: validated,
+                    }
+                } else {
+                    AdapterCommand::ValidationSucceeded {
+                        round,
+                        subject,
+                        receipt: validated,
+                    }
+                };
+                stage_completion_for_queue_test(&mut runtime, tag, terminal);
+                runtime
+                    .ingress
+                    .commands
+                    .back_mut()
+                    .expect("the validation terminal is queued")
+                    .candidate_semantic_statement = Some(ordinary_statement);
+
+                let result = runtime.body_pipeline_candidate_has_terminal(&stage, &incoming_owner);
+                if receipt_matches {
+                    assert!(result.expect("exact receipt authority coalesces"));
+                    assert!(!runtime.fail_closed);
+                } else {
+                    assert_eq!(
+                        result.expect_err("mismatching receipt authority must fail closed"),
+                        "Sumeragi v2 runtime is fail-closed"
+                    );
+                    assert!(runtime.fail_closed);
+                }
+                assert_eq!(runtime.queued_commands(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn validation_failure_terminal_requires_the_exact_authority_statement() {
+        let directory = TempDir::new().expect("temporary validation-failure authority directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let commit = signed_runtime_quorum_certificate(&context, &keys, 0xA6);
+        let tag = runtime.round_tag();
+        let round = commit.proposal_round;
+        let subject = commit.subject;
+        let stage = AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        };
+
+        let ordinary_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint an ordinary validation-failure retry owner");
+        let ordinary_owner = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&stage),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                tag,
+                ordinary_ordinal,
+            )],
+        )
+        .expect("bind the ordinary validation-failure retry")
+        .pop()
+        .expect("one ordinary validation-failure retry has one owner");
+        let ordinary_statement = ordinary_owner
+            .candidate_semantic_statement()
+            .expect("the ordinary validation failure has one exact statement");
+
+        let commit_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("mint a Commit validation-failure retry owner");
+        let commit_fetch = AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            manifest: None,
+            certified_sources: Vec::new(),
+            certificate: Some(commit),
+        };
+        let commit_fetch_owner = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&commit_fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, commit_ordinal)],
+        )
+        .expect("bind the Commit validation-failure FetchBody retry")
+        .pop()
+        .expect("one Commit validation-failure FetchBody has one owner");
+        let commit_owner = commit_fetch_owner
+            .rebind_as_inherited_adapter_effect(&stage)
+            .expect("carry Commit authority into the validation-failure retry");
+
+        stage_completion_for_queue_test(
+            &mut runtime,
+            tag,
+            AdapterCommand::ValidationFailed { round, subject },
+        );
+        runtime
+            .ingress
+            .commands
+            .back_mut()
+            .expect("the validation failure is queued")
+            .candidate_semantic_statement = Some(ordinary_statement);
+
+        assert!(
+            runtime
+                .body_pipeline_candidate_has_terminal(&stage, &ordinary_owner)
+                .expect("an exact validation-failure retry coalesces")
+        );
+        assert!(!runtime.fail_closed);
+        assert_eq!(
+            runtime
+                .body_pipeline_candidate_has_terminal(&stage, &commit_owner)
+                .expect_err("validation failure cannot acquire receipt-free authority"),
+            "Sumeragi v2 runtime is fail-closed"
+        );
+        assert!(runtime.fail_closed);
+        assert_eq!(runtime.queued_commands(), 1);
+    }
+
+    #[test]
+    fn deferred_validation_terminal_binds_incoming_authority_to_the_exact_receipt() {
+        for receipt_matches in [false, true] {
+            let directory =
+                TempDir::new().expect("temporary deferred validation receipt directory");
+            let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+                &directory,
+                RuntimeQueueConfig::new(8, 1, 1),
+                Some(0),
+            );
+            let tag = runtime.round_tag();
+            let manifest = runtime_manifest(&context, 0xA6);
+            let stage = AdapterEffect::ValidateBody {
+                tag,
+                round: manifest.round,
+                subject: manifest.subject,
+            };
+            runtime
+                .driver
+                .defer_body_pipeline_stage_for_test(
+                    tag,
+                    &manifest,
+                    DeferredBodyPipelineStageForTest::ValidationSucceeded,
+                )
+                .expect("stage a Busy-deferred validation terminal");
+            let candidates = runtime.driver.deferred_body_pipeline_terminal_candidates();
+            let [(deferred_ordinal, deferred_tag, evidence)] = candidates.as_slice() else {
+                panic!("one exact validation terminal is Busy-deferred")
+            };
+            assert_eq!(*deferred_tag, tag);
+            let BodyPipelineCompletionEvidence::ValidationSucceeded { receipt, .. } = evidence
+            else {
+                panic!("the deferred terminal retains its validation receipt")
+            };
+            let receipt_commitment = receipt.execution_commitment();
+            bind_local_deferred_lifecycle_for_test(
+                &mut runtime,
+                *deferred_ordinal,
+                b"deferred-validation-terminal-authority",
+            );
+            let (_, ordinary_statement) = production_adapter_effect_candidate_statement(&stage)
+                .expect("ValidateBody has one route-neutral candidate statement");
+            let deferred = runtime
+                .deferred_lifecycle_ownership
+                .remove(deferred_ordinal)
+                .expect("the deferred validation terminal has a runtime sidecar")
+                .with_candidate_semantic_statement(Some(ordinary_statement))
+                .expect("attach the ordinary validation authority statement");
+            assert!(
+                runtime
+                    .deferred_lifecycle_ownership
+                    .insert(*deferred_ordinal, deferred)
+                    .is_none()
+            );
+
+            let mut commit = signed_runtime_quorum_certificate(&context, &keys, 0xA7);
+            commit.round = manifest.round;
+            commit.proposal_round = manifest.round;
+            commit.subject = manifest.subject;
+            if receipt_matches {
+                commit.execution_commitment = receipt_commitment;
+            } else {
+                assert_ne!(commit.execution_commitment, receipt_commitment);
+            }
+            let commit = resign_runtime_quorum_certificate(commit, &keys);
+            let commit_ordinal = runtime
+                .ingress
+                .mint_non_fifo_lifecycle_ordinal()
+                .expect("mint a source-recognized deferred-validation retry owner");
+            let commit_fetch = AdapterEffect::FetchBody {
+                tag,
+                round: manifest.round,
+                subject: manifest.subject,
+                manifest: None,
+                certified_sources: Vec::new(),
+                certificate: Some(commit),
+            };
+            let commit_fetch_owner = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&commit_fetch),
+                vec![RuntimeEffectOwnership::fresh_for_test(tag, commit_ordinal)],
+            )
+            .expect("bind the deferred validation Commit retry")
+            .pop()
+            .expect("one deferred validation FetchBody has one owner");
+            assert!(commit_fetch_owner.binds_exact_fetch_body_manifest(&manifest));
+            let incoming_owner = commit_fetch_owner
+                .rebind_as_inherited_adapter_effect(&stage)
+                .expect("carry Commit authority into the deferred validation retry");
+
+            let result = runtime.body_pipeline_candidate_has_terminal(&stage, &incoming_owner);
+            if receipt_matches {
+                assert!(result.expect("exact deferred receipt authority coalesces"));
+                assert!(!runtime.fail_closed);
+            } else {
+                assert_eq!(
+                    result.expect_err("mismatching deferred receipt authority must fail closed"),
+                    "Sumeragi v2 runtime is fail-closed"
+                );
+                assert!(runtime.fail_closed);
+            }
+            assert_eq!(runtime.queued_commands(), 0);
+            assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
+        }
+    }
+
+    #[test]
+    fn queued_body_terminals_reject_conflicting_commit_authority() {
+        for validate in [false, true] {
+            let directory =
+                TempDir::new().expect("temporary body-terminal commitment-conflict directory");
+            let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+                &directory,
+                RuntimeQueueConfig::new(8, 1, 1),
+                Some(0),
+            );
+            let body = vec![0xA4; 4];
+            let mut commit = signed_runtime_quorum_certificate(&context, &keys, 0xA3);
+            commit.subject.payload_hash = Hash::new(&body);
+            let commit = resign_runtime_quorum_certificate(commit, &keys);
+            let commit_commitment = commit.execution_commitment;
+            let mut conflicting_commit = commit.clone();
+            conflicting_commit.execution_commitment = wire::ExecutionCommitment::without_topups(
+                Hash::new(b"conflicting-state-root"),
+                Hash::new(b"conflicting-transaction-root"),
+                Hash::new(b"conflicting-event-root"),
+                Hash::new(b"conflicting-receipt-root"),
+            );
+            let conflicting_commit = resign_runtime_quorum_certificate(conflicting_commit, &keys);
+
+            let tag = runtime.round_tag();
+            let round = commit.proposal_round;
+            let subject = commit.subject;
+            let stage = if validate {
+                AdapterEffect::ValidateBody {
+                    tag,
+                    round,
+                    subject,
+                }
+            } else {
+                AdapterEffect::StoreBody {
+                    tag,
+                    round,
+                    subject,
+                }
+            };
+            let terminal_ordinal = runtime
+                .ingress
+                .mint_non_fifo_lifecycle_ordinal()
+                .expect("mint a source-recognized incumbent Commit owner");
+            let terminal_fetch = AdapterEffect::FetchBody {
+                tag,
+                round,
+                subject,
+                manifest: None,
+                certified_sources: Vec::new(),
+                certificate: Some(commit),
+            };
+            let terminal_fetch_owner = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&terminal_fetch),
+                vec![RuntimeEffectOwnership::fresh_for_test(
+                    tag,
+                    terminal_ordinal,
+                )],
+            )
+            .expect("bind the incumbent Commit FetchBody owner")
+            .pop()
+            .expect("one incumbent Commit FetchBody has one owner");
+            let terminal_owner = terminal_fetch_owner
+                .rebind_as_inherited_adapter_effect(&stage)
+                .expect("carry incumbent Commit authority into the body stage");
+
+            let incoming_ordinal = runtime
+                .ingress
+                .mint_non_fifo_lifecycle_ordinal()
+                .expect("mint a source-recognized conflicting Commit owner");
+            let incoming_fetch = AdapterEffect::FetchBody {
+                tag,
+                round,
+                subject,
+                manifest: None,
+                certified_sources: Vec::new(),
+                certificate: Some(conflicting_commit),
+            };
+            let incoming_fetch_owner = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&incoming_fetch),
+                vec![RuntimeEffectOwnership::fresh_for_test(
+                    tag,
+                    incoming_ordinal,
+                )],
+            )
+            .expect("bind the conflicting Commit FetchBody owner")
+            .pop()
+            .expect("one conflicting Commit FetchBody has one owner");
+            let incoming_owner = incoming_fetch_owner
+                .rebind_as_inherited_adapter_effect(&stage)
+                .expect("carry conflicting Commit authority into the body stage");
+            assert_ne!(
+                terminal_owner.candidate_semantic_statement(),
+                incoming_owner.candidate_semantic_statement(),
+                "the regression requires conflicting Commit statements"
+            );
+
+            let manifest = encode_payload(&context, round, subject, &body)
+                .expect("encode the exact commitment-conflict payload")
+                .manifest()
+                .clone();
+            assert!(terminal_fetch_owner.binds_exact_fetch_body_manifest(&manifest));
+            assert!(incoming_fetch_owner.binds_exact_fetch_body_manifest(&manifest));
+            let durable =
+                DurableBodyReceipt::for_test(context.id(), round, subject, HashOf::new(&manifest));
+            let terminal_statement = terminal_owner
+                .candidate_semantic_statement()
+                .expect("the incumbent Commit owner has one exact statement");
+            let terminal = if validate {
+                AdapterCommand::ValidationSucceeded {
+                    round,
+                    subject,
+                    receipt: ValidatedBodyReceipt::for_test_with_commitment(
+                        durable,
+                        commit_commitment,
+                    ),
+                }
+            } else {
+                AdapterCommand::BodyStored {
+                    round,
+                    subject,
+                    receipt: durable,
+                }
+            };
+            stage_completion_for_queue_test(&mut runtime, tag, terminal);
+            runtime
+                .ingress
+                .commands
+                .back_mut()
+                .expect("the staged body terminal is queued")
+                .candidate_semantic_statement = Some(terminal_statement);
+
+            assert_eq!(
+                runtime
+                    .body_pipeline_candidate_has_terminal(&stage, &incoming_owner)
+                    .expect_err("a conflicting Commit commitment must fail closed"),
+                "Sumeragi v2 runtime is fail-closed"
+            );
+            assert_eq!(runtime.queued_commands(), 1);
+            assert!(runtime.fail_closed);
+        }
     }
 
     #[test]

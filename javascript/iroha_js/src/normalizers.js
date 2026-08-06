@@ -22,6 +22,7 @@ const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvw
 const BASE58_INDEX = new Map(Array.from(BASE58_ALPHABET, (symbol, index) => [symbol, index]));
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const ASSET_DEFINITION_ADDRESS_LEN = 21;
+const MAX_UINT64 = (1n << 64n) - 1n;
 const ALIAS_LOCAL_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 const ALIAS_SCOPE_SEGMENT_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -575,11 +576,18 @@ export function normalizeAssetHoldingId(value, name) {
   if (scope === undefined) {
     return `${normalizedAssetId}#${normalizedAccountId}`;
   }
-  const scopeMatch = /^dataspace:(\d+)$/.exec(scope);
+  const scopeMatch = /^dataspace:(0|[1-9]\d*)$/.exec(scope);
   if (!scopeMatch) {
     fail(
       ValidationErrorCode.INVALID_ASSET_ID,
       `${name}.scope must use 'dataspace:<id>' when present`,
+      name,
+    );
+  }
+  if (BigInt(scopeMatch[1]) > MAX_UINT64) {
+    fail(
+      ValidationErrorCode.INVALID_ASSET_ID,
+      `${name}.scope dataspace id must fit an unsigned 64-bit integer`,
       name,
     );
   }
@@ -591,10 +599,17 @@ export function composeAssetHoldingId(assetId, accountId, dataspaceId, name = "a
   const normalizedAccountId = normalizeAccountId(accountId, `${name}.accountId`);
   const scope = String(dataspaceId ?? "").trim();
   if (!scope) return `${normalizedAssetId}#${normalizedAccountId}`;
-  if (!/^\d+$/.test(scope)) {
+  if (!/^(0|[1-9]\d*)$/.test(scope)) {
     fail(
       ValidationErrorCode.INVALID_ASSET_ID,
-      `${name}.scope must use decimal digits when present`,
+      `${name}.scope must use canonical decimal digits when present`,
+      `${name}.scope`,
+    );
+  }
+  if (BigInt(scope) > MAX_UINT64) {
+    fail(
+      ValidationErrorCode.INVALID_ASSET_ID,
+      `${name}.scope must fit an unsigned 64-bit integer`,
       `${name}.scope`,
     );
   }

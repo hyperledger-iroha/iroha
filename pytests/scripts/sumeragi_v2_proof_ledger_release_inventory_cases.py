@@ -20,7 +20,7 @@
                 f"production ownership regression {test_name} must be pinned exactly once; found 0",
             )
             for test_name in (
-                "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+                "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner",
                 "sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
                 "sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
                 "sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded",
@@ -57,26 +57,26 @@
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=309",
-            "readonly expected_multilane_focus_test_count=308",
-            "multilane G-UNIT source count must be sealed as 309",
+            "readonly expected_multilane_focus_test_count=314",
+            "readonly expected_multilane_focus_test_count=313",
+            "multilane G-UNIT source count must be sealed as 314",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 310 ]]; then""",
+            """'[:space:]')" != 315 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 309 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 309 focus rows",
+            """'[:space:]')" != 314 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 314 focus rows",
         ),
         (
-            "The canonical 309-row TSV is",
-            "The canonical 308-row TSV is",
-            "G-UNIT inventory comment must seal 309 rows",
+            "The canonical 314-row TSV is",
+            "The canonical 313-row TSV is",
+            "G-UNIT inventory comment must seal 314 rows",
         ),
         (
-            "including exact 309/309 G-UNIT,",
-            "including exact 308/309 G-UNIT,",
-            "terminal success text must seal exact 309/309 G-UNIT",
+            "including exact 314/314 G-UNIT,",
+            "including exact 313/314 G-UNIT,",
+            "terminal success text must seal exact 314/314 G-UNIT",
         ),
         (
             "  sumeragi::v2_core::refinement::tests::"

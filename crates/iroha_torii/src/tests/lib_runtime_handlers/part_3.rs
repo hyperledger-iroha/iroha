@@ -857,6 +857,43 @@
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    fn move_queue_plan_synced_test_binding_to_future(
+        request: &mut ToriiProxyRequestV5,
+        authority_height: u64,
+        predecessor_block_hash: HashOf<BlockHeader>,
+    ) {
+        let ToriiProxyRequestKindV4::SubmitTransaction {
+            transaction,
+            expected_plan,
+            admission_binding,
+            ..
+        } = &mut request.request
+        else {
+            panic!("QueuePlanSynced test request must contain a transaction");
+        };
+        let binding = admission_binding
+            .as_mut()
+            .expect("QueuePlanSynced test request must contain an admission binding");
+        binding.admission_context.authority_height = authority_height;
+        binding.admission_context.proposal_height = authority_height
+            .checked_add(1)
+            .expect("future QueuePlan fixture proposal height");
+        binding.admission_context.predecessor_block_hash = Some(predecessor_block_hash);
+        let routing_plan = expected_plan
+            .clone()
+            .try_into_routing_plan()
+            .expect("future QueuePlanSynced test routing plan");
+        binding.journal_record_digest = queue::queue_plan_journal_record_claim_digest(
+            transaction.clone(),
+            routing_plan,
+            binding.admission_context.clone(),
+            binding.enqueue_timestamp_ms,
+            Some(binding.global_admission_identity()),
+        )
+        .expect("rebuild future QueuePlanSynced journal claim");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     fn exact_queue_plan_synced_test_receipt(
         request: &ToriiProxyRequestV5,
         signer: &KeyPair,
@@ -1020,6 +1057,96 @@
                 .expect_err("unsupported publication schema must fail")
                 .contains("schema_version")
         );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn queue_plan_admission_publication_rejects_future_frontier_before_persistence() {
+        let (app, mut request) =
+            incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        let future_authority_height = u64::try_from(app.state.committed_height())
+            .expect("fixture committed height fits u64")
+            .checked_add(1)
+            .expect("fixture future authority height");
+        move_queue_plan_synced_test_binding_to_future(
+            &mut request,
+            future_authority_height,
+            HashOf::from_untyped_unchecked(Hash::new(b"future QueuePlan publication predecessor")),
+        );
+        let receipt =
+            exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 40_002);
+        let publication = QueuePlanAdmissionPublicationV1 {
+            schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+            certificate: queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]).body,
+        };
+        let carrier_height = u64::try_from(app.state.committed_height())
+            .expect("fixture committed height fits u64")
+            .checked_add(1)
+            .expect("fixture carrier height");
+        assert_eq!(
+            app.state
+                .classify_pending_queue_plan_admission(&publication.certificate, carrier_height)
+                .expect("future publication remains cryptographically classifiable")
+                .1,
+            PendingQueuePlanAdmissionDisposition::Future
+        );
+
+        let error = super::validate_queue_plan_admission_publication(&app, &publication)
+            .expect_err("a receiver behind the certified frontier must reject publication");
+        assert!(error.contains("ahead of the local canonical authority frontier"));
+        let ingest_error = super::ingest_queue_plan_admission_publication(&app, &publication)
+            .expect_err("future publication must fail before durable ingress");
+        assert!(ingest_error.contains("ahead of the local canonical authority frontier"));
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn queue_plan_admission_publication_rejects_far_future_self_described_roster() {
+        let (app, mut request) =
+            incoming_proxy_submit_fixture(0xb2, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        let attacker = checked_torii_test_keypair_from_seed_byte(
+            0xb3,
+            Algorithm::BlsNormal,
+            "derive far-future QueuePlan publication attacker",
+        );
+        let local_signer = app.torii_proxy_bridge_signer.clone();
+        let authorities = bind_queue_plan_synced_test_authorities(
+            &mut request,
+            &[attacker.clone(), local_signer],
+        );
+        assert_eq!(
+            authorities.get(1),
+            app.local_peer_id.as_ref(),
+            "the receiver must remain named in the self-described coordinator roster"
+        );
+        move_queue_plan_synced_test_binding_to_future(
+            &mut request,
+            1_024,
+            HashOf::from_untyped_unchecked(Hash::new(
+                b"far-future self-described QueuePlan predecessor",
+            )),
+        );
+        let receipt = exact_queue_plan_synced_test_receipt(&request, &attacker, 40_003);
+        let publication = QueuePlanAdmissionPublicationV1 {
+            schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+            certificate: queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]).body,
+        };
+        let carrier_height = u64::try_from(app.state.committed_height())
+            .expect("fixture committed height fits u64")
+            .checked_add(1)
+            .expect("fixture carrier height");
+        assert_eq!(
+            app.state
+                .classify_pending_queue_plan_admission(&publication.certificate, carrier_height)
+                .expect("self-described future publication is structurally classifiable")
+                .1,
+            PendingQueuePlanAdmissionDisposition::Future,
+            "embedded-roster signatures alone must not establish canonical future authority"
+        );
+
+        let error = super::ingest_queue_plan_admission_publication(&app, &publication)
+            .expect_err("far-future self-described authority must not reach Kura");
+        assert!(error.contains("ahead of the local canonical authority frontier"));
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]

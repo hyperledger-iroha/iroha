@@ -66354,10 +66354,11 @@ pub async fn handle_v1_explorer_asset_detail(
     asset_id: AssetId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let dto = world
-        .asset(&asset_id)
-        .map(crate::explorer::ExplorerAssetDto::from_entry)
+    let asset = world.asset(&asset_id).map_err(|_| explorer_not_found())?;
+    let definition = world
+        .asset_definition(asset_id.definition())
         .map_err(|_| explorer_not_found())?;
+    let dto = crate::explorer::ExplorerAssetDto::from_entry(asset, &definition);
     Ok(JsonBody(dto).into_response())
 }
 

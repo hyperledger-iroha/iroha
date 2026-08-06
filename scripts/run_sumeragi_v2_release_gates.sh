@@ -488,6 +488,11 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     "$release_host_root/cache" \
     "$release_host_root/cargo-home" \
     "$release_host_root/release"
+  # `integration_tests/build.rs` stages canonical IVM fixtures below the
+  # historical crate-local `crates/ivm/target` path. Keep that build output in
+  # the authenticated external target without making any source directory
+  # writable.
+  mkdir -m 0700 -- "$release_host_root/workspace-target/ivm-crate-target"
   for cargo_cache in registry git; do
     if [[ -d "${inherited_cargo_cache_home}/${cargo_cache}" ]]; then
       ln -s "$(canonical_path "${inherited_cargo_cache_home}/${cargo_cache}")" \
@@ -544,10 +549,13 @@ for parent in root.parents:
 PY
 
   ln -s "$release_host_root/workspace-target" "$sealed_repo_root/target"
+  ln -s "../../target/ivm-crate-target" "$sealed_repo_root/crates/ivm/target"
   python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
-    --seal --root "$sealed_repo_root" --writable target
+    --seal --root "$sealed_repo_root" \
+    --writable target --writable crates/ivm/target
   python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
-    --verify --root "$sealed_repo_root" --writable target
+    --verify --root "$sealed_repo_root" \
+    --writable target --writable crates/ivm/target
   # Keep both digests. The candidate manifest records the original checkout;
   # the sealed manifest may change because the manifest intentionally binds all
   # permission bits. Every child build/evidence item uses the sealed digest,
@@ -724,6 +732,23 @@ verify_release_identity() {
     echo "sealed release target changed at ${checkpoint}" >&2
     return 1
   fi
+  local observed_ivm_target expected_ivm_target
+  if [[ ! -L "$repo_root/crates/ivm/target" ]]; then
+    echo "sealed release IVM target is not the external output symlink at ${checkpoint}" >&2
+    return 1
+  fi
+  observed_ivm_target="$(
+    python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+      "$repo_root/crates/ivm/target"
+  )"
+  expected_ivm_target="$(
+    python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+      "$IROHA_RELEASE_WORKSPACE_TARGET/ivm-crate-target"
+  )"
+  if [[ "$observed_ivm_target" != "$expected_ivm_target" ]]; then
+    echo "sealed release IVM target changed at ${checkpoint}" >&2
+    return 1
+  fi
   local expected observed
   expected="$(<"$IROHA_RELEASE_EXPECTED_IDENTITY_PATH")"
   if ! observed="$(release_identity_json)"; then
@@ -735,7 +760,8 @@ verify_release_identity() {
     return 1
   fi
   if ! python3 -I -S scripts/seal_workspace_source.py \
-    --verify --root "$repo_root" --writable target; then
+    --verify --root "$repo_root" \
+    --writable target --writable crates/ivm/target; then
     echo "release source seal changed at ${checkpoint}" >&2
     return 1
   fi
@@ -1075,7 +1101,7 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::decision_retains_in_flight_body_pipeline_without_duplicate_fetch
   sumeragi::v2_core::tests::timeout_elapsed_cannot_start_durable_timeout_after_decision
   sumeragi::v2_core::tests::quorum_completing_timeout_vote_cannot_form_tc_after_decision
-  sumeragi::v2_core::tests::commit_qc_cannot_overtake_timeout_frontier
+  sumeragi::v2_core::tests::commit_qc_preempts_hung_timeout_signature_but_not_pending_wal
   sumeragi::v2_core::tests::future_view_commit_qc_uses_current_owner_through_application
   sumeragi::v2_core::tests::later_reproposal_commit_qc_replays_and_applies_its_exact_certified_round
   sumeragi::v2_core::tests::valid_commit_qc_supersedes_different_subject_prepare_lock_live_and_replay
@@ -1386,7 +1412,7 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
   sumeragi::v2_effects::tests::retained_producer_suffix_allows_exact_certified_response_to_release_fetch_capacity
   sumeragi::v2_effects::tests::retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch
-  sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed
+  sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner
   sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work
   sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes
   sumeragi::v2_effects::tests::retained_effect_tail_is_fifo_and_refilters_after_durable_decision
@@ -1466,7 +1492,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically
   sumeragi::v2_runtime::tests::runtime_ingress_carrier_capacity_returns_backpressure_atomically
   sumeragi::v2_runtime::tests::exact_authenticated_progress_retransmission_is_queue_coalesced
-  sumeragi::v2_runtime::tests::commit_certificate_response_coalesces_with_exact_busy_deferred_qc
+  sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix
   sumeragi::v2_runtime::tests::completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
   sumeragi::v2_runtime::tests::body_available_rebind_accepts_same_view_higher_generation
   sumeragi::v2_runtime::tests::body_available_rebind_rejects_uninstalled_destination_without_mutation
@@ -1495,7 +1521,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::successor_activation_snapshot_requires_armed_live_clocks
   sumeragi::v2_runtime::tests::production_ingress_pop_uses_shared_selector_for_every_ready_mask
   sumeragi::v2_runtime::tests::network_admission_uses_exact_normal_and_progress_reservations
-  sumeragi::v2_runtime::tests::serviceable_adapter_debt_drains_one_macro_step_before_new_work
+  sumeragi::v2_runtime::tests::absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains
   sumeragi::v2_runtime::tests::serviceable_adapter_debt_runs_without_runtime_ingress
   sumeragi::v2_runtime::tests::runtime_rejects_driver_selection_outside_eligible_deferred_owner_set
   sumeragi::v2_runtime::tests::runtime_physical_cut_is_monotone_and_regression_fails_closed
@@ -2077,6 +2103,9 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_lane_work::tests::historical_recovery_diagnostics_are_typed_bounded_and_payload_free
   sumeragi::v2_lane_work::tests::native_participant_pruned_carrier_retries_queue_pressure_and_retires_carrier_siblings
   sumeragi::v2_lane_work::tests::merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_journal
+  sumeragi::v2_lane_work::tests::queue_plan_tag21_handoff_survives_restarts_to_outside_coordinator_leader_and_retires_exactly
+  sumeragi::v2_lane_work::tests::queue_plan_leader_rejects_future_handoff_until_canonical_frontier
+  sumeragi::v2_lane_work::tests::queue_plan_durable_future_source_waits_for_canonical_frontier
 )
 required_multilane_queue_journal_focus_tests=(
   queue::journal::tests::queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context
@@ -2267,6 +2296,8 @@ required_multilane_torii_focus_tests=(
   operator_signatures::tests::torii_proxy_middleware_exposes_authenticated_unlisted_peer_identity
   router::builder::tests::torii_proxy_peer_witness_is_sealed_as_identity_bound_authentication
   tests_queue_metadata::queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash
+  tests_runtime_handlers::queue_plan_admission_publication_rejects_future_frontier_before_persistence
+  tests_runtime_handlers::queue_plan_admission_publication_rejects_far_future_self_described_roster
 )
 required_multilane_torii_shared_focus_tests=(
   route_catalog::tests::internal_torii_proxy_is_the_only_identity_bound_operator_route
@@ -2288,7 +2319,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=309
+readonly expected_multilane_focus_test_count=314
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2459,7 +2490,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 309-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 314-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2567,8 +2598,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 310 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 309 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 315 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 314 focused tests" >&2
     exit 1
   fi
 fi
@@ -2577,12 +2608,34 @@ fi
 # harness/name inventory source-bound and non-ignored even though ordinary
 # developer runs may opt out inside the test body.
 readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
+readonly multilane_autoscale_observer_omission_marker="[multilane-release-observer-omission-evidence] windows=2 exact_three_of_four=passed first_autonomous=passed first_drain_carrier=passed first_drain_certificate=passed second_autonomous=passed"
 readonly multilane_autoscale_restart_release_test="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
 readonly multilane_autoscale_drain_release_test="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly multilane_native_amx_rotating_release_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly multilane_native_amx_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
+readonly multilane_ex297_idle_release_test="sumeragi_localnet_smoke::permissioned_idle_chain_advances_only_for_external_or_internal_work"
+readonly multilane_ex297_idle_release_marker="[ex-297-idle-evidence] clean_idle=passed external_non_empty=passed internal_non_empty=passed"
+readonly multilane_ex297_phase_cut_release_test="musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay"
+readonly multilane_ex297_phase_cut_release_marker="[ex-297-phase-cut-evidence] after_prepare_qc=passed after_commit_qc=passed before_world_commit=passed exact_once=passed"
+if [[ "$(grep -Fxc -- "readonly AUTOSCALE_OBSERVER_OMISSION_MARKER=\"${multilane_autoscale_observer_omission_marker}\"" scripts/run_nexus_cross_dataspace_atomic_swap.sh || true)" != 1 ]]; then
+  echo "mandatory four-peer launcher is not source-bound to observer-omission evidence" >&2
+  exit 1
+fi
+if [[ "$(grep -Foc -- "\"${multilane_autoscale_observer_omission_marker}\"" integration_tests/tests/nexus/autoscale_localnet.rs || true)" != 1 \
+  || "$(grep -Fxc -- '    eprintln!("{FOUR_PEER_OBSERVER_OMISSION_RELEASE_MARKER}");' integration_tests/tests/nexus/autoscale_localnet.rs || true)" != 1 ]]; then
+  echo "mandatory four-peer lifecycle test is not source-bound to observer-omission evidence" >&2
+  exit 1
+fi
 if [[ "$(grep -Fxc -- "readonly NATIVE_AMX_GROUPED_PRUNING_MARKER=\"${multilane_native_amx_grouped_pruning_marker}\"" scripts/run_nexus_cross_dataspace_atomic_swap.sh || true)" != 1 ]]; then
   echo "mandatory four-peer launcher is not source-bound to grouped Native AMX pruning evidence" >&2
+  exit 1
+fi
+if [[ "$(grep -Fxc -- "readonly EX297_IDLE_CHAIN_RELEASE_MARKER=\"${multilane_ex297_idle_release_marker}\"" scripts/run_nexus_cross_dataspace_atomic_swap.sh || true)" != 1 ]]; then
+  echo "mandatory four-peer launcher is not source-bound to EX-297 idle evidence" >&2
+  exit 1
+fi
+if [[ "$(grep -Fxc -- "readonly EX297_PHASE_CUT_RELEASE_MARKER=\"${multilane_ex297_phase_cut_release_marker}\"" scripts/run_nexus_cross_dataspace_atomic_swap.sh || true)" != 1 ]]; then
+  echo "mandatory four-peer launcher is not source-bound to EX-297 phase-cut evidence" >&2
   exit 1
 fi
 multilane_nexus_release_test_list="$(
@@ -2590,6 +2643,12 @@ multilane_nexus_release_test_list="$(
 )"
 multilane_nexus_release_ignored_test_list="$(
   run_cargo test --locked --offline -p integration_tests --test nexus_and_streaming -- --list --ignored
+)"
+multilane_consensus_release_test_list="$(
+  run_cargo test --locked --offline -p integration_tests --test consensus_and_da -- --list
+)"
+multilane_consensus_release_ignored_test_list="$(
+  run_cargo test --locked --offline -p integration_tests --test consensus_and_da -- --list --ignored
 )"
 multilane_native_release_test_list="$(
   run_cargo test --locked --offline -p integration_tests --test native_amx_routing -- --list
@@ -2601,15 +2660,28 @@ for required_test_spec in \
   "nexus_and_streaming|${multilane_autoscale_four_peer_release_test}" \
   "nexus_and_streaming|${multilane_autoscale_restart_release_test}" \
   "nexus_and_streaming|${multilane_autoscale_drain_release_test}" \
-  "native_amx_routing|${multilane_native_amx_rotating_release_test}"; do
+  "native_amx_routing|${multilane_native_amx_rotating_release_test}" \
+  "consensus_and_da|${multilane_ex297_idle_release_test}" \
+  "native_amx_routing|${multilane_ex297_phase_cut_release_test}"; do
   IFS='|' read -r required_target required_test <<<"$required_test_spec"
-  if [[ "$required_target" == "nexus_and_streaming" ]]; then
-    required_test_list="$multilane_nexus_release_test_list"
-    required_ignored_test_list="$multilane_nexus_release_ignored_test_list"
-  else
-    required_test_list="$multilane_native_release_test_list"
-    required_ignored_test_list="$multilane_native_release_ignored_test_list"
-  fi
+  case "$required_target" in
+    nexus_and_streaming)
+      required_test_list="$multilane_nexus_release_test_list"
+      required_ignored_test_list="$multilane_nexus_release_ignored_test_list"
+      ;;
+    consensus_and_da)
+      required_test_list="$multilane_consensus_release_test_list"
+      required_ignored_test_list="$multilane_consensus_release_ignored_test_list"
+      ;;
+    native_amx_routing)
+      required_test_list="$multilane_native_release_test_list"
+      required_ignored_test_list="$multilane_native_release_ignored_test_list"
+      ;;
+    *)
+      echo "unknown mandatory four-peer test target: ${required_target}" >&2
+      exit 1
+      ;;
+  esac
   if [[ "$(grep -Fxc -- "${required_test}: test" <<<"$required_test_list" || true)" != 1 ]]; then
     echo "missing or renamed mandatory four-peer multilane release test: ${required_test}" >&2
     exit 1
@@ -3042,15 +3114,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 source_manifest_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 source_manifest_pass_summary="$(
-  grep -Ec '^30 passed in [0-9]+([.][0-9]+)?s$' "$source_manifest_contract_log" || true
+  grep -Ec '^59 passed in [0-9]+([.][0-9]+)?s$' "$source_manifest_contract_log" || true
 )"
 if ((source_manifest_pipeline_status[0] != 0 || source_manifest_pipeline_status[1] != 0)) \
   || [[ "$source_manifest_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 source-manifest/seal contract preflight did not run exactly 30 passing tests (pytest=${source_manifest_pipeline_status[0]}, tee=${source_manifest_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 source-manifest/seal contract preflight did not run exactly 59 passing tests (pytest=${source_manifest_pipeline_status[0]}, tee=${source_manifest_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-source-seal pytest 30 \
+  preflight-source-seal pytest 59 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${source_manifest_contract_tests[*]}" \
   "$source_manifest_contract_log" \
   "${source_manifest_pipeline_status[0]}" "${source_manifest_pipeline_status[1]}"
@@ -3162,16 +3234,16 @@ if [[ "$profile" == "--release" ]]; then
   release_bootstrap_pipeline_status=("${PIPESTATUS[@]}")
   set -e
   release_bootstrap_pass_summary="$(
-    grep -Ec '^82 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+    grep -Ec '^232 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
       "$release_bootstrap_contract_log" || true
   )"
   if ((release_bootstrap_pipeline_status[0] != 0 || release_bootstrap_pipeline_status[1] != 0)) \
     || [[ "$release_bootstrap_pass_summary" != 1 ]]; then
-    echo "Sumeragi v2 release-bootstrap preflight did not run exactly 82 passing tests (pytest=${release_bootstrap_pipeline_status[0]}, tee=${release_bootstrap_pipeline_status[1]})" >&2
+    echo "Sumeragi v2 release-bootstrap preflight did not run exactly 232 passing tests (pytest=${release_bootstrap_pipeline_status[0]}, tee=${release_bootstrap_pipeline_status[1]})" >&2
     exit 1
   fi
   record_corridor_log \
-    preflight-release-bootstrap pytest 82 \
+    preflight-release-bootstrap pytest 232 \
     "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_bootstrap_contract_files[*]}" \
     "$release_bootstrap_contract_log" \
     "${release_bootstrap_pipeline_status[0]}" "${release_bootstrap_pipeline_status[1]}"
@@ -3212,6 +3284,7 @@ release_receipt_contract_files=(
   pytests/scripts/sumeragi_v2_release_receipt_test.py
   pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py
   pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py
+  pytests/scripts/nexus_cross_dataspace_launcher_test.py
 )
 release_receipt_contract_log="$(corridor_contract_log_path preflight-release-receipt)"
 set +e
@@ -3220,16 +3293,16 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^316 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^329 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 316 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 329 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 316 \
+  preflight-release-receipt pytest 329 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -3278,7 +3351,7 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 3,633 ledger/checker cases (including the
+# Collection is source-bound as 4,004 ledger/checker cases (including the
 # eight lexically executed case components), 28 pinned-Verus evidence cases,
 # and 15 TLC-normalizer cases.
 set +e
@@ -3287,15 +3360,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 proof_fidelity_pass_summary="$(
-  grep -Ec '^3676 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^4047 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 3676 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 4047 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 3676 \
+  preflight-proof-fidelity pytest 4047 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3521,11 +3594,14 @@ if [[ "$profile" == "--release" ]]; then
   fi
   for required_line in \
     $'mode\tmandatory-four-peer-multilane-release' \
-    $'expected_runs\t4' \
-    $'passed_runs\t4' \
+    $'expected_runs\t6' \
+    $'passed_runs\t6' \
     $'failed_runs\t0' \
     $'skipped_runs\t0' \
-    $'native_grouped_pruning_evidence\tpassed'; do
+    $'observer_omission_evidence\tpassed' \
+    $'native_grouped_pruning_evidence\tpassed' \
+    $'ex297_idle_evidence\tpassed' \
+    $'ex297_phase_cut_evidence\tpassed'; do
     if ! grep -Fqx -- "$required_line" "$multilane_four_peer_completion_path"; then
       echo "four-peer multilane completion is missing exact accounting: ${required_line}" >&2
       exit 1
@@ -3758,4 +3834,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 309/309 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 314/314 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

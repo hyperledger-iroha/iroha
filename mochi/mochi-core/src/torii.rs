@@ -9066,9 +9066,10 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "mochi-test".parse().expect("chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
             chain,
-            ALICE_ID.clone(),
+            authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(iter::empty::<InstructionBox>())

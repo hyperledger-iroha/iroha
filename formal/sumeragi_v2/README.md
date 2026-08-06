@@ -494,7 +494,12 @@ height-context state are not migrated in place.
   The QueuePlan binding covers the shared V2 binding and coordinator quorum,
   Kura-before-wake-before-WSV public acceptance, immutable registry CAS,
   Exact-gated autonomous ownership, restart/TTL retention, and exact
-  authenticated loser cleanup.
+  authenticated loser cleanup. Its static source contract also requires both
+  Torii publication ingress and the Sumeragi leader handoff to reject a
+  `Future` authority classification before Kura persistence, while the durable
+  recovery scan retains already-persisted `Future` evidence until canonical
+  reclassification and never admits it to an early carrier. This source seal
+  is not a model-checked future-frontier theorem; that evidence remains open.
   It also binds the bounded autonomous stage projection, its durable-stage
   reducer, and the data-model stage geometry/order validation; diagnostics
   cannot advance beyond revalidated evidence or authorize consensus state.
@@ -1382,7 +1387,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc`.
+`4feda6be5196d970ff4a0a114bca7f302c96fa967845a965bcdbe11a2978906f`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal

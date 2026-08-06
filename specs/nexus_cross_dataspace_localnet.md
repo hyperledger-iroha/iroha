@@ -115,7 +115,10 @@ The production multilane corridor runs this test and the four-peer autoscale
 A/B/A lifecycle gate as ordinary, non-ignored inventory tests through
 `scripts/run_nexus_cross_dataspace_atomic_swap.sh --release
 --multilane-four-peer-release`. Release mode requires a real network and exact
-start/completion markers; a developer opt-out cannot satisfy the gate.
+start/completion markers; a developer opt-out cannot satisfy the gate. The
+six-gate launcher deterministically sets `IROHA_NATIVE_AMX_SOAK_ITERATIONS=10`
+after caller inputs and rejects attempts to supply that reserved control via
+`--env`, so an inherited environment cannot shorten or alter the release soak.
 
 ## Expected Proof Signals
 

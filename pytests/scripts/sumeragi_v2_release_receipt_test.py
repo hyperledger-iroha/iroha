@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import runpy
+import shlex
 import shutil
 import stat
 import subprocess
@@ -25,6 +26,12 @@ from pytests.scripts.sumeragi_v2_release_receipt_components import (
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
+OBSERVER_OMISSION_MARKER = (
+    "[multilane-release-observer-omission-evidence] windows=2 "
+    "exact_three_of_four=passed first_autonomous=passed "
+    "first_drain_carrier=passed first_drain_certificate=passed "
+    "second_autonomous=passed"
+)
 FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
     "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
@@ -285,7 +292,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
+        "9ec0d9255cf3329c022a57ba76cdc0e9ad858e0ade228a6147428192d4f0208a"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -1147,6 +1154,15 @@ def make_g4p_evidence(
             "native_amx_rotating_validator_fault_soak_preserves_independent_"
             "participant_qcs",
         ),
+        (
+            "consensus_and_da",
+            "sumeragi_localnet_smoke::"
+            "permissioned_idle_chain_advances_only_for_external_or_internal_work",
+        ),
+        (
+            "native_amx_routing",
+            "musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay",
+        ),
     )
 
     logs = []
@@ -1154,17 +1170,30 @@ def make_g4p_evidence(
     for index, (target, test) in enumerate(release_tests):
         log = evidence_dir / f"run-{index:02d}-{target}.log"
         release_markers = []
-        if index in (0, 3):
+        if index in (0, 3, 4, 5):
             release_markers.append(
                 f"[multilane-release-gate] started: {test}"
             )
-        if target == "native_amx_routing":
+        if index == 0:
+            release_markers.append(OBSERVER_OMISSION_MARKER)
+        if index == 3:
             release_markers.append(
                 "[multilane-release-native-evidence] grouped_sources=2 "
                 "durable_manifest=passed body_eviction_recovery=passed "
                 "authenticated_remote_recovery=passed exact_once=passed"
             )
-        if index in (0, 3):
+        if index == 4:
+            release_markers.append(
+                "[ex-297-idle-evidence] clean_idle=passed "
+                "external_non_empty=passed internal_non_empty=passed"
+            )
+        if index == 5:
+            release_markers.append(
+                "[ex-297-phase-cut-evidence] after_prepare_qc=passed "
+                "after_commit_qc=passed before_world_commit=passed "
+                "exact_once=passed"
+            )
+        if index in (0, 3, 4, 5):
             release_markers.append(
                 f"[multilane-release-gate] completed: {test}"
             )
@@ -1199,11 +1228,14 @@ def make_g4p_evidence(
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
             "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
-            "expected_runs": "4",
-            "passed_runs": "4",
+            "expected_runs": "6",
+            "passed_runs": "6",
             "failed_runs": "0",
             "skipped_runs": "0",
+            "observer_omission_evidence": "passed",
             "native_grouped_pruning_evidence": "passed",
+            "ex297_idle_evidence": "passed",
+            "ex297_phase_cut_evidence": "passed",
             "runs_sha256": sha256(summary),
         },
     )
@@ -1213,6 +1245,98 @@ def make_g4p_evidence(
         "g4p_logs": logs,
         "g4p_log": logs[0],
     }
+
+
+def test_ex297_idle_release_markers_bind_the_exact_launcher_filter() -> None:
+    launcher_source = (
+        ROOT_DIR / "scripts" / "run_nexus_cross_dataspace_atomic_swap.sh"
+    ).read_text(encoding="utf-8")
+    idle_test_source = (
+        ROOT_DIR / "integration_tests" / "tests" / "sumeragi_localnet_smoke.rs"
+    ).read_text(encoding="utf-8")
+    idle_impl_source = (
+        ROOT_DIR
+        / "integration_tests"
+        / "tests"
+        / "sumeragi_localnet_smoke"
+        / "idle_chain.rs"
+    ).read_text(encoding="utf-8")
+    autoscale_source = (
+        ROOT_DIR / "integration_tests" / "tests" / "nexus" / "autoscale_localnet.rs"
+    ).read_text(encoding="utf-8")
+
+    launcher_match = re.search(
+        r'^readonly EX297_IDLE_CHAIN_RELEASE_TEST="(?P<name>[^"]+)"$',
+        launcher_source,
+        flags=re.MULTILINE,
+    )
+    source_match = re.search(
+        r'^const EX297_IDLE_CHAIN_RELEASE_TEST: &str =\s*'
+        r'"(?P<name>[^"]+)";$',
+        idle_test_source,
+        flags=re.MULTILINE,
+    )
+    assert launcher_match is not None
+    assert source_match is not None
+
+    exact_name = (
+        "sumeragi_localnet_smoke::"
+        "permissioned_idle_chain_advances_only_for_external_or_internal_work"
+    )
+    assert launcher_match.group("name") == exact_name
+    assert source_match.group("name") == exact_name
+    assert idle_impl_source.count(
+        "    let context = EX297_IDLE_CHAIN_RELEASE_TEST;"
+    ) == 1
+    assert idle_impl_source.count("let context =") == 1
+    assert idle_impl_source.count(
+        '        eprintln!("[multilane-release-gate] started: {context}");'
+    ) == 1
+    assert idle_impl_source.count(
+        '        eprintln!("[multilane-release-gate] completed: {context}");'
+    ) == 1
+
+    observer_launcher_match = re.search(
+        r'^readonly AUTOSCALE_OBSERVER_OMISSION_MARKER="(?P<marker>[^"]+)"$',
+        launcher_source,
+        flags=re.MULTILINE,
+    )
+    assert observer_launcher_match is not None
+    assert observer_launcher_match.group("marker") == OBSERVER_OMISSION_MARKER
+    implementation_start = autoscale_source.index(
+        "fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_"
+        "rejects_stale_artifacts_impl()"
+    )
+    marker_position = autoscale_source.index(
+        'eprintln!("{FOUR_PEER_OBSERVER_OMISSION_RELEASE_MARKER}");',
+        implementation_start,
+    )
+    assertion_contexts = (
+        "first observer window autonomous merge QC",
+        "first observer window drain carrier merge QC",
+        "first observer window lane-drain certificate",
+        "second observer window autonomous merge QC",
+    )
+    assertion_positions = [
+        autoscale_source.index(f'"{context}"', implementation_start)
+        for context in assertion_contexts
+    ]
+    assert assertion_positions == sorted(assertion_positions)
+    assert all(position < marker_position for position in assertion_positions)
+    assert (
+        autoscale_source[implementation_start:marker_position].count(
+            "validate_four_peer_observer_omission("
+        )
+        == 4
+    )
+    assert autoscale_source.count(f'"{OBSERVER_OMISSION_MARKER}"') == 1
+    for token in (
+        "expected_validator_set: &[T]",
+        "certificate roster is not the exact network peer membership",
+        '"foreign non-observer"',
+        '"duplicate non-observer"',
+    ):
+        assert autoscale_source.count(token) == 1
 
 
 def make_g12_evidence(
@@ -1313,7 +1437,13 @@ def make_g12_evidence(
     }
 
 
-def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
+def make_evidence(
+    tmp_path: Path, *, archived_git_prelude: str = ""
+) -> dict[str, Path | str | list[Path]]:
+    fixture_root = tmp_path / "receipt-fixture" / "evidence"
+    fixture_root.mkdir(parents=True, mode=0o700)
+    fixture_root.chmod(0o700)
+    tmp_path = fixture_root
     candidate_manifest = "a" * 64
     sealed_manifest = "b" * 64
     tree = "2" * 40
@@ -1373,7 +1503,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     signature_revocation.write_bytes(b"")
     fake_git = (
         "#!/bin/sh\n"
-        "case \"$*\" in\n"
+        + archived_git_prelude
+        + "case \"$*\" in\n"
         "  'rev-parse --show-toplevel') pwd -P ;;\n"
         f"  'rev-parse --verify HEAD^{{commit}}') printf '%s\\n' {head} ;;\n"
         f"  'rev-parse --verify {head}^{{tree}}') printf '%s\\n' {tree} ;;\n"
@@ -2840,7 +2971,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
+        "9ec0d9255cf3329c022a57ba76cdc0e9ad858e0ade228a6147428192d4f0208a"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -3055,6 +3186,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
 
     g4p = receipt["evidence"]["g4p_multilane"]
     assert g4p["schema_version"] == 1
+    assert g4p["observer_omission_evidence"] == "passed"
     g4p_logs = evidence["g4p_logs"]
     assert isinstance(g4p_logs, list)
     g4p_expected = {
@@ -3890,10 +4022,68 @@ def test_receipt_rejects_rehashed_g4p_run_identity_mismatch(
 
 
 @pytest.mark.parametrize(
+    ("log_index", "marker"),
+    (
+        (0, OBSERVER_OMISSION_MARKER),
+        (
+            4,
+            "[ex-297-idle-evidence] clean_idle=passed "
+            "external_non_empty=passed internal_non_empty=passed",
+        ),
+        (
+            5,
+            "[ex-297-phase-cut-evidence] after_prepare_qc=passed "
+            "after_commit_qc=passed before_world_commit=passed exact_once=passed",
+        ),
+    ),
+)
+def test_receipt_rejects_rehashed_g4p_log_missing_release_marker(
+    tmp_path: Path, log_index: int, marker: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    logs = evidence["g4p_logs"]
+    summary = evidence["g4p_summary"]
+    completion = evidence["g4p_completion"]
+    assert isinstance(logs, list)
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+    log = logs[log_index]
+    assert isinstance(log, Path)
+    original = log.read_text(encoding="utf-8")
+    assert original.count(f"{marker}\n") == 1
+    log.write_text(original.replace(f"{marker}\n", "", 1), encoding="utf-8")
+
+    rows = summary.read_text(encoding="utf-8").splitlines()
+    fields = rows[log_index + 1].split("\t")
+    fields[3] = sha256(log)
+    rows[log_index + 1] = "\t".join(fields)
+    summary.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    completion_fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    completion_fields["runs_sha256"] = sha256(summary)
+    write_tsv(completion, completion_fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert (
+        f"G-4P run log {log_index} does not prove one exact passing mandatory G-4P test"
+        in result.stderr
+    )
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     (
         ("schema_version", "2"),
         ("source_manifest_sha256", "0" * 64),
+        ("expected_runs", "4"),
+        ("observer_omission_evidence", "failed"),
+        ("ex297_idle_evidence", "failed"),
+        ("ex297_phase_cut_evidence", "failed"),
     ),
 )
 def test_receipt_rejects_g4p_completion_schema_or_release_mismatch(
@@ -5404,7 +5594,10 @@ def test_hand_invoked_writer_rejects_fake_machine_completion_artifacts(
     result = run_writer(evidence, output, SCRIPT)
 
     assert result.returncode == 1
-    assert "archived formal Verus evidence failed validation" in result.stderr
+    assert (
+        "archived formal ledger has an invalid cross-tool evidence requirement"
+        in result.stderr
+    )
     assert not output.exists()
 
 
@@ -5685,6 +5878,54 @@ def test_receipt_rejects_seed_summary_row_with_extra_column(tmp_path: Path) -> N
 
     assert result.returncode == 1
     assert "extra or missing columns" in result.stderr
+
+
+def test_receipt_fixture_ignores_unrelated_shared_pytest_root_churn(
+    tmp_path: Path,
+) -> None:
+    simulated_pytest_root = tmp_path / "pytest-of-user"
+    test_root = simulated_pytest_root / "pytest-1" / "test-case"
+    test_root.mkdir(parents=True)
+    unrelated_session = simulated_pytest_root / "pytest-unrelated"
+    churn_commands = (
+        f"mkdir {shlex.quote(str(unrelated_session))}\n"
+        f"rmdir {shlex.quote(str(unrelated_session))}\n"
+    )
+    evidence = make_evidence(
+        test_root,
+        archived_git_prelude=churn_commands,
+    )
+    writer = fixture_writer(test_root)
+    git_path = evidence["signature_git"]
+    taira_log = evidence["taira_log"]
+    completion = evidence["taira_completion"]
+    assert isinstance(git_path, Path)
+    assert isinstance(taira_log, Path)
+    assert isinstance(completion, Path)
+    watched_ancestors = (
+        git_path.parent,
+        *tuple(git_path.parent.parents)[:3],
+    )
+    assert watched_ancestors[-1] == test_root
+    assert simulated_pytest_root not in watched_ancestors
+    taira_log.write_text(
+        "running 1 test\n"
+        "test forged_taira_soak ... ok\n\n"
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+        "42 filtered out; finished in 86400.01s\n",
+        encoding="utf-8",
+    )
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["log_sha256"] = sha256(taira_log)
+    write_tsv(completion, fields)
+
+    result = run_writer(evidence, test_root / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "Taira log does not prove its one exact passing soak" in result.stderr
 
 
 def test_receipt_revalidates_archived_taira_semantics(tmp_path: Path) -> None:

@@ -1641,7 +1641,63 @@ NATIVE_PREPUBLICATION_RETENTION_WRITERS = (
     "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
 )
 QUEUE_PLAN_STARTUP_REPLAY_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
+QUEUE_PLAN_FUTURE_FRONTIER_BINDINGS = (
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::accept_queue_plan_admission_certificate",
+        (
+            "classify_pending_queue_plan_admission",
+            "PendingQueuePlanAdmissionDisposition::Future",
+            "return Ok(V2LaneIngressOutcome::Rejected)",
+            "persist_pending_queue_plan_admission_certificate",
+            "refresh_merge_candidates",
+        ),
+    ),
+    (
+        "crates/iroha_torii/src/lib.rs",
+        "fn",
+        "validate_queue_plan_admission_publication",
+        (
+            "classify_pending_queue_plan_admission",
+            "PendingQueuePlanAdmissionDisposition::Future",
+            "retry after catch-up",
+            "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
+            "PendingQueuePlanAdmissionDisposition::Stale",
+            "Ok(binding)",
+        ),
+    ),
+    (
+        "crates/iroha_torii/src/lib.rs",
+        "fn",
+        "ingest_queue_plan_admission_publication",
+        (
+            "validate_queue_plan_admission_publication(app, publication)?",
+            "queue_plan_admission_binding_registry_match",
+            "QueuePlanAdmissionRegistryMatch::Absent",
+            "persist_pending_queue_plan_admission_certificate",
+            "notify_pending_queue_plan_admission",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "fn",
+        "refresh_merge_candidates",
+        (
+            "pending_queue_plan_admission_certificates_bounded",
+            "classify_pending_queue_plan_admission",
+            "PendingQueuePlanAdmissionDisposition::Exact",
+            "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
+            "PendingQueuePlanAdmissionDisposition::Stale",
+            "reject_exact_queue_plan_admission_claim",
+            "remove_pending_queue_plan_admission_certificate",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent",
+            "PendingQueuePlanAdmissionDisposition::Future",
+        ),
+    ),
+)
 QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
+    *QUEUE_PLAN_FUTURE_FRONTIER_BINDINGS,
     (
         "crates/iroha_core/src/queue/journal.rs",
         "method",

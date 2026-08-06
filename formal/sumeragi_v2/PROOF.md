@@ -1574,7 +1574,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc`.
+`4feda6be5196d970ff4a0a114bca7f302c96fa967845a965bcdbe11a2978906f`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

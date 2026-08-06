@@ -7,12 +7,16 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
 readonly autoscale_file="integration_tests/tests/nexus/autoscale_localnet.rs"
+readonly idle_file="integration_tests/tests/sumeragi_localnet_smoke.rs"
+readonly idle_impl_file="integration_tests/tests/sumeragi_localnet_smoke/idle_chain.rs"
 readonly native_file="integration_tests/tests/native_amx_routing.rs"
+readonly phase_cut_file="integration_tests/tests/native_amx_routing/selectable_publication_gate.rs"
 readonly launcher="scripts/run_nexus_cross_dataspace_atomic_swap.sh"
 readonly release_runner="scripts/run_sumeragi_v2_release_gates.sh"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly grouped_fixture="fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly release_receipt_writer="scripts/write_sumeragi_v2_release_receipt.py"
+readonly release_bootstrap="scripts/bootstrap_sumeragi_v2_release.py"
 readonly prebuilt_bundle_shell="scripts/sumeragi_v2_prebuilt_bundle.sh"
 readonly prebuilt_bundle_helper="scripts/sumeragi_v2_prebuilt_bundle.py"
 readonly seed_runner="scripts/run_sumeragi_v2_seed_matrix.sh"
@@ -32,7 +36,14 @@ readonly autoscale_restart_qualified_test="nexus::autoscale_localnet::${autoscal
 readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+readonly native_amx_release_iterations=10
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
+readonly observer_omission_marker="[multilane-release-observer-omission-evidence] windows=2 exact_three_of_four=passed first_autonomous=passed first_drain_carrier=passed first_drain_certificate=passed second_autonomous=passed"
+readonly ex297_idle_test="permissioned_idle_chain_advances_only_for_external_or_internal_work"
+readonly ex297_idle_qualified_test="sumeragi_localnet_smoke::${ex297_idle_test}"
+readonly ex297_idle_marker="[ex-297-idle-evidence] clean_idle=passed external_non_empty=passed internal_non_empty=passed"
+readonly ex297_phase_cut_test="musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay"
+readonly ex297_phase_cut_marker="[ex-297-phase-cut-evidence] after_prepare_qc=passed after_commit_qc=passed before_world_commit=passed exact_once=passed"
 readonly canonical_production_test_count=826
 
 require_nonignored_test() {
@@ -75,10 +86,15 @@ require_nonignored_test "$autoscale_file" "$autoscale_test"
 require_nonignored_test "$autoscale_file" "$autoscale_restart_test"
 require_nonignored_test "$autoscale_file" "$autoscale_drain_test"
 require_nonignored_test "$native_file" "$native_test"
+require_nonignored_test "$idle_file" "$ex297_idle_test"
+require_nonignored_test "$native_file" "$ex297_phase_cut_test"
 
 require_exact_token \
   "$launcher" \
   "readonly AUTOSCALE_FOUR_PEER_RELEASE_TEST=\"${autoscale_qualified_test}\""
+require_exact_token \
+  "$launcher" \
+  "readonly AUTOSCALE_OBSERVER_OMISSION_MARKER=\"${observer_omission_marker}\""
 require_exact_token \
   "$launcher" \
   "readonly AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST=\"${autoscale_restart_qualified_test}\""
@@ -90,10 +106,52 @@ require_exact_token \
   "readonly NATIVE_AMX_FAULT_SOAK_TEST=\"${native_test}\""
 require_exact_token \
   "$launcher" \
+  "readonly NATIVE_AMX_RELEASE_ITERATIONS=${native_amx_release_iterations}"
+require_exact_token \
+  "$launcher" \
+  '    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_NATIVE_AMX_SOAK_ITERATIONS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)'
+require_exact_token \
+  "$launcher" \
+  '  ENV_VARS+=("IROHA_NATIVE_AMX_SOAK_ITERATIONS=${NATIVE_AMX_RELEASE_ITERATIONS}")'
+require_exact_token \
+  "$launcher" \
   "readonly NATIVE_AMX_GROUPED_PRUNING_MARKER=\"${native_grouped_pruning_marker}\""
+require_exact_token \
+  "$launcher" \
+  "readonly EX297_IDLE_CHAIN_RELEASE_TEST=\"${ex297_idle_qualified_test}\""
+require_exact_token \
+  "$launcher" \
+  "readonly EX297_IDLE_CHAIN_RELEASE_MARKER=\"${ex297_idle_marker}\""
+require_exact_token \
+  "$idle_file" \
+  'const EX297_IDLE_CHAIN_RELEASE_TEST: &str ='
+require_exact_token \
+  "$idle_file" \
+  '    "sumeragi_localnet_smoke::permissioned_idle_chain_advances_only_for_external_or_internal_work";'
+require_exact_token \
+  "$idle_impl_file" \
+  '    let context = EX297_IDLE_CHAIN_RELEASE_TEST;'
+require_exact_token \
+  "$launcher" \
+  "readonly EX297_PHASE_CUT_RELEASE_TEST=\"${ex297_phase_cut_test}\""
+require_exact_token \
+  "$launcher" \
+  "readonly EX297_PHASE_CUT_RELEASE_MARKER=\"${ex297_phase_cut_marker}\""
+require_exact_token \
+  "$launcher" \
+  'ENV_VARS+=("IROHA_FAIL_ON_SANDBOX_SKIP=1")'
+require_exact_token \
+  "$launcher" \
+  '    "consensus_and_da|${EX297_IDLE_CHAIN_RELEASE_TEST}"'
+require_exact_token \
+  "$launcher" \
+  '    "native_amx_routing|${EX297_PHASE_CUT_RELEASE_TEST}"'
 require_exact_token \
   "$release_runner" \
   "readonly multilane_autoscale_four_peer_release_test=\"${autoscale_qualified_test}\""
+require_exact_token \
+  "$release_runner" \
+  "readonly multilane_autoscale_observer_omission_marker=\"${observer_omission_marker}\""
 require_exact_token \
   "$release_runner" \
   "readonly multilane_autoscale_restart_release_test=\"${autoscale_restart_qualified_test}\""
@@ -108,13 +166,31 @@ require_exact_token \
   "readonly multilane_native_amx_grouped_pruning_marker=\"${native_grouped_pruning_marker}\""
 require_exact_token \
   "$release_runner" \
-  "    \$'native_grouped_pruning_evidence\\tpassed'; do"
+  "readonly multilane_ex297_idle_release_test=\"${ex297_idle_qualified_test}\""
+require_exact_token \
+  "$release_runner" \
+  "readonly multilane_ex297_idle_release_marker=\"${ex297_idle_marker}\""
+require_exact_token \
+  "$release_runner" \
+  "readonly multilane_ex297_phase_cut_release_test=\"${ex297_phase_cut_test}\""
+require_exact_token \
+  "$release_runner" \
+  "readonly multilane_ex297_phase_cut_release_marker=\"${ex297_phase_cut_marker}\""
+require_exact_token \
+  "$release_runner" \
+  '  "consensus_and_da|${multilane_ex297_idle_release_test}" \'
+require_exact_token \
+  "$release_runner" \
+  '  "native_amx_routing|${multilane_ex297_phase_cut_release_test}"; do'
+require_exact_token \
+  "$release_runner" \
+  "    \$'ex297_phase_cut_evidence\\tpassed'; do"
 require_exact_token \
   "$release_runner" \
   "readonly native_amx_grouped_parity_harness=\"${grouped_parity_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=309"
+  "readonly expected_multilane_focus_test_count=314"
 require_exact_token \
   "$release_runner" \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
@@ -155,16 +231,37 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 51"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 309"
+  "_G_UNIT_TEST_COUNT = 314"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
 require_exact_token \
   "$release_receipt_writer" \
+  "_G4P_OBSERVER_OMISSION_MARKER = ("
+require_exact_token \
+  "$release_receipt_writer" \
   "_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER = ("
 require_exact_token \
   "$release_receipt_writer" \
+  "_G4P_EX297_IDLE_MARKER = ("
+require_exact_token \
+  "$release_receipt_writer" \
+  "_G4P_EX297_PHASE_CUT_MARKER = ("
+require_exact_token \
+  "$release_receipt_writer" \
   '        "native_grouped_pruning_evidence": "passed",'
+require_exact_token \
+  "$release_receipt_writer" \
+  '        "ex297_idle_evidence": "passed",'
+require_exact_token \
+  "$release_receipt_writer" \
+  '        "ex297_phase_cut_evidence": "passed",'
+require_exact_token \
+  "$release_bootstrap" \
+  '        "run-04-consensus_and_da.log",'
+require_exact_token \
+  "$release_bootstrap" \
+  '        "run-05-native_amx_routing.log",'
 for grouped_suite in \
   '    ("openapi", 7),' \
   '    ("python", 58),' \
@@ -174,6 +271,10 @@ for grouped_suite in \
   '    ("java", 5),'; do
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
+if [[ "$(grep -Fxc -- '        "observer_omission_evidence": "passed",' "$release_receipt_writer" || true)" != 2 ]]; then
+  echo "aggregate receipt must validate and export exact observer-omission evidence" >&2
+  exit 1
+fi
 
 python3 -I -S - \
   "$release_runner" \
@@ -292,8 +393,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "d87b65dd729e85f6c2f4c3a18be3d899"
-    "6e8cbfdd90d46433b819aaef6a0f9bfc"
+    "4feda6be5196d970ff4a0a114bca7f30"
+    "2c96fa967845a965bcdbe11a2978906f"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -446,13 +547,13 @@ for block in source_sealed_blocks:
         reject(f"source-sealed command/evidence block {label} is missing or duplicated")
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 115,
+    "required_multilane_core_focus_tests": 118,
     "required_multilane_queue_journal_focus_tests": 137,
     "required_multilane_config_lib_focus_tests": 3,
     "required_multilane_config_runtime_focus_tests": 2,
     "required_multilane_config_fixtures_focus_tests": 2,
     "required_multilane_data_model_focus_tests": 8,
-    "required_multilane_torii_focus_tests": 39,
+    "required_multilane_torii_focus_tests": 41,
     "required_multilane_torii_shared_focus_tests": 1,
     "required_multilane_integration_lib_focus_tests": 2,
 }
@@ -490,9 +591,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 309 or len(set(all_focus_entries)) != 309:
+if len(all_focus_entries) != 314 or len(set(all_focus_entries)) != 314:
     reject(
-        "multilane focus-test arrays must contain 309 globally distinct tests; "
+        "multilane focus-test arrays must contain 314 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -502,7 +603,7 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        115,
+        118,
         "--lib",
     ),
     (
@@ -544,7 +645,7 @@ g_unit_groups = (
         "required_multilane_torii_focus_tests",
         "g-unit-iroha-torii",
         "iroha_torii",
-        39,
+        41,
         "--lib",
     ),
     (
@@ -574,7 +675,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 309 count is not published exactly once")
+        reject("G-UNIT expected 314 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -1138,16 +1239,101 @@ if [[ "$(grep -Fxc -- "    skipped_runs 0 \\" "$launcher" || true)" != 1 ]]; the
   echo "mandatory four-peer completion contract must record exactly zero skips" >&2
   exit 1
 fi
-if [[ "$(grep -Fxc -- "    expected_runs 4 \\" "$launcher" || true)" != 1 ]]; then
-  echo "mandatory four-peer completion contract must record exactly four runs" >&2
+if [[ "$(grep -Fxc -- "    expected_runs 6 \\" "$launcher" || true)" != 1 ]]; then
+  echo "mandatory four-peer completion contract must record exactly six runs" >&2
+  exit 1
+fi
+if [[ "$(grep -Fxc -- "    observer_omission_evidence passed \\" "$launcher" || true)" != 1 ]]; then
+  echo "mandatory four-peer completion must record observer-omission evidence" >&2
   exit 1
 fi
 if [[ "$(grep -Fxc -- "    native_grouped_pruning_evidence passed \\" "$launcher" || true)" != 1 ]]; then
   echo "mandatory four-peer completion must record grouped Native AMX pruning evidence" >&2
   exit 1
 fi
+if [[ "$(grep -Fxc -- "    ex297_idle_evidence passed \\" "$launcher" || true)" != 1 ]]; then
+  echo "mandatory four-peer completion must record EX-297 idle evidence" >&2
+  exit 1
+fi
+if [[ "$(grep -Fxc -- "    ex297_phase_cut_evidence passed \\" "$launcher" || true)" != 1 ]]; then
+  echo "mandatory four-peer completion must record EX-297 phase-cut evidence" >&2
+  exit 1
+fi
 if [[ "$(grep -Fxc -- "authenticated_remote_recovery=passed exact_once=passed\";" "$native_file" || true)" != 1 ]]; then
   echo "mandatory Native AMX test must publish the exact grouped/pruning marker" >&2
+  exit 1
+fi
+if [[ "$(grep -Fxc -- "clean_idle=passed external_non_empty=passed internal_non_empty=passed\";" "$idle_file" || true)" != 1 ]]; then
+  echo "mandatory EX-297 idle test must publish the exact release marker" >&2
+  exit 1
+fi
+if [[ "$(grep -Fxc -- "after_prepare_qc=passed after_commit_qc=passed before_world_commit=passed exact_once=passed\";" "$native_file" || true)" != 1 ]]; then
+  echo "mandatory EX-297 phase-cut test must publish the exact release marker" >&2
+  exit 1
+fi
+
+python3 -I -S - "$autoscale_file" "$observer_omission_marker" <<'PY'
+from pathlib import Path
+import sys
+
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+marker = sys.argv[2]
+implementation = (
+    "fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_"
+    "rejects_stale_artifacts_impl()"
+)
+try:
+    start = source.index(implementation)
+    emitted = source.index(
+        'eprintln!("{FOUR_PEER_OBSERVER_OMISSION_RELEASE_MARKER}");', start
+    )
+except ValueError as error:
+    raise SystemExit(
+        "mandatory four-peer lifecycle lacks its observer-omission marker path"
+    ) from error
+contexts = (
+    "first observer window autonomous merge QC",
+    "first observer window drain carrier merge QC",
+    "first observer window lane-drain certificate",
+    "second observer window autonomous merge QC",
+)
+try:
+    context_positions = [source.index(f'"{context}"', start) for context in contexts]
+except ValueError as error:
+    raise SystemExit(
+        "mandatory four-peer lifecycle lacks an observer-omission assertion"
+    ) from error
+prefix = source[start:emitted]
+if (
+    source.count(f'"{marker}"') != 1
+    or prefix.count("validate_four_peer_observer_omission(") != len(contexts)
+    or context_positions != sorted(context_positions)
+    or any(position >= emitted for position in context_positions)
+    or source.count('eprintln!("{FOUR_PEER_OBSERVER_OMISSION_RELEASE_MARKER}");')
+    != 1
+):
+    raise SystemExit(
+        "observer-omission evidence marker must follow all four exact lifecycle assertions"
+    )
+for token in (
+    "expected_validator_set: &[T]",
+    "expected network roster contains duplicate validators",
+    "certificate roster contains duplicate validators",
+    "certificate roster is not the exact network peer membership",
+    '"foreign non-observer"',
+    '"duplicate non-observer"',
+):
+    if source.count(token) != 1:
+        raise SystemExit(
+            f"observer-omission exact-roster source binding is missing: {token}"
+        )
+PY
+if [[ "$(grep -Fxc -- '        eprintln!("[multilane-release-gate] started: {context}");' "$idle_impl_file" || true)" != 1 \
+  || "$(grep -Fxc -- '        eprintln!("[multilane-release-gate] completed: {context}");' "$idle_impl_file" || true)" != 1 \
+  || "$(grep -Fxc -- '    eprintln!("[multilane-release-gate] started: {context}");' "$phase_cut_file" || true)" != 1 \
+  || "$(grep -Fxc -- '    eprintln!("[multilane-release-gate] completed: {context}");' "$phase_cut_file" || true)" != 1 ]]; then
+  echo "mandatory EX-297 tests must publish exact started/completed release markers" >&2
   exit 1
 fi
 if [[ "$(grep -Fxc -- "        .submit_prepared_transaction_payload_batch_async(&payloads)" "$native_file" || true)" != 1 ]]; then
@@ -1167,4 +1353,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 81 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 38 modules, exact 309/309 G-UNIT (115 core, 137 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 81 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 38 modules, exact 314/314 G-UNIT (118 core, 137 queue-journal, 7 config, 8 data-model, 41 Torii, 1 Torii-shared, 2 integration), six mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"

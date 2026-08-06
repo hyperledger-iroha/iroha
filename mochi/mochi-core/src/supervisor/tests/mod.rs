@@ -19,3 +19,5 @@ use super::*;
 
 include!("core_and_snapshot.rs");
 include!("generation_and_runtime.rs");
+include!("generation_topology.rs");
+include!("soracloud_runtime.rs");

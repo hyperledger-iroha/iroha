@@ -776,6 +776,16 @@ pub(crate) enum V2LaneWorkEffect {
     },
     /// Broadcast a merge signature share to the frozen voting roster.
     BroadcastMerge(MergeCommitteeSignature),
+    /// Hand one exact Kura-durable QueuePlan admission certificate to the
+    /// current global leader.
+    PostQueuePlanAdmissionCertificate {
+        /// Current global leader selected by the frozen height context.
+        peer: PeerId,
+        /// Frozen global view which selected `peer` as leader.
+        view: wire::View,
+        /// Exact canonical quorum certificate bytes.
+        certificate: Arc<Vec<u8>>,
+    },
     /// Send one authenticated certified merge-sidecar request or response.
     PostCertifiedMergeSidecar {
         /// Exact destination selected by the sidecar transport.
@@ -2483,6 +2493,8 @@ pub(crate) struct V2LaneWorkAdapter {
     native_participant_recovery_retry_cursor: usize,
     committed_lane_output_cursor: usize,
     admitted_relays: BTreeSet<(LaneId, DataSpaceId, Hash, u64)>,
+    queue_plan_admission_handoff_retry_required: bool,
+    queue_plan_admission_handoff_cursor: usize,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
     merge_signing_guard: MergeSigningGuard,
@@ -2875,6 +2887,8 @@ impl V2LaneWorkAdapter {
             native_participant_recovery_retry_cursor,
             committed_lane_output_cursor: 0,
             admitted_relays: BTreeSet::new(),
+            queue_plan_admission_handoff_retry_required: false,
+            queue_plan_admission_handoff_cursor: 0,
             merge_entries: BTreeMap::new(),
             merge_claims: BTreeMap::new(),
             merge_signing_guard,
@@ -4259,27 +4273,29 @@ impl V2LaneWorkAdapter {
             let descriptor = &payload.origin_proposal.descriptor;
             let epoch = self.epoch_for_proposal_height(descriptor.proposal_height);
             let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(payload);
-            match self
+            let first_reservation = payload.reservation_keys.first().ok_or_else(|| {
+                V2LaneWorkError::Persistence(
+                    "losing autonomous payload has no durable reservation identity".to_owned(),
+                )
+            })?;
+            let existing_retirement = self
                 .kura
-                .read_autonomous_lane_slot_retirement(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
+                .autonomous_lane_retirement_matching_reservation(
+                    first_reservation,
                     chain_id_hash,
                     epoch,
                 )
-                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
-            {
-                Some(existing) if existing == retirement => {}
-                Some(_) => {
-                    return Err(V2LaneWorkError::Persistence(
-                        "losing autonomous carrier conflicts with its durable slot retirement"
-                            .to_owned(),
-                    ));
-                }
-                None => self
-                    .kura
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            if existing_retirement.as_ref() != Some(&retirement) {
+                // A retired attempt may be followed by an authenticated
+                // higher-proposal-height attempt for the same still-open lane
+                // height.  Let Kura validate and durably install that exact
+                // successor before retiring it; Kura rejects stale or
+                // conflicting bytes.  Only an exact retirement replay skips
+                // persistence because its payload is already durably closed.
+                self.kura
                     .persist_lane_executable_payload(payload, chain_id_hash, epoch)
-                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
+                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             }
             super::v2_apply::retire_autonomous_lane_slot_and_release_reservations(
                 self.kura.as_ref(),
@@ -5693,6 +5709,7 @@ impl V2LaneWorkAdapter {
             },
             V2LaneWorkEffect::PostDurableLaneCertificate { .. } => true,
             V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => true,
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => true,
             V2LaneWorkEffect::PostNativeAmx { .. }
             | V2LaneWorkEffect::PostLaneDrainVote { .. }
             | V2LaneWorkEffect::BroadcastMerge(_) => false,
@@ -6061,10 +6078,7 @@ impl V2LaneWorkAdapter {
             .kura
             .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
         {
-            if durable.proposal != session.proposal
-                || durable.prepare_qc != session.prepare_qc
-                || durable.commit_qc != session.commit_qc
-            {
+            if durable.proposal != session.proposal {
                 return Err(
                     "historical lane certificate conflicts with its durable certified slot"
                         .to_owned(),
@@ -6073,7 +6087,35 @@ impl V2LaneWorkAdapter {
             Kura::validate_certified_lane_block_artifact(&durable).map_err(|error| {
                 format!("historical durable lane certificate is invalid: {error}")
             })?;
-            return Ok(durable.signer_pops);
+            if durable.prepare_qc == session.prepare_qc && durable.commit_qc == session.commit_qc {
+                return Ok(durable.signer_pops);
+            }
+
+            // Prepare/Commit signer subsets are proof variants, not lane-slot
+            // identity. Reconstruct the complete immutable authority frozen
+            // at the proposal height, then retain only the exact signer union
+            // selected by this alternative certificate. Never consult mutable
+            // current State for historical proof variants.
+            let validator_pops =
+                durable_historical_lane_verification_pops(self.kura.as_ref(), &durable)?;
+            let mut signer_pops = project_qc_signer_pops(&session.prepare_qc, &validator_pops)
+                .map_err(|error| {
+                    format!(
+                        "historical Prepare QC variant lacks immutable signer authority: {error}"
+                    )
+                })?;
+            signer_pops.extend(
+                project_qc_signer_pops(&session.commit_qc, &validator_pops).map_err(|error| {
+                    format!(
+                        "historical Commit QC variant lacks immutable signer authority: {error}"
+                    )
+                })?,
+            );
+            let candidate = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+            Kura::validate_certified_lane_block_artifact(&candidate).map_err(|error| {
+                format!("historical alternative lane certificate is invalid: {error}")
+            })?;
+            return Ok(signer_pops);
         }
 
         let identity = HistoricalRecoveryIdentity::from_proposal(&session.proposal)
@@ -8780,7 +8822,11 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         };
         if self.decision_pending()
-            && !matches!(&message, LaneRelayMessage::CertifiedMergeSidecar { .. })
+            && !matches!(
+                &message,
+                LaneRelayMessage::CertifiedMergeSidecar { .. }
+                    | LaneRelayMessage::QueuePlanAdmissionCertificate { .. }
+            )
         {
             operation.complete();
             return V2LaneIngressOutcome::Rejected;
@@ -8790,6 +8836,10 @@ impl V2LaneWorkAdapter {
             LaneRelayMessage::MergeSignature(signature) => {
                 self.accept_merge_signature(signature, active_view)
             }
+            LaneRelayMessage::QueuePlanAdmissionCertificate {
+                sender,
+                certificate,
+            } => self.accept_queue_plan_admission_certificate(sender, certificate, active_view),
             LaneRelayMessage::CertifiedMergeSidecar {
                 sender,
                 reply_route,
@@ -11021,8 +11071,13 @@ impl V2LaneWorkAdapter {
     }
 
     fn purge_queued_merge_broadcasts(&mut self) {
-        self.effects
-            .retain(|effect| !matches!(effect, V2LaneWorkEffect::BroadcastMerge(_)));
+        self.effects.retain(|effect| {
+            !matches!(
+                effect,
+                V2LaneWorkEffect::BroadcastMerge(_)
+                    | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+            )
+        });
         self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
     }
 
@@ -11061,7 +11116,8 @@ impl V2LaneWorkAdapter {
             } => true,
             V2LaneWorkEffect::PostLaneBlock { .. }
             | V2LaneWorkEffect::PostLaneDrainVote { .. }
-            | V2LaneWorkEffect::BroadcastMerge(_) => false,
+            | V2LaneWorkEffect::BroadcastMerge(_)
+            | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => false,
             V2LaneWorkEffect::PostDurableLaneCertificate { .. } => {
                 allowed_durable_certificates.contains(&lane_work_effect_key(effect))
             }
@@ -13523,6 +13579,7 @@ impl V2LaneWorkAdapter {
     }
 
     fn refresh_merge_candidates(&mut self, active_view: wire::View) -> Result<(), V2LaneWorkError> {
+        self.queue_plan_admission_handoff_retry_required = false;
         let carrier_protected = self
             .retained_merge_carrier_state
             .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
@@ -13562,6 +13619,18 @@ impl V2LaneWorkAdapter {
         {
             return Ok(());
         }
+        let leader_index = self.context.leader(active_view);
+        let leader_peer = self
+            .context
+            .roster
+            .get(usize::try_from(leader_index).unwrap_or(usize::MAX))
+            .map(|entry| entry.validator.clone())
+            .ok_or_else(|| {
+                V2LaneWorkError::InvalidContext(
+                    "current global leader is outside the frozen roster".to_owned(),
+                )
+            })?;
+        let local_is_leader = self.local_validator_index() == Some(leader_index);
         // Reconcile the durable QueuePlan admission store only at an exact
         // canonical Kura/WSV parent frontier. Exact registry matches are safe
         // to forget after their global carrier is durable; absent claims stay
@@ -13570,12 +13639,24 @@ impl V2LaneWorkAdapter {
         // definitive losers and can be removed; malformed durable evidence
         // still fails closed.
         let mut pending_queue_plan_admissions = Vec::new();
-        for (certificate_hash, certificate_bytes) in self
+        let mut pending_certificates = self
             .kura
             .pending_queue_plan_admission_certificates_bounded(
                 self.kura.pending_queue_plan_admission_capacity(),
             )
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        let pending_certificate_count = pending_certificates.len();
+        let handoff_scan_start = if local_is_leader || pending_certificate_count == 0 {
+            0
+        } else {
+            self.queue_plan_admission_handoff_cursor % pending_certificate_count
+        };
+        if handoff_scan_start != 0 {
+            pending_certificates.rotate_left(handoff_scan_start);
+        }
+        let mut handoff_scan_completed = true;
+        for (scan_offset, (certificate_hash, certificate_bytes)) in
+            pending_certificates.into_iter().enumerate()
         {
             let (admission, disposition) = self
                 .state
@@ -13612,14 +13693,36 @@ impl V2LaneWorkAdapter {
                         .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
                 }
                 PendingQueuePlanAdmissionDisposition::EligibleAbsent => {
-                    pending_queue_plan_admissions.push(certificate_bytes);
+                    if local_is_leader {
+                        pending_queue_plan_admissions.push(certificate_bytes);
+                    } else {
+                        let effect = V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                            peer: leader_peer.clone(),
+                            view: active_view,
+                            certificate: Arc::new(certificate_bytes),
+                        };
+                        let already_queued =
+                            self.effect_keys.contains(&lane_work_effect_key(&effect));
+                        if !already_queued && !self.push_effect(effect) {
+                            self.queue_plan_admission_handoff_retry_required = true;
+                            self.queue_plan_admission_handoff_cursor =
+                                (handoff_scan_start + scan_offset) % pending_certificate_count;
+                            handoff_scan_completed = false;
+                            break;
+                        }
+                    }
                 }
                 PendingQueuePlanAdmissionDisposition::Future => {
-                    // Keep the authenticated, bounded certificate durable until this peer
-                    // reaches its canonical authority frontier. It will be reclassified on
-                    // the next exact parent frontier and must not enter an early carrier.
+                    // Keep the already-durable, cryptographically self-consistent certificate
+                    // until this peer reaches its canonical authority frontier. It will be
+                    // reclassified on the next exact parent frontier and must not enter an
+                    // early carrier.
                 }
             }
+        }
+        if !local_is_leader && pending_certificate_count != 0 && handoff_scan_completed {
+            self.queue_plan_admission_handoff_cursor =
+                (handoff_scan_start + 1) % pending_certificate_count;
         }
         self.drive_lane_drain(active_view)?;
 
@@ -13689,8 +13792,6 @@ impl V2LaneWorkAdapter {
         if let Some((_, candidate, _)) = authorized_candidate {
             installed_candidates.push(candidate);
         }
-        let local_is_leader =
-            self.local_validator_index() == Some(self.context.leader(active_view));
         let leader_candidates = if authorized_digest.is_none() && local_is_leader {
             let base = if let Some(candidate) =
                 self.lane_drain_merge_candidate(&parent_header, active_view)?
@@ -13797,6 +13898,122 @@ impl V2LaneWorkAdapter {
             self.try_commit_merge(key)?;
         }
         Ok(())
+    }
+
+    /// Reconcile Kura-durable QueuePlan admissions and, on a nonleader, hand
+    /// each unsent exact certificate to the current global leader.
+    ///
+    /// Returns `false` only when bounded lane-effect pressure retained Kura as
+    /// the source and requires the runner to keep its coalescing dirty bit set.
+    pub(crate) fn refresh_pending_queue_plan_admission_handoffs(
+        &mut self,
+        active_view: wire::View,
+    ) -> Result<bool, V2LaneWorkError> {
+        self.refresh_merge_candidates(active_view)?;
+        Ok(!self.queue_plan_admission_handoff_retry_required)
+    }
+
+    pub(crate) fn required_merge_carrier_digest(
+        &self,
+        active_view: wire::View,
+    ) -> Result<Option<Hash>, V2LaneWorkError> {
+        let round_header = self.merge_carrier_context_header(active_view)?;
+        let expected_epoch = self
+            .state
+            .merge_ledger()
+            .latest()
+            .map_or(1, |entry| entry.epoch_id.saturating_add(1));
+        if let Some((_, entry, _)) = self
+            .state
+            .select_pending_certified_merge_entry_for_round(&round_header, expected_epoch)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
+        {
+            return Ok(Some(entry.merge_qc.message_digest));
+        }
+        let Some(carrier_parent_hash) = round_header.prev_block_hash() else {
+            return Ok(None);
+        };
+        Ok(self.merge_entries.iter().find_map(|(key, pending)| {
+            matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if key.epoch_id == expected_epoch
+                        && key.view == active_view
+                        && candidate.carrier_height == self.context.height
+                        && candidate.carrier_parent_hash == carrier_parent_hash
+            )
+            .then_some(key.digest)
+        }))
+    }
+
+    fn accept_queue_plan_admission_certificate(
+        &mut self,
+        _sender: PeerId,
+        certificate: Arc<Vec<u8>>,
+        active_view: wire::View,
+    ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
+        let local_is_current_leader = self
+            .context
+            .roster
+            .get(usize::try_from(self.context.leader(active_view)).unwrap_or(usize::MAX))
+            .is_some_and(|entry| entry.validator == self.local_peer);
+        if !local_is_current_leader
+            || certificate.is_empty()
+            || certificate.len() > iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
+            || crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+                &self.context.chain_id,
+                certificate.as_slice(),
+            )
+            .is_err()
+        {
+            return Ok(V2LaneIngressOutcome::Rejected);
+        }
+        let disposition = match self
+            .state
+            .classify_pending_queue_plan_admission(certificate.as_slice(), self.context.height)
+        {
+            Ok((_, disposition)) => disposition,
+            Err(error) => {
+                return Err(V2LaneWorkError::Persistence(format!(
+                    "relayed QueuePlan admission certificate cannot be reconciled: {error}"
+                )));
+            }
+        };
+        match disposition {
+            PendingQueuePlanAdmissionDisposition::Exact => {
+                return Ok(V2LaneIngressOutcome::Duplicate);
+            }
+            PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+            | PendingQueuePlanAdmissionDisposition::Stale => {
+                return Ok(V2LaneIngressOutcome::Rejected);
+            }
+            PendingQueuePlanAdmissionDisposition::EligibleAbsent => {}
+            PendingQueuePlanAdmissionDisposition::Future => {
+                // The embedded quorum is only self-consistent until this receiver
+                // reaches the certificate's authority frontier and can compare its
+                // predecessor, lifecycle, and roster with canonical state. The
+                // sender retains the durable source and retries after catch-up.
+                return Ok(V2LaneIngressOutcome::Rejected);
+            }
+        }
+        let certificate_hash = Hash::new(certificate.as_slice());
+        let already_pending = self
+            .kura
+            .pending_queue_plan_admission_certificates_bounded(
+                self.kura.pending_queue_plan_admission_capacity(),
+            )
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
+            .iter()
+            .any(|(hash, _)| *hash == certificate_hash);
+        self.kura
+            .persist_pending_queue_plan_admission_certificate(certificate.as_slice())
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        self.refresh_merge_candidates(active_view)?;
+        Ok(if already_pending {
+            V2LaneIngressOutcome::Duplicate
+        } else {
+            V2LaneIngressOutcome::Inserted
+        })
     }
 
     fn accept_merge_signature(
@@ -14147,6 +14364,13 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
             drop(operation);
             return Err(all_unavailable(candidates.len(), error.to_string()));
         }
+        let required_merge_carrier_digest = match self.required_merge_carrier_digest(view) {
+            Ok(digest) => digest,
+            Err(error) => {
+                drop(operation);
+                return Err(all_unavailable(candidates.len(), error.to_string()));
+            }
+        };
         let result = (|| {
             self.planned_lane_proposals.clear();
             let reserved_routes = self
@@ -14302,6 +14526,7 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 native_amx_receipts: receipts,
                 lane_payload_ownerships: lane_plan.ownerships,
                 autonomous_lane_payloads,
+                required_merge_carrier_digest,
             })
         })();
         operation.complete();
@@ -14365,7 +14590,8 @@ fn lane_work_effect_reply_routes_have_valid_shape(effect: &V2LaneWorkEffect) -> 
     match effect {
         V2LaneWorkEffect::PostLaneBlock { .. }
         | V2LaneWorkEffect::PostLaneDrainVote { .. }
-        | V2LaneWorkEffect::BroadcastMerge(_) => true,
+        | V2LaneWorkEffect::BroadcastMerge(_)
+        | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => true,
         V2LaneWorkEffect::PostDurableLaneCertificate {
             peer,
             reply_routes,
@@ -14410,7 +14636,8 @@ fn lane_work_effect_reply_routes_are_valid(effect: &V2LaneWorkEffect) -> bool {
     match effect {
         V2LaneWorkEffect::PostLaneBlock { .. }
         | V2LaneWorkEffect::PostLaneDrainVote { .. }
-        | V2LaneWorkEffect::BroadcastMerge(_) => true,
+        | V2LaneWorkEffect::BroadcastMerge(_)
+        | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => true,
         V2LaneWorkEffect::PostDurableLaneCertificate {
             peer,
             reply_routes,
@@ -14600,7 +14827,11 @@ where
             V2LaneWorkEffect::PostLaneDrainVote { .. },
             V2LaneWorkEffect::PostLaneDrainVote { .. },
         )
-        | (V2LaneWorkEffect::BroadcastMerge(_), V2LaneWorkEffect::BroadcastMerge(_)) => true,
+        | (V2LaneWorkEffect::BroadcastMerge(_), V2LaneWorkEffect::BroadcastMerge(_))
+        | (
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. },
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. },
+        ) => true,
         _ => false,
     }
 }
@@ -14649,6 +14880,16 @@ fn lane_work_effect_key(effect: &V2LaneWorkEffect) -> Hash {
         V2LaneWorkEffect::BroadcastMerge(signature) => {
             encoded.push(2);
             encoded.extend(signature.encode());
+        }
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+            peer,
+            view,
+            certificate,
+        } => {
+            encoded.push(6);
+            encoded.extend(peer.encode());
+            encoded.extend(view.encode());
+            encoded.extend(certificate.as_ref().encode());
         }
         V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message, .. } => {
             encoded.push(3);
@@ -15029,6 +15270,7 @@ pub(super) mod tests {
                 tests::{
                     durable_finality_fixture, service_for_history_context,
                     service_for_history_context_with_handoff_owner,
+                    service_for_history_context_with_local_validator,
                     service_for_history_context_with_local_validator_and_handoff_owner,
                 },
             },
@@ -15051,7 +15293,9 @@ pub(super) mod tests {
         fixture_at_height(mode, 9)
     }
 
-    fn fixture_with_durable_parent(mode: wire::ConsensusMode) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+    pub(in crate::sumeragi) fn fixture_with_durable_parent(
+        mode: wire::ConsensusMode,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         fixture_at_height_inner(mode, 9, true)
     }
 
@@ -15158,8 +15402,35 @@ pub(super) mod tests {
         height: u64,
         persist_parent_chain: bool,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_at_epoch(mode, height, persist_parent_chain, 4)
+    }
+
+    fn fixture_at_height_inner_at_epoch(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        context_epoch: u64,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_at_epoch_with_setup(
+            mode,
+            height,
+            persist_parent_chain,
+            context_epoch,
+            None,
+            None,
+        )
+    }
+
+    fn fixture_at_height_inner_at_epoch_with_setup(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        context_epoch: u64,
+        setup: Option<fn(&State, &mut wire::HeightContext, &[KeyPair])>,
+        local_validator_index: Option<usize>,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let nonzero = NonZeroUsize::new(8).expect("nonzero");
-        fixture_at_height_inner_with_limits(
+        fixture_at_height_inner_with_limits_and_kura_at_epoch_with_setup(
             mode,
             height,
             persist_parent_chain,
@@ -15190,6 +15461,10 @@ pub(super) mod tests {
                 )
                 .expect("default Native AMX signing limits"),
             ),
+            Kura::blank_kura_for_testing(),
+            context_epoch,
+            setup,
+            local_validator_index,
         )
     }
 
@@ -15214,6 +15489,47 @@ pub(super) mod tests {
         persist_parent_chain: bool,
         limits: V2LaneWorkLimits,
         kura: Arc<Kura>,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_with_limits_and_kura_at_epoch(
+            mode,
+            height,
+            persist_parent_chain,
+            limits,
+            kura,
+            4,
+        )
+    }
+
+    fn fixture_at_height_inner_with_limits_and_kura_at_epoch(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        limits: V2LaneWorkLimits,
+        kura: Arc<Kura>,
+        context_epoch: u64,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_with_limits_and_kura_at_epoch_with_setup(
+            mode,
+            height,
+            persist_parent_chain,
+            limits,
+            kura,
+            context_epoch,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fixture_at_height_inner_with_limits_and_kura_at_epoch_with_setup(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        limits: V2LaneWorkLimits,
+        kura: Arc<Kura>,
+        context_epoch: u64,
+        setup: Option<fn(&State, &mut wire::HeightContext, &[KeyPair])>,
+        local_validator_index: Option<usize>,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let chain_id: ChainId = "v2-lane-work-test".into();
         let mut keys = (1_u8..=4)
@@ -15263,7 +15579,7 @@ pub(super) mod tests {
             chain_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height,
-            epoch: 4,
+            epoch: context_epoch,
             epoch_end_height: height.saturating_add(11),
             next_epoch_snapshot: None,
             mode,
@@ -15345,8 +15661,15 @@ pub(super) mod tests {
         if let Some(parent_qc) = context.parent_commit_qc.as_mut() {
             parent_qc.subject.block_hash = parent.expect("non-genesis fixture has a parent");
         }
-        let local_index = usize::try_from(context.leader(0)).expect("leader index");
-        let local_key = keys[local_index].clone();
+        if let Some(setup) = setup {
+            setup(state.as_ref(), &mut context, &keys);
+        }
+        let local_index = local_validator_index
+            .unwrap_or_else(|| usize::try_from(context.leader(0)).expect("leader index"));
+        let local_key = keys
+            .get(local_index)
+            .expect("fixture local validator index is in the frozen roster")
+            .clone();
         let local_peer = PeerId::new(local_key.public_key().clone());
         let authenticated_genesis_nexus_amx_context = (height == 1).then(|| {
             AuthenticatedGenesisNexusAmxContext::Staged(StagedGenesisNexusAmxContext::for_test(
@@ -15375,6 +15698,41 @@ pub(super) mod tests {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
     ) -> Vec<PeerId> {
+        enable_multilane_nexus_with_default_lane_validators(
+            adapter,
+            keys,
+            keys,
+            lane_id,
+            dataspace_id,
+        )
+    }
+
+    fn enable_multilane_nexus_with_default_lane_validators(
+        adapter: &mut V2LaneWorkAdapter,
+        keys: &[KeyPair],
+        default_lane_validator_keys: &[KeyPair],
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Vec<PeerId> {
+        let state = Arc::clone(&adapter.state);
+        configure_multilane_nexus_with_default_lane_validators(
+            state.as_ref(),
+            &mut adapter.context,
+            keys,
+            default_lane_validator_keys,
+            lane_id,
+            dataspace_id,
+        )
+    }
+
+    fn configure_multilane_nexus_with_default_lane_validators(
+        state: &State,
+        context: &mut wire::HeightContext,
+        keys: &[KeyPair],
+        default_lane_validator_keys: &[KeyPair],
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Vec<PeerId> {
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero lane count"),
             vec![
@@ -15399,16 +15757,16 @@ pub(super) mod tests {
         ])
         .expect("multi-lane test dataspace catalog");
         {
-            let mut nexus = adapter.state.nexus.write();
+            let mut nexus = state.nexus.write();
             nexus.enabled = true;
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
             nexus.lane_catalog = lane_catalog;
             nexus.dataspace_catalog = dataspace_catalog;
         }
-        adapter.state.reseed_static_lane_incarnations_for_tests();
+        state.reseed_static_lane_incarnations_for_tests();
 
-        let mut world_block = adapter.state.world.block();
+        let mut world_block = state.world.block();
         {
             let mut peers = world_block.peers_mut_for_testing().transaction();
             for key in keys {
@@ -15434,6 +15792,19 @@ pub(super) mod tests {
                 torii_url: None,
             })
             .collect::<Vec<_>>();
+        let default_validators = default_lane_validator_keys
+            .iter()
+            .map(|key| AccountId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let default_validator_bindings = default_validators
+            .iter()
+            .zip(default_lane_validator_keys)
+            .map(|(validator, key)| ManifestValidatorBinding {
+                validator: validator.clone(),
+                peer_id: PeerId::new(key.public_key().clone()),
+                torii_url: None,
+            })
+            .collect::<Vec<_>>();
         let default_status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "default".to_owned(),
@@ -15445,8 +15816,8 @@ pub(super) mod tests {
                 "/tmp/v2-default-lane-manifest.json",
             )),
             governance_rules: Some(GovernanceRules {
-                validators: validators.clone(),
-                validator_bindings: validator_bindings.clone(),
+                validators: default_validators,
+                validator_bindings: default_validator_bindings,
                 ..GovernanceRules::default()
             }),
             privacy_commitments: Vec::new(),
@@ -15468,25 +15839,67 @@ pub(super) mod tests {
             }),
             privacy_commitments: Vec::new(),
         };
-        adapter
-            .state
-            .install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
-                BTreeMap::from([(LaneId::SINGLE, default_status), (lane_id, status)]),
-            )));
-        adapter.context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+            BTreeMap::from([(LaneId::SINGLE, default_status), (lane_id, status)]),
+        )));
+        context.nexus_amx_context_hash =
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state);
+        context.execution_policy_hash =
+            super::super::v2_recovery::committed_execution_policy_hash(state)
+                .expect("derive multi-lane fixture execution policy");
 
         assert!(proposal_lookahead_enabled(
-            &adapter.state.nexus_snapshot(),
-            adapter.context.height,
+            &state.nexus_snapshot(),
+            context.height,
         ));
-        let mut validators = adapter
-            .state
-            .authoritative_lane_peer_ids_at_height(lane_id, adapter.context.height);
+        let mut validators = state.authoritative_lane_peer_ids_at_height(lane_id, context.height);
         validators.sort();
         validators.dedup();
         assert_eq!(validators.len(), keys.len());
         validators
+    }
+
+    fn configure_queue_plan_tag21_restart_nexus(
+        state: &State,
+        context: &mut wire::HeightContext,
+        keys: &[KeyPair],
+    ) {
+        let initial_local_index = context.leader(0);
+        let search_bound = u64::try_from(context.roster.len())
+            .expect("fixture roster length fits u64")
+            .saturating_mul(2);
+        let outside_leader_index = (0..search_bound)
+            .map(|view| context.leader(view))
+            .find(|leader| *leader != initial_local_index)
+            .expect("rotating leader schedule reaches an outside-coordinator validator");
+        let outside_leader_index =
+            usize::try_from(outside_leader_index).expect("leader index fits this platform");
+        let coordinator_keys = keys
+            .iter()
+            .enumerate()
+            .filter_map(|(index, key)| (index != outside_leader_index).then_some(key.clone()))
+            .collect::<Vec<_>>();
+        configure_multilane_nexus_with_default_lane_validators(
+            state,
+            context,
+            keys,
+            &coordinator_keys,
+            LaneId::new(1),
+            DataSpaceId::new(7),
+        );
+    }
+
+    fn queue_plan_tag21_restart_fixture(
+        local_validator_index: Option<usize>,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_at_epoch_with_setup(
+            wire::ConsensusMode::Permissioned,
+            9,
+            true,
+            4,
+            Some(configure_queue_plan_tag21_restart_nexus),
+            local_validator_index,
+        )
     }
 
     fn limits_with_native_capacity(record_capacity: usize) -> V2LaneWorkLimits {
@@ -26999,6 +27412,89 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn historical_recovery_accepts_valid_same_proposal_qc_variant_from_frozen_authority() {
+        let (adapter, keys, request) = self_contained_historical_recovery_request_fixture();
+        let proposal = request
+            .certificate
+            .as_ref()
+            .expect("historical lane request certificate")
+            .proposal
+            .clone();
+        let retained = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Commit),
+        };
+        adapter
+            .kura
+            .persist_committed_lane_block_session(&retained, &lane_signer_pops(&keys[..3]))
+            .expect("persist first valid quorum variant");
+
+        let alternative = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Commit),
+        };
+        let signer_pops = adapter
+            .historical_recovery_signer_pops(&alternative)
+            .expect("validate alternative quorum from frozen finality authority");
+        assert_eq!(signer_pops, lane_signer_pops(&keys[1..]));
+        Kura::validate_certified_lane_block_artifact(&CertifiedLaneBlockArtifact::new(
+            alternative,
+            signer_pops,
+        ))
+        .expect("alternative historical certificate remains independently valid");
+
+        let durable = adapter
+            .kura
+            .read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("first durable quorum remains retained");
+        assert_eq!(durable.prepare_qc, retained.prepare_qc);
+        assert_eq!(durable.commit_qc, retained.commit_qc);
+    }
+
+    #[test]
+    fn historical_recovery_rejects_qc_variant_without_frozen_signer_authority() {
+        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (_block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        let retained = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Commit),
+        };
+        adapter
+            .kura
+            .persist_committed_lane_block_session(&retained, &lane_signer_pops(&keys[..3]))
+            .expect("persist first valid quorum variant");
+
+        let alternative = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Commit),
+        };
+        let error = adapter
+            .historical_recovery_signer_pops(&alternative)
+            .expect_err("missing immutable authority must reject an alternate quorum");
+        assert!(
+            error.contains("lacks immutable signer authority"),
+            "unexpected rejection: {error}"
+        );
+
+        let durable = adapter
+            .kura
+            .read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("first durable quorum remains retained");
+        assert_eq!(durable.prepare_qc, retained.prepare_qc);
+        assert_eq!(durable.commit_qc, retained.commit_qc);
+    }
+
+    #[test]
     fn historical_recovery_request_rejects_stale_incarnation_and_unanchored_view() {
         let (adapter, keys, request) = self_contained_historical_recovery_request_fixture();
 
@@ -29403,9 +29899,11 @@ pub(super) mod tests {
         }
     }
 
-    #[test]
-    fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    fn assert_empty_direct_decision_durably_retires_losing_autonomous_carrier(
+        roll_epoch_before_successor: bool,
+    ) {
+        let (mut adapter, keys) =
+            fixture_at_height_inner_at_epoch(wire::ConsensusMode::Permissioned, 2, true, 0);
         let (losing_block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
         let entrypoint = losing_block
             .external_entrypoints_cloned()
@@ -29480,18 +29978,22 @@ pub(super) mod tests {
         adapter
             .install_lane_drain_queue(Arc::clone(&queue))
             .expect("install live queue before retiring losing ownership");
-        let (round, losing_subject) = global_lock_for_block(&adapter, &losing_block);
-        let winning_subject = wire::BlockSubject {
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"winning-control-only-carrier-block",
-            )),
-            payload_hash: Hash::new(b"winning-control-only-carrier-payload"),
-            ..losing_subject
-        };
-        assert_eq!(
-            adapter.mark_global_body_locked(round, winning_subject),
-            Ok(GlobalBodyLockOutcome::Inserted)
-        );
+        let parent = adapter
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash);
+        let leader_index = usize::try_from(adapter.context.leader(0))
+            .expect("empty-carrier leader index fits usize");
+        let winning_block = test_block(adapter.context.height, parent, None, &keys[leader_index]);
+        adapter
+            .kura
+            .store_block(winning_block.clone())
+            .expect("persist empty direct-decision carrier");
+        let (round, winning_subject) = global_lock_for_block(&adapter, &winning_block);
+        adapter
+            .retain_merge_sidecars_for_global_view(round.view, None, Some(winning_subject))
+            .expect("install empty direct Decision without a preceding local lock");
 
         assert!(adapter.autonomous_payloads.is_empty());
         let retirement = adapter
@@ -29510,10 +30012,23 @@ pub(super) mod tests {
         );
         assert!(queue.live_lane_reservations().is_empty());
         assert!(!adapter.output_guard.restart_required());
+
+        let finality = verified_finality_artifact_for_block(&adapter, &keys, &winning_block);
+        let receipt = KuraV2CommitReceipt::for_test(&finality);
+        let committed = ValidBlock::committed_from_replay_signed_block(winning_block.clone());
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        assert_ne!(
+            adapter
+                .recover_decided_canonical_lane_body(&receipt, &finality)
+                .expect("recover exact empty direct-decision carrier"),
+            V2LaneIngressOutcome::Rejected,
+            "the exact empty carrier must remain bindable after retiring its losing autonomous payload"
+        );
+        assert!(!adapter.output_guard.restart_required());
         assert_eq!(
             adapter.accept_lane_message(
                 InboundBlockMessage::new(
-                    BlockMessage::LaneExecutablePayload(payload),
+                    BlockMessage::LaneExecutablePayload(payload.clone()),
                     Some(producer),
                 ),
                 round.view,
@@ -29521,6 +30036,282 @@ pub(super) mod tests {
             V2LaneIngressOutcome::Rejected,
             "a delayed payload from the retired carrier must not reclaim the slot"
         );
+
+        // The next global height may plan the same still-uncommitted lane
+        // height again.  Kura retains the losing first attempt as a retired
+        // proposal-height record and explicitly permits a higher-proposal
+        // successor to take that lane-height slot.  An empty direct Decision
+        // must retire that successor as well instead of treating the older
+        // retirement record as a conflict.
+        let historical_epoch = adapter.context.epoch;
+        if roll_epoch_before_successor {
+            let historical_height = adapter.context.height;
+            let mut world = adapter.state.world.block();
+            world.vrf_epochs_mut_for_testing().insert(
+                historical_epoch,
+                iroha_data_model::consensus::VrfEpochRecord {
+                    epoch: historical_epoch,
+                    seed: adapter.context.leader_seed,
+                    epoch_length: 2,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 0,
+                    finalized: true,
+                    updated_at_height: historical_height,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            world.commit();
+        }
+        let mut successor_context = successor_context_for_parent(&adapter, &winning_block);
+        successor_context.epoch = {
+            let world = adapter.state.world_view();
+            crate::sumeragi::epoch_for_height_from_world(&world, successor_context.height)
+        };
+        if roll_epoch_before_successor {
+            successor_context.epoch_end_height = successor_context.height.saturating_add(1);
+        }
+        assert_eq!(
+            successor_context.epoch,
+            historical_epoch.saturating_add(u64::from(roll_epoch_before_successor)),
+            "the successor fixture must select the requested authenticated epoch"
+        );
+        successor_context
+            .validate()
+            .expect("successor empty-carrier context remains valid");
+        let local_peer = adapter.local_peer.clone();
+        let local_key = adapter.key_pair.clone();
+        let state = Arc::clone(&adapter.state);
+        let kura = Arc::clone(&adapter.kura);
+        let limits = adapter.limits;
+        drop(adapter);
+
+        let mut successor = V2LaneWorkAdapter::new(
+            successor_context,
+            local_peer,
+            local_key,
+            true,
+            state,
+            kura,
+            limits,
+            None,
+        )
+        .expect("open successor after the first empty carrier");
+        let (second_losing_block, second_proposal) =
+            planned_lane_candidate_block_at_view(&successor, &keys, 0);
+        assert_eq!(
+            second_proposal.descriptor.lane_block_height, proposal.descriptor.lane_block_height,
+            "an empty carrier must leave the lane-local height available"
+        );
+        assert!(
+            second_proposal.descriptor.proposal_height > proposal.descriptor.proposal_height,
+            "the next global height must identify a newer autonomous attempt"
+        );
+        let second_entrypoint = second_losing_block
+            .external_entrypoints_cloned()
+            .next()
+            .expect("successor losing autonomous entrypoint");
+        let second_accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+            std::borrow::Cow::Owned(second_entrypoint.clone()),
+        );
+        let second_routing_plan = RoutingPlan::single(RoutingDecision::new(
+            second_proposal.descriptor.lane_id,
+            second_proposal.descriptor.dataspace_id,
+        ));
+        let mut second_reservation = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: second_accepted.hash(),
+            entrypoint_hash: second_entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"successor-losing-autonomous-queue-plan-admission-binding",
+            ),
+            routing_plan_digest: second_routing_plan.digest(),
+            coordinator_leg: second_routing_plan.coordinator_leg(),
+            lane_id: second_proposal.descriptor.lane_id,
+            dataspace_id: second_proposal.descriptor.dataspace_id,
+            lane_incarnation: second_proposal.descriptor.lane_incarnation,
+            proposal_height: second_proposal.descriptor.proposal_height,
+            lane_block_height: second_proposal.descriptor.lane_block_height,
+            lane_block_view: second_proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"successor-losing-autonomous-reservation-owner"),
+            proposal_identity_hash: second_proposal.proposal_hash,
+        };
+        let second_producer = successor
+            .expected_lane_author(&second_proposal)
+            .expect("deterministic successor autonomous producer")
+            .clone();
+        bind_canonical_autonomous_reservation_identity(
+            &successor,
+            &second_proposal,
+            &second_producer,
+            &mut second_reservation,
+        );
+        let second_producer_key = keys
+            .iter()
+            .find(|key| key.public_key() == second_producer.public_key())
+            .expect("successor autonomous producer key");
+        let second_payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+            successor.native_chain_id_hash(),
+            successor.context.epoch,
+            second_proposal.clone(),
+            vec![second_entrypoint],
+            vec![second_reservation],
+            vec![second_routing_plan],
+            vec![None],
+            second_producer.clone(),
+            second_producer_key.private_key(),
+        )
+        .expect("signed successor losing autonomous payload");
+        assert_eq!(
+            successor.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneExecutablePayload(second_payload.clone()),
+                    Some(second_producer),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        let successor_queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &iroha_primitives::time::TimeSource::new_system(),
+        ));
+        successor
+            .install_lane_drain_queue(Arc::clone(&successor_queue))
+            .expect("install live queue before retiring successor ownership");
+        let second_leader_index = usize::try_from(successor.context.leader(0))
+            .expect("successor empty-carrier leader index fits usize");
+        let second_winning_block = test_block(
+            successor.context.height,
+            Some(winning_block.hash()),
+            None,
+            &keys[second_leader_index],
+        );
+        successor
+            .kura
+            .store_block(second_winning_block.clone())
+            .expect("persist successor empty direct-decision carrier");
+        assert_eq!(
+            successor
+                .kura
+                .read_autonomous_lane_slot_retirement(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                    successor.native_chain_id_hash(),
+                    payload.epoch,
+                )
+                .expect("read predecessor latest pointer before successor Decision"),
+            Some(retirement.clone()),
+            "Kura's latest pointer must still name the retired predecessor attempt"
+        );
+        let retirement_before_successor_decision = successor
+            .kura
+            .autonomous_lane_retirement_matching_reservation(
+                payload
+                    .reservation_keys
+                    .first()
+                    .expect("first attempt has a reservation identity"),
+                successor.native_chain_id_hash(),
+                payload.epoch,
+            )
+            .expect("read retirement immediately before successor Decision")
+            .expect("the first attempt remains the durable retirement authority");
+        let expected_second_retirement =
+            crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&second_payload);
+        assert_eq!(retirement_before_successor_decision, retirement);
+        assert_ne!(
+            retirement_before_successor_decision,
+            expected_second_retirement
+        );
+        assert_eq!(
+            successor
+                .kura
+                .autonomous_lane_retirement_matching_reservation(
+                    second_payload
+                        .reservation_keys
+                        .first()
+                        .expect("successor attempt has a reservation identity"),
+                    successor.native_chain_id_hash(),
+                    second_payload.epoch,
+                )
+                .expect("query exact successor attempt before Decision"),
+            None,
+            "the incoming attempt must be absent while Kura's latest pointer still names the retired predecessor"
+        );
+        let (second_round, second_winning_subject) =
+            global_lock_for_block(&successor, &second_winning_block);
+        successor
+            .retain_merge_sidecars_for_global_view(
+                second_round.view,
+                None,
+                Some(second_winning_subject),
+            )
+            .expect("an older retirement must not reject the newer losing autonomous successor");
+
+        let second_retirement = successor
+            .kura
+            .read_autonomous_lane_slot_retirement(
+                second_proposal.descriptor.lane_id,
+                second_proposal.descriptor.lane_block_height,
+                successor.native_chain_id_hash(),
+                successor.context.epoch,
+            )
+            .expect("read successor autonomous retirement")
+            .expect("successor autonomous slot is durably retired");
+        assert_eq!(second_retirement, expected_second_retirement);
+        assert!(successor_queue.live_lane_reservations().is_empty());
+        assert!(!successor.output_guard.restart_required());
+
+        successor
+            .retire_autonomous_payload_batch(std::slice::from_ref(&payload))
+            .expect("an exact historical retirement replay remains idempotent after its successor is current");
+        assert_eq!(
+            successor
+                .kura
+                .read_autonomous_lane_slot_retirement(
+                    second_proposal.descriptor.lane_id,
+                    second_proposal.descriptor.lane_block_height,
+                    successor.native_chain_id_hash(),
+                    successor.context.epoch,
+                )
+                .expect("read current retirement after historical replay"),
+            Some(second_retirement),
+            "historical replay must not replace the current successor retirement"
+        );
+
+        let second_finality =
+            verified_finality_artifact_for_block(&successor, &keys, &second_winning_block);
+        let second_receipt = KuraV2CommitReceipt::for_test(&second_finality);
+        let second_committed = ValidBlock::committed_from_replay_signed_block(second_winning_block);
+        commit_test_block_to_state(
+            successor.state.as_ref(),
+            &second_committed,
+            &successor.context,
+        );
+        assert_ne!(
+            successor
+                .recover_decided_canonical_lane_body(&second_receipt, &second_finality)
+                .expect("recover exact successor empty direct-decision carrier"),
+            V2LaneIngressOutcome::Rejected,
+            "the successor empty carrier must remain bindable after retiring the newer losing attempt"
+        );
+        assert!(!successor.output_guard.restart_required());
+    }
+
+    #[test]
+    fn empty_direct_decision_durably_retires_losing_autonomous_carrier_before_recovery() {
+        assert_empty_direct_decision_durably_retires_losing_autonomous_carrier(false);
+    }
+
+    #[test]
+    fn empty_direct_decision_retires_same_lane_height_successor_across_epoch_rollover() {
+        assert_empty_direct_decision_durably_retires_losing_autonomous_carrier(true);
     }
 
     #[test]
@@ -30355,6 +31146,1029 @@ pub(super) mod tests {
         (0..search_bound)
             .find(|view| adapter.context.leader(*view) != local)
             .expect("rotating leader schedule reaches a remote validator")
+    }
+
+    fn queue_plan_admission_certificate_for_lane_work_test(
+        adapter: &V2LaneWorkAdapter,
+        validator_keypairs: &[KeyPair],
+        tag: u8,
+        predecessor_block_hash: Option<HashOf<BlockHeader>>,
+    ) -> (crate::torii_proxy::QueuePlanAdmissionBindingV2, Vec<u8>) {
+        let authority_height = adapter
+            .context
+            .height
+            .checked_sub(1)
+            .expect("non-genesis QueuePlan fixture height");
+        queue_plan_admission_certificate_for_lane_work_test_at_authority_height(
+            adapter,
+            validator_keypairs,
+            tag,
+            authority_height,
+            predecessor_block_hash,
+        )
+    }
+
+    fn queue_plan_admission_certificate_for_lane_work_test_at_authority_height(
+        adapter: &V2LaneWorkAdapter,
+        validator_keypairs: &[KeyPair],
+        tag: u8,
+        authority_height: u64,
+        predecessor_block_hash: Option<HashOf<BlockHeader>>,
+    ) -> (crate::torii_proxy::QueuePlanAdmissionBindingV2, Vec<u8>) {
+        let proposal_height = authority_height
+            .checked_add(1)
+            .expect("QueuePlan fixture proposal height");
+        let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ));
+        let route_incarnations = routing_plan
+            .legs()
+            .into_iter()
+            .map(|leg| {
+                let validator_set = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                    &adapter.state.view(),
+                    leg.route,
+                    proposal_height,
+                );
+                assert!(
+                    !validator_set.is_empty(),
+                    "QueuePlan handoff fixture requires live route authority"
+                );
+                crate::queue::QueuePlanRouteIncarnationV2 {
+                    leg,
+                    lane_incarnation: adapter
+                        .state
+                        .lane_incarnation_at_height(leg.route.lane_id, proposal_height)
+                        .expect("QueuePlan fixture route is active at proposal height"),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validator_set),
+                    validator_count: u16::try_from(validator_set.len())
+                        .expect("QueuePlan fixture validator count fits u16"),
+                    durability_threshold: u16::try_from(validator_set.len().div_ceil(3))
+                        .expect("QueuePlan fixture durability threshold fits u16"),
+                    validator_set,
+                }
+            })
+            .collect::<Vec<_>>();
+        let admission_context = crate::queue::QueuePlanAdmissionContextV2 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+            authority_height,
+            proposal_height,
+            predecessor_block_hash,
+            routing_plan_digest: routing_plan.digest(),
+            route_incarnations,
+        };
+        let transaction_keypair =
+            KeyPair::try_from_seed(vec![tag.wrapping_add(0x31); 32], Algorithm::Ed25519)
+                .expect("deterministic QueuePlan transaction key");
+        let mut transaction = TransactionBuilder::new(
+            adapter.context.chain_id.clone(),
+            AccountId::new(transaction_keypair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        transaction.set_creation_time(Duration::from_millis(u64::from(tag).saturating_add(1)));
+        let entrypoint = TransactionEntrypoint::External(
+            transaction
+                .with_instructions([Log::new(Level::INFO, format!("queue-plan-handoff-{tag}"))])
+                .sign(transaction_keypair.private_key()),
+        );
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            &adapter.context.chain_id,
+            &entrypoint,
+            &routing_plan,
+            admission_context,
+            u64::from(tag).saturating_add(100),
+        )
+        .expect("build canonical QueuePlan handoff binding");
+        let binding_hash = binding.canonical_hash();
+        let coordinator = binding
+            .admission_context
+            .route_incarnations
+            .first()
+            .expect("QueuePlan fixture has a coordinator");
+        let attestations = coordinator
+            .validator_set
+            .iter()
+            .take(usize::from(coordinator.durability_threshold))
+            .enumerate()
+            .map(|(index, validator)| {
+                let keypair = validator_keypairs
+                    .iter()
+                    .find(|keypair| keypair.public_key() == validator.public_key())
+                    .expect("QueuePlan fixture retains every authority key");
+                let validator_index =
+                    u16::try_from(index).expect("QueuePlan validator index fits u16");
+                let signing_bytes =
+                    crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(
+                        binding_hash,
+                        validator_index,
+                    )
+                    .expect("encode QueuePlan attestation preimage");
+                crate::torii_proxy::QueuePlanAdmissionAttestationV2 {
+                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                    validator_index,
+                    signature: Signature::try_new(keypair.private_key(), &signing_bytes)
+                        .expect("sign QueuePlan handoff certificate"),
+                }
+            })
+            .collect();
+        let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+            binding: binding.clone(),
+            attestations,
+        };
+        let bytes =
+            norito::encode_canonical(&certificate).expect("encode canonical QueuePlan certificate");
+        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+            &adapter.context.chain_id,
+            &bytes,
+        )
+        .expect("QueuePlan handoff fixture is a canonical quorum certificate");
+        (binding, bytes)
+    }
+
+    fn prepare_queue_plan_admission_handoff_fixture(
+        adapter: &mut V2LaneWorkAdapter,
+        validator_keypairs: &[KeyPair],
+    ) {
+        enable_multilane_nexus(
+            adapter,
+            validator_keypairs,
+            LaneId::new(1),
+            DataSpaceId::new(7),
+        );
+    }
+
+    fn exact_queue_plan_predecessor(adapter: &V2LaneWorkAdapter) -> Option<HashOf<BlockHeader>> {
+        adapter
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash)
+    }
+
+    #[test]
+    fn queue_plan_nonleader_handoff_targets_current_leader_with_exact_bytes_and_view() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        prepare_queue_plan_admission_handoff_fixture(&mut adapter, &keys);
+        let (_, certificate) = queue_plan_admission_certificate_for_lane_work_test(
+            &adapter,
+            &keys,
+            0x40,
+            exact_queue_plan_predecessor(&adapter),
+        );
+        adapter
+            .kura
+            .persist_pending_queue_plan_admission_certificate(&certificate)
+            .expect("persist exact QueuePlan certificate before follower handoff");
+        let view = remote_merge_leader_view(&adapter);
+        let leader = adapter.context.roster
+            [usize::try_from(adapter.context.leader(view)).expect("leader index fits usize")]
+        .validator
+        .clone();
+
+        adapter
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("install exact unlocked follower view");
+        let handoffs = adapter
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .filter_map(|effect| match effect {
+                V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                    peer,
+                    view,
+                    certificate,
+                } => Some((peer, view, certificate)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(handoffs.len(), 1);
+        assert_eq!(handoffs[0].0, leader);
+        assert_eq!(handoffs[0].1, view);
+        assert_eq!(handoffs[0].2.as_slice(), certificate.as_slice());
+        assert_eq!(
+            adapter
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("read durable follower QueuePlan certificate")
+                .as_deref(),
+            Some(certificate.as_slice()),
+            "handoff must retain Kura as the retry authority"
+        );
+    }
+
+    #[test]
+    fn queue_plan_leader_accepts_observer_handoff_and_durably_stages_exact_certificate() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        prepare_queue_plan_admission_handoff_fixture(&mut adapter, &keys);
+        assert_eq!(
+            adapter.context.roster
+                [usize::try_from(adapter.context.leader(0)).expect("leader index fits usize")]
+            .validator,
+            adapter.local_peer
+        );
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("install exact unlocked leader view");
+        adapter.drain_effects(usize::MAX);
+        let (_, certificate) = queue_plan_admission_certificate_for_lane_work_test(
+            &adapter,
+            &keys,
+            0x41,
+            exact_queue_plan_predecessor(&adapter),
+        );
+        let observer = PeerId::new(
+            KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519)
+                .expect("deterministic observer key")
+                .public_key()
+                .clone(),
+        );
+        assert!(
+            adapter
+                .context
+                .roster
+                .iter()
+                .all(|entry| entry.validator != observer)
+        );
+
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: observer.clone(),
+                    certificate: Arc::new(certificate.clone()),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(
+            adapter
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("read leader-staged QueuePlan certificate")
+                .as_deref(),
+            Some(certificate.as_slice())
+        );
+        assert!(adapter.merge_entries.values().any(|pending| {
+            matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions == vec![certificate.clone()]
+            )
+        }));
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: observer,
+                    certificate: Arc::new(certificate),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Duplicate,
+            "an exact retransmission must remain idempotent"
+        );
+        assert!(!adapter.output_guard.restart_required());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn queue_plan_tag21_handoff_survives_restarts_to_outside_coordinator_leader_and_retires_exactly()
+     {
+        let (mut follower, keys) = queue_plan_tag21_restart_fixture(None);
+        let view = remote_merge_leader_view(&follower);
+        let follower_index = follower
+            .local_validator_index()
+            .expect("fixture follower is in the frozen global roster");
+        let leader_index = follower.context.leader(view);
+        assert_ne!(leader_index, follower_index);
+        let leader_index_usize =
+            usize::try_from(leader_index).expect("leader index fits this platform");
+        let leader_peer = follower.context.roster[leader_index_usize]
+            .validator
+            .clone();
+        let (binding, certificate) = queue_plan_admission_certificate_for_lane_work_test(
+            &follower,
+            &keys,
+            0x4A,
+            exact_queue_plan_predecessor(&follower),
+        );
+        let coordinator = binding
+            .admission_context
+            .route_incarnations
+            .first()
+            .expect("QueuePlan handoff fixture has a coordinator route");
+        assert_eq!(coordinator.validator_set.len(), keys.len() - 1);
+        assert!(
+            coordinator
+                .validator_set
+                .iter()
+                .all(|validator| validator != &leader_peer),
+            "the tag-21 handoff is required because the global leader is outside the coordinator roster"
+        );
+        assert!(
+            coordinator
+                .validator_set
+                .iter()
+                .any(|validator| validator == &follower.local_peer),
+            "the sender must remain an authoritative coordinator validator"
+        );
+
+        follower
+            .kura
+            .persist_pending_queue_plan_admission_certificate(&certificate)
+            .expect("persist exact QueuePlan certificate before interrupted handoff");
+        follower
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("select the outside-coordinator global leader");
+        let first_handoff = follower
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+                )
+            })
+            .expect("follower emits the first QueuePlan handoff");
+        match &first_handoff {
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                peer,
+                view: effect_view,
+                certificate: effect_certificate,
+            } => {
+                assert_eq!(peer, &leader_peer);
+                assert_eq!(*effect_view, view);
+                assert_eq!(effect_certificate.as_slice(), certificate.as_slice());
+            }
+            _ => unreachable!("filtered to QueuePlan handoff"),
+        }
+        // Drop the first transport action and reopen the sender. Kura, not the
+        // volatile effect queue, remains the retry authority.
+        drop(first_handoff);
+        let follower_context = follower.context.clone();
+        let follower_peer = follower.local_peer.clone();
+        let follower_key = follower.key_pair.clone();
+        let follower_state = Arc::clone(&follower.state);
+        let follower_kura = Arc::clone(&follower.kura);
+        let follower_limits = follower.limits;
+        assert_eq!(
+            follower_context.execution_policy_hash,
+            super::super::v2_recovery::committed_execution_policy_hash(follower_state.as_ref())
+                .expect("derive interrupted sender execution policy"),
+            "the restart fixture must preserve the exact committed execution-policy snapshot"
+        );
+        drop(follower);
+        let mut follower = V2LaneWorkAdapter::new(
+            follower_context,
+            follower_peer.clone(),
+            follower_key,
+            true,
+            follower_state,
+            follower_kura,
+            follower_limits,
+            None,
+        )
+        .expect("reopen interrupted QueuePlan sender");
+        follower
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("retry QueuePlan handoff from the durable sender source");
+        let retry_handoff = follower
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+                )
+            })
+            .expect("sender restart reconstructs the QueuePlan handoff");
+        let V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+            peer: retry_peer,
+            view: retry_view,
+            certificate: retry_certificate,
+        } = &retry_handoff
+        else {
+            unreachable!("filtered to QueuePlan handoff")
+        };
+        assert_eq!(retry_peer, &leader_peer);
+        assert_eq!(*retry_view, view);
+        assert_eq!(retry_certificate.as_slice(), certificate.as_slice());
+        assert_eq!(
+            follower
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("read restarted sender QueuePlan source")
+                .as_deref(),
+            Some(certificate.as_slice())
+        );
+
+        let mut output_service = service_for_history_context_with_local_validator(
+            Arc::clone(&follower.kura),
+            follower.context.clone(),
+            &keys,
+            follower_index,
+        );
+        assert_eq!(
+            output_service.can_retain_lane_work_effect(&retry_handoff),
+            Ok(true),
+            "production exact-output admission must construct a Kura-backed tag-21 handoff"
+        );
+        let posted = Arc::new(Mutex::new(Vec::new()));
+        let posted_for_hook = Arc::clone(&posted);
+        output_service.set_exact_output_admission_hook(move |post, ticket| {
+            assert!(ticket.is_none());
+            posted_for_hook
+                .lock()
+                .expect("record QueuePlan production output")
+                .push((post.peer_id, post.data));
+            Ok(())
+        });
+        output_service.post_queue_plan_admission_certificate(
+            retry_peer.clone(),
+            view,
+            Arc::clone(retry_certificate),
+        );
+        let mut posted =
+            std::mem::take(&mut *posted.lock().expect("inspect QueuePlan production output"));
+        assert_eq!(posted.len(), 1);
+        let (posted_peer, posted_message) = posted.pop().expect("one QueuePlan network output");
+        assert_eq!(posted_peer, leader_peer);
+        let encoded = norito::to_bytes(&posted_message)
+            .expect("encode production QueuePlan tag-21 network message");
+        let decoded = norito::decode_from_bytes::<crate::NetworkMessage>(&encoded)
+            .expect("decode QueuePlan tag-21 network message");
+        let crate::NetworkMessage::QueuePlanAdmissionCertificate(delivered_certificate) = decoded
+        else {
+            panic!("tag-21 roundtrip changed the QueuePlan message kind")
+        };
+        assert_eq!(delivered_certificate.as_slice(), certificate.as_slice());
+
+        let (mut leader, leader_keys) = queue_plan_tag21_restart_fixture(Some(leader_index_usize));
+        assert_eq!(leader.context, follower.context);
+        assert_eq!(leader.local_peer, leader_peer);
+        assert_eq!(
+            leader.key_pair.public_key(),
+            leader_keys[leader_index_usize].public_key()
+        );
+        leader
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("install the exact outside-coordinator leader view");
+        leader.drain_effects(usize::MAX);
+        assert_eq!(
+            leader.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: follower_peer,
+                    certificate: Arc::clone(&delivered_certificate),
+                },
+                view,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(
+            leader
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("read leader-staged QueuePlan source")
+                .as_deref(),
+            Some(certificate.as_slice())
+        );
+        assert!(leader.merge_entries.values().any(|pending| {
+            matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions == vec![certificate.clone()]
+            )
+        }));
+
+        let leader_context = leader.context.clone();
+        let leader_state = Arc::clone(&leader.state);
+        let leader_kura = Arc::clone(&leader.kura);
+        let leader_limits = leader.limits;
+        drop(leader);
+        let mut leader = V2LaneWorkAdapter::new(
+            leader_context,
+            leader_peer.clone(),
+            leader_keys[leader_index_usize].clone(),
+            true,
+            leader_state,
+            leader_kura,
+            leader_limits,
+            None,
+        )
+        .expect("reopen outside-coordinator QueuePlan leader");
+        leader
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("reconstruct leader candidate from the exact Kura source");
+        let candidate = leader
+            .merge_entries
+            .values()
+            .find_map(|pending| match &pending.stage {
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions == vec![certificate.clone()] =>
+                {
+                    Some(candidate.clone())
+                }
+                PendingMergeStage::Collecting(_) | PendingMergeStage::Certified(_) => None,
+            })
+            .expect("leader restart reconstructs the QueuePlan merge candidate");
+        let digest = crate::merge::merge_qc_message_digest(
+            &leader.context.chain_id,
+            &candidate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            leader.frozen_validator_set_hash(),
+        );
+        let merge_key = MergeKey {
+            epoch_id: candidate.epoch_id,
+            view: candidate.view,
+            digest,
+        };
+        for index in 0..leader_keys.len() {
+            let signer = u32::try_from(index).expect("fixture signer index fits u32");
+            if signer == leader_index {
+                continue;
+            }
+            let share = signed_merge_share_for_test(&leader, &leader_keys, &candidate, signer);
+            assert_eq!(
+                leader
+                    .accept_merge_signature(share, view)
+                    .expect("admit QueuePlan merge signature"),
+                V2LaneIngressOutcome::Inserted
+            );
+            if !leader.merge_entries.contains_key(&merge_key) {
+                break;
+            }
+        }
+        assert!(
+            !leader.merge_entries.contains_key(&merge_key),
+            "global quorum must durably certify the handoff candidate"
+        );
+        let (_, certified_entry) = leader
+            .kura
+            .select_pending_certified_merge_entry()
+            .expect("read pending certified QueuePlan merge entry")
+            .expect("QueuePlan candidate reaches a real certified entry");
+        assert_eq!(
+            certified_entry.queue_plan_admissions,
+            vec![certificate.clone()]
+        );
+        let certified_binding =
+            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+                &leader.context.chain_id,
+                certified_entry.queue_plan_admissions[0].as_slice(),
+            )
+            .expect("revalidate the exact certified QueuePlan control")
+            .certificate
+            .binding;
+        assert_eq!(certified_binding, binding);
+        for adapter in [&follower, &leader] {
+            assert_eq!(
+                adapter
+                    .kura
+                    .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                    .expect("read pre-commit QueuePlan source")
+                    .as_deref(),
+                Some(certificate.as_slice()),
+                "send, receipt, restart, and certification must not retire before exact WSV commit"
+            );
+        }
+
+        // Cross the post-carrier WSV boundary with the binding decoded from
+        // the real certified entry, rather than from the original ingress
+        // fixture. The old-height adapters then exercise the production
+        // `Exact` reconciliation/retirement branch without an invalid partial
+        // height rollover.
+        install_autonomous_fixture_queue_plan_registry_value(
+            follower.state.as_ref(),
+            &certified_binding,
+        );
+        install_autonomous_fixture_queue_plan_registry_value(
+            leader.state.as_ref(),
+            &certified_binding,
+        );
+        follower
+            .refresh_merge_candidates(view)
+            .expect("retire sender source after exact registry commit");
+        leader
+            .refresh_merge_candidates(view)
+            .expect("retire receiver source after exact registry commit");
+        for adapter in [&follower, &leader] {
+            assert_eq!(
+                adapter
+                    .kura
+                    .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                    .expect("read retired QueuePlan source"),
+                None,
+                "only the exact committed registry value retires the durable source"
+            );
+        }
+    }
+
+    #[test]
+    fn queue_plan_leader_rejects_future_handoff_until_canonical_frontier() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        prepare_queue_plan_admission_handoff_fixture(&mut adapter, &keys);
+        assert_eq!(
+            adapter.context.roster
+                [usize::try_from(adapter.context.leader(0)).expect("leader index fits usize")]
+            .validator,
+            adapter.local_peer
+        );
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("install exact unlocked leader view");
+        adapter.drain_effects(usize::MAX);
+
+        let original_canonical_tip = adapter.state.block_hashes.view().last().copied();
+
+        let future_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"future QueuePlan handoff predecessor",
+        ));
+        {
+            let mut block_hashes = adapter.state.block_hashes.block();
+            block_hashes.push_for_tests(future_predecessor);
+            block_hashes.commit_for_tests();
+        }
+        let future_authority_height = adapter.context.height;
+        let (_, certificate) =
+            queue_plan_admission_certificate_for_lane_work_test_at_authority_height(
+                &adapter,
+                &keys,
+                0x47,
+                future_authority_height,
+                Some(future_predecessor),
+            );
+        {
+            let block_hashes = adapter.state.block_hashes.block_and_revert();
+            assert_eq!(
+                block_hashes.last().copied(),
+                original_canonical_tip,
+                "the receiver must be restored behind the certificate authority frontier"
+            );
+            block_hashes.commit_for_tests();
+        }
+        assert!(
+            u64::try_from(adapter.state.committed_height())
+                .expect("test committed height fits u64")
+                < future_authority_height
+        );
+        assert_eq!(
+            adapter
+                .state
+                .classify_pending_queue_plan_admission(&certificate, adapter.context.height)
+                .expect("future QueuePlan certificate remains classifiable")
+                .1,
+            PendingQueuePlanAdmissionDisposition::Future
+        );
+        let observer = PeerId::new(
+            KeyPair::try_from_seed(vec![0xD2; 32], Algorithm::Ed25519)
+                .expect("deterministic future observer key")
+                .public_key()
+                .clone(),
+        );
+        assert!(
+            adapter
+                .context
+                .roster
+                .iter()
+                .all(|entry| entry.validator != observer)
+        );
+
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: observer.clone(),
+                    certificate: Arc::new(certificate.clone()),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert_eq!(
+            adapter
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("inspect rejected future QueuePlan certificate"),
+            None
+        );
+        assert!(adapter.merge_entries.values().all(|pending| {
+            !matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions.contains(&certificate)
+            )
+        }));
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: observer,
+                    certificate: Arc::new(certificate.clone()),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected,
+            "a future handoff retransmission must remain rejected until catch-up"
+        );
+        assert_eq!(
+            adapter
+                .kura
+                .pending_queue_plan_admission_certificates_bounded(
+                    adapter.kura.pending_queue_plan_admission_capacity(),
+                )
+                .expect("read bounded retained QueuePlan certificates")
+                .len(),
+            0
+        );
+        assert!(adapter.merge_entries.values().all(|pending| {
+            !matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions.contains(&certificate)
+            )
+        }));
+        assert!(
+            adapter.drain_effects(usize::MAX).is_empty(),
+            "a rejected future handoff must not emit consensus or retry traffic"
+        );
+
+        let (_, eligible) = queue_plan_admission_certificate_for_lane_work_test(
+            &adapter,
+            &keys,
+            0x49,
+            exact_queue_plan_predecessor(&adapter),
+        );
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: adapter.local_peer.clone(),
+                    certificate: Arc::new(eligible.clone()),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted,
+            "rejecting an early handoff must preserve capacity for current canonical work"
+        );
+        assert!(adapter.merge_entries.values().any(|pending| {
+            matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions.contains(&eligible)
+            )
+        }));
+        assert!(!adapter.output_guard.restart_required());
+    }
+
+    #[test]
+    fn queue_plan_durable_future_source_waits_for_canonical_frontier() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        prepare_queue_plan_admission_handoff_fixture(&mut adapter, &keys);
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("install exact unlocked leader view");
+        adapter.drain_effects(usize::MAX);
+
+        let future_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"durable future QueuePlan predecessor",
+        ));
+        {
+            let mut block_hashes = adapter.state.block_hashes.block();
+            block_hashes.push_for_tests(future_predecessor);
+            block_hashes.commit_for_tests();
+        }
+        let (_, certificate) =
+            queue_plan_admission_certificate_for_lane_work_test_at_authority_height(
+                &adapter,
+                &keys,
+                0x48,
+                adapter.context.height,
+                Some(future_predecessor),
+            );
+        {
+            let block_hashes = adapter.state.block_hashes.block_and_revert();
+            assert_ne!(block_hashes.last().copied(), Some(future_predecessor));
+            block_hashes.commit_for_tests();
+        }
+        assert_eq!(
+            adapter
+                .state
+                .classify_pending_queue_plan_admission(&certificate, adapter.context.height)
+                .expect("durable future QueuePlan source remains classifiable")
+                .1,
+            PendingQueuePlanAdmissionDisposition::Future
+        );
+        adapter
+            .kura
+            .persist_pending_queue_plan_admission_certificate(&certificate)
+            .expect("persist recovered future QueuePlan source");
+
+        adapter
+            .refresh_merge_candidates(0)
+            .expect("future durable source must defer without poisoning refresh");
+        assert_eq!(
+            adapter
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("read retained durable future QueuePlan source")
+                .as_deref(),
+            Some(certificate.as_slice())
+        );
+        assert!(adapter.merge_entries.values().all(|pending| {
+            !matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions.contains(&certificate)
+            )
+        }));
+        assert!(adapter.drain_effects(usize::MAX).is_empty());
+        assert!(!adapter.output_guard.restart_required());
+    }
+
+    #[test]
+    fn queue_plan_handoff_rejects_nonleader_stale_conflict_and_corrupt_inputs_without_poison() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        prepare_queue_plan_admission_handoff_fixture(&mut adapter, &keys);
+        let sender = adapter.context.roster[0].validator.clone();
+        let (_, valid) = queue_plan_admission_certificate_for_lane_work_test(
+            &adapter,
+            &keys,
+            0x42,
+            exact_queue_plan_predecessor(&adapter),
+        );
+        let remote_view = remote_merge_leader_view(&adapter);
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: sender.clone(),
+                    certificate: Arc::new(valid),
+                },
+                remote_view,
+            ),
+            V2LaneIngressOutcome::Rejected,
+            "a nonleader must not stage a certificate addressed to the current leader"
+        );
+        assert!(!adapter.output_guard.restart_required());
+
+        let (_, stale) = queue_plan_admission_certificate_for_lane_work_test(
+            &adapter,
+            &keys,
+            0x43,
+            Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"noncanonical QueuePlan predecessor",
+            ))),
+        );
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: sender.clone(),
+                    certificate: Arc::new(stale),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(!adapter.output_guard.restart_required());
+
+        let (conflicting_binding, conflicting) =
+            queue_plan_admission_certificate_for_lane_work_test(
+                &adapter,
+                &keys,
+                0x44,
+                exact_queue_plan_predecessor(&adapter),
+            );
+        let registry_key = conflicting_binding.registry_key();
+        let marker_key = format!(
+            "queue_plan_admission_v2_{}_{}",
+            hex::encode(registry_key.chain_id_digest.as_ref()),
+            hex::encode(registry_key.entrypoint_hash.as_ref()),
+        )
+        .parse()
+        .expect("QueuePlan conflict marker key");
+        let conflicting_marker = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            binding_hash: Hash::new(b"different QueuePlan binding"),
+        };
+        assert_ne!(
+            conflicting_marker.binding_hash,
+            conflicting_binding.canonical_hash()
+        );
+        let mut world = adapter.state.world.block();
+        world.smart_contract_state.insert(
+            marker_key,
+            norito::to_bytes(&conflicting_marker).expect("encode QueuePlan conflict marker"),
+        );
+        world.commit();
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: sender.clone(),
+                    certificate: Arc::new(conflicting),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(!adapter.output_guard.restart_required());
+
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender,
+                    certificate: Arc::new(vec![0xFF; 16]),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(!adapter.output_guard.restart_required());
+        assert!(
+            adapter
+                .kura
+                .pending_queue_plan_admission_certificates_bounded(
+                    adapter.kura.pending_queue_plan_admission_capacity(),
+                )
+                .expect("read pending QueuePlan store after rejected handoffs")
+                .is_empty(),
+            "rejected handoffs must not mutate the durable pending store"
+        );
+    }
+
+    #[test]
+    fn queue_plan_handoff_cursor_rotates_after_effect_pressure() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        prepare_queue_plan_admission_handoff_fixture(&mut adapter, &keys);
+        let view = remote_merge_leader_view(&adapter);
+        let leader = adapter.context.roster
+            [usize::try_from(adapter.context.leader(view)).expect("leader index fits usize")]
+        .validator
+        .clone();
+        adapter
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("install exact unlocked follower view");
+        adapter.drain_effects(usize::MAX);
+        let certificates = [0x45, 0x46]
+            .into_iter()
+            .map(|tag| {
+                queue_plan_admission_certificate_for_lane_work_test(
+                    &adapter,
+                    &keys,
+                    tag,
+                    exact_queue_plan_predecessor(&adapter),
+                )
+                .1
+            })
+            .collect::<Vec<_>>();
+        for certificate in &certificates {
+            adapter
+                .kura
+                .persist_pending_queue_plan_admission_certificate(certificate)
+                .expect("persist QueuePlan fairness fixture");
+        }
+        adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("one handoff effect slot");
+        assert!(
+            adapter.push_effect(V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                peer: adapter.local_peer.clone(),
+                view: u64::MAX,
+                certificate: Arc::new(vec![0xA5]),
+            })
+        );
+        assert!(
+            !adapter
+                .refresh_pending_queue_plan_admission_handoffs(view)
+                .expect("effect pressure is a retryable QueuePlan outcome")
+        );
+        assert_eq!(adapter.queue_plan_admission_handoff_cursor, 0);
+        assert_eq!(adapter.drain_effects(usize::MAX).len(), 1);
+
+        let next_handoff = |adapter: &mut V2LaneWorkAdapter| {
+            assert!(
+                !adapter
+                    .refresh_pending_queue_plan_admission_handoffs(view)
+                    .expect("one slot retains the unsent QueuePlan certificate")
+            );
+            let effects = adapter.drain_effects(usize::MAX);
+            assert_eq!(effects.len(), 1);
+            match effects.into_iter().next().expect("one QueuePlan handoff") {
+                V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                    peer,
+                    view: effect_view,
+                    certificate,
+                } => {
+                    assert_eq!(peer, leader);
+                    assert_eq!(effect_view, view);
+                    certificate.as_ref().clone()
+                }
+                effect => panic!("unexpected QueuePlan fairness effect: {effect:?}"),
+            }
+        };
+        let first = next_handoff(&mut adapter);
+        assert_eq!(adapter.queue_plan_admission_handoff_cursor, 1);
+        let second = next_handoff(&mut adapter);
+        assert_ne!(
+            first, second,
+            "the full tail must not starve behind the head"
+        );
+        assert!(certificates.contains(&first));
+        assert!(certificates.contains(&second));
     }
 
     fn signed_merge_share_for_test(

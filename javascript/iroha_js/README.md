@@ -87,16 +87,19 @@ offline examples: `recipes/iso_bridge_builder.mjs` and
 source repository where its native and live-service prerequisites are
 available.
 
-When publishing or testing the packaged layout, build the ESM dist tree:
+When publishing or testing the release snapshot, build the ESM dist tree:
 
 ```bash
 npm run build:dist
 ```
 
-The checked-in `dist` tree is the input for local `file:` consumers. Dependency
-installation does not rebuild or mutate the SDK checkout. `build:dist` uses an
-inter-process lock, validates a staging tree, and publishes only when source and
-distribution content differ, so explicit concurrent builds are deterministic.
+Runtime entrypoints resolve the tracked `src` tree, so exact Git revisions,
+source archives, and local `file:` consumers do not need lifecycle scripts or a
+generated `dist` directory. Dependency installation does not rebuild or mutate
+the SDK checkout. `build:dist` copies the same source into an untracked release
+snapshot, uses an inter-process lock, validates a staging tree, and publishes
+only when source and distribution content differ, so explicit concurrent builds
+are deterministic.
 
 Native bindings load only after verifying the platform-specific SHA-256 recorded
 in `native/iroha_js_host.checksums.json`. When a binding is present but its

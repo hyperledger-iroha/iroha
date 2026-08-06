@@ -221,6 +221,36 @@ def test_seal_rejects_source_symlink_into_writable_output(tmp_path: Path) -> Non
         module.seal_source_tree(source)
 
 
+def test_seal_keeps_historical_ivm_target_in_external_writable_output(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    source = tmp_path / "source"
+    ivm = source / "crates" / "ivm"
+    external = tmp_path / "workspace-target"
+    ivm_output = external / "ivm-crate-target"
+    ivm.mkdir(parents=True)
+    ivm_output.mkdir(parents=True)
+    (ivm / "lib.rs").write_text("pub fn fixture() {}\n", encoding="utf-8")
+    (source / "target").symlink_to(external, target_is_directory=True)
+    crate_target = ivm / "target"
+    crate_target.symlink_to("../../target/ivm-crate-target", target_is_directory=True)
+
+    writable = ["target", "crates/ivm/target"]
+    module.seal_source_tree(source, writable)
+    module.verify_source_tree_sealed(source, writable)
+
+    assert crate_target.resolve(strict=True) == ivm_output.resolve(strict=True)
+    assert stat.S_IMODE(ivm.stat().st_mode) == 0o555
+    staged = crate_target / "prebuilt" / "build_config.toml"
+    staged.parent.mkdir()
+    staged.write_text('profile = "Release"\n', encoding="utf-8")
+    assert staged.read_text(encoding="utf-8") == 'profile = "Release"\n'
+
+    with pytest.raises(module.SealError, match="target enters a writable output"):
+        module.verify_source_tree_sealed(source, ["target"])
+
+
 def test_seal_rejects_external_hard_link_alias_before_it_can_bypass_modes(
     tmp_path: Path,
 ) -> None:

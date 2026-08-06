@@ -24,7 +24,7 @@ const EXPECTED_EXPORTS = [
   "validateBrowserTransferSignable",
 ];
 
-test("transaction codec is identical across root, browser, dist, and package subpath exports", () => {
+test("transaction codec identities follow their source and distribution entrypoint trees", () => {
   for (const name of EXPECTED_EXPORTS) {
     assert.equal(typeof distSubpath[name], name.endsWith("Codec") ? "object" : "function");
     assert.equal(distRoot[name], distSubpath[name], `root export mismatch for ${name}`);
@@ -35,7 +35,7 @@ test("transaction codec is identical across root, browser, dist, and package sub
     );
     assert.equal(
       packageSubpath[name],
-      distSubpath[name],
+      sourceSubpath[name],
       `package subpath export mismatch for ${name}`,
     );
   }
@@ -55,8 +55,8 @@ test("package metadata and declarations expose the browser transaction codec", (
     fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.deepEqual(packageJson.exports["./transaction-codec"], {
-    browser: "./dist/transactionCodec.js",
-    import: "./dist/transactionCodec.js",
+    browser: "./src/transactionCodec.js",
+    import: "./src/transactionCodec.js",
     types: "./transaction-codec.d.ts",
   });
   assert.deepEqual(packageJson.typesVersions["*"]["transaction-codec"], [

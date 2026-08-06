@@ -120,13 +120,13 @@ Gas enforcement (CoreHost)
   schedule; production rate selection is also bound by the ZK policy hash.
 - GET_PUBLIC_INPUT charges a base plus a per-byte cost based on the returned TLV length.
 - `JSON_OBJECT` helper — Gas: `G_json + bytes`.
-- `JSON_GET_*` helpers and their direct variants return compiler-owned
+- `JSON_GET_*` helpers return compiler-owned
   `Option<T>` sum handles. Missing keys, non-object roots, and type/conversion
   mismatches are `Option::none`; malformed TLVs remain VM errors. Gas: `G_json_get + input bytes + active payload + sum allocation`.
 - `JSON_BUILD` converts one compiler-emitted `JsonConstructionSchemaV1` and a
   flattened word table into one canonical `Json` payload. Gas is charged by
   schema bytes, source bytes, words, collection elements, and encoded bytes.
-- `JSON_SET_I64`, `JSON_SET_ACCOUNT_ID`, and their direct variants — Gas: `G_json + bytes`.
+- `JSON_SET_I64` and `JSON_SET_ACCOUNT_ID` — Gas: `G_json + bytes`.
 - SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost. Pagination offsets add an extra per-item penalty for unsorted queries; for sorted queries, the per-item charge is based on all items scanned before pagination (so offsets are already included). Query materialization aborts with OutOfGas when the per-item budget is exhausted, and responses that exceed the per-byte budget are rejected before encoding when exact Norito sizing is available (otherwise after encoding).
 
 Lifecycle / Utility
@@ -227,11 +227,11 @@ Native JSON construction
   remain canonical base-10 strings and bytes are lowercase `0x` hex. No
   floating-point conversion occurs.
 - Products, `Result`, and resource handles are not accepted as implicit JSON
-  values. Typed getters materialize active payloads only. The exact numeric
-  int getters at `0x010160` and `0x010163` accept only `i64`/`u64` JSON number
-  tokens. Decimal and quantity getters at `0x010161..0x010162` and
-  `0x010164..0x010165` accept canonical strings only. Numeric strings for int,
-  floating-point number tokens, and alternate spellings return `Option::none`.
+  values. Typed getters materialize active payloads only. The int getter at
+  `0x010160` accepts only `i64`/`u64` JSON number tokens. Decimal and quantity
+  getters at `0x010161..0x010162` accept canonical strings only. Numeric strings
+  for int, floating-point number tokens, and alternate spellings return
+  `Option::none`.
 
 Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain

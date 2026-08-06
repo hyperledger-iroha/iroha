@@ -22,6 +22,12 @@ const CURRENT_ARTIFACT_FIXTURE = parseStrictLosslessIntegerJson(
   ),
   "current Rust contract artifact fixture",
 );
+// The strict fixture parser intentionally builds null-prototype records, while
+// the WASM boundary returns ordinary JSON objects. Keep that prototype choice
+// out of this wire-data comparison.
+const CURRENT_ARTIFACT_MANIFEST = structuredClone(
+  CURRENT_ARTIFACT_FIXTURE.manifest,
+);
 
 function successfulOutput() {
   return {
@@ -31,7 +37,7 @@ function successfulOutput() {
     header_len: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
     code_offset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
     entrypoint_count: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
-    manifest: CURRENT_ARTIFACT_FIXTURE.manifest,
+    manifest: CURRENT_ARTIFACT_MANIFEST,
   };
 }
 
@@ -62,7 +68,7 @@ test("raw artifact-admission WASM is digest anchored and returns bounded typed o
     headerLength: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
     codeOffset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
     entrypointCount: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
-    manifest: CURRENT_ARTIFACT_FIXTURE.manifest,
+    manifest: CURRENT_ARTIFACT_MANIFEST,
   });
   assert.equal(Object.isFrozen(result), true);
   assert.equal(Object.isFrozen(result.manifest), true);

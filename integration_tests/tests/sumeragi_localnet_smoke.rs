@@ -36,7 +36,8 @@ use iroha::{
             IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
         },
         isi::{
-            Instruction, InstructionBox, Log, Mint, Register, SetKeyValue, SetParameter, Transfer,
+            Grant, Instruction, InstructionBox, Log, Mint, Register, SetKeyValue, SetParameter,
+            Transfer,
             identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
             ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -69,6 +70,7 @@ use iroha_crypto::{
     try_bfv_programmed_public_parameters_with_program,
 };
 use iroha_data_model::{HasMetadata, prelude::QueryBuilderExt};
+use iroha_executor_data_model::permission::query::CanReadAllLedgerData;
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     Network, NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
@@ -185,6 +187,11 @@ const REALISTIC_30TPS_NPOS_FEE_FUNDING_CHUNK: usize = 128;
 const REALISTIC_30TPS_RAM_LFE_EMAIL_POLICY_ID: &str = "email#realistic";
 const REALISTIC_30TPS_RAM_LFE_EMAIL_PROGRAM_ID: &str = "email_realistic";
 const FAIL_ON_SANDBOX_SKIP_ENV: &str = "IROHA_FAIL_ON_SANDBOX_SKIP";
+const MULTILANE_RELEASE_MODE_ENV: &str = "IROHA_MULTILANE_RELEASE_MODE";
+const EX297_IDLE_CHAIN_RELEASE_TEST: &str =
+    "sumeragi_localnet_smoke::permissioned_idle_chain_advances_only_for_external_or_internal_work";
+const EX297_IDLE_CHAIN_RELEASE_MARKER: &str = "[ex-297-idle-evidence] \
+clean_idle=passed external_non_empty=passed internal_non_empty=passed";
 // Grouped localnet runs can take longer to publish authoritative Nexus bindings
 // than the earlier exact-test-only timeout budget.
 const ROUTE_BINDING_TIMEOUT: Duration = Duration::from_secs(120);

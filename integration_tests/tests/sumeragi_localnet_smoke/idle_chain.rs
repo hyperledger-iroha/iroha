@@ -29,14 +29,6 @@ pub(super) async fn run_permissioned_progress() -> Result<()> {
                 .write(
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    2_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
                 );
         });
 
@@ -163,6 +155,7 @@ pub(super) async fn run() -> Result<()> {
 
     const TIP_POLL: Duration = Duration::from_millis(250);
     const PROGRESS_TIMEOUT: Duration = Duration::from_secs(60);
+    let release_mode = std::env::var(MULTILANE_RELEASE_MODE_ENV).ok().as_deref() == Some("1");
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -170,6 +163,10 @@ pub(super) async fn run() -> Result<()> {
         .with_real_genesis_keypair()
         .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_permissioned_consensus()
+        .with_genesis_instruction(Grant::account_permission(
+            CanReadAllLedgerData,
+            ALICE_ID.clone(),
+        ))
         .with_config_layer(|layer| {
             layer
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
@@ -180,17 +177,12 @@ pub(super) async fn run() -> Result<()> {
                 .write(
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    2_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
                 );
         });
-    let context = stringify!(permissioned_idle_chain_advances_only_for_external_or_internal_work);
+    let context = EX297_IDLE_CHAIN_RELEASE_TEST;
+    if release_mode {
+        eprintln!("[multilane-release-gate] started: {context}");
+    }
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         ensure!(
             !fail_on_sandbox_skip(),
@@ -542,6 +534,7 @@ pub(super) async fn run() -> Result<()> {
         eprintln!(
             "EX-297 idle-chain evidence: cadence={SMOKE_PIPELINE_TIME:?}, retransmit_interval_ms={retransmit_interval_ms}, retransmit_window={retransmit_observation:?}, commit_quorum_window={commit_quorum_observation:?}, baseline_settle_window={baseline_settle_window:?}, idle_window={idle_observation:?}, baseline_height={baseline_height}, external_height={external_height}, trigger_registration_height={registration_height}, internal_trigger_height={internal_height}, final_tip_hash={expected_internal_hash}"
         );
+        eprintln!("{EX297_IDLE_CHAIN_RELEASE_MARKER}");
         Ok(())
     }
     .await;
@@ -549,6 +542,9 @@ pub(super) async fn run() -> Result<()> {
     network.shutdown().await;
     if sandbox::handle_result(result, context)?.is_none() {
         return Ok(());
+    }
+    if release_mode {
+        eprintln!("[multilane-release-gate] completed: {context}");
     }
     Ok(())
 }

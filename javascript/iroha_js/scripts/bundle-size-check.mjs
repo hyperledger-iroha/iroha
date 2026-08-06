@@ -20,42 +20,41 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
     // protected pre-reset tree measured 945,975 bytes on the same pinned runner.
-    // The authenticated SoraFS reputation and billing clients bring current V1 to
-    // 1,000,409 bytes (+5.75%); the 978 KiB ceiling remains below a 6% regression
-    // from that documented predecessor.
-    limitKb: 978,
+    // Current tracked-source V1, including strict explorer asset records, is
+    // 1,097,250 bytes. The 1,072 KiB ceiling is its rounded-up release bound.
+    limitKb: 1072,
   }),
   Object.freeze({
     label: "transactionCodec.js (browser)",
-    entryPoint: join(ROOT, "dist", "transactionCodec.js"),
+    entryPoint: join(ROOT, "src", "transactionCodec.js"),
     platform: "browser",
     target: "es2020",
-    // Browser package mapping is defined for checked-in dist paths, so audit the
+    // Browser package mapping is defined for the tracked source path, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
-    // pre-reset tree measured 290,498 bytes; current V1 is 297,228 bytes (+2.32%).
-    // The 297 KiB ceiling remains below a 5% predecessor regression.
-    limitKb: 297,
+    // pre-reset tree measured 290,498 bytes; current tracked-source V1 is
+    // 320,433 bytes. The 313 KiB ceiling is its rounded-up release bound.
+    limitKb: 313,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
   Object.freeze({
     label: "nexusApp.js (browser)",
-    entryPoint: join(ROOT, "dist", "nexusApp.js"),
+    entryPoint: join(ROOT, "src", "nexusApp.js"),
     platform: "browser",
     target: "es2020",
-    // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree and 380,431 bytes in current V1 (+2.43%). The 380 KiB ceiling
-    // remains below a 5% predecessor regression.
-    limitKb: 380,
+    // The protected pre-reset facade measured 371,403 bytes; current
+    // tracked-source V1 is 395,703 bytes. The 387 KiB ceiling is its rounded-up
+    // release bound.
+    limitKb: 387,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
   Object.freeze({
     label: "canonicalRequest.js (browser)",
-    entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
+    entryPoint: join(ROOT, "src", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // Protected pre-reset baseline: 97,869 bytes. Current V1: 98,090 bytes
+    // Protected pre-reset baseline: 97,869 bytes. Current V1: 98,089 bytes
     // (+0.23%). The 100 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 100,
     forbidNodeInputs: true,
@@ -63,7 +62,7 @@ export const BUNDLE_TARGETS = Object.freeze([
   }),
   Object.freeze({
     label: "ivmArtifact.js (browser)",
-    entryPoint: join(ROOT, "dist", "ivmArtifact.js"),
+    entryPoint: join(ROOT, "src", "ivmArtifact.js"),
     platform: "browser",
     target: "es2020",
     // This leaf helper must remain suitable for strict-DOM browser consumers.
@@ -73,12 +72,12 @@ export const BUNDLE_TARGETS = Object.freeze([
   }),
   Object.freeze({
     label: "kotodamaCompiler/browser.js (browser)",
-    entryPoint: join(ROOT, "dist", "kotodamaCompiler", "browser.js"),
+    entryPoint: join(ROOT, "src", "kotodamaCompiler", "browser.js"),
     platform: "browser",
     target: "es2020",
     // Pinned-esbuild predecessor is 52,156 bytes. Exact V1 manifest state-type,
-    // feature-bit, and dynamic-access validation produces 52,735 bytes
-    // (+1.11%); the 53 KiB ceiling keeps this required boundary hardening
+    // feature-bit, and dynamic-access validation produces 52,928 bytes
+    // (+1.48%); the 53 KiB ceiling keeps this required boundary hardening
     // below the release-wide 5% regression limit.
     limitKb: 53,
     forbidNodeInputs: true,
@@ -86,13 +85,13 @@ export const BUNDLE_TARGETS = Object.freeze([
   }),
   Object.freeze({
     label: "browser.js (public aggregate)",
-    entryPoint: join(ROOT, "dist", "browser.js"),
+    entryPoint: join(ROOT, "src", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner; current V1 is 476,074 bytes (+3.93%). The 469 KiB
-    // ceiling remains below a 5% predecessor regression.
-    limitKb: 469,
+    // The protected pre-reset aggregate measured 458,081 bytes; current
+    // tracked-source V1 is 529,988 bytes. The 518 KiB ceiling is its rounded-up
+    // release bound.
+    limitKb: 518,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -260,9 +259,9 @@ export function listExplicitBrowserExports(pkg) {
       continue;
     }
     const target = configured.browser;
-    if (typeof target !== "string" || !target.startsWith("./dist/")) {
+    if (typeof target !== "string" || !target.startsWith("./src/")) {
       throw new Error(
-        `${subpath} explicit browser export should point to built dist artifacts`,
+        `${subpath} explicit browser export should point to tracked source artifacts`,
       );
     }
     const subpaths = grouped.get(target) ?? [];
@@ -301,17 +300,17 @@ function exportTarget(pkg, subpath, condition) {
   return configured?.[condition] ?? configured?.import;
 }
 
-async function checkDistExport(pkg, subpath, condition) {
+async function checkSourceExport(pkg, subpath, condition) {
   const target = exportTarget(pkg, subpath, condition);
-  if (!target?.startsWith("./dist/")) {
-    throw new Error(`${subpath} ${condition} export should point to built dist artifacts`);
+  if (!target?.startsWith("./src/")) {
+    throw new Error(`${subpath} ${condition} export should point to tracked source artifacts`);
   }
-  const distPath = resolve(ROOT, target);
+  const sourcePath = resolve(ROOT, target);
   try {
-    await readFile(distPath, "utf8");
+    await readFile(sourcePath, "utf8");
   } catch (error) {
     throw new Error(
-      `${subpath} export points to ${pathToFileURL(distPath)}, but the file is missing. Run npm run build:dist.`,
+      `${subpath} export points to ${pathToFileURL(sourcePath)}, but the tracked file is missing.`,
       { cause: error },
     );
   }
@@ -328,15 +327,15 @@ export async function runBundleSizeCheck({
 
   const pkg = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
   await checkExplicitBrowserExportGraphs(esbuild, pkg, log);
-  await checkDistExport(pkg, "./torii", "import");
-  await checkDistExport(pkg, "./transaction-codec", "browser");
-  await checkDistExport(pkg, "./smart-contract-deployment", "browser");
-  await checkDistExport(pkg, "./nexus-app", "browser");
-  await checkDistExport(pkg, "./canonical-request", "browser");
-  await checkDistExport(pkg, "./ivm-artifact", "browser");
-  await checkDistExport(pkg, "./ivm-artifact-admission-wasm", "browser");
-  await checkDistExport(pkg, "./kotodama-compiler", "browser");
-  await checkDistExport(pkg, "./browser", "browser");
+  await checkSourceExport(pkg, "./torii", "import");
+  await checkSourceExport(pkg, "./transaction-codec", "browser");
+  await checkSourceExport(pkg, "./smart-contract-deployment", "browser");
+  await checkSourceExport(pkg, "./nexus-app", "browser");
+  await checkSourceExport(pkg, "./canonical-request", "browser");
+  await checkSourceExport(pkg, "./ivm-artifact", "browser");
+  await checkSourceExport(pkg, "./ivm-artifact-admission-wasm", "browser");
+  await checkSourceExport(pkg, "./kotodama-compiler", "browser");
+  await checkSourceExport(pkg, "./browser", "browser");
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

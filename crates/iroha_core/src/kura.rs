@@ -32639,9 +32639,11 @@ impl Kura {
     ///
     /// The certificate is stored in the independently replaceable bounded
     /// state file, so sealing READY quorum never appends another copy of the
-    /// potentially large executable payload. The certificate itself is
-    /// immutable after first write: only an exact replay is accepted, and a
-    /// later synthetic NewView cursor cannot replace the origin Prepare QC.
+    /// potentially large executable payload. The first valid certificate is
+    /// immutable after write. An exact replay or another valid quorum proof
+    /// for the same origin payload is idempotent and retains those first
+    /// durable bytes; a later synthetic NewView cursor cannot replace the
+    /// origin Prepare QC.
     pub(crate) fn persist_lane_payload_availability_certificate(
         &self,
         lane_id: LaneId,
@@ -32676,12 +32678,6 @@ impl Kura {
                     "missing autonomous executable payload for availability certificate",
                 )
             })?;
-        if record.retirement.is_some() {
-            return Err(Self::invalid_lane_artifact_error(
-                record.view_state_path,
-                "durably retired autonomous lane slot cannot accept availability evidence",
-            ));
-        }
         let mut artifact = record.artifact;
         crate::lane_consensus::validate_lane_payload_availability_certificate(
             &certificate,
@@ -32695,13 +32691,19 @@ impl Kura {
                 format!("invalid autonomous lane availability certificate: {err}"),
             )
         })?;
-        if let Some(existing) = &artifact.availability_certificate {
-            if existing == &certificate {
-                return Ok(());
-            }
+        if artifact.availability_certificate.is_some() {
+            // Validation above binds every accepted proof variant to this
+            // exact producer-authenticated origin payload, committee, chain,
+            // epoch, and Prepare body. Quorum signer subsets and aggregate
+            // bytes are proof variants rather than slot identity. Retain the
+            // first durable certificate instead of attempting to replace it,
+            // including after terminal retirement.
+            return Ok(());
+        }
+        if record.retirement.is_some() {
             return Err(Self::invalid_lane_artifact_error(
-                slot_path,
-                "conflicting autonomous lane origin availability certificate",
+                record.view_state_path,
+                "durably retired autonomous lane slot cannot accept first availability evidence",
             ));
         }
         artifact.availability_certificate = Some(certificate);

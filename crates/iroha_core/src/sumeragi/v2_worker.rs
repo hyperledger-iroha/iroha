@@ -8518,6 +8518,12 @@ enum ExactOutputRolloverClaim {
         scope: ExactOutputCreationScope,
         share_hash: HashOf<MergeCommitteeSignature>,
     },
+    QueuePlanAdmission {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        view: wire::View,
+        certificate_hash: Hash,
+    },
     CertifiedSidecarRequest {
         scope: ExactOutputCreationScope,
         target: PeerId,
@@ -8582,6 +8588,7 @@ impl ExactOutputRolloverClaim {
             | Self::NativeAmx { scope, .. }
             | Self::LaneDrainVote { scope, .. }
             | Self::MergeShare { scope, .. }
+            | Self::QueuePlanAdmission { scope, .. }
             | Self::CertifiedSidecarRequest { scope, .. }
             | Self::CertifiedSidecarControl { scope, .. }
             | Self::CertifiedSidecarChunk { scope, .. } => Some(*scope),
@@ -8862,6 +8869,29 @@ impl ExactOutputRolloverClaim {
                 };
                 if HashOf::new(signature.as_ref()) != *share_hash {
                     return Err("merge-share rollover claim changed semantic identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::QueuePlanAdmission {
+                target,
+                certificate_hash,
+                ..
+            } => {
+                let [NetworkMessage::QueuePlanAdmissionCertificate(certificate)] = messages else {
+                    return Err(
+                        "QueuePlan admission rollover claim requires one exact certificate"
+                            .to_owned(),
+                    );
+                };
+                if peers != std::slice::from_ref(target)
+                    || certificate.is_empty()
+                    || certificate.len()
+                        > iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
+                    || Hash::new(certificate.as_slice()) != *certificate_hash
+                {
+                    return Err(
+                        "QueuePlan admission rollover claim changed semantic identity".to_owned(),
+                    );
                 }
                 Ok(())
             }
@@ -13644,6 +13674,42 @@ fn applied_height_reconstruction_covers(
             *proposal_height,
         );
     }
+    if let ExactOutputRolloverClaim::QueuePlanAdmission {
+        target,
+        view,
+        certificate_hash,
+        ..
+    } = rollover_claim
+    {
+        let [NetworkMessage::QueuePlanAdmissionCertificate(certificate)] = messages else {
+            return Err(
+                "QueuePlan admission rollover lost its exact certificate payload".to_owned(),
+            );
+        };
+        let expected_leader = artifact
+            .height_context
+            .roster
+            .get(usize::try_from(artifact.height_context.leader(*view)).unwrap_or(usize::MAX))
+            .map(|entry| &entry.validator);
+        if expected_leader != Some(target) {
+            return Err(
+                "QueuePlan admission rollover target is not its frozen view leader".to_owned(),
+            );
+        }
+        let durable_history = durable_history.ok_or_else(|| {
+            "QueuePlan admission rollover lacks an independently readable Kura source".to_owned()
+        })?;
+        let source_is_exact = durable_history
+            .pending_queue_plan_admission_certificates_bounded(
+                durable_history.pending_queue_plan_admission_capacity(),
+            )
+            .map_err(|error| error.to_string())?
+            .iter()
+            .any(|(hash, bytes)| hash == certificate_hash && bytes == certificate.as_slice());
+        return source_is_exact.then_some(()).ok_or_else(|| {
+            "QueuePlan admission rollover lost its exact durable Kura source".to_owned()
+        });
+    }
     if matches!(
         rollover_claim,
         ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
@@ -16894,6 +16960,65 @@ impl ProductionV2Services {
                         },
                     )
                 }
+                V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                    peer,
+                    view,
+                    certificate,
+                } => {
+                    let expected_leader = self
+                        .context
+                        .roster
+                        .get(usize::try_from(self.context.leader(*view)).unwrap_or(usize::MAX))
+                        .map(|entry| &entry.validator)
+                        .ok_or_else(|| {
+                            "QueuePlan admission handoff view has no frozen leader".to_owned()
+                        })?;
+                    if peer != expected_leader {
+                        return Err(
+                            "QueuePlan admission handoff target is not its frozen view leader"
+                                .to_owned(),
+                        );
+                    }
+                    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+                        &self.context.chain_id,
+                        certificate.as_slice(),
+                    )
+                    .map_err(|error| {
+                        format!("QueuePlan admission handoff has an invalid certificate: {error}")
+                    })?;
+                    let certificate_hash = Hash::new(certificate.as_slice());
+                    let has_exact_kura_source = self
+                        .kura
+                        .pending_queue_plan_admission_certificates_bounded(
+                            self.kura.pending_queue_plan_admission_capacity(),
+                        )
+                        .map_err(|error| error.to_string())?
+                        .iter()
+                        .any(|(hash, bytes)| {
+                            *hash == certificate_hash && bytes == certificate.as_slice()
+                        });
+                    if !has_exact_kura_source {
+                        return Err(
+                            "QueuePlan admission handoff has no exact durable Kura source"
+                                .to_owned(),
+                        );
+                    }
+                    (
+                        vec![NetworkMessage::QueuePlanAdmissionCertificate(Arc::clone(
+                            certificate,
+                        ))],
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Topology],
+                        None,
+                        None,
+                        ExactOutputRolloverClaim::QueuePlanAdmission {
+                            scope: self.exact_output_scope(),
+                            target: peer.clone(),
+                            view: *view,
+                            certificate_hash,
+                        },
+                    )
+                }
                 V2LaneWorkEffect::PostCertifiedMergeSidecar {
                     peer,
                     reply_routes,
@@ -17697,6 +17822,75 @@ impl ProductionV2Services {
             }
             Err(error) => {
                 iroha_logger::error!(%error, "merge-share output failed closed");
+            }
+        }
+    }
+
+    /// Hand one exact Kura-durable QueuePlan admission certificate to the
+    /// current global leader through the retained exact-output corridor.
+    pub(crate) fn post_queue_plan_admission_certificate(
+        &self,
+        peer: PeerId,
+        view: wire::View,
+        certificate: Arc<Vec<u8>>,
+    ) {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            return;
+        };
+        if let Err(error) =
+            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+                &self.context.chain_id,
+                certificate.as_slice(),
+            )
+        {
+            iroha_logger::error!(%error, "QueuePlan admission handoff failed validation");
+            return;
+        }
+        let expected_leader = self
+            .context
+            .roster
+            .get(usize::try_from(self.context.leader(view)).unwrap_or(usize::MAX))
+            .map(|entry| &entry.validator);
+        let certificate_hash = Hash::new(certificate.as_slice());
+        let has_exact_kura_source = self
+            .kura
+            .pending_queue_plan_admission_certificates_bounded(
+                self.kura.pending_queue_plan_admission_capacity(),
+            )
+            .is_ok_and(|pending| {
+                pending.iter().any(|(hash, bytes)| {
+                    *hash == certificate_hash && bytes == certificate.as_slice()
+                })
+            });
+        if expected_leader != Some(&peer) || !has_exact_kura_source {
+            iroha_logger::error!(
+                %peer,
+                view,
+                "QueuePlan admission handoff lost its frozen leader or durable source"
+            );
+            return;
+        }
+        let rollover_claim = ExactOutputRolloverClaim::QueuePlanAdmission {
+            scope: self.exact_output_scope(),
+            target: peer.clone(),
+            view,
+            certificate_hash,
+        };
+        match self.enqueue_exact_fanout_while_guarded(
+            vec![NetworkMessage::QueuePlanAdmissionCertificate(certificate)],
+            vec![peer],
+            rollover_claim,
+            operation.permit(),
+        ) {
+            Ok(ExactFanoutOwnership::Owned) => operation.complete(),
+            Ok(ExactFanoutOwnership::SourceRetained) => {
+                iroha_logger::error!(
+                    "QueuePlan admission handoff reached an unreserved outbound corridor boundary"
+                );
+            }
+            Err(error) => {
+                iroha_logger::error!(%error, "QueuePlan admission handoff failed closed");
             }
         }
     }
@@ -20913,6 +21107,160 @@ pub(super) mod tests {
             })
             .expect_err("tampered drain vote must fail before corridor reservation");
         assert!(error.contains("invalid vote evidence"));
+    }
+
+    #[test]
+    fn queue_plan_admission_rollover_binds_target_hash_and_frozen_view() {
+        let (service, keys) = fixture();
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let view = 0;
+        let leader_index = usize::try_from(service.context.leader(view))
+            .expect("fixture leader index is representable");
+        let target = service.context.roster[leader_index].validator.clone();
+        let certificate = Arc::new(vec![0x51, 0x50, 0x41]);
+        let certificate_hash = Hash::new(certificate.as_slice());
+        service
+            .kura
+            .persist_pending_queue_plan_admission_certificate(certificate.as_slice())
+            .expect("retain exact rollover source in Kura");
+        let messages = vec![NetworkMessage::QueuePlanAdmissionCertificate(Arc::clone(
+            &certificate,
+        ))];
+        let claim = ExactOutputRolloverClaim::QueuePlanAdmission {
+            scope: service.exact_output_scope(),
+            target: target.clone(),
+            view,
+            certificate_hash,
+        };
+        assert_eq!(
+            applied_height_reconstruction_covers(
+                &messages,
+                std::slice::from_ref(&target),
+                &claim,
+                &artifact,
+                None,
+                Some(service.kura.as_ref()),
+            ),
+            Ok(())
+        );
+
+        let other_target = service
+            .context
+            .roster
+            .iter()
+            .map(|entry| &entry.validator)
+            .find(|peer| *peer != &target)
+            .expect("fixture has another peer");
+        let error = applied_height_reconstruction_covers(
+            &messages,
+            std::slice::from_ref(other_target),
+            &claim,
+            &artifact,
+            None,
+            Some(service.kura.as_ref()),
+        )
+        .expect_err("rollover cannot retarget an exact certificate");
+        assert!(error.contains("changed semantic identity"));
+
+        let wrong_hash_claim = ExactOutputRolloverClaim::QueuePlanAdmission {
+            scope: service.exact_output_scope(),
+            target: target.clone(),
+            view,
+            certificate_hash: Hash::new(b"different QueuePlan certificate"),
+        };
+        let error = applied_height_reconstruction_covers(
+            &messages,
+            std::slice::from_ref(&target),
+            &wrong_hash_claim,
+            &artifact,
+            None,
+            Some(service.kura.as_ref()),
+        )
+        .expect_err("rollover cannot substitute a different certificate hash");
+        assert!(error.contains("changed semantic identity"));
+
+        let wrong_view = (1..=u64::try_from(service.context.roster.len())
+            .expect("fixture roster length is representable"))
+            .find(|candidate| service.context.leader(*candidate) != service.context.leader(view))
+            .expect("fixture rotates to another leader");
+        let wrong_view_claim = ExactOutputRolloverClaim::QueuePlanAdmission {
+            scope: service.exact_output_scope(),
+            target: target.clone(),
+            view: wrong_view,
+            certificate_hash,
+        };
+        let error = applied_height_reconstruction_covers(
+            &messages,
+            std::slice::from_ref(&target),
+            &wrong_view_claim,
+            &artifact,
+            None,
+            Some(service.kura.as_ref()),
+        )
+        .expect_err("rollover target must remain the leader frozen by its view");
+        assert!(error.contains("not its frozen view leader"));
+    }
+
+    #[test]
+    fn queue_plan_admission_rollover_requires_exact_kura_bytes() {
+        let (service, keys) = fixture();
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let view = 0;
+        let leader_index = usize::try_from(service.context.leader(view))
+            .expect("fixture leader index is representable");
+        let target = service.context.roster[leader_index].validator.clone();
+        let certificate = Arc::new(vec![0x44, 0x55, 0x52, 0x41]);
+        let messages = vec![NetworkMessage::QueuePlanAdmissionCertificate(Arc::clone(
+            &certificate,
+        ))];
+        let claim = ExactOutputRolloverClaim::QueuePlanAdmission {
+            scope: service.exact_output_scope(),
+            target: target.clone(),
+            view,
+            certificate_hash: Hash::new(certificate.as_slice()),
+        };
+
+        let error = applied_height_reconstruction_covers(
+            &messages,
+            std::slice::from_ref(&target),
+            &claim,
+            &artifact,
+            None,
+            None,
+        )
+        .expect_err("rollover requires an independently readable durable source");
+        assert!(error.contains("independently readable Kura source"));
+
+        service
+            .kura
+            .persist_pending_queue_plan_admission_certificate(b"different certificate")
+            .expect("retain a non-matching Kura record");
+        let error = applied_height_reconstruction_covers(
+            &messages,
+            std::slice::from_ref(&target),
+            &claim,
+            &artifact,
+            None,
+            Some(service.kura.as_ref()),
+        )
+        .expect_err("another durable certificate cannot reconstruct this output");
+        assert!(error.contains("lost its exact durable Kura source"));
+
+        service
+            .kura
+            .persist_pending_queue_plan_admission_certificate(certificate.as_slice())
+            .expect("retain the exact Kura record");
+        assert_eq!(
+            applied_height_reconstruction_covers(
+                &messages,
+                std::slice::from_ref(&target),
+                &claim,
+                &artifact,
+                None,
+                Some(service.kura.as_ref()),
+            ),
+            Ok(())
+        );
     }
 
     #[test]

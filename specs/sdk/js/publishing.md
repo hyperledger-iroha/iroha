@@ -102,6 +102,11 @@ binary whose V3 build provenance is unavailable.
 - `package.json` now declares the repository, homepage, files allowlist, and
   `publishConfig` (public access + provenance). No additional CLI flags are
   required when running `npm publish`.
+- Runtime `main`, conditional exports, and browser replacements resolve the
+  tracked `src/` tree. This keeps exact Git revisions and source archives
+  installable when lifecycle scripts are disabled. `npm run build:dist` still
+  creates the byte-identical `dist/` publication snapshot, and the release
+  gates continue to verify and pack both trees.
 - Run `npm run check:changelog` to ensure `CHANGELOG.md` contains an entry for
   the package version. The `prepublishOnly` hook runs this check automatically,
   followed by `npm test`, so publishing without updating the changelog or

@@ -326,13 +326,31 @@ struct KagamiStub {
     log_path: PathBuf,
 }
 
+fn kagami_stub_manifest(consensus_mode: SumeragiConsensusMode) -> String {
+    use iroha_data_model::parameter::{
+        Parameter,
+        system::SumeragiNposParameters,
+    };
+
+    let chain = "00000000-0000-0000-0000-000000000000"
+        .parse::<ChainId>()
+        .expect("stub chain id");
+    let mut builder = iroha_genesis::GenesisBuilder::new_without_executor(chain, ".");
+    if consensus_mode == SumeragiConsensusMode::Npos {
+        builder = builder.append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into(),
+        ));
+    }
+    let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
+    assert_eq!(manifest.consensus_mode(), consensus_mode);
+    norito::json::to_string(&manifest).expect("encode typed Kagami stub manifest")
+}
+
 impl KagamiStub {
     fn install(root: &Path) -> Self {
         let script_path = root.join("kagami_stub.sh");
-        let chain_discriminant = iroha_data_model::account::address::chain_discriminant();
-        let manifest = format!(
-            "{{\"chain\":\"00000000-0000-0000-0000-000000000000\",\"chain_discriminant\":{chain_discriminant},\"ivm_dir\":\".\",\"consensus_mode\":\"Permissioned\",\"wire_protocol_version\":4,\"sumeragi_v2\":{{\"da_layout\":{{\"encoding\":{{\"encoding\":\"reed_solomon16\",\"details\":null}},\"chunk_size_bytes\":262144,\"data_shards\":4,\"parity_shards\":2,\"max_payload_size_bytes\":16777216,\"max_chunk_count\":1024}},\"nexus_amx_context_hash\":\"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3\",\"execution_policy_hash\":\"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3\"}},\"transactions\":[{{\"instructions\":[]}}]}}"
-        );
+        let permissioned_manifest = kagami_stub_manifest(SumeragiConsensusMode::Permissioned);
+        let npos_manifest = kagami_stub_manifest(SumeragiConsensusMode::Npos);
         let script = format!(
             r#"#!/bin/sh
 if [ -n "$MOCHI_KAGAMI_LOG" ]; then
@@ -349,9 +367,22 @@ case "$1" in
   genesis)
     case "$2" in
       generate)
-        cat <<'JSON'
-{manifest}
-JSON
+        case " $* " in
+          *" --consensus-mode permissioned "*)
+            cat <<'PERMISSIONED_JSON'
+{permissioned_manifest}
+PERMISSIONED_JSON
+            ;;
+          *" --consensus-mode npos "*)
+            cat <<'NPOS_JSON'
+{npos_manifest}
+NPOS_JSON
+            ;;
+          *)
+            echo "missing or unsupported --consensus-mode for kagami stub" >&2
+            exit 24
+            ;;
+        esac
         exit 0
         ;;
       sign)
@@ -453,13 +484,15 @@ struct StandaloneKagamiStub {
     log_path: PathBuf,
     _irohad_guard: EnvVarGuard,
     _iroha_cli_guard: EnvVarGuard,
+    _signature_guard: EnvVarGuard,
 }
 
 impl StandaloneKagamiStub {
     fn create(root: &Path) -> Self {
         let script_path = root.join("kagami_override.sh");
         let log_path = root.join("kagami_override.log");
-        let chain_discriminant = iroha_data_model::account::address::chain_discriminant();
+        let permissioned_manifest = kagami_stub_manifest(SumeragiConsensusMode::Permissioned);
+        let npos_manifest = kagami_stub_manifest(SumeragiConsensusMode::Npos);
         let script = format!(
             r#"#!/bin/sh
 set -e
@@ -476,9 +509,22 @@ case "$1" in
   genesis)
     case "$2" in
       generate)
-        cat <<'JSON'
-{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{chain_discriminant},"ivm_dir":".","consensus_mode":"Permissioned","wire_protocol_version":4,"sumeragi_v2":{{"da_layout":{{"encoding":{{"encoding":"reed_solomon16","details":null}},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024}},"nexus_amx_context_hash":"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3","execution_policy_hash":"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3"}},"transactions":[{{"instructions":[]}}]}}
-JSON
+        case " $* " in
+          *" --consensus-mode permissioned "*)
+            cat <<'PERMISSIONED_JSON'
+{permissioned_manifest}
+PERMISSIONED_JSON
+            ;;
+          *" --consensus-mode npos "*)
+            cat <<'NPOS_JSON'
+{npos_manifest}
+NPOS_JSON
+            ;;
+          *)
+            echo "missing or unsupported --consensus-mode for standalone kagami stub" >&2
+            exit 24
+            ;;
+        esac
         exit 0
         ;;
       sign)
@@ -546,11 +592,16 @@ esac
         let iroha_stub = write_version_stub(root, "kagami-override-iroha", "iroha3");
         let irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", iroha_stub.as_os_str());
         let iroha_cli_guard = EnvVarGuard::set("MOCHI_IROHA_CLI", iroha_stub.as_os_str());
+        let signature_guard = EnvVarGuard::set(
+            TEST_FINALIZE_KAGAMI_STUB_SIGNATURE,
+            std::ffi::OsStr::new("1"),
+        );
         Self {
             script_path,
             log_path,
             _irohad_guard: irohad_guard,
             _iroha_cli_guard: iroha_cli_guard,
+            _signature_guard: signature_guard,
         }
     }
 
@@ -900,6 +951,15 @@ fn builder_creates_peer_configs() {
         .parse::<iroha_primitives::addr::SocketAddr>()
         .expect("public addr literal")
         .to_literal();
+    let expected_genesis_hash_body = supervisor
+        .genesis
+        .expected_hash
+        .as_ref()
+        .expect("built supervisor has an exact genesis hash")
+        .to_string()
+        .to_ascii_uppercase();
+    let expected_genesis_hash =
+        norito::literal::format("hash", expected_genesis_hash_body.as_str());
 
     assert_eq!(
         value.get("chain").and_then(toml::Value::as_str),
@@ -935,7 +995,7 @@ fn builder_creates_peer_configs() {
             .and_then(toml::Value::as_table)
             .and_then(|table| table.get("expected_hash"))
             .and_then(toml::Value::as_str),
-        Some("hash:0000000000000000000000000000000000000000000000000000000000000001#C50E")
+        Some(expected_genesis_hash.as_str())
     );
     assert!(!contents.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
     assert!(
@@ -1224,6 +1284,7 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
             &["kura", "store_dir"][..],
             &["snapshot", "store_dir"][..],
             &["sorafs", "storage", "data_dir"][..],
+            &["soracloud_runtime", "state_dir"][..],
             &["streaming", "session_store_dir"][..],
             &["streaming", "soranet", "provision_spool_dir"][..],
             &["streaming", "soravpn", "provision_spool_dir"][..],
@@ -2025,10 +2086,12 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
     lane0.insert("alias".into(), toml::Value::String("core".into()));
     lane0.insert("index".into(), toml::Value::Integer(0));
     lane0.insert("dataspace".into(), toml::Value::String("universal".into()));
+    lane0.insert("metadata".into(), toml::Value::Table(toml::Table::new()));
     let mut lane1 = toml::Table::new();
     lane1.insert("alias".into(), toml::Value::String("governance".into()));
     lane1.insert("index".into(), toml::Value::Integer(1));
     lane1.insert("dataspace".into(), toml::Value::String("universal".into()));
+    lane1.insert("metadata".into(), toml::Value::Table(toml::Table::new()));
     nexus.insert(
         "lane_catalog".into(),
         toml::Value::Array(vec![toml::Value::Table(lane0), toml::Value::Table(lane1)]),

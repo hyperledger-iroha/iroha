@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-03
+Last updated: 2026-08-06
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -20,8 +20,17 @@ V1/revision-3 checkpoint lists elsewhere in this file are historical and do
 not add release gates. Guarded formatting, explicit production `iroha_core`
 library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
 regressions, generated-artifact determinism, exact profile-config admission,
-and public consensus wire roundtrips are complete. The outstanding revision-4
-work is limited to:
+and public consensus wire roundtrips are complete.
+
+EX-292/EX-297 proposal admission and recovery semantics are implemented. Clean
+idle heights do not manufacture ordinary empty proposals; only an explicitly
+armed, bounded recovery heartbeat may use one empty recovery carrier. That
+carrier advances finalized height without incrementing `blocks_non_empty`, and
+NPoS/Mochi workload qualification counts non-empty commits. This is a consensus
+hard cut: upgrade the complete validator committee together, never as a rolling
+or mixed old/new validator deployment.
+
+The outstanding revision-4 work is limited to:
 
 - Repair or isolate the unrelated committed `iroha_core`, `iroha_data_model`,
   and daemon test-harness compilation failures, and extend the host guard
@@ -275,6 +284,18 @@ hash-tree artifacts now describe the 110-entry release schema. Focused
 data-model, Core, IVM, bridge, fixture, and cross-SDK execution remains required
 before these audit items can close; physical Kagemusha recursion also remains
 blocked on a clean SSH-signed source seal and reviewed external inputs.
+The restored `cfleaf03`/`cfnode03` Axiom Poseidon empty root is a state
+compatibility hard cut. A persisted chain, snapshot, or confidential checkpoint
+created with the superseded canonical-empty root must not be opened by the new
+binaries without an explicit reviewed migration; otherwise rebuild/resync it
+from authoritative corrected state. There is no implicit root rewrite or mixed
+old/new persisted-state rollout.
+Before cross-SDK closure, replace the Swift, Kotlin, and Android confidential
+Merkle helpers' legacy polynomial compressor and raw-zero leaves with Core's
+current `cfleaf03`/`cfnode03` Axiom Poseidon construction. Publish shared
+empty-root, one-leaf, and authentication-path vectors and require every SDK to
+consume those exact vectors; self-consistent legacy fixtures are not parity
+evidence.
 The H24 Governance DAG source remediation is implemented: the publisher uses a
 deterministic fixed Kubo UnixFS profile, signed-HTTP-only head CAS, sealed
 intent/checkpoint recovery with pre-CAS and post-loss object repair, fixed V1
@@ -427,23 +448,38 @@ evidence.
 ## Sumeragi V2 production multilane release closure
 
 On the current tree, the independent 81-leg release inventory contract is
-sealed at 826 production tests across 38 modules, 309 G-UNIT rows, and four
+sealed at 826 production tests across 38 modules, 314 G-UNIT rows, and six
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
-Fresh guard and mutation execution against this source is pending. The
-package-layout preflight and aggregate checker also bind the sole reviewed
-test-only `v2_core/refinement_cases.rs` source split and reject additional,
-parent-relative, non-test, or skipped-verifier mutations. Its focused pytest
-mutation execution remains pending while concurrent checker jobs are active.
-The broader `check_sumeragi_v2_multilane_models.py` structural gate now passes
-after binding Kura's whole-plan route preflight, all-manifest readback,
+The fresh guard and its exact production-count, ten-iteration Native AMX,
+reserved-control, effective-assignment, and full-qualified idle-marker
+mutations pass on this source. The package-layout preflight and aggregate
+source-seal probe also bind the sole reviewed test-only
+`v2_core/refinement_cases.rs` source split and reject additional,
+parent-relative, non-test, or skipped-verifier mutations; their focused pytest
+mutations pass. The broader `check_sumeragi_v2_multilane_models.py` structural
+gate and all nine QueuePlan source-binding positive/negative cases pass after
+binding Kura's whole-plan route preflight, all-manifest readback,
 transition-checked latest-index publication, configured evidence-byte bounds,
-and State-frontier authentication. Its focused failing-mutation pytest cases
-must still execute on the final source before freeze.
+and State-frontier authentication. The four new QueuePlan item-seal mutations
+also pass; the wider item-seal slice retains only the already-baselined
+`torii_proxy.rs:68` fidelity mismatch and adds no diagnostic. These static
+results do not replace the still-pending final source-sealed G-4P execution.
 
-- Run a live four-validator idle-chain check for the restored proposal-work
-  gate, confirming that idle heights do not manufacture empty blocks while
-  explicitly armed recovery heartbeats and genuine internal work still
-  advance.
+The EX-297 real four-validator qualification sources are implemented. The
+idle-chain gate holds one canonical tip through the cadence, retransmission, and
+commit-quorum windows, then proves that external and internal-only work advance
+through non-empty commits. The recovery phase-cut matrix separately admits at
+most one explicitly armed empty carrier, verifies that `blocks_non_empty` does
+not advance for it, and proves that the chain returns to ordinary non-empty
+publication after restart. Final source-sealed execution remains part of the
+real-network release gates above rather than an implementation TODO. Both exact
+tests are now fail-closed members of the six-run G-4P launcher, receipt, and
+bootstrap inventory; a sandbox skip cannot satisfy their completion contract.
+The idle gate's started/completed evidence now uses the launcher's full exact
+libtest filter, and a focused source-contract regression rejects an unqualified
+marker context before the real-network run. The same launcher now pins the
+release Native AMX leg to the canonical ten iterations after caller inputs and
+reserves that environment control, so an inherited value cannot weaken G-4P.
 
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
@@ -460,6 +496,12 @@ Native/retirement/consensus/recovery failures, including exact deterministic
 merge-carrier header admission and adjacent SoraFS repair decoding boundaries.
 This focused repair evidence does not replace the outstanding archived
 `G-UNIT`, real-network, soak, scale, or source-sealed final gates below.
+The first-release QueuePlan ingress boundary now rejects a self-consistent
+future-authority certificate at both Torii publication ingress and the
+Sumeragi leader handoff before Kura persistence. Recovery continues to retain
+an already-durable future certificate until the canonical authority frontier
+catches up and reclassifies it. Four exact regressions source-bind those two
+ingress rejection paths and the durable-recovery path in G-UNIT.
 The first-release queue-plan restart boundary now reconciles reservation
 Commit barriers against exact globally certified V4 journal bindings, and the
 journal-disabled startup path is retired. Full queue-hash/coordinator identity,
@@ -470,11 +512,12 @@ reject a legacy V1 pointer filename, a fully unbacked pointer, and
 receipt-absent executed-wire/finality/manifest binding drift. They establish
 the prior 280-test G-UNIT checkpoint. One exact in-flight refinement-kernel
 regression and eight reservation-journal checked-application/adversarial
-regressions now raise the current source inventory to 289 tests. The fresh
+regressions established an earlier 289-test source-inventory checkpoint. The fresh
 24-test queue/configuration slice and 130-test Native AMX slice are green; the
 exact-source isolated reservation-journal slice is green at `65/65`, and the
 identity-bound in-flight refinement regression is green at `1/1`. The complete
-289-test archived execution receipt is still outstanding.
+289-test archived execution receipt was never produced and does not attest the
+current 314-test inventory.
 
 The in-flight carrier formal corpus is now bound to the versions that
 production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
@@ -484,11 +527,11 @@ multilane binding ledger keeps this as
 reservation, queue-order, Kura persistence/recovery, runner, and release
 receipt consumers, and requires a distinct fifth layout-only Apalache result
 after the four refinement rows. The schema-4 structural/source-binding checks,
-exact 826-test production inventory, 309-test G-UNIT source inventory, 12
+exact 826-test production inventory, 314-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
-contract controls require a fresh source-bound rerun. The G-UNIT inventory has 310 TSV lines
+contract controls require a fresh source-bound rerun. The G-UNIT inventory has 315 TSV lines
 and SHA-256
-`b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb`.
+`007cb768e76b304e849eb0541640c057fbe15d5762036a8e7f98e795eef041f8`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
 claimed by those static checks, and the total Rust transition projection
@@ -535,23 +578,27 @@ The remaining work is evidence-driven and must stay in order:
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 309 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 314 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
-  `ML-API-04`/`G-SDK`. The current harness contract requires OpenAPI `7`,
-  Python `56`, JavaScript `54`, Swift `3`, Kotlin `6`, and Java `5` cases. Its
-  exact fixture SHA-256 is
-  `ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`,
+  `ML-API-04`/`G-SDK`. The current source-bound harness inventory requires
+  OpenAPI `7`, Python `58`, JavaScript `56`, Swift `4`, Kotlin `6`, and Java
+  `5` cases. Its exact fixture SHA-256 is
+  `7cf8617c3f4e0fb01439486f19053f5b9ebb645eb23e48f0c9c7b18c2be883f5`,
   and its suite-source manifest SHA-256 is
-  `ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
-  Current standalone OpenAPI and installed-package Python runs pass `7/7` and
-  `56/56`, respectively. Those results are not an archived all-surface replay;
-  the remaining SDK blocker is one archived release replay of every required
-  language surface together.
+  `0da8e8780da02d8aa2603116e7e7491ea3f4a5375ff40618d35bf20203a8d0b8`.
+  These counts and hashes seal source inventory; they are not executed release
+  evidence. The remaining SDK blocker is one archived release replay of every
+  required language surface together.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
+  The source gate now checks exact three-of-four signer exclusion during both
+  supported rotating observer-omission windows and does not represent that
+  evidence as Byzantine fault injection. Its post-assertion evidence marker is
+  mandatory in the exact lifecycle log and is carried into G-4P completion and
+  aggregate receipt accounting.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
   fault soak on its 13-peer global committee (twelve lane validators plus one
   global-only lane observer). The source-side correction and bounded stage diagnostics for the

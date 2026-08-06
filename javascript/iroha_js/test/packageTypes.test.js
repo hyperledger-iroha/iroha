@@ -58,7 +58,7 @@ function createPackedLayout({ includeNodeTypes }) {
       );
     }
   }
-  fs.cpSync(path.join(PACKAGE_ROOT, "dist"), path.join(packagePath, "dist"), {
+  fs.cpSync(path.join(PACKAGE_ROOT, "src"), path.join(packagePath, "src"), {
     recursive: true,
   });
   fs.symlinkSync(
@@ -184,7 +184,7 @@ test("every public export has a safe runtime target and an explicit declaration 
     "typesVersions must cover every public subpath exactly once",
   );
   assert.deepEqual(packageJson.exports["./norito"], {
-    import: "./dist/norito.js",
+    import: "./src/norito.js",
     types: "./index.d.ts",
   });
 });

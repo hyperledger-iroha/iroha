@@ -1426,7 +1426,7 @@ data_root = "./env-data"
             .expect("profile table");
         assert_eq!(
             profile_table.get("peer_count").and_then(Value::as_integer),
-            Some(3)
+            Some(7)
         );
         assert_eq!(
             profile_table.get("consensus_mode").and_then(Value::as_str),

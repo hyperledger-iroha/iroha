@@ -20,7 +20,7 @@ use iroha_test_network::NetworkPeer;
 use iroha_test_samples::ALICE_ID;
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use tokio::{sync::Notify, task, time::sleep};
-use toml::{Table, Value};
+use toml::Table;
 use tracing::{debug, error, info, warn};
 
 /// Configuration for periodic fault injection.
@@ -57,7 +57,7 @@ pub enum FaultScenarioKind {
     SpamInvalidTransactions,
     /// Restart with exaggerated gossip delays for a short period.
     NetworkLatencySpike,
-    /// Restart with a self-only trusted peer roster for a short period.
+    /// Restart with complete bidirectional P2P packet loss for a short period.
     NetworkPartition,
     /// Restart with debug P2P packet-loss settings for a short period.
     NetworkPacketLoss,
@@ -85,7 +85,7 @@ impl Default for NetworkLatencyConfig {
     }
 }
 
-/// Settings for a temporary trusted-peer partition.
+/// Settings for a temporary network partition.
 #[derive(Clone, Debug)]
 pub struct NetworkPartitionConfig {
     /// How long the partition should remain active.
@@ -587,19 +587,13 @@ async fn network_partition<P: FaultPeer>(
         target: "izanami::faults",
         peer = peer.mnemonic(),
         ?duration,
-        "isolating peer from trusted network"
+        "isolating peer with complete bidirectional P2P packet loss"
     );
 
-    let trusted_peer = peer
-        .isolated_trusted_peer_entry()
-        .wrap_err("peer missing self trusted-peer entry required for partition restart")?;
-    let trusted_peers_pop = peer
-        .isolated_trusted_peers_pop_entries()
-        .wrap_err("peer missing self PoP required for partition restart")?;
     peer.shutdown().await;
     let overrides = Table::new()
-        .write(["trusted_peers"], vec![trusted_peer])
-        .write(["trusted_peers_pop"], Value::Array(trusted_peers_pop));
+        .write(["network", "debug_packet_loss_inbound_percent"], 100_u8)
+        .write(["network", "debug_packet_loss_outbound_percent"], 100_u8);
     let result = peer
         .restart_with_layers(config_layers, std::slice::from_ref(&overrides), genesis)
         .await;
@@ -824,16 +818,6 @@ fn sample_u64<R: Rng>(rng: &mut R, range: &RangeInclusive<u64>) -> u64 {
     rng.random_range(start..=end)
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(TABLE[(byte >> 4) as usize] as char);
-        out.push(TABLE[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
 /// Minimal client surface used by fault helpers that need to submit invalid traffic.
 pub trait FaultClient: Clone + Send + Sync + 'static {
     /// Submit one instruction and surface any failure to the fault harness.
@@ -870,18 +854,6 @@ pub trait FaultPeer: Clone + Send + Sync + 'static {
     fn kura_store_dir(&self) -> PathBuf;
     /// Client handle for submitting invalid traffic during a fault run.
     fn client(&self) -> Self::Client;
-    /// Trusted-peer entry for the local peer while it is isolated from the rest of the network.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the peer cannot provide its local network identity.
-    fn isolated_trusted_peer_entry(&self) -> Result<String>;
-    /// `PoP` entries that remain valid when the peer is restarted in isolation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the peer cannot provide its own BLS proof-of-possession.
-    fn isolated_trusted_peers_pop_entries(&self) -> Result<Vec<Value>>;
     /// Stop the peer process and return once shutdown has been requested.
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
     /// Restart the peer using the supplied config layers and overlay tables.
@@ -906,28 +878,6 @@ impl FaultPeer for NetworkPeer {
 
     fn client(&self) -> Self::Client {
         NetworkPeer::client(self)
-    }
-
-    fn isolated_trusted_peer_entry(&self) -> Result<String> {
-        Ok(format!(
-            "{}@{}",
-            self.network_peer_id(),
-            self.p2p_address().to_literal()
-        ))
-    }
-
-    fn isolated_trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
-        let public_key = self
-            .bls_public_key()
-            .ok_or_else(|| eyre!("peer missing BLS public key"))?;
-        let pop = self
-            .bls_pop()
-            .ok_or_else(|| eyre!("peer missing BLS proof-of-possession"))?;
-        Ok(vec![Value::Table(
-            Table::new()
-                .write("public_key", public_key.to_string())
-                .write("pop_hex", format!("0x{}", hex_lower(pop))),
-        )])
     }
 
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -967,6 +917,8 @@ mod tests {
         },
     };
 
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_genesis::GenesisTopologyEntry;
     use iroha_primitives::unique_vec::UniqueVec;
     use iroha_test_network::genesis_factory;
     use tokio::{
@@ -1047,18 +999,6 @@ mod tests {
 
         fn client(&self) -> Self::Client {
             self.client.clone()
-        }
-
-        fn isolated_trusted_peer_entry(&self) -> Result<String> {
-            Ok("mock-partition-public-key@127.0.0.1:1337".to_string())
-        }
-
-        fn isolated_trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
-            Ok(vec![Value::Table(
-                Table::new()
-                    .write("public_key", "mock-partition-public-key")
-                    .write("pop_hex", "mock-partition-pop-hex"),
-            )])
         }
 
         fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -1224,7 +1164,18 @@ mod tests {
     }
 
     fn dummy_genesis() -> Arc<GenesisBlock> {
-        Arc::new(genesis_factory(Vec::new(), UniqueVec::new(), Vec::new()))
+        let mut peers = Vec::with_capacity(4);
+        let mut topology_entries = Vec::with_capacity(4);
+        for _ in 0..4 {
+            let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = PeerId::new(key_pair.public_key().clone());
+            let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                .expect("BLS PoP generation");
+            peers.push(peer.clone());
+            topology_entries.push(GenesisTopologyEntry::new(peer, pop));
+        }
+        let topology: UniqueVec<_> = peers.into_iter().collect();
+        Arc::new(genesis_factory(Vec::new(), topology, topology_entries))
     }
 
     #[tokio::test]
@@ -1531,40 +1482,28 @@ mod tests {
         match &events[1] {
             MockEvent::Restart { extra_layers } => {
                 assert_eq!(extra_layers.len(), 1);
-                let trusted = extra_layers[0]
-                    .get("trusted_peers")
-                    .and_then(toml::Value::as_array)
-                    .expect("trusted_peers array");
-                assert_eq!(
-                    trusted
-                        .iter()
-                        .filter_map(toml::Value::as_str)
-                        .collect::<Vec<_>>(),
-                    vec!["mock-partition-public-key@127.0.0.1:1337"],
-                    "partition should keep only the isolated peer trusted temporarily"
-                );
-                let trusted_pop = extra_layers[0]
-                    .get("trusted_peers_pop")
-                    .and_then(toml::Value::as_array)
-                    .expect("trusted_peers_pop array");
                 assert!(
-                    trusted_pop.len() == 1,
-                    "partition should preserve the isolated peer's own PoP"
+                    !extra_layers[0].contains_key("trusted_peers")
+                        && !extra_layers[0].contains_key("trusted_peers_pop"),
+                    "partition must preserve the signed validator roster and PoPs"
                 );
-                let trusted_pop_entry = trusted_pop[0]
-                    .as_table()
-                    .expect("trusted_peers_pop entry should be a table");
+                let network = extra_layers[0]
+                    .get("network")
+                    .and_then(toml::Value::as_table)
+                    .expect("network override table");
                 assert_eq!(
-                    trusted_pop_entry
-                        .get("public_key")
-                        .and_then(toml::Value::as_str),
-                    Some("mock-partition-public-key")
+                    network
+                        .get("debug_packet_loss_inbound_percent")
+                        .and_then(toml::Value::as_integer),
+                    Some(100),
+                    "partition must drop every inbound P2P application frame"
                 );
                 assert_eq!(
-                    trusted_pop_entry
-                        .get("pop_hex")
-                        .and_then(toml::Value::as_str),
-                    Some("mock-partition-pop-hex")
+                    network
+                        .get("debug_packet_loss_outbound_percent")
+                        .and_then(toml::Value::as_integer),
+                    Some(100),
+                    "partition must drop every outbound P2P application frame"
                 );
             }
             other => panic!("unexpected restart payload: {other:?}"),

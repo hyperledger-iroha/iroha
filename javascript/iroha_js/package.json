@@ -3,111 +3,111 @@
   "version": "0.0.3",
   "description": "Node.js SDK for interacting with Hyperledger Iroha via Norito payloads and Torii APIs.",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./src/index.js",
   "types": "./index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./src/index.js",
       "types": "./index.d.ts"
     },
     "./address": {
-      "import": "./dist/address.js",
+      "import": "./src/address.js",
       "types": "./index.d.ts"
     },
     "./browser": {
-      "browser": "./dist/browser.js",
-      "import": "./dist/browser.js",
+      "browser": "./src/browser.js",
+      "import": "./src/browser.js",
       "types": "./index.d.ts"
     },
     "./privacy-capabilities": {
-      "browser": "./dist/privacyCapabilities.js",
-      "import": "./dist/privacyCapabilities.js",
+      "browser": "./src/privacyCapabilities.js",
+      "import": "./src/privacyCapabilities.js",
       "types": "./privacy-capabilities.d.ts"
     },
     "./bootle-lantern-issuance": {
-      "browser": "./dist/bootleLanternIssuance.js",
-      "import": "./dist/bootleLanternIssuance.js",
+      "browser": "./src/bootleLanternIssuance.js",
+      "import": "./src/bootleLanternIssuance.js",
       "types": "./bootle-lantern-issuance.d.ts"
     },
     "./transaction-codec": {
-      "browser": "./dist/transactionCodec.js",
-      "import": "./dist/transactionCodec.js",
+      "browser": "./src/transactionCodec.js",
+      "import": "./src/transactionCodec.js",
       "types": "./transaction-codec.d.ts"
     },
     "./smart-contract-deployment": {
-      "browser": "./dist/smartContractDeployment.js",
-      "import": "./dist/smartContractDeployment.js",
+      "browser": "./src/smartContractDeployment.js",
+      "import": "./src/smartContractDeployment.js",
       "types": "./smart-contract-deployment.d.ts"
     },
     "./normalizers": {
-      "browser": "./dist/normalizers.js",
-      "import": "./dist/normalizers.js",
+      "browser": "./src/normalizers.js",
+      "import": "./src/normalizers.js",
       "types": "./index.d.ts"
     },
     "./blake2b": {
-      "browser": "./dist/blake2b.js",
-      "import": "./dist/blake2b.js",
+      "browser": "./src/blake2b.js",
+      "import": "./src/blake2b.js",
       "types": "./index.d.ts"
     },
     "./ivm-artifact": {
-      "browser": "./dist/ivmArtifact.js",
-      "import": "./dist/ivmArtifact.js",
+      "browser": "./src/ivmArtifact.js",
+      "import": "./src/ivmArtifact.js",
       "types": "./ivm-artifact.d.ts"
     },
     "./ivm-artifact-admission-wasm": {
-      "browser": "./dist/ivmArtifactAdmissionWasm.js",
-      "import": "./dist/ivmArtifactAdmissionWasm.js",
+      "browser": "./src/ivmArtifactAdmissionWasm.js",
+      "import": "./src/ivmArtifactAdmissionWasm.js",
       "types": "./ivm-artifact-admission-wasm.d.ts"
     },
     "./instruction-builders": {
-      "import": "./dist/instructionBuilders.js",
+      "import": "./src/instructionBuilders.js",
       "types": "./index.d.ts"
     },
     "./torii": {
-      "browser": "./dist/toriiBrowserClient.js",
-      "import": "./dist/toriiClient.js",
+      "browser": "./src/toriiBrowserClient.js",
+      "import": "./src/toriiClient.js",
       "types": "./index.d.ts"
     },
     "./torii-browser": {
-      "import": "./dist/toriiBrowserClient.js",
-      "browser": "./dist/toriiBrowserClient.js",
+      "import": "./src/toriiBrowserClient.js",
+      "browser": "./src/toriiBrowserClient.js",
       "types": "./index.d.ts"
     },
     "./norito": {
-      "import": "./dist/norito.js",
+      "import": "./src/norito.js",
       "types": "./index.d.ts"
     },
     "./canonical-request": {
-      "browser": "./dist/canonicalRequest.js",
-      "import": "./dist/canonicalRequest.js",
+      "browser": "./src/canonicalRequest.js",
+      "import": "./src/canonicalRequest.js",
       "types": "./canonical-request.d.ts"
     },
     "./sccp": {
-      "import": "./dist/sccp.js",
+      "import": "./src/sccp.js",
       "types": "./index.d.ts"
     },
     "./sorafs": {
-      "import": "./dist/sorafs.js",
+      "import": "./src/sorafs.js",
       "types": "./index.d.ts"
     },
     "./crypto": {
-      "browser": "./dist/crypto.browser.js",
-      "import": "./dist/crypto.js",
+      "browser": "./src/crypto.browser.js",
+      "import": "./src/crypto.js",
       "types": "./index.d.ts"
     },
     "./connect-browser": {
-      "import": "./dist/connect.browser.js",
+      "import": "./src/connect.browser.js",
       "types": "./connect.browser.d.ts"
     },
     "./nexus-app": {
-      "browser": "./dist/nexusApp.js",
-      "import": "./dist/nexusApp.js",
+      "browser": "./src/nexusApp.js",
+      "import": "./src/nexusApp.js",
       "types": "./nexus-app.d.ts"
     },
     "./kotodama-compiler": {
       "types": "./kotodama-compiler.d.ts",
-      "browser": "./dist/kotodamaCompiler/browser.js",
-      "import": "./dist/kotodamaCompiler/index.js"
+      "browser": "./src/kotodamaCompiler/browser.js",
+      "import": "./src/kotodamaCompiler/index.js"
     }
   },
   "typesVersions": {
@@ -240,10 +240,10 @@
     "src"
   ],
   "browser": {
-    "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",
-    "./dist/crypto.js": "./dist/crypto.browser.js",
-    "./dist/cryptoHash.js": "./dist/cryptoHash.browser.js",
-    "./dist/native.js": "./dist/native.browser.js"
+    "./src/authenticatedBlockProofs.js": "./src/authenticatedBlockProofs.browser.js",
+    "./src/crypto.js": "./src/crypto.browser.js",
+    "./src/cryptoHash.js": "./src/cryptoHash.browser.js",
+    "./src/native.js": "./src/native.browser.js"
   },
   "publishConfig": {
     "access": "public",

@@ -132,7 +132,7 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
     let decoded: ProofAttachmentList = norito_core::NoritoDeserialize::deserialize(archived);
     assert_eq!(decoded, list);
     let decoded_privacy = decoded
-        .0
+        .as_slice()
         .first()
         .and_then(|entry| entry.lane_privacy.clone())
         .expect("lane privacy attachment present");

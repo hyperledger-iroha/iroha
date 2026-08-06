@@ -525,12 +525,13 @@ ABI V1 contains the unconditional numeric syscall blocks:
 0x010140..0x01014f  quantity
 ```
 
-Typed exact-number JSON getters occupy `0x010160..0x010165`: `int`, `decimal`,
-and `quantity`, followed by their direct-pointer variants. They accept only a
-canonical base-10 JSON string. A JSON number token, exponent spelling, leading
-plus or zero, negative quantity, removable fractional zero, or out-of-domain
-string returns `Option::none`; it is never rounded or converted through a host
-floating-point type.
+Typed exact-number JSON getters occupy `0x010160..0x010162`: `int`, `decimal`,
+and `quantity`. The `int` getter accepts only `i64`/`u64` JSON number tokens;
+the `decimal` and `quantity` getters accept only canonical base-10 JSON strings.
+A numeric string for `int`, floating-point number token, exponent spelling,
+leading plus or zero, negative quantity, removable fractional zero, or
+out-of-domain value returns `Option::none`; it is never rounded or converted
+through a host floating-point type.
 
 The detailed signatures live in `crates/ivm/spec/syscalls.toml`. The retired
 pre-release generic-`Numeric` and `Amount` syscall blocks are not in the V1

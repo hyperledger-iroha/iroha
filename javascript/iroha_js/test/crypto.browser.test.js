@@ -148,8 +148,8 @@ test("browser package wiring omits the retired privacy catalog module", () => {
   const packageJson = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
-  assert.equal(packageJson.exports["./crypto"].browser, "./dist/crypto.browser.js");
-  assert.equal(packageJson.browser["./dist/crypto.js"], "./dist/crypto.browser.js");
+  assert.equal(packageJson.exports["./crypto"].browser, "./src/crypto.browser.js");
+  assert.equal(packageJson.browser["./src/crypto.js"], "./src/crypto.browser.js");
 
   for (const [label, relativePath] of [
     ["src", "../src/privacyAlgorithms.js"],

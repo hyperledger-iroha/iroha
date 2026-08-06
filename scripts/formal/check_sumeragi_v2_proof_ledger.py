@@ -61385,6 +61385,29 @@ if matches!(
             "CommitCertificateResponse progress-reservation regression",
             errors,
         )
+        busy_regression_name = (
+            "certified_tc_crosses_full_fence_blocked_prepare_prefix"
+        )
+        busy_regression = _require_rust_item(
+            runtime_path, runtime_source, busy_regression_name, errors
+        )
+        _require_rust_item_context(
+            runtime_path,
+            busy_regression,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "certified TC fence-blocked Prepare-prefix regression",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            busy_regression,
+            _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
+                busy_regression_name
+            ],
+            "certified TC fence-blocked Prepare-prefix regression",
+            errors,
+        )
         causal_runtime_regressions: dict[str, RustItem | None] = {}
         runtime_test_context = (
             ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
@@ -75581,6 +75604,14 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
     journal_path = (
         repo_root / "crates" / "iroha_core" / "src" / "queue" / "journal.rs"
     )
+    lane_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_lane_work.rs"
+    )
     torii_path = repo_root / "crates" / "iroha_torii" / "src" / "lib.rs"
     errors: list[str] = []
     sources: dict[Path, str] = {}
@@ -75588,6 +75619,7 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
         (binding_path, "shared QueuePlan semantic-request kernel"),
         (queue_path, "core strict QueuePlan admission call site"),
         (journal_path, "durable QueuePlan reconstruction call site"),
+        (lane_path, "Sumeragi QueuePlan ingress and durable recovery seam"),
         (torii_path, "Torii QueuePlan ingress call site"),
     ):
         if not path.is_file() or path.is_symlink():
@@ -75599,6 +75631,7 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
     binding_source = sources[binding_path]
     queue_source = sources[queue_path]
     journal_source = sources[journal_path]
+    lane_source = sources[lane_path]
     torii_source = sources[torii_path]
 
     durable_kernel = _require_rust_item(
@@ -75890,6 +75923,63 @@ if let Err(error) =
         "Torii QueuePlan execution must validate the shared semantic identity before dispatch",
         errors,
     )
+
+    lane_future_items = {
+        item_name: _require_qualified_rust_item(
+            lane_path,
+            lane_source,
+            "V2LaneWorkAdapter",
+            item_name,
+            errors,
+            description,
+        )
+        for item_name, description in (
+            (
+                "accept_queue_plan_admission_certificate",
+                "QueuePlan future-certificate Sumeragi ingress rejection",
+            ),
+            (
+                "refresh_merge_candidates",
+                "QueuePlan durable future-certificate recovery retention",
+            ),
+        )
+    }
+    for item_name, item in lane_future_items.items():
+        qualified_name = f"V2LaneWorkAdapter::{item_name}"
+        _require_rust_item_token_sha256(
+            lane_path,
+            item,
+            _QUEUE_PLAN_FUTURE_INGRESS_ITEM_SHA256[qualified_name],
+            qualified_name,
+            errors,
+        )
+
+    torii_future_items = {
+        item_name: _require_rust_item(torii_path, torii_source, item_name, errors)
+        for item_name in (
+            "validate_queue_plan_admission_publication",
+            "ingest_queue_plan_admission_publication",
+        )
+    }
+    torii_ingress_attributes = (
+        '#[cfg(any(feature = "p2p_ws", feature = "connect"))]',
+    )
+    for item_name, item in torii_future_items.items():
+        _require_rust_item_context(
+            torii_path,
+            item,
+            (),
+            f"QueuePlan future-certificate Torii ingress seam {item_name}",
+            errors,
+            expected_attributes=torii_ingress_attributes,
+        )
+        _require_rust_item_token_sha256(
+            torii_path,
+            item,
+            _QUEUE_PLAN_FUTURE_INGRESS_ITEM_SHA256[item_name],
+            item_name,
+            errors,
+        )
     return errors
 
 
@@ -89263,20 +89353,15 @@ let metadata =
         ),
         (
             """
-let aggregate_bytes = match kind {
-    NativeAmxEvidenceKind::Manifest => &mut manifest_bytes,
-    NativeAmxEvidenceKind::Receipt => &mut receipt_bytes,
-};
-*aggregate_bytes = aggregate_bytes.checked_add(encoded_len)
+evidence_bytes = evidence_bytes.checked_add(encoded_len).ok_or_else(|| {
 """,
-            "standalone Native AMX manifest and receipt byte totals must be "
-            "independent and overflow checked",
+            "standalone Native AMX shared byte total must be overflow checked",
         ),
         (
             """
-if *aggregate_bytes > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES {
+if evidence_bytes > self.native_amx_participant_evidence_file_bytes() {
 """,
-            "standalone Native AMX aggregate byte bounds",
+            "standalone Native AMX evidence must share the configured aggregate byte bound",
         ),
         (
             """
@@ -96068,10 +96153,10 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         else harness[unit_start:chaos_start]
     )
     required_unit_inventory_tokens = (
-        "    if ((${#listed_unit_tests[@]} != 137)); then",
-        '      echo "expected exactly 137 Sumeragi v2 reducer unit tests" >&2',
+        "    if ((${#listed_unit_tests[@]} != 140)); then",
+        '      echo "expected exactly 140 Sumeragi v2 reducer unit tests" >&2',
         "    if ((${#listed_ignored_unit_tests[@]} != 0)); then",
-        '      echo "reducer unit gate requires all 137 tests to be runnable" >&2',
+        '      echo "reducer unit gate requires all 140 tests to be runnable" >&2',
     )
     missing_unit_inventory_tokens = [
         token
@@ -96080,7 +96165,7 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
     ]
     if missing_unit_inventory_tokens:
         errors.append(
-            f"{harness_path}: --unit must seal exactly 137 runnable "
+            f"{harness_path}: --unit must seal exactly 140 runnable "
             "source-shared tests; missing or repeated "
             f"{missing_unit_inventory_tokens}"
         )
@@ -96571,8 +96656,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 400:
-        errors.append("internal release-regression seal must contain exactly 400 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 410:
+        errors.append("internal release-regression seal must contain exactly 410 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:

@@ -2015,6 +2015,23 @@
         lane_block_height: u64,
         signer: &KeyPair,
     ) -> (Hash, u64, LaneExecutablePayloadV1) {
+        autonomous_lane_payload_for_kura_with_validators(
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            std::slice::from_ref(signer),
+            signer,
+        )
+    }
+
+    fn autonomous_lane_payload_for_kura_with_validators(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        validators: &[KeyPair],
+        producer: &KeyPair,
+    ) -> (Hash, u64, LaneExecutablePayloadV1) {
+        assert!(!validators.is_empty(), "validator fixture must be nonempty");
         let chain: ChainId = "kura-autonomous-view-checkpoint".parse().expect("chain id");
         let transaction = TransactionBuilder::new(
             chain,
@@ -2028,7 +2045,19 @@
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let entrypoint = TransactionEntrypoint::External(transaction);
         let entrypoint_hash = Hash::from(entrypoint.hash());
-        let validator_set = vec![PeerId::new(signer.public_key().clone())];
+        let validator_set = validators
+            .iter()
+            .map(|validator| PeerId::new(validator.public_key().clone()))
+            .collect::<Vec<_>>();
+        assert!(
+            validator_set
+                .iter()
+                .any(|validator| validator.public_key() == producer.public_key()),
+            "producer must belong to the validator fixture"
+        );
+        let validator_count =
+            u32::try_from(validator_set.len()).expect("validator fixture count fits u32");
+        let min_quorum = validator_count.saturating_mul(2) / 3 + 1;
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id,
             dataspace_id,
@@ -2049,8 +2078,8 @@
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
-            validator_count: 1,
-            min_quorum: 1,
+            validator_count,
+            min_quorum,
             qc_mode_tag: "permissioned:kura-autonomous-view".to_owned(),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
@@ -2103,8 +2132,8 @@
             vec![reservation],
             vec![routing_plan],
             vec![None],
-            validator_set[0].clone(),
-            signer.private_key(),
+            PeerId::new(producer.public_key().clone()),
+            producer.private_key(),
         )
         .expect("autonomous payload");
         (chain_id_hash, epoch, payload)
@@ -2346,11 +2375,35 @@
         proposal: &LaneBlockProposalV1,
         signer: &KeyPair,
     ) -> DurableLanePayloadAvailabilityCertificateV1 {
+        durable_lane_payload_availability_for_kura_signers(
+            payload,
+            proposal,
+            std::slice::from_ref(signer),
+            &[0],
+        )
+    }
+
+    fn durable_lane_payload_availability_for_kura_signers(
+        payload: &LaneExecutablePayloadV1,
+        proposal: &LaneBlockProposalV1,
+        validators: &[KeyPair],
+        signer_indices: &[usize],
+    ) -> DurableLanePayloadAvailabilityCertificateV1 {
         let body = proposal.vote_body(Phase::Prepare);
-        let signature = Signature::try_new(signer.private_key(), &body.signature_preimage())
-            .expect("availability READY signature");
-        let validator_set_pops =
-            vec![bls_normal_pop_prove(signer.private_key()).expect("availability signer PoP")];
+        assert_eq!(
+            proposal.descriptor.validator_set,
+            validators
+                .iter()
+                .map(|validator| PeerId::new(validator.public_key().clone()))
+                .collect::<Vec<_>>(),
+            "availability authority must match the proposal roster"
+        );
+        let validator_set_pops = validators
+            .iter()
+            .map(|validator| {
+                bls_normal_pop_prove(validator.private_key()).expect("availability validator PoP")
+            })
+            .collect::<Vec<_>>();
         let availability_body = crate::lane_consensus::lane_payload_availability_body(
             payload,
             proposal,
@@ -2358,23 +2411,33 @@
             payload.epoch,
         )
         .expect("availability body");
-        let availability_vote = crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
-            availability_body,
-            PeerId::new(signer.public_key().clone()),
-            validator_set_pops,
-            signer.private_key(),
-        )
-        .expect("availability READY vote");
-        let vote = crate::lane_consensus::LaneBlockVoteV1 {
-            body: body.clone(),
-            signer: PeerId::new(signer.public_key().clone()),
-            bls_signature: signature.payload().to_vec(),
-            payload_availability_vote: Some(availability_vote),
-        };
+        let votes = signer_indices
+            .iter()
+            .map(|index| {
+                let signer = validators.get(*index).expect("availability signer index");
+                let signature =
+                    Signature::try_new(signer.private_key(), &body.signature_preimage())
+                        .expect("availability Prepare signature");
+                let availability_vote =
+                    crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
+                        availability_body.clone(),
+                        PeerId::new(signer.public_key().clone()),
+                        validator_set_pops.clone(),
+                        signer.private_key(),
+                    )
+                    .expect("availability READY vote");
+                crate::lane_consensus::LaneBlockVoteV1 {
+                    body: body.clone(),
+                    signer: PeerId::new(signer.public_key().clone()),
+                    bls_signature: signature.payload().to_vec(),
+                    payload_availability_vote: Some(availability_vote),
+                }
+            })
+            .collect::<Vec<_>>();
         let certificate = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
             body,
             proposal.descriptor.validator_set.clone(),
-            &[vote],
+            &votes,
         )
         .expect("availability DELIVER QC");
         DurableLanePayloadAvailabilityCertificateV1 { certificate }
@@ -2679,6 +2742,124 @@
     }
 
     #[test]
+    fn autonomous_lane_availability_retains_first_valid_three_of_four_proof_variant() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let mut validators = (0xC0_u8..=0xC3)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("derive deterministic availability validator")
+            })
+            .collect::<Vec<_>>();
+        validators.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura_with_validators(
+                lane_id,
+                lane_entry.dataspace_id,
+                1,
+                &validators,
+                &validators[0],
+            );
+        assert_eq!(payload.origin_proposal.descriptor.validator_count, 4);
+        assert_eq!(payload.origin_proposal.descriptor.min_quorum, 3);
+
+        let retained = durable_lane_payload_availability_for_kura_signers(
+            &payload,
+            &payload.origin_proposal,
+            &validators,
+            &[0, 1, 3],
+        );
+        let alternative = durable_lane_payload_availability_for_kura_signers(
+            &payload,
+            &payload.origin_proposal,
+            &validators,
+            &[1, 2, 3],
+        );
+        assert_eq!(retained.certificate.signers_bitmap, vec![0x0B]);
+        assert_eq!(alternative.certificate.signers_bitmap, vec![0x0E]);
+        assert_ne!(retained, alternative);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist four-validator autonomous payload");
+        kura.persist_lane_payload_availability_certificate(
+            lane_id,
+            1,
+            retained.clone(),
+            chain_id_hash,
+            epoch,
+        )
+        .expect("persist first valid three-of-four proof");
+        let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+            lane_entry,
+            &kura.store_root,
+            1,
+            payload.origin_proposal.descriptor.proposal_height,
+        );
+        let first_bytes = fs::read(&view_path).expect("read first durable availability proof");
+
+        kura.persist_lane_payload_availability_certificate(
+            lane_id,
+            1,
+            alternative.clone(),
+            chain_id_hash,
+            epoch,
+        )
+        .expect("a valid alternate three-of-four proof is idempotent");
+        assert_eq!(
+            fs::read(&view_path).expect("read retained first availability proof"),
+            first_bytes,
+            "an alternate quorum proof must not replace the first durable bytes",
+        );
+        let artifact = kura
+            .read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
+            .expect("read origin-certified autonomous payload");
+        assert_eq!(artifact.availability_certificate.as_ref(), Some(&retained));
+
+        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
+        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+            .expect("retire availability proof-variant fixture");
+        let retired_bytes = fs::read(&view_path).expect("read retired autonomous view state");
+        for replay in [retained.clone(), alternative.clone()] {
+            kura.persist_lane_payload_availability_certificate(
+                lane_id,
+                1,
+                replay,
+                chain_id_hash,
+                epoch,
+            )
+            .expect("a validated retained proof replay remains idempotent after retirement");
+        }
+        assert_eq!(
+            fs::read(&view_path).expect("read view state after retired proof replays"),
+            retired_bytes,
+            "proof replays must not mutate terminal retirement state",
+        );
+
+        let mut invalid = alternative;
+        invalid.certificate.body.subject_hash = Hash::new(b"different availability subject");
+        assert!(
+            kura.persist_lane_payload_availability_certificate(
+                lane_id,
+                1,
+                invalid,
+                chain_id_hash,
+                epoch,
+            )
+            .is_err(),
+            "an invalid or different availability subject must still fail closed",
+        );
+        assert_eq!(
+            fs::read(view_path).expect("read terminal view state after rejected subject"),
+            retired_bytes,
+        );
+    }
+
+    #[test]
     fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() {
         let temp_dir = TempDir::new().expect("temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -2789,4 +2970,3 @@
             "restart must not resurrect the retired executable payload",
         );
     }
-

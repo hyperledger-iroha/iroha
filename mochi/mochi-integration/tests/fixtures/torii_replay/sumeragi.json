@@ -32,5 +32,41 @@
       "min_signers": 3,
       "total_power": 4
     }
+  },
+  "liveness": {
+    "generation": 0,
+    "prepare_quorums": [],
+    "commit_quorums": [],
+    "timeout_quorums": [],
+    "outbound_intents": [],
+    "work": {
+      "candidate": {
+        "stage": "idle",
+        "details": null
+      },
+      "body_recovery": {
+        "stage": "idle",
+        "details": null
+      },
+      "body_store": {
+        "stage": "idle",
+        "details": null
+      },
+      "validation": {
+        "stage": "idle",
+        "details": null
+      },
+      "application": {
+        "stage": "idle",
+        "details": null
+      },
+      "successor_height": {
+        "stage": "idle",
+        "details": null
+      }
+    },
+    "queues": [],
+    "no_progress_age_ms": 0,
+    "ignore_counts": []
   }
 }

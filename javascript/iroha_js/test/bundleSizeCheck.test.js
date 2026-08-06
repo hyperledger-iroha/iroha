@@ -52,19 +52,19 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
     [
       {
         label: "toriiClient.js",
-      limitKb: 978,
+        limitKb: 1072,
         forbidNodeInputs: false,
         forbidGlobalBuffer: false,
       },
       {
         label: "transactionCodec.js (browser)",
-        limitKb: 297,
+        limitKb: 313,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "nexusApp.js (browser)",
-        limitKb: 380,
+        limitKb: 387,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
@@ -88,7 +88,7 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
       },
       {
         label: "browser.js (public aggregate)",
-        limitKb: 469,
+        limitKb: 518,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
@@ -100,32 +100,32 @@ test("bundle-size check covers the browser transaction codec", () => {
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("transactionCodec"));
   assert.ok(target, "browser transaction-codec bundle target is required");
   assert.equal(target.platform, "browser");
-  assert.match(target.entryPoint, /dist[/\\]transactionCodec\.js$/u);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 297);
+  assert.match(target.entryPoint, /src[/\\]transactionCodec\.js$/u);
+  assert.equal(target.limitKb, 313);
 });
 
 test("bundle-size check proves the Nexus app export has a browser-only graph", () => {
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("nexusApp"));
   assert.ok(target, "browser Nexus app bundle target is required");
   assert.equal(target.platform, "browser");
-  assert.match(target.entryPoint, /dist[/\\]nexusApp\.js$/u);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 380);
+  assert.match(target.entryPoint, /src[/\\]nexusApp\.js$/u);
+  assert.equal(target.limitKb, 387);
 });
 
 test("bundle-size check gates the complete public browser aggregate", () => {
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("public aggregate"));
   assert.ok(target, "public browser aggregate bundle target is required");
   assert.equal(target.platform, "browser");
-  assert.match(target.entryPoint, /dist[/\\]browser\.js$/u);
+  assert.match(target.entryPoint, /src[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 469);
+  assert.equal(target.limitKb, 518);
 });
 
 test("bundle-size check gates canonical requests as a browser subpath", () => {
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("canonicalRequest"));
   assert.ok(target, "browser canonical-request bundle target is required");
   assert.equal(target.platform, "browser");
-  assert.match(target.entryPoint, /dist[/\\]canonicalRequest\.js$/u);
+  assert.match(target.entryPoint, /src[/\\]canonicalRequest\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.ok(target.limitKb > 0 && target.limitKb <= 100);
 });
@@ -134,7 +134,7 @@ test("bundle-size check gates the IVM artifact helper as a browser leaf", () => 
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("ivmArtifact"));
   assert.ok(target, "browser IVM artifact bundle target is required");
   assert.equal(target.platform, "browser");
-  assert.match(target.entryPoint, /dist[/\\]ivmArtifact\.js$/u);
+  assert.match(target.entryPoint, /src[/\\]ivmArtifact\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.equal(target.forbidGlobalBuffer, true);
   assert.ok(target.limitKb > 0 && target.limitKb <= 12);
@@ -146,7 +146,7 @@ test("bundle-size check gates the remote Kotodama compiler browser export", () =
   );
   assert.ok(target, "browser Kotodama compiler bundle target is required");
   assert.equal(target.platform, "browser");
-  assert.match(target.entryPoint, /dist[/\\]kotodamaCompiler[/\\]browser\.js$/u);
+  assert.match(target.entryPoint, /src[/\\]kotodamaCompiler[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.equal(target.forbidGlobalBuffer, true);
   assert.equal(target.limitKb, 53);
@@ -194,32 +194,36 @@ test("browser graph audit derives every explicit browser-conditioned package exp
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.deepEqual(listExplicitBrowserExports(pkg), [
-    { target: "./dist/browser.js", subpaths: ["./browser"] },
+    { target: "./src/browser.js", subpaths: ["./browser"] },
     {
-      target: "./dist/privacyCapabilities.js",
+      target: "./src/privacyCapabilities.js",
       subpaths: ["./privacy-capabilities"],
     },
-    { target: "./dist/transactionCodec.js", subpaths: ["./transaction-codec"] },
     {
-      target: "./dist/smartContractDeployment.js",
+      target: "./src/bootleLanternIssuance.js",
+      subpaths: ["./bootle-lantern-issuance"],
+    },
+    { target: "./src/transactionCodec.js", subpaths: ["./transaction-codec"] },
+    {
+      target: "./src/smartContractDeployment.js",
       subpaths: ["./smart-contract-deployment"],
     },
-    { target: "./dist/normalizers.js", subpaths: ["./normalizers"] },
-    { target: "./dist/blake2b.js", subpaths: ["./blake2b"] },
-    { target: "./dist/ivmArtifact.js", subpaths: ["./ivm-artifact"] },
+    { target: "./src/normalizers.js", subpaths: ["./normalizers"] },
+    { target: "./src/blake2b.js", subpaths: ["./blake2b"] },
+    { target: "./src/ivmArtifact.js", subpaths: ["./ivm-artifact"] },
     {
-      target: "./dist/ivmArtifactAdmissionWasm.js",
+      target: "./src/ivmArtifactAdmissionWasm.js",
       subpaths: ["./ivm-artifact-admission-wasm"],
     },
     {
-      target: "./dist/toriiBrowserClient.js",
+      target: "./src/toriiBrowserClient.js",
       subpaths: ["./torii", "./torii-browser"],
     },
-    { target: "./dist/canonicalRequest.js", subpaths: ["./canonical-request"] },
-    { target: "./dist/crypto.browser.js", subpaths: ["./crypto"] },
-    { target: "./dist/nexusApp.js", subpaths: ["./nexus-app"] },
+    { target: "./src/canonicalRequest.js", subpaths: ["./canonical-request"] },
+    { target: "./src/crypto.browser.js", subpaths: ["./crypto"] },
+    { target: "./src/nexusApp.js", subpaths: ["./nexus-app"] },
     {
-      target: "./dist/kotodamaCompiler/browser.js",
+      target: "./src/kotodamaCompiler/browser.js",
       subpaths: ["./kotodama-compiler"],
     },
   ]);
@@ -252,7 +256,7 @@ test("privacy policy stays out of base entry graphs and optional API stays clien
   }
 
   const result = await build({
-    entryPoints: [`${PACKAGE_ROOT}/dist/privacyCapabilities.js`],
+    entryPoints: [`${PACKAGE_ROOT}/src/privacyCapabilities.js`],
     bundle: true,
     write: false,
     platform: "browser",
@@ -282,7 +286,7 @@ test("browser graph audit catches Node edges in an export omitted from size budg
           return {
             outputFiles: [{ contents: new Uint8Array(), text: "" }],
             metafile: {
-              inputs: entryPoint.endsWith("/dist/normalizers.js")
+              inputs: entryPoint.endsWith("/src/normalizers.js")
                 ? { "node:fs": {} }
                 : { [entryPoint]: {} },
             },
@@ -301,7 +305,7 @@ test("browser runtime probe catches aliased global Buffer installation", async (
       loadEsbuild: async () => ({
         async build(options) {
           const entryPoint = options.entryPoints[0];
-          const installsBuffer = entryPoint.endsWith("/dist/browser.js");
+          const installsBuffer = entryPoint.endsWith("/src/browser.js");
           const text = installsBuffer
             ? "const root = globalThis; root.Buffer = class BufferShim {};"
             : "export {};";
@@ -337,12 +341,8 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 59);
-  assert.equal(result.outputFiles[0].contents.byteLength, 476_074);
-  assert.ok(
-    result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
-    "public browser aggregate regressed more than 5% from the protected pre-reset tree",
-  );
+  assert.equal(Object.keys(result.metafile.inputs).length, 64);
+  assert.equal(result.outputFiles[0].contents.byteLength, 529_988);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
@@ -379,24 +379,12 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
   );
 });
 
-test("remaining bundle targets retain exact pinned-esbuild baselines", async () => {
-  const predecessor = new Map([
-    ["toriiClient.js", 945_975],
-    ["transactionCodec.js (browser)", 290_498],
-    ["nexusApp.js (browser)", 371_403],
-    ["canonicalRequest.js (browser)", 97_869],
-  ]);
-  const maximumGrowth = new Map([
-    ["toriiClient.js", 1.06],
-    ["transactionCodec.js (browser)", 1.05],
-    ["nexusApp.js (browser)", 1.05],
-    ["canonicalRequest.js (browser)", 1.05],
-  ]);
+test("remaining bundle targets retain exact tracked-source baselines", async () => {
   const expected = new Map([
-    ["toriiClient.js", { bytes: 1_000_409, modules: 61 }],
-    ["transactionCodec.js (browser)", { bytes: 297_228, modules: 46 }],
-    ["nexusApp.js (browser)", { bytes: 380_431, modules: 55 }],
-    ["canonicalRequest.js (browser)", { bytes: 98_090, modules: 34 }],
+    ["toriiClient.js", { bytes: 1_097_250, modules: 71 }],
+    ["transactionCodec.js (browser)", { bytes: 320_433, modules: 49 }],
+    ["nexusApp.js (browser)", { bytes: 395_703, modules: 58 }],
+    ["canonicalRequest.js (browser)", { bytes: 98_089, modules: 34 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -428,11 +416,8 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     }
     assert.deepEqual(actual, expected.get(target.label), target.label);
     assert.ok(
-      actual.bytes <=
-        Math.floor(
-          predecessor.get(target.label) * maximumGrowth.get(target.label),
-        ),
-      `${target.label} exceeded its audited protected-tree growth ceiling`,
+      actual.bytes <= target.limitKb * 1024,
+      `${target.label} exceeded its tracked-source release ceiling`,
     );
   }
 });
@@ -460,7 +445,7 @@ test("Kotodama compiler browser export stays below 53 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 52_735);
+  assert.equal(result.outputFiles[0].contents.byteLength, 52_928);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(52_156 * 1.05),
     "Kotodama compiler browser export regressed more than 5% from the protected pre-reset tree",

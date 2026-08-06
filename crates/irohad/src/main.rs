@@ -3270,6 +3270,9 @@ impl ConsensusIngressLimiter {
             iroha_core::NetworkMessage::SumeragiControlFlow(_)
             | iroha_core::NetworkMessage::LaneDrainVote(_)
             | iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
+            iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(_) => {
+                IngressPolicy::bulk()
+            }
             iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
                 | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {
@@ -3386,6 +3389,13 @@ impl ConsensusIngressLimiter {
     ) -> Option<ConsensusIngressDropReason> {
         if matches!(msg, iroha_core::NetworkMessage::LaneDrainVote(_))
             && size_bytes > iroha_core::MAX_LANE_DRAIN_VOTE_WIRE_BYTES
+        {
+            return Some(ConsensusIngressDropReason::Bytes);
+        }
+        if matches!(
+            msg,
+            iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(_)
+        ) && size_bytes > iroha_core::MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES
         {
             return Some(ConsensusIngressDropReason::Bytes);
         }
@@ -3854,7 +3864,8 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
         | MergeCommitteeSignature(_)
         | LaneDrainVote(_)
         | CertifiedMergeSidecar(_)
-        | NativeAmx(_) => Some(SumeragiRelayClass::Lane),
+        | NativeAmx(_)
+        | QueuePlanAdmissionCertificate(_) => Some(SumeragiRelayClass::Lane),
         _ => None,
     }
 }
@@ -4088,6 +4099,7 @@ fn prepare_sumeragi_lane_relay_item(
 ) -> PrepareSumeragiRelayResult {
     use iroha_core::NetworkMessage::{
         CertifiedMergeSidecar, LaneDrainVote, LaneRelay, MergeCommitteeSignature, NativeAmx,
+        QueuePlanAdmissionCertificate,
     };
 
     let peer_id = context.peer.id().clone();
@@ -4112,6 +4124,12 @@ fn prepare_sumeragi_lane_relay_item(
             reply_route: Some(context.reply_route.clone()),
             message: Arc::unwrap_or_clone(message),
         },
+        QueuePlanAdmissionCertificate(certificate) => {
+            LaneRelayMessage::QueuePlanAdmissionCertificate {
+                sender: peer_id.clone(),
+                certificate,
+            }
+        }
         LaneDrainVote(vote) => {
             let vote = *vote;
             if vote.signer != peer_id {
@@ -5628,7 +5646,11 @@ impl NetworkRelayShared {
 
         if !matches!(
             msg,
-            SumeragiBlock(_) | SumeragiControlFlow(_) | LaneDrainVote(_) | CertifiedMergeSidecar(_)
+            SumeragiBlock(_)
+                | SumeragiControlFlow(_)
+                | LaneDrainVote(_)
+                | CertifiedMergeSidecar(_)
+                | QueuePlanAdmissionCertificate(_)
         ) {
             return true;
         }
@@ -5677,6 +5699,9 @@ impl NetworkRelayShared {
                     ("CertifiedMergeSidecarChunk", None, None)
                 }
             },
+            QueuePlanAdmissionCertificate(_) => {
+                ("QueuePlanAdmissionCertificate", None, None)
+            }
             _ => ("Other", None, None),
         };
         iroha_logger::debug!(
@@ -5783,7 +5808,8 @@ impl NetworkRelayShared {
             | MergeCommitteeSignature(_)
             | LaneDrainVote(_)
             | CertifiedMergeSidecar(_)
-            | NativeAmx(_) => {
+            | NativeAmx(_)
+            | QueuePlanAdmissionCertificate(_) => {
                 iroha_logger::error!(
                     %peer,
                     via = %authenticated_via,
@@ -6209,7 +6235,7 @@ impl NetworkRelayShared {
 
 #[cfg(test)]
 mod network_relay_tests {
-    use std::{num::NonZeroU64, time::Duration};
+    use std::{num::NonZeroU64, sync::Arc, time::Duration};
 
     use iroha_core::{
         MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
@@ -6246,7 +6272,8 @@ mod network_relay_tests {
     use super::{
         BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
         LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
-        SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
+        SumeragiRelayClass, SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
+        sumeragi_relay_class,
     };
 
     #[cfg(feature = "test-network-message-control")]
@@ -6930,6 +6957,10 @@ mod network_relay_tests {
             proof_of_possession,
             bls_signature,
         }))
+    }
+
+    fn queue_plan_admission_handoff_msg() -> iroha_core::NetworkMessage {
+        iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![0x51]))
     }
 
     pub fn sample_v2_round(height: u64, view: u64) -> consensus_v2::ConsensusRound {
@@ -7708,6 +7739,9 @@ mod network_relay_tests {
 
         let peer = sample_peer();
         assert_bulk(&peer, &v2_certified_body_response_msg());
+        let handoff = queue_plan_admission_handoff_msg();
+        assert_bulk(&peer, &handoff);
+        assert_eq!(sumeragi_relay_class(&handoff), Some(SumeragiRelayClass::Lane));
     }
 
     #[test]
@@ -7736,6 +7770,37 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Bytes)
         );
         assert_eq!(limiter.should_drop(&peer, &msg, 5), None);
+
+        let handoff = queue_plan_admission_handoff_msg();
+        let mut hard_cap_limiter = ConsensusIngressLimiter::new(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            PenaltyConfig {
+                threshold: 0,
+                window: Duration::from_secs(1),
+                cooldown: Duration::from_secs(1),
+            },
+        );
+        assert_eq!(
+            hard_cap_limiter.should_drop(
+                &peer,
+                &handoff,
+                iroha_core::MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES + 1,
+            ),
+            Some(ConsensusIngressDropReason::Bytes)
+        );
+        assert_eq!(
+            hard_cap_limiter.should_drop(
+                &peer,
+                &handoff,
+                iroha_core::MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
+            ),
+            None
+        );
     }
 
     #[test]
@@ -13484,9 +13549,30 @@ fn filesystem_identity(path: &Path) -> Option<String> {
 #[cfg(unix)]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     let stats = rustix::fs::statvfs(path).ok()?;
-    let fragment_size = stats.f_frsize.max(stats.f_bsize);
-    let available_bytes = stats.f_bavail.checked_mul(fragment_size)?;
-    let total_bytes = stats.f_blocks.checked_mul(fragment_size)?;
+    filesystem_space_from_statvfs_counts(
+        stats.f_blocks,
+        stats.f_bavail,
+        stats.f_frsize,
+        stats.f_bsize,
+    )
+}
+
+#[cfg(unix)]
+fn filesystem_space_from_statvfs_counts(
+    total_blocks: u64,
+    available_blocks: u64,
+    fragment_size: u64,
+    block_size: u64,
+) -> Option<(u64, u64)> {
+    // POSIX defines f_blocks/f_bavail in f_frsize units. Some filesystems report a much larger
+    // preferred I/O block size in f_bsize; using it here inflates both capacity and headroom.
+    let allocation_unit = if fragment_size == 0 {
+        block_size
+    } else {
+        fragment_size
+    };
+    let available_bytes = available_blocks.checked_mul(allocation_unit)?;
+    let total_bytes = total_blocks.checked_mul(allocation_unit)?;
     Some((available_bytes, total_bytes))
 }
 
@@ -21649,6 +21735,37 @@ mod tests {
                 managed_roots: Vec::new(),
                 derived_budget_bytes: None,
             }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn filesystem_space_uses_statvfs_fragment_units() {
+            assert_eq!(
+                filesystem_space_from_statvfs_counts(10, 2, 4_096, 1_048_576),
+                Some((8_192, 40_960))
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn filesystem_space_falls_back_when_fragment_size_is_zero() {
+            assert_eq!(
+                filesystem_space_from_statvfs_counts(10, 2, 0, 4_096),
+                Some((8_192, 40_960))
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn filesystem_space_rejects_capacity_overflow() {
+            assert_eq!(
+                filesystem_space_from_statvfs_counts(u64::MAX, 1, 2, 4_096),
+                None
+            );
+            assert_eq!(
+                filesystem_space_from_statvfs_counts(1, u64::MAX, 2, 4_096),
+                None
+            );
         }
 
         #[test]
