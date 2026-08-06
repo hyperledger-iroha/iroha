@@ -24,8 +24,9 @@ use iroha_data_model::{
         consensus::{
             CertPhase, LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockDescriptorV1,
             LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
-            LaneSettlementReceipt, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
-            NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
+            LanePayloadAvailabilityQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            SumeragiLanePayloadOwnership,
         },
         consensus_v2 as wire,
     },
@@ -1433,7 +1434,28 @@ fn lane_qcs_certify_same_decision(left: &LaneBlockQcV1, right: &LaneBlockQcV1) -
         && left.validator_set_hash_version == right.validator_set_hash_version
         && left.validator_set_hash == right.validator_set_hash
         && left.validator_set == right.validator_set
-        && left.payload_availability_qc == right.payload_availability_qc
+        && lane_payload_availability_qcs_certify_same_subject(
+            left.payload_availability_qc.as_ref(),
+            right.payload_availability_qc.as_ref(),
+        )
+}
+
+/// Return whether two optional READY certificates differ only in quorum proof bytes.
+fn lane_payload_availability_qcs_certify_same_subject(
+    left: Option<&LanePayloadAvailabilityQcV1>,
+    right: Option<&LanePayloadAvailabilityQcV1>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.body == right.body
+                && left.validator_set_hash_version == right.validator_set_hash_version
+                && left.validator_set_hash == right.validator_set_hash
+                && left.validator_set == right.validator_set
+                && left.validator_set_pops == right.validator_set_pops
+        }
+        (None, Some(_)) | (Some(_), None) => false,
+    }
 }
 
 /// Return whether a retained QC makes one still-backpressured vote redundant.
@@ -1519,6 +1541,17 @@ fn project_qc_signer_pops(
                 .ok_or_else(|| "autonomous READY PoP index is missing".to_owned())
         })
         .collect()
+}
+
+fn project_lane_session_signer_pops(
+    session: &CommittedLaneBlockSession,
+    validator_pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<BTreeMap<PublicKey, Vec<u8>>, String> {
+    let mut signer_pops = BTreeMap::new();
+    for qc in [&session.prepare_qc, &session.commit_qc] {
+        signer_pops.extend(project_qc_signer_pops(qc, validator_pops)?);
+    }
+    Ok(signer_pops)
 }
 
 /// Validate an earlier-height lane output against its certified Kura source.
@@ -2099,6 +2132,7 @@ impl HistoricalRecoveryDiagnostics {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HistoricalRecoveryPersistence {
     Complete,
+    Superseded,
     Waiting(HistoricalRecoveryWaitReason),
 }
 
@@ -5737,7 +5771,9 @@ impl V2LaneWorkAdapter {
             }
         };
         match self.persist_historical_recovery_session(&session) {
-            Ok(HistoricalRecoveryPersistence::Complete) => {
+            Ok(
+                HistoricalRecoveryPersistence::Complete | HistoricalRecoveryPersistence::Superseded,
+            ) => {
                 self.historical_recovery_diagnostics.complete(identity);
                 self.retire_historical_recovery_request(identity);
                 operation.complete();
@@ -6061,10 +6097,7 @@ impl V2LaneWorkAdapter {
             .kura
             .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
         {
-            if durable.proposal != session.proposal
-                || durable.prepare_qc != session.prepare_qc
-                || durable.commit_qc != session.commit_qc
-            {
+            if durable.proposal != session.proposal {
                 return Err(
                     "historical lane certificate conflicts with its durable certified slot"
                         .to_owned(),
@@ -6073,7 +6106,33 @@ impl V2LaneWorkAdapter {
             Kura::validate_certified_lane_block_artifact(&durable).map_err(|error| {
                 format!("historical durable lane certificate is invalid: {error}")
             })?;
-            return Ok(durable.signer_pops);
+            if !lane_qcs_certify_same_decision(&durable.prepare_qc, &session.prepare_qc)
+                || !lane_qcs_certify_same_decision(&durable.commit_qc, &session.commit_qc)
+            {
+                return Err(
+                    "historical lane certificate conflicts with its durable certified decision subject"
+                        .to_owned(),
+                );
+            }
+            if durable.prepare_qc == session.prepare_qc && durable.commit_qc == session.commit_qc {
+                return Ok(durable.signer_pops);
+            }
+            // A quorum certificate is proof of a proposal decision, not part
+            // of the lane-block slot identity. Different validators can
+            // therefore retain distinct valid quorum subsets for the same
+            // proposal. Validate the replayed proof below with its own PoP
+            // authority; persistence will keep the first durable proof while
+            // using the shared proposal to finish recovery.
+            let verification_pops =
+                durable_historical_lane_verification_pops(self.kura.as_ref(), &durable)?;
+            if let Ok(signer_pops) = project_lane_session_signer_pops(session, &verification_pops) {
+                let candidate =
+                    CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+                Kura::validate_certified_lane_block_artifact(&candidate).map_err(|error| {
+                    format!("historical alternate lane certificate is invalid: {error}")
+                })?;
+                return Ok(signer_pops);
+            }
         }
 
         let identity = HistoricalRecoveryIdentity::from_proposal(&session.proposal)
@@ -6083,20 +6142,38 @@ impl V2LaneWorkAdapter {
             let Some(certificate) = request.certificate.as_ref() else {
                 return Err("historical lane recovery request lost its lane certificate".to_owned());
             };
-            if certificate.proposal != session.proposal
-                || certificate.prepare_qc != session.prepare_qc
-                || certificate.commit_qc != session.commit_qc
-            {
+            if certificate.proposal != session.proposal {
                 return Err(
                     "historical recovery request conflicts with its retained session".to_owned(),
                 );
             }
-            let candidate =
-                CertifiedLaneBlockArtifact::new(session.clone(), request.signer_pops.clone());
-            Kura::validate_certified_lane_block_artifact(&candidate).map_err(|error| {
-                format!("historical recovery request signer PoPs are invalid: {error}")
-            })?;
-            return Ok(request.signer_pops.clone());
+            if !lane_qcs_certify_same_decision(&certificate.prepare_qc, &session.prepare_qc)
+                || !lane_qcs_certify_same_decision(&certificate.commit_qc, &session.commit_qc)
+            {
+                return Err(
+                    "historical recovery request conflicts with its retained decision subject"
+                        .to_owned(),
+                );
+            }
+            if certificate.prepare_qc == session.prepare_qc
+                && certificate.commit_qc == session.commit_qc
+            {
+                let candidate =
+                    CertifiedLaneBlockArtifact::new(session.clone(), request.signer_pops.clone());
+                Kura::validate_certified_lane_block_artifact(&candidate).map_err(|error| {
+                    format!("historical recovery request signer PoPs are invalid: {error}")
+                })?;
+                return Ok(request.signer_pops.clone());
+            }
+            if let Ok(signer_pops) = project_lane_session_signer_pops(session, &request.signer_pops)
+            {
+                let candidate =
+                    CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+                Kura::validate_certified_lane_block_artifact(&candidate).map_err(|error| {
+                    format!("historical recovery request signer PoPs are invalid: {error}")
+                })?;
+                return Ok(signer_pops);
+            }
         }
 
         // Autonomous READY evidence already carries the complete historical
@@ -6334,6 +6411,16 @@ impl V2LaneWorkAdapter {
         &self,
         session: &CommittedLaneBlockSession,
     ) -> Result<HistoricalRecoveryPersistence, V2LaneWorkError> {
+        if let Some(reason) = self.historical_proposal_anchor_wait(&session.proposal)? {
+            return Ok(HistoricalRecoveryPersistence::Waiting(reason));
+        }
+        if !self.historical_proposal_has_exact_canonical_anchor(&session.proposal) {
+            // A valid lane certificate may finish after another proposal won
+            // the global carrier. It is then a losing proof, not durable slot
+            // corruption. Retire it before consulting or mutating that slot.
+            return Ok(HistoricalRecoveryPersistence::Superseded);
+        }
+
         let pops = self
             .historical_recovery_signer_pops(session)
             .map_err(V2LaneWorkError::Persistence)?;
@@ -6343,10 +6430,6 @@ impl V2LaneWorkAdapter {
                 "historical lane certificate is invalid: {message}"
             ))
         })?;
-        if let Some(reason) = self.historical_proposal_anchor_wait(&session.proposal)? {
-            return Ok(HistoricalRecoveryPersistence::Waiting(reason));
-        }
-
         let autonomous_payload = session.prepare_qc.payload_availability_qc.is_some();
         let (recovered_payload, autonomous_epoch) = if autonomous_payload {
             let proposal_height = session.proposal.descriptor.proposal_height;
@@ -6434,26 +6517,67 @@ impl V2LaneWorkAdapter {
                 "historical lane payload differs from its committed canonical anchor".to_owned(),
             ));
         }
+        let descriptor = &session.proposal.descriptor;
+        let durable = self
+            .kura
+            .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height);
         if let Some(expected_epoch) = autonomous_epoch {
             self.kura
                 .persist_lane_block_execution_input(&recovered_payload)
                 .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            // READY quorum subsets are proof variants for the same proposal.
+            // Reuse the already-durable availability proof when recovery
+            // arrives with another valid subset; the immutable autonomous
+            // sidecar must converge on its first retained certificate bytes.
+            let existing_prepare_qc = self
+                .kura
+                .read_autonomous_lane_block_artifact(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    self.native_chain_id_hash(),
+                    expected_epoch,
+                )
+                .and_then(|artifact| artifact.availability_certificate)
+                .map(|certificate| certificate.certificate);
+            let retained_prepare_qc = match existing_prepare_qc {
+                Some(existing)
+                    if lane_qcs_certify_same_decision(&existing, &session.prepare_qc) =>
+                {
+                    existing
+                }
+                Some(_) => {
+                    return Err(V2LaneWorkError::Persistence(
+                        "historical autonomous PrepareQC conflicts with the durable READY decision subject"
+                            .to_owned(),
+                    ));
+                }
+                None => durable
+                    .as_ref()
+                    .filter(|artifact| {
+                        artifact.proposal == session.proposal
+                            && artifact.prepare_qc.payload_availability_qc.is_some()
+                            && lane_qcs_certify_same_decision(
+                                &artifact.prepare_qc,
+                                &session.prepare_qc,
+                            )
+                    })
+                    .map_or_else(
+                        || session.prepare_qc.clone(),
+                        |artifact| artifact.prepare_qc.clone(),
+                    ),
+            };
             self.kura
                 .persist_lane_payload_availability_certificate(
-                    session.proposal.descriptor.lane_id,
-                    session.proposal.descriptor.lane_block_height,
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
                     DurableLanePayloadAvailabilityCertificateV1 {
-                        certificate: session.prepare_qc.clone(),
+                        certificate: retained_prepare_qc,
                     },
                     self.native_chain_id_hash(),
                     expected_epoch,
                 )
                 .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         }
-        let descriptor = &session.proposal.descriptor;
-        let durable = self
-            .kura
-            .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height);
         let durable_proposal = match durable {
             Some(durable) if durable.proposal == session.proposal => durable.proposal,
             Some(_) | None => {
@@ -6729,6 +6853,24 @@ impl V2LaneWorkAdapter {
             }
         }
         matches == 1
+    }
+
+    fn historical_proposal_has_exact_canonical_anchor(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        let Some(hint) = proposal.payload_block_hint else {
+            return false;
+        };
+        let Some(height) = usize::try_from(hint.proposal_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+        else {
+            return false;
+        };
+        self.kura
+            .get_block(height)
+            .is_some_and(|block| self.historical_block_anchors_proposal(&block, proposal))
     }
 
     fn proposal_anchor_is_committed_in_state(&self, proposal: &LaneBlockProposalV1) -> bool {
@@ -7175,8 +7317,36 @@ impl V2LaneWorkAdapter {
         proposal: &LaneBlockProposalV1,
         prepare_qc: &LaneBlockQcV1,
     ) -> Result<(), String> {
-        if prepare_qc.payload_availability_qc.is_none() {
-            return Ok(());
+        let chain_id_hash = self.native_chain_id_hash();
+        let epoch = self.epoch_for_proposal_height(proposal.descriptor.proposal_height);
+        let existing = self
+            .kura
+            .read_autonomous_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+                chain_id_hash,
+                epoch,
+            )
+            .and_then(|artifact| artifact.availability_certificate)
+            .map(|certificate| certificate.certificate);
+        match (prepare_qc.payload_availability_qc.as_ref(), existing) {
+            (None, None) => return Ok(()),
+            (None, Some(_)) => {
+                return Err(
+                    "autonomous PrepareQC conflicts with the durable READY decision subject"
+                        .to_owned(),
+                );
+            }
+            (Some(_), Some(existing)) => {
+                if !lane_qcs_certify_same_decision(&existing, prepare_qc) {
+                    return Err(
+                        "autonomous PrepareQC conflicts with the durable READY decision subject"
+                            .to_owned(),
+                    );
+                }
+                return Ok(());
+            }
+            (Some(_), None) => {}
         }
         let payload = self
             .durable_autonomous_payload_for_proposal(proposal)
@@ -7196,8 +7366,8 @@ impl V2LaneWorkAdapter {
                 DurableLanePayloadAvailabilityCertificateV1 {
                     certificate: prepare_qc.clone(),
                 },
-                self.native_chain_id_hash(),
-                self.epoch_for_proposal_height(proposal.descriptor.proposal_height),
+                chain_id_hash,
+                epoch,
             )
             .map_err(|error| {
                 format!("failed to persist autonomous availability certificate: {error}")
@@ -10560,10 +10730,13 @@ impl V2LaneWorkAdapter {
         if proposal.descriptor.proposal_height < self.context.height {
             // Historical certificates carry their complete aggregate proof.
             // Admit recoverable missing body/payload dependencies without
-            // requiring a proposer-local sidecar, but reject immutable
-            // State/Kura identity drift at ingress.
-            if self.historical_proposal_anchor_wait(&proposal).is_err() {
-                return V2LaneIngressOutcome::Rejected;
+            // requiring a proposer-local sidecar. Once the canonical body is
+            // present, require exact carrier membership rather than accepting
+            // a losing certificate which merely copied its hash/view hint.
+            match self.historical_proposal_anchor_wait(&proposal) {
+                Ok(Some(_)) => {}
+                Ok(None) if self.historical_proposal_has_exact_canonical_anchor(&proposal) => {}
+                Ok(None) | Err(_) => return V2LaneIngressOutcome::Rejected,
             }
             return self.insert_historical_lane_certificate(proposal, prepare_qc, commit_qc);
         }
@@ -10629,7 +10802,9 @@ impl V2LaneWorkAdapter {
             prepare_qc,
             commit_qc,
         };
-        let pops = self.pops_for_lane_session(&session);
+        let Ok(pops) = self.historical_recovery_signer_pops(&session) else {
+            return V2LaneIngressOutcome::Rejected;
+        };
         let candidate = CertifiedLaneBlockArtifact::new(session.clone(), pops);
         if Kura::validate_certified_lane_block_artifact(&candidate).is_err() {
             return V2LaneIngressOutcome::Rejected;
@@ -14993,8 +15168,8 @@ pub(super) mod tests {
             SignedBlock,
             builder::BlockBuilder,
             consensus::{
-                LaneBlockCommitment, NativeAmxAttestationBodyV2, NativeAmxPhase,
-                SumeragiLanePayloadOwnership,
+                LaneBlockCommitment, LanePayloadAvailabilityBodyV1, NativeAmxAttestationBodyV2,
+                NativeAmxPhase, SumeragiLanePayloadOwnership,
             },
             consensus_v2 as wire,
         },
@@ -21078,9 +21253,125 @@ pub(super) mod tests {
                 .is_some_and(|artifact| artifact.availability_certificate.is_none()),
             "direct certificate recovery starts before local READY publication"
         );
+        adapter
+            .persist_autonomous_prepare_availability(&proposal, &prepare_qc)
+            .expect("persist the first READY proof before the certified session");
+        assert!(
+            adapter
+                .kura
+                .read_certified_lane_block_artifact(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "fixture must stop at the sidecar-only crash boundary"
+        );
+        let mut conflicting_availability_body = lane_payload_availability_body(
+            &payload,
+            &proposal,
+            payload.chain_id_hash,
+            payload.epoch,
+        )
+        .expect("derive a valid conflicting READY body fixture");
+        conflicting_availability_body.executable_payload_hash =
+            Hash::new(b"conflicting sidecar-only executable payload");
+        let conflicting_votes = keys[..3]
+            .iter()
+            .map(|key| {
+                signed_autonomous_prepare_vote_for_body(
+                    &proposal,
+                    conflicting_availability_body.clone(),
+                    key,
+                    &keys,
+                )
+            })
+            .collect::<Vec<_>>();
+        let conflicting_prepare = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            proposal.vote_body(CertPhase::Prepare),
+            proposal.descriptor.validator_set.clone(),
+            &conflicting_votes,
+        )
+        .expect("conflicting READY body forms a cryptographically valid QC");
+        assert!(!lane_qcs_certify_same_decision(
+            &prepare_qc,
+            &conflicting_prepare
+        ));
+        assert!(
+            adapter
+                .persist_autonomous_prepare_availability(&proposal, &conflicting_prepare)
+                .is_err(),
+            "sidecar-only recovery must reject a different READY decision subject"
+        );
+        assert!(
+            adapter
+                .kura
+                .read_certified_lane_block_artifact(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "a conflicting READY subject must not publish a certified session"
+        );
 
-        let committed = ValidBlock::committed_from_replay_signed_block(block);
+        let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
         commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        let historical_epoch = adapter.context.epoch;
+        let historical_height = adapter.context.height;
+        {
+            let mut world = adapter.state.world.block();
+            world.vrf_epochs_mut_for_testing().insert(
+                historical_epoch,
+                iroha_data_model::consensus::VrfEpochRecord {
+                    epoch: historical_epoch,
+                    seed: adapter.context.leader_seed,
+                    epoch_length: 2,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 0,
+                    finalized: true,
+                    updated_at_height: historical_height,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            world.commit();
+        }
+        let current_context = adapter.context.clone();
+        let mut sidecar_only_successor = successor_context_for_parent(&adapter, &block);
+        sidecar_only_successor.epoch = {
+            let world = adapter.state.world_view();
+            crate::sumeragi::epoch_for_height_from_world(&world, sidecar_only_successor.height)
+        };
+        adapter.context = sidecar_only_successor;
+        let conflicting_session = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: conflicting_prepare,
+            commit_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Commit),
+        };
+        let sidecar_conflict = adapter
+            .persist_historical_recovery_session(&conflicting_session)
+            .expect_err("historical sidecar-only recovery must reject a different READY subject");
+        assert!(matches!(
+            sidecar_conflict,
+            V2LaneWorkError::Persistence(message)
+                if message.contains("durable READY decision subject")
+        ));
+        assert!(
+            adapter
+                .kura
+                .read_certified_lane_block_artifact(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "historical sidecar conflict must not publish a certified session"
+        );
+        adapter.context = current_context;
         assert_eq!(
             adapter
                 .persist_anchored_sessions()
@@ -21141,6 +21432,94 @@ pub(super) mod tests {
             .is_some(),
             "a different valid 3-of-4 QC must survive rollover without mutable State PoPs"
         );
+
+        let alternative_prepare_votes = keys[1..]
+            .iter()
+            .map(|key| signed_autonomous_prepare_vote(&proposal, &payload, key, &keys))
+            .collect::<Vec<_>>();
+        let alternative_prepare = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            proposal.vote_body(CertPhase::Prepare),
+            proposal.descriptor.validator_set.clone(),
+            &alternative_prepare_votes,
+        )
+        .expect("alternate READY quorum forms a PrepareQC");
+        let replayed = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: alternative_prepare,
+            commit_qc: lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Commit),
+        };
+        assert_ne!(
+            replayed.prepare_qc.signers_bitmap, durable.prepare_qc.signers_bitmap,
+            "historical replay must use a different valid READY quorum subset"
+        );
+        assert!(lane_qcs_certify_same_decision(
+            &durable.prepare_qc,
+            &replayed.prepare_qc
+        ));
+        assert!(lane_qcs_certify_same_decision(
+            &durable.commit_qc,
+            &replayed.commit_qc
+        ));
+        let mut missing_ready = replayed.prepare_qc.clone();
+        missing_ready.payload_availability_qc = None;
+        assert!(
+            !lane_qcs_certify_same_decision(&durable.prepare_qc, &missing_ready),
+            "READY presence is part of the certified decision subject"
+        );
+        let mut different_payload = replayed.prepare_qc.clone();
+        different_payload
+            .payload_availability_qc
+            .as_mut()
+            .expect("alternate PrepareQC carries READY")
+            .body
+            .executable_payload_hash = Hash::new(b"different autonomous executable payload");
+        assert!(
+            !lane_qcs_certify_same_decision(&durable.prepare_qc, &different_payload),
+            "the READY executable-payload hash is part of the certified decision subject"
+        );
+
+        adapter.pending_committed_lanes.push_back(replayed.clone());
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("current-height alternate READY proof reuses the durable subject proof"),
+            1
+        );
+        let mut successor_context = successor_context_for_parent(&adapter, &block);
+        successor_context.epoch = {
+            let world = adapter.state.world_view();
+            crate::sumeragi::epoch_for_height_from_world(&world, successor_context.height)
+        };
+        adapter.context = successor_context;
+        assert!(proposal.descriptor.proposal_height < adapter.context.height);
+        adapter.historical_recovery_sessions.push_back(replayed);
+        assert!(matches!(
+            adapter
+                .service_next_historical_recovery()
+                .expect("alternate historical READY proof reuses durable certificate bytes"),
+            HistoricalRecoveryServiceOutcome::Complete(_)
+        ));
+        let retained_availability = adapter
+            .kura
+            .read_autonomous_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+                adapter.native_chain_id_hash(),
+                payload.epoch,
+            )
+            .and_then(|artifact| artifact.availability_certificate)
+            .expect("the first durable READY certificate remains available");
+        assert_eq!(retained_availability.certificate, durable.prepare_qc);
+        let retained_certificate = adapter
+            .kura
+            .read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("the first autonomous lane certificate remains durable");
+        assert_eq!(retained_certificate.prepare_qc, durable.prepare_qc);
+        assert_eq!(retained_certificate.commit_qc, durable.commit_qc);
+        assert!(!adapter.output_guard.restart_required());
     }
 
     #[test]
@@ -22590,12 +22969,26 @@ pub(super) mod tests {
         key_pair: &KeyPair,
         validator_keys: &[KeyPair],
     ) -> LaneBlockVoteV1 {
-        let body = proposal.vote_body(CertPhase::Prepare);
-        let signature = Signature::try_new(key_pair.private_key(), &body.signature_preimage())
-            .expect("fixture lane prepare signature");
         let availability_body =
             lane_payload_availability_body(payload, proposal, payload.chain_id_hash, payload.epoch)
                 .expect("fixture READY body");
+        signed_autonomous_prepare_vote_for_body(
+            proposal,
+            availability_body,
+            key_pair,
+            validator_keys,
+        )
+    }
+
+    fn signed_autonomous_prepare_vote_for_body(
+        proposal: &LaneBlockProposalV1,
+        availability_body: LanePayloadAvailabilityBodyV1,
+        key_pair: &KeyPair,
+        validator_keys: &[KeyPair],
+    ) -> LaneBlockVoteV1 {
+        let body = proposal.vote_body(CertPhase::Prepare);
+        let signature = Signature::try_new(key_pair.private_key(), &body.signature_preimage())
+            .expect("fixture lane prepare signature");
         let validator_set_pops = proposal
             .descriptor
             .validator_set
@@ -25736,6 +26129,197 @@ pub(super) mod tests {
                 .unapplied_lane_block_artifact_heights_snapshot_cached()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn historical_losing_certificate_cannot_conflict_with_durable_canonical_slot() {
+        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (parent_block, winning_proposal) =
+            globally_anchored_lane_block_fixture(&adapter, &keys);
+        adapter
+            .kura
+            .store_block(parent_block.clone())
+            .expect("persist the canonical winning carrier");
+        let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
+        commit_test_block_to_state(adapter.state.as_ref(), &committed_parent, &adapter.context);
+
+        let durable_session = CommittedLaneBlockSession {
+            proposal: winning_proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&winning_proposal, &keys[..3], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&winning_proposal, &keys[..3], CertPhase::Commit),
+        };
+        adapter
+            .kura
+            .persist_committed_lane_block_session(&durable_session, &lane_signer_pops(&keys[..3]))
+            .expect("persist the canonical winning lane certificate");
+
+        let mut losing_ownership = ownership_from_proposal(&winning_proposal);
+        losing_ownership.accepted_transaction_hashes =
+            vec![Hash::new(b"late certified losing lane proposal")];
+        let losing_replay = losing_ownership
+            .compute_replay_hashes()
+            .expect("derive internally consistent losing ownership");
+        losing_ownership.subject_hash = losing_replay.subject_hash;
+        losing_ownership.payload_ownership_hash = losing_replay.payload_ownership_hash;
+        losing_ownership.rbc_instance_hash = losing_replay.rbc_instance_hash;
+        losing_ownership.lane_block_descriptor_hash =
+            Some(losing_replay.lane_block_descriptor_hash);
+        let losing_proposal = proposal_from_ownership(&losing_ownership, parent_block.hash())
+            .expect("construct the losing proposal with the winning carrier hint");
+        assert_ne!(losing_proposal, winning_proposal);
+        assert!(
+            !adapter.historical_block_anchors_proposal(&parent_block, &losing_proposal),
+            "copying a canonical block hint must not make a losing proposal canonical"
+        );
+        let losing_certificate = LaneBlockCertificateV1 {
+            proposal: losing_proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&losing_proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&losing_proposal, &keys, CertPhase::Commit),
+        };
+
+        let successor_context = successor_context_for_parent(&adapter, &parent_block);
+        let local_peer = adapter.local_peer.clone();
+        let local_key = adapter.key_pair.clone();
+        let state = Arc::clone(&adapter.state);
+        let kura = Arc::clone(&adapter.kura);
+        let limits = adapter.limits;
+        drop(adapter);
+        let mut successor = V2LaneWorkAdapter::new(
+            successor_context,
+            local_peer,
+            local_key,
+            true,
+            state,
+            kura,
+            limits,
+            None,
+        )
+        .expect("open the true successor-height adapter");
+        assert_eq!(
+            successor.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(losing_certificate.clone())),
+                    Some(PeerId::new(keys[0].public_key().clone())),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected,
+            "historical ingress must require exact canonical carrier membership"
+        );
+        assert!(successor.historical_recovery_sessions.is_empty());
+
+        successor
+            .historical_recovery_sessions
+            .push_back(CommittedLaneBlockSession {
+                proposal: losing_certificate.proposal,
+                prepare_qc: losing_certificate.prepare_qc,
+                commit_qc: losing_certificate.commit_qc,
+            });
+        assert!(matches!(
+            successor
+                .service_next_historical_recovery()
+                .expect("the losing proof is retired without touching the durable winner"),
+            HistoricalRecoveryServiceOutcome::Complete(_)
+        ));
+        assert!(!successor.has_pending_historical_recovery());
+        assert!(!successor.output_guard.restart_required());
+        let durable = successor
+            .kura
+            .read_certified_lane_block_artifact(
+                winning_proposal.descriptor.lane_id,
+                winning_proposal.descriptor.lane_block_height,
+            )
+            .expect("the durable winner remains authoritative");
+        assert_eq!(durable.proposal, durable_session.proposal);
+        assert_eq!(durable.prepare_qc, durable_session.prepare_qc);
+        assert_eq!(durable.commit_qc, durable_session.commit_qc);
+    }
+
+    #[test]
+    fn historical_alternative_qc_reuses_durable_proposal_identity() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (parent_block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        adapter
+            .kura
+            .store_block(parent_block.clone())
+            .expect("persist the canonical historical carrier");
+        let finality = verified_finality_artifact_for_block(&adapter, &keys, &parent_block);
+        let _commit_receipt = adapter
+            .kura
+            .store_v2_finality_artifact(&finality)
+            .expect("persist the frozen historical validator PoP authority");
+        let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
+        commit_test_block_to_state(adapter.state.as_ref(), &committed_parent, &adapter.context);
+        let durable_session = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Commit),
+        };
+        adapter
+            .kura
+            .persist_committed_lane_block_session(&durable_session, &lane_signer_pops(&keys[..3]))
+            .expect("persist the first valid quorum proof");
+        assert!(
+            !adapter
+                .kura
+                .lane_block_application_receipt_available(&proposal),
+            "fixture must stop between certificate and receipt durability"
+        );
+        let replayed = LaneBlockCertificateV1 {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Commit),
+        };
+        assert_ne!(
+            replayed.prepare_qc.signers_bitmap, durable_session.prepare_qc.signers_bitmap,
+            "fixture must use distinct valid quorum subsets"
+        );
+
+        adapter.context = successor_context_for_parent(&adapter, &parent_block);
+        assert!(proposal.descriptor.proposal_height < adapter.context.height);
+        {
+            let mut world = adapter.state.world.block();
+            for key in &keys {
+                world
+                    .consensus_keys_by_pk
+                    .insert(key.public_key().to_string(), Vec::new());
+            }
+            world.commit();
+        }
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(replayed)),
+                    Some(PeerId::new(keys[0].public_key().clone())),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted,
+            "the alternate proof must enter the historical recovery owner"
+        );
+        assert!(matches!(
+            adapter
+                .service_next_historical_recovery()
+                .expect("an alternate quorum proof for the same proposal completes recovery"),
+            HistoricalRecoveryServiceOutcome::Complete(_)
+        ));
+        assert!(adapter.historical_recovery_sessions.is_empty());
+        assert!(
+            adapter
+                .kura
+                .lane_block_application_receipt_available(&proposal),
+            "alternate proof recovery must finish the interrupted application receipt"
+        );
+        let durable = adapter
+            .kura
+            .read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("retain the first durable quorum proof");
+        assert_eq!(durable.prepare_qc, durable_session.prepare_qc);
+        assert_eq!(durable.commit_qc, durable_session.commit_qc);
+        assert!(!adapter.output_guard.restart_required());
     }
 
     #[test]
