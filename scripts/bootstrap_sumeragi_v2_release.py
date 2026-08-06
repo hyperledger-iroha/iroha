@@ -1899,11 +1899,19 @@ def _validate_terminal_release_evidence(
 
     g4p = _require_exact_json_fields(
         receipt_evidence["g4p_multilane"],
-        {"schema_version", "completion", "run_summary", "run_logs"},
+        {
+            "schema_version",
+            "observer_omission_evidence",
+            "completion",
+            "run_summary",
+            "run_logs",
+        },
         "terminal G-4P evidence",
     )
     if type(g4p["schema_version"]) is not int or g4p["schema_version"] != 1:
         raise BootstrapError("terminal G-4P evidence has the wrong schema")
+    if g4p["observer_omission_evidence"] != "passed":
+        raise BootstrapError("terminal G-4P observer-omission evidence is not exact")
     if not isinstance(g4p["completion"], dict) or not isinstance(g4p["completion"].get("path"), str):
         raise BootstrapError("terminal G-4P completion is malformed")
     g4p_root = Path(g4p["completion"]["path"]).parent

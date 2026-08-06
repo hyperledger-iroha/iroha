@@ -1247,9 +1247,9 @@ certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
 `4feda6be5196d970ff4a0a114bca7f302c96fa967845a965bcdbe11a2978906f`.
-Nine of those legs execute the separate 313-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 314 TSV lines and has SHA-256
-`d82616565324fc5a939136e0c93921138ae75e7367a94fd31a68bdf8d74ececf`.
+Nine of those legs execute the separate 314-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 315 TSV lines and has SHA-256
+`007cb768e76b304e849eb0541640c057fbe15d5762036a8e7f98e795eef041f8`.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1686,7 +1686,7 @@ bash scripts/run_sumeragi_v2_release_gates.sh --pr
 
 Before those longer scenarios, the PR gate inventories 826 exact production
 liveness tests and executes all 38 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 313-test
+profile additionally records nine G-UNIT legs executing a separate 314-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -2120,7 +2120,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 81 pre-network corridor legs and
-their exact 826-test production inventory, the separate 313-test G-UNIT
+their exact 826-test production inventory, the separate 314-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

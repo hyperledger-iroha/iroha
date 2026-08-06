@@ -144,6 +144,7 @@ const EVICTED_BLOCK_INDEX_START: u64 = u64::MAX;
 const BLOCK_INDEX_ENTRY_BYTES: usize = core::mem::size_of::<u64>() * 2;
 const FOUR_PEER_RELEASE_COPY_MAX_ENTRIES: usize = 65_536;
 const FOUR_PEER_RELEASE_COPY_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const FOUR_PEER_OBSERVER_OMISSION_RELEASE_MARKER: &str = "[multilane-release-observer-omission-evidence] windows=2 exact_three_of_four=passed first_autonomous=passed first_drain_carrier=passed first_drain_certificate=passed second_autonomous=passed";
 
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
 #[norito(deny_unknown_fields)]
@@ -5439,6 +5440,83 @@ fn four_peer_observer_omission_layer() -> Table {
     layer
 }
 
+fn validate_four_peer_observer_omission<T: Eq>(
+    validator_set: &[T],
+    expected_validator_set: &[T],
+    signers_bitmap: &[u8],
+    observer: &T,
+    context: &str,
+) -> Result<()> {
+    ensure!(
+        validator_set.len() == TOTAL_PEERS,
+        "{context}: certificate roster has {} validators, expected {TOTAL_PEERS}",
+        validator_set.len()
+    );
+    ensure!(
+        expected_validator_set.len() == TOTAL_PEERS,
+        "{context}: expected network roster has {} validators, expected {TOTAL_PEERS}",
+        expected_validator_set.len()
+    );
+    ensure!(
+        expected_validator_set
+            .iter()
+            .enumerate()
+            .all(|(index, validator)| !expected_validator_set[..index].contains(validator)),
+        "{context}: expected network roster contains duplicate validators"
+    );
+    ensure!(
+        validator_set
+            .iter()
+            .enumerate()
+            .all(|(index, validator)| !validator_set[..index].contains(validator)),
+        "{context}: certificate roster contains duplicate validators"
+    );
+    ensure!(
+        validator_set
+            .iter()
+            .all(|validator| expected_validator_set.contains(validator)),
+        "{context}: certificate roster is not the exact network peer membership"
+    );
+    let observer_indices = validator_set
+        .iter()
+        .enumerate()
+        .filter_map(|(index, validator)| (validator == observer).then_some(index))
+        .collect::<Vec<_>>();
+    ensure!(
+        observer_indices.len() == 1,
+        "{context}: rotating observer is not present exactly once in the frozen four-peer roster"
+    );
+    let expected_bitmap_len = validator_set.len().div_ceil(8);
+    ensure!(
+        signers_bitmap.len() == expected_bitmap_len,
+        "{context}: signer bitmap length is {}, expected {expected_bitmap_len}",
+        signers_bitmap.len()
+    );
+    if validator_set.len() % 8 != 0 {
+        let used_bits = validator_set.len() % 8;
+        let padding_mask = !((1_u8 << used_bits) - 1);
+        ensure!(
+            signers_bitmap[expected_bitmap_len - 1] & padding_mask == 0,
+            "{context}: signer bitmap has non-zero padding"
+        );
+    }
+    let observer_index = observer_indices[0];
+    ensure!(
+        signers_bitmap[observer_index / 8] & (1_u8 << (observer_index % 8)) == 0,
+        "{context}: the configured observer participated in the certificate"
+    );
+    let signer_count = signers_bitmap
+        .iter()
+        .map(|byte| usize::try_from(byte.count_ones()).expect("u8 popcount fits usize"))
+        .sum::<usize>();
+    let expected_signers = commit_quorum_from_len(TOTAL_PEERS);
+    ensure!(
+        signer_count == expected_signers,
+        "{context}: certificate selected {signer_count} signers, expected the exact {expected_signers}-of-{TOTAL_PEERS} non-observer quorum"
+    );
+    Ok(())
+}
+
 fn restart_four_peer_validator(
     network: &sandbox::SerializedNetwork,
     runtime: &tokio::runtime::Runtime,
@@ -6218,6 +6296,13 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
             && quorum_required == TOTAL_PEERS - 1,
         "four-peer release gate requires an exact three-validator quorum"
     );
+    let expected_validator_set = network
+        .peers()
+        .iter()
+        .map(|peer| peer.id())
+        .collect::<Vec<_>>();
+    let first_omission_peer_id = expected_validator_set[FIRST_OMISSION_PEER].clone();
+    let second_omission_peer_id = expected_validator_set[SECOND_OMISSION_PEER].clone();
 
     let initial_height = submitters[0].get_status()?.blocks;
     restart_four_peer_validator(
@@ -6248,6 +6333,13 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         autonomous_a.lane_marker == marker_a,
         "first autonomous cycle changed the active lane marker"
     );
+    validate_four_peer_observer_omission(
+        &autonomous_a.merge_entry.merge_qc.validator_set,
+        &expected_validator_set,
+        &autonomous_a.merge_entry.merge_qc.signers_bitmap,
+        &first_omission_peer_id,
+        "first observer window autonomous merge QC",
+    )?;
     let intent_a = wait_for_uncommitted_lane_drain_intent_on_all_peers(
         &network,
         &submitters,
@@ -6280,6 +6372,20 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         .lane_drain_certificates
         .first()
         .ok_or_else(|| eyre!("first drain entry omitted its certificate"))?;
+    validate_four_peer_observer_omission(
+        &drain_a.merge_qc.validator_set,
+        &expected_validator_set,
+        &drain_a.merge_qc.signers_bitmap,
+        &first_omission_peer_id,
+        "first observer window drain carrier merge QC",
+    )?;
+    validate_four_peer_observer_omission(
+        &certificate_a.validator_set,
+        &expected_validator_set,
+        &certificate_a.signers_bitmap,
+        &first_omission_peer_id,
+        "first observer window lane-drain certificate",
+    )?;
     ensure!(
         certificate_a.body.intent.lane_incarnation == marker_a.incarnation,
         "first drain certificate did not bind incarnation A"
@@ -6421,6 +6527,14 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
             && autonomous_b.entrypoint_hash != autonomous_a.entrypoint_hash,
         "recreated lane reused incarnation A's autonomous source identity"
     );
+    validate_four_peer_observer_omission(
+        &autonomous_b.merge_entry.merge_qc.validator_set,
+        &expected_validator_set,
+        &autonomous_b.merge_entry.merge_qc.signers_bitmap,
+        &second_omission_peer_id,
+        "second observer window autonomous merge QC",
+    )?;
+    eprintln!("{FOUR_PEER_OBSERVER_OMISSION_RELEASE_MARKER}");
 
     restart_four_peer_validator(
         &network,
@@ -8050,8 +8164,8 @@ mod tests {
         should_require_scale_in_transition_for_lane, should_run_cooldown_clearance,
         single_cycle_load_tx_count, soak_cycle_load_tx_count, storage_lane_id,
         tx_confirmation_status_counts_as_load_activity,
-        tx_confirmation_status_counts_as_post_cycle_progress, validate_lane_drain_lifecycle_order,
-        validate_load_submission_outcome,
+        tx_confirmation_status_counts_as_post_cycle_progress, validate_four_peer_observer_omission,
+        validate_lane_drain_lifecycle_order, validate_load_submission_outcome,
     };
 
     fn status_with_declared_lanes(lane_ids: &[u32]) -> PeerStatusSnapshot {
@@ -13627,6 +13741,116 @@ mod tests {
             Some("observer")
         );
         assert!(!sumeragi.contains_key("debug"));
+    }
+
+    #[test]
+    fn four_peer_observer_omission_requires_exact_rotating_three_of_four_quorum() {
+        let validators = [10, 20, 30, 40];
+        assert!(
+            validate_four_peer_observer_omission(
+                &validators,
+                &validators,
+                &[0b0000_0111],
+                &40,
+                "tail observer",
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_four_peer_observer_omission(
+                &validators,
+                &validators,
+                &[0b0000_1101],
+                &20,
+                "rotated observer",
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn four_peer_observer_omission_rejects_participation_or_nonexact_roster() {
+        let validators = [10, 20, 30, 40];
+        assert!(
+            validate_four_peer_observer_omission(
+                &validators,
+                &validators,
+                &[0b0000_1111],
+                &40,
+                "participating observer",
+            )
+            .is_err()
+        );
+        assert!(
+            validate_four_peer_observer_omission(
+                &validators,
+                &validators,
+                &[],
+                &40,
+                "missing bitmap byte",
+            )
+            .is_err()
+        );
+        assert!(
+            validate_four_peer_observer_omission(
+                &validators,
+                &validators,
+                &[0b0000_0111],
+                &50,
+                "missing observer",
+            )
+            .is_err()
+        );
+        assert!(
+            validate_four_peer_observer_omission(
+                &[10, 20, 30, 30],
+                &validators,
+                &[0b0000_0011],
+                &30,
+                "duplicate observer",
+            )
+            .is_err()
+        );
+        assert!(
+            validate_four_peer_observer_omission(
+                &validators[..3],
+                &validators,
+                &[0b0000_0101],
+                &20,
+                "truncated roster",
+            )
+            .is_err()
+        );
+        assert!(
+            validate_four_peer_observer_omission(
+                &validators,
+                &validators,
+                &[0b1000_0111],
+                &40,
+                "non-zero padding",
+            )
+            .is_err()
+        );
+        assert!(
+            validate_four_peer_observer_omission(
+                &[10, 20, 50, 40],
+                &validators,
+                &[0b0000_0111],
+                &40,
+                "foreign non-observer",
+            )
+            .is_err()
+        );
+        assert!(
+            validate_four_peer_observer_omission(
+                &[10, 10, 30, 40],
+                &validators,
+                &[0b0000_0111],
+                &40,
+                "duplicate non-observer",
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "4feda6be5196d970ff4a0a114bca7f302c96fa967845a965bcdbe11a2978906f"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "2c3798b6ecf1652c1ef88696ff29faa545ccadd1806f11f72f6d375da7198c7f"
+        "27e88769a9c2e25079a4545277b3e681bd952881a5ee1a49a2a30b7edc611164"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "e672412b541730e0e2f0d80b7f0e03e54fb009397a9182e09cad233e5cabdda2"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 313
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 314
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 314
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 315
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "d82616565324fc5a939136e0c93921138ae75e7367a94fd31a68bdf8d74ececf"
+        "007cb768e76b304e849eb0541640c057fbe15d5762036a8e7f98e795eef041f8"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -151,7 +151,7 @@ def test_release_inventory_constants_match_current_source_seal(
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
     assert receipt_module._PRODUCTION_TEST_COUNT == 826
-    assert receipt_module._G_UNIT_TEST_COUNT == 313
+    assert receipt_module._G_UNIT_TEST_COUNT == 314
     assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 826
     receipt_module_counts = {
         module_name: count
@@ -160,7 +160,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert receipt_module_counts["sumeragi::v2_effects::tests"] == 71
     assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 68
     assert receipt_module_counts["sumeragi::v2_worker::tests"] == 131
-    assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 313
+    assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 314
 
 
 def test_release_corridor_rejects_network_skips_and_zero_test_filters(
@@ -2017,8 +2017,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "preflight-release-bootstrap pytest 232" in release_source
     assert "did not run exactly 37 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 37" in release_source
-    assert "did not run exactly 327 passing tests" in release_source
-    assert "preflight-release-receipt pytest 327" in release_source
+    assert "did not run exactly 329 passing tests" in release_source
+    assert "preflight-release-receipt pytest 329" in release_source
     assert "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py" in release_source
     assert (
         "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py"
@@ -2042,7 +2042,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                327,'
+        '"preflight-release-receipt",\n                "pytest",\n                329,'
         in receipt_source
     )
     assert "pytests/scripts/nexus_cross_dataspace_launcher_test.py" in receipt_source

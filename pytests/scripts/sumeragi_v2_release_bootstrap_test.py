@@ -867,6 +867,7 @@ g4p_logs = [
 ]
 g4p_evidence = {{
     "schema_version": 1,
+    "observer_omission_evidence": "passed",
     "completion": full_artifact(g4p_completion),
     "run_summary": full_artifact(g4p_summary),
     "run_logs": [full_artifact(path) for path in g4p_logs],

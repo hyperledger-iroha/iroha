@@ -139,7 +139,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "1ec65218b718871ac51fe47896c64aec0004832fd944a29e48e02f5e826038a7"
+    "9ec0d9255cf3329c022a57ba76cdc0e9ad858e0ade228a6147428192d4f0208a"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -289,6 +289,12 @@ _G4P_RELEASE_TESTS = (
         "musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay",
     ),
 )
+_G4P_OBSERVER_OMISSION_MARKER = (
+    "[multilane-release-observer-omission-evidence] windows=2 "
+    "exact_three_of_four=passed first_autonomous=passed "
+    "first_drain_carrier=passed first_drain_certificate=passed "
+    "second_autonomous=passed"
+)
 _G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER = (
     "[multilane-release-native-evidence] grouped_sources=2 "
     "durable_manifest=passed body_eviction_recovery=passed "
@@ -387,13 +393,13 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "command",
 )
 _PRODUCTION_TEST_COUNT = 826
-_G_UNIT_TEST_COUNT = 313
+_G_UNIT_TEST_COUNT = 314
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        117,
+        118,
         "lib",
     ),
     (
@@ -1100,7 +1106,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                327,
+                329,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
@@ -6305,6 +6311,8 @@ def _validate_g4p_log(snapshot: EvidenceSnapshot, name: str, test: str) -> None:
     except UnicodeDecodeError as error:
         raise ReceiptError(f"{name} is not UTF-8") from error
     results = [line for line in lines if line.startswith("test result:")]
+    observer_marker_count = lines.count(_G4P_OBSERVER_OMISSION_MARKER)
+    expected_observer_marker_count = int(test == _G4P_RELEASE_TESTS[0][1])
     native_marker_count = lines.count(_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER)
     expected_native_marker_count = int(test == _G4P_RELEASE_TESTS[3][1])
     idle_marker_count = lines.count(_G4P_EX297_IDLE_MARKER)
@@ -6323,6 +6331,7 @@ def _validate_g4p_log(snapshot: EvidenceSnapshot, name: str, test: str) -> None:
     if (
         lines.count("running 1 test") != 1
         or lines.count(f"test {test} ... ok") != 1
+        or observer_marker_count != expected_observer_marker_count
         or lines.count(f"[multilane-release-gate] started: {test}")
         != release_marker_count
         or lines.count(f"[multilane-release-gate] completed: {test}")
@@ -6372,6 +6381,7 @@ def _validate_g4p_evidence(
         "passed_runs",
         "failed_runs",
         "skipped_runs",
+        "observer_omission_evidence",
         "native_grouped_pruning_evidence",
         "ex297_idle_evidence",
         "ex297_phase_cut_evidence",
@@ -6391,6 +6401,7 @@ def _validate_g4p_evidence(
         "passed_runs": "6",
         "failed_runs": "0",
         "skipped_runs": "0",
+        "observer_omission_evidence": "passed",
         "native_grouped_pruning_evidence": "passed",
         "ex297_idle_evidence": "passed",
         "ex297_phase_cut_evidence": "passed",
@@ -6450,6 +6461,7 @@ def _validate_g4p_evidence(
 
     return {
         "schema_version": 1,
+        "observer_omission_evidence": "passed",
         "completion": _snapshot_receipt_artifact(completion),
         "run_summary": _snapshot_receipt_artifact(summary),
         "run_logs": [
@@ -7412,7 +7424,11 @@ def _snapshot_receipt_inputs(
     )
 
     g4p = receipt["evidence"].get("g4p_multilane")
-    if not isinstance(g4p, dict) or g4p.get("schema_version") != 1:
+    if (
+        not isinstance(g4p, dict)
+        or g4p.get("schema_version") != 1
+        or g4p.get("observer_omission_evidence") != "passed"
+    ):
         raise ReceiptError("aggregate receipt lacks its G-4P evidence")
     try:
         g4p_root = Path(g4p["completion"]["path"]).parent

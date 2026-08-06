@@ -26,6 +26,12 @@ from pytests.scripts.sumeragi_v2_release_receipt_components import (
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
+OBSERVER_OMISSION_MARKER = (
+    "[multilane-release-observer-omission-evidence] windows=2 "
+    "exact_three_of_four=passed first_autonomous=passed "
+    "first_drain_carrier=passed first_drain_certificate=passed "
+    "second_autonomous=passed"
+)
 FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
     "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
@@ -286,7 +292,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "1ec65218b718871ac51fe47896c64aec0004832fd944a29e48e02f5e826038a7"
+        "9ec0d9255cf3329c022a57ba76cdc0e9ad858e0ade228a6147428192d4f0208a"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -1168,6 +1174,8 @@ def make_g4p_evidence(
             release_markers.append(
                 f"[multilane-release-gate] started: {test}"
             )
+        if index == 0:
+            release_markers.append(OBSERVER_OMISSION_MARKER)
         if index == 3:
             release_markers.append(
                 "[multilane-release-native-evidence] grouped_sources=2 "
@@ -1224,6 +1232,7 @@ def make_g4p_evidence(
             "passed_runs": "6",
             "failed_runs": "0",
             "skipped_runs": "0",
+            "observer_omission_evidence": "passed",
             "native_grouped_pruning_evidence": "passed",
             "ex297_idle_evidence": "passed",
             "ex297_phase_cut_evidence": "passed",
@@ -1251,6 +1260,9 @@ def test_ex297_idle_release_markers_bind_the_exact_launcher_filter() -> None:
         / "tests"
         / "sumeragi_localnet_smoke"
         / "idle_chain.rs"
+    ).read_text(encoding="utf-8")
+    autoscale_source = (
+        ROOT_DIR / "integration_tests" / "tests" / "nexus" / "autoscale_localnet.rs"
     ).read_text(encoding="utf-8")
 
     launcher_match = re.search(
@@ -1283,6 +1295,48 @@ def test_ex297_idle_release_markers_bind_the_exact_launcher_filter() -> None:
     assert idle_impl_source.count(
         '        eprintln!("[multilane-release-gate] completed: {context}");'
     ) == 1
+
+    observer_launcher_match = re.search(
+        r'^readonly AUTOSCALE_OBSERVER_OMISSION_MARKER="(?P<marker>[^"]+)"$',
+        launcher_source,
+        flags=re.MULTILINE,
+    )
+    assert observer_launcher_match is not None
+    assert observer_launcher_match.group("marker") == OBSERVER_OMISSION_MARKER
+    implementation_start = autoscale_source.index(
+        "fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_"
+        "rejects_stale_artifacts_impl()"
+    )
+    marker_position = autoscale_source.index(
+        'eprintln!("{FOUR_PEER_OBSERVER_OMISSION_RELEASE_MARKER}");',
+        implementation_start,
+    )
+    assertion_contexts = (
+        "first observer window autonomous merge QC",
+        "first observer window drain carrier merge QC",
+        "first observer window lane-drain certificate",
+        "second observer window autonomous merge QC",
+    )
+    assertion_positions = [
+        autoscale_source.index(f'"{context}"', implementation_start)
+        for context in assertion_contexts
+    ]
+    assert assertion_positions == sorted(assertion_positions)
+    assert all(position < marker_position for position in assertion_positions)
+    assert (
+        autoscale_source[implementation_start:marker_position].count(
+            "validate_four_peer_observer_omission("
+        )
+        == 4
+    )
+    assert autoscale_source.count(f'"{OBSERVER_OMISSION_MARKER}"') == 1
+    for token in (
+        "expected_validator_set: &[T]",
+        "certificate roster is not the exact network peer membership",
+        '"foreign non-observer"',
+        '"duplicate non-observer"',
+    ):
+        assert autoscale_source.count(token) == 1
 
 
 def make_g12_evidence(
@@ -2917,7 +2971,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "1ec65218b718871ac51fe47896c64aec0004832fd944a29e48e02f5e826038a7"
+        "9ec0d9255cf3329c022a57ba76cdc0e9ad858e0ade228a6147428192d4f0208a"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -3132,6 +3186,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
 
     g4p = receipt["evidence"]["g4p_multilane"]
     assert g4p["schema_version"] == 1
+    assert g4p["observer_omission_evidence"] == "passed"
     g4p_logs = evidence["g4p_logs"]
     assert isinstance(g4p_logs, list)
     g4p_expected = {
@@ -3969,6 +4024,7 @@ def test_receipt_rejects_rehashed_g4p_run_identity_mismatch(
 @pytest.mark.parametrize(
     ("log_index", "marker"),
     (
+        (0, OBSERVER_OMISSION_MARKER),
         (
             4,
             "[ex-297-idle-evidence] clean_idle=passed "
@@ -3981,7 +4037,7 @@ def test_receipt_rejects_rehashed_g4p_run_identity_mismatch(
         ),
     ),
 )
-def test_receipt_rejects_rehashed_g4p_log_missing_ex297_marker(
+def test_receipt_rejects_rehashed_g4p_log_missing_release_marker(
     tmp_path: Path, log_index: int, marker: str
 ) -> None:
     evidence = make_evidence(tmp_path)
@@ -4025,6 +4081,7 @@ def test_receipt_rejects_rehashed_g4p_log_missing_ex297_marker(
         ("schema_version", "2"),
         ("source_manifest_sha256", "0" * 64),
         ("expected_runs", "4"),
+        ("observer_omission_evidence", "failed"),
         ("ex297_idle_evidence", "failed"),
         ("ex297_phase_cut_evidence", "failed"),
     ),

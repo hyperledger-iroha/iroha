@@ -15270,6 +15270,7 @@ pub(super) mod tests {
                 tests::{
                     durable_finality_fixture, service_for_history_context,
                     service_for_history_context_with_handoff_owner,
+                    service_for_history_context_with_local_validator,
                     service_for_history_context_with_local_validator_and_handoff_owner,
                 },
             },
@@ -15410,8 +15411,26 @@ pub(super) mod tests {
         persist_parent_chain: bool,
         context_epoch: u64,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_at_epoch_with_setup(
+            mode,
+            height,
+            persist_parent_chain,
+            context_epoch,
+            None,
+            None,
+        )
+    }
+
+    fn fixture_at_height_inner_at_epoch_with_setup(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        context_epoch: u64,
+        setup: Option<fn(&State, &mut wire::HeightContext, &[KeyPair])>,
+        local_validator_index: Option<usize>,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let nonzero = NonZeroUsize::new(8).expect("nonzero");
-        fixture_at_height_inner_with_limits_and_kura_at_epoch(
+        fixture_at_height_inner_with_limits_and_kura_at_epoch_with_setup(
             mode,
             height,
             persist_parent_chain,
@@ -15444,6 +15463,8 @@ pub(super) mod tests {
             ),
             Kura::blank_kura_for_testing(),
             context_epoch,
+            setup,
+            local_validator_index,
         )
     }
 
@@ -15486,6 +15507,29 @@ pub(super) mod tests {
         limits: V2LaneWorkLimits,
         kura: Arc<Kura>,
         context_epoch: u64,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_with_limits_and_kura_at_epoch_with_setup(
+            mode,
+            height,
+            persist_parent_chain,
+            limits,
+            kura,
+            context_epoch,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fixture_at_height_inner_with_limits_and_kura_at_epoch_with_setup(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        limits: V2LaneWorkLimits,
+        kura: Arc<Kura>,
+        context_epoch: u64,
+        setup: Option<fn(&State, &mut wire::HeightContext, &[KeyPair])>,
+        local_validator_index: Option<usize>,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let chain_id: ChainId = "v2-lane-work-test".into();
         let mut keys = (1_u8..=4)
@@ -15617,8 +15661,15 @@ pub(super) mod tests {
         if let Some(parent_qc) = context.parent_commit_qc.as_mut() {
             parent_qc.subject.block_hash = parent.expect("non-genesis fixture has a parent");
         }
-        let local_index = usize::try_from(context.leader(0)).expect("leader index");
-        let local_key = keys[local_index].clone();
+        if let Some(setup) = setup {
+            setup(state.as_ref(), &mut context, &keys);
+        }
+        let local_index = local_validator_index
+            .unwrap_or_else(|| usize::try_from(context.leader(0)).expect("leader index"));
+        let local_key = keys
+            .get(local_index)
+            .expect("fixture local validator index is in the frozen roster")
+            .clone();
         let local_peer = PeerId::new(local_key.public_key().clone());
         let authenticated_genesis_nexus_amx_context = (height == 1).then(|| {
             AuthenticatedGenesisNexusAmxContext::Staged(StagedGenesisNexusAmxContext::for_test(
@@ -15647,6 +15698,41 @@ pub(super) mod tests {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
     ) -> Vec<PeerId> {
+        enable_multilane_nexus_with_default_lane_validators(
+            adapter,
+            keys,
+            keys,
+            lane_id,
+            dataspace_id,
+        )
+    }
+
+    fn enable_multilane_nexus_with_default_lane_validators(
+        adapter: &mut V2LaneWorkAdapter,
+        keys: &[KeyPair],
+        default_lane_validator_keys: &[KeyPair],
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Vec<PeerId> {
+        let state = Arc::clone(&adapter.state);
+        configure_multilane_nexus_with_default_lane_validators(
+            state.as_ref(),
+            &mut adapter.context,
+            keys,
+            default_lane_validator_keys,
+            lane_id,
+            dataspace_id,
+        )
+    }
+
+    fn configure_multilane_nexus_with_default_lane_validators(
+        state: &State,
+        context: &mut wire::HeightContext,
+        keys: &[KeyPair],
+        default_lane_validator_keys: &[KeyPair],
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Vec<PeerId> {
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero lane count"),
             vec![
@@ -15671,16 +15757,16 @@ pub(super) mod tests {
         ])
         .expect("multi-lane test dataspace catalog");
         {
-            let mut nexus = adapter.state.nexus.write();
+            let mut nexus = state.nexus.write();
             nexus.enabled = true;
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
             nexus.lane_catalog = lane_catalog;
             nexus.dataspace_catalog = dataspace_catalog;
         }
-        adapter.state.reseed_static_lane_incarnations_for_tests();
+        state.reseed_static_lane_incarnations_for_tests();
 
-        let mut world_block = adapter.state.world.block();
+        let mut world_block = state.world.block();
         {
             let mut peers = world_block.peers_mut_for_testing().transaction();
             for key in keys {
@@ -15706,6 +15792,19 @@ pub(super) mod tests {
                 torii_url: None,
             })
             .collect::<Vec<_>>();
+        let default_validators = default_lane_validator_keys
+            .iter()
+            .map(|key| AccountId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let default_validator_bindings = default_validators
+            .iter()
+            .zip(default_lane_validator_keys)
+            .map(|(validator, key)| ManifestValidatorBinding {
+                validator: validator.clone(),
+                peer_id: PeerId::new(key.public_key().clone()),
+                torii_url: None,
+            })
+            .collect::<Vec<_>>();
         let default_status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "default".to_owned(),
@@ -15717,8 +15816,8 @@ pub(super) mod tests {
                 "/tmp/v2-default-lane-manifest.json",
             )),
             governance_rules: Some(GovernanceRules {
-                validators: validators.clone(),
-                validator_bindings: validator_bindings.clone(),
+                validators: default_validators,
+                validator_bindings: default_validator_bindings,
                 ..GovernanceRules::default()
             }),
             privacy_commitments: Vec::new(),
@@ -15740,25 +15839,67 @@ pub(super) mod tests {
             }),
             privacy_commitments: Vec::new(),
         };
-        adapter
-            .state
-            .install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
-                BTreeMap::from([(LaneId::SINGLE, default_status), (lane_id, status)]),
-            )));
-        adapter.context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+            BTreeMap::from([(LaneId::SINGLE, default_status), (lane_id, status)]),
+        )));
+        context.nexus_amx_context_hash =
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state);
+        context.execution_policy_hash =
+            super::super::v2_recovery::committed_execution_policy_hash(state)
+                .expect("derive multi-lane fixture execution policy");
 
         assert!(proposal_lookahead_enabled(
-            &adapter.state.nexus_snapshot(),
-            adapter.context.height,
+            &state.nexus_snapshot(),
+            context.height,
         ));
-        let mut validators = adapter
-            .state
-            .authoritative_lane_peer_ids_at_height(lane_id, adapter.context.height);
+        let mut validators = state.authoritative_lane_peer_ids_at_height(lane_id, context.height);
         validators.sort();
         validators.dedup();
         assert_eq!(validators.len(), keys.len());
         validators
+    }
+
+    fn configure_queue_plan_tag21_restart_nexus(
+        state: &State,
+        context: &mut wire::HeightContext,
+        keys: &[KeyPair],
+    ) {
+        let initial_local_index = context.leader(0);
+        let search_bound = u64::try_from(context.roster.len())
+            .expect("fixture roster length fits u64")
+            .saturating_mul(2);
+        let outside_leader_index = (0..search_bound)
+            .map(|view| context.leader(view))
+            .find(|leader| *leader != initial_local_index)
+            .expect("rotating leader schedule reaches an outside-coordinator validator");
+        let outside_leader_index =
+            usize::try_from(outside_leader_index).expect("leader index fits this platform");
+        let coordinator_keys = keys
+            .iter()
+            .enumerate()
+            .filter_map(|(index, key)| (index != outside_leader_index).then_some(key.clone()))
+            .collect::<Vec<_>>();
+        configure_multilane_nexus_with_default_lane_validators(
+            state,
+            context,
+            keys,
+            &coordinator_keys,
+            LaneId::new(1),
+            DataSpaceId::new(7),
+        );
+    }
+
+    fn queue_plan_tag21_restart_fixture(
+        local_validator_index: Option<usize>,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_at_epoch_with_setup(
+            wire::ConsensusMode::Permissioned,
+            9,
+            true,
+            4,
+            Some(configure_queue_plan_tag21_restart_nexus),
+            local_validator_index,
+        )
     }
 
     fn limits_with_native_capacity(record_capacity: usize) -> V2LaneWorkLimits {
@@ -31288,6 +31429,339 @@ pub(super) mod tests {
             "an exact retransmission must remain idempotent"
         );
         assert!(!adapter.output_guard.restart_required());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn queue_plan_tag21_handoff_survives_restarts_to_outside_coordinator_leader_and_retires_exactly()
+     {
+        let (mut follower, keys) = queue_plan_tag21_restart_fixture(None);
+        let view = remote_merge_leader_view(&follower);
+        let follower_index = follower
+            .local_validator_index()
+            .expect("fixture follower is in the frozen global roster");
+        let leader_index = follower.context.leader(view);
+        assert_ne!(leader_index, follower_index);
+        let leader_index_usize =
+            usize::try_from(leader_index).expect("leader index fits this platform");
+        let leader_peer = follower.context.roster[leader_index_usize]
+            .validator
+            .clone();
+        let (binding, certificate) = queue_plan_admission_certificate_for_lane_work_test(
+            &follower,
+            &keys,
+            0x4A,
+            exact_queue_plan_predecessor(&follower),
+        );
+        let coordinator = binding
+            .admission_context
+            .route_incarnations
+            .first()
+            .expect("QueuePlan handoff fixture has a coordinator route");
+        assert_eq!(coordinator.validator_set.len(), keys.len() - 1);
+        assert!(
+            coordinator
+                .validator_set
+                .iter()
+                .all(|validator| validator != &leader_peer),
+            "the tag-21 handoff is required because the global leader is outside the coordinator roster"
+        );
+        assert!(
+            coordinator
+                .validator_set
+                .iter()
+                .any(|validator| validator == &follower.local_peer),
+            "the sender must remain an authoritative coordinator validator"
+        );
+
+        follower
+            .kura
+            .persist_pending_queue_plan_admission_certificate(&certificate)
+            .expect("persist exact QueuePlan certificate before interrupted handoff");
+        follower
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("select the outside-coordinator global leader");
+        let first_handoff = follower
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+                )
+            })
+            .expect("follower emits the first QueuePlan handoff");
+        match &first_handoff {
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                peer,
+                view: effect_view,
+                certificate: effect_certificate,
+            } => {
+                assert_eq!(peer, &leader_peer);
+                assert_eq!(*effect_view, view);
+                assert_eq!(effect_certificate.as_slice(), certificate.as_slice());
+            }
+            _ => unreachable!("filtered to QueuePlan handoff"),
+        }
+        // Drop the first transport action and reopen the sender. Kura, not the
+        // volatile effect queue, remains the retry authority.
+        drop(first_handoff);
+        let follower_context = follower.context.clone();
+        let follower_peer = follower.local_peer.clone();
+        let follower_key = follower.key_pair.clone();
+        let follower_state = Arc::clone(&follower.state);
+        let follower_kura = Arc::clone(&follower.kura);
+        let follower_limits = follower.limits;
+        assert_eq!(
+            follower_context.execution_policy_hash,
+            super::super::v2_recovery::committed_execution_policy_hash(follower_state.as_ref())
+                .expect("derive interrupted sender execution policy"),
+            "the restart fixture must preserve the exact committed execution-policy snapshot"
+        );
+        drop(follower);
+        let mut follower = V2LaneWorkAdapter::new(
+            follower_context,
+            follower_peer.clone(),
+            follower_key,
+            true,
+            follower_state,
+            follower_kura,
+            follower_limits,
+            None,
+        )
+        .expect("reopen interrupted QueuePlan sender");
+        follower
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("retry QueuePlan handoff from the durable sender source");
+        let retry_handoff = follower
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+                )
+            })
+            .expect("sender restart reconstructs the QueuePlan handoff");
+        let V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+            peer: retry_peer,
+            view: retry_view,
+            certificate: retry_certificate,
+        } = &retry_handoff
+        else {
+            unreachable!("filtered to QueuePlan handoff")
+        };
+        assert_eq!(retry_peer, &leader_peer);
+        assert_eq!(*retry_view, view);
+        assert_eq!(retry_certificate.as_slice(), certificate.as_slice());
+        assert_eq!(
+            follower
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("read restarted sender QueuePlan source")
+                .as_deref(),
+            Some(certificate.as_slice())
+        );
+
+        let mut output_service = service_for_history_context_with_local_validator(
+            Arc::clone(&follower.kura),
+            follower.context.clone(),
+            &keys,
+            follower_index,
+        );
+        assert_eq!(
+            output_service.can_retain_lane_work_effect(&retry_handoff),
+            Ok(true),
+            "production exact-output admission must construct a Kura-backed tag-21 handoff"
+        );
+        let posted = Arc::new(Mutex::new(Vec::new()));
+        let posted_for_hook = Arc::clone(&posted);
+        output_service.set_exact_output_admission_hook(move |post, ticket| {
+            assert!(ticket.is_none());
+            posted_for_hook
+                .lock()
+                .expect("record QueuePlan production output")
+                .push((post.peer_id, post.data));
+            Ok(())
+        });
+        output_service.post_queue_plan_admission_certificate(
+            retry_peer.clone(),
+            view,
+            Arc::clone(retry_certificate),
+        );
+        let mut posted =
+            std::mem::take(&mut *posted.lock().expect("inspect QueuePlan production output"));
+        assert_eq!(posted.len(), 1);
+        let (posted_peer, posted_message) = posted.pop().expect("one QueuePlan network output");
+        assert_eq!(posted_peer, leader_peer);
+        let encoded = norito::to_bytes(&posted_message)
+            .expect("encode production QueuePlan tag-21 network message");
+        let decoded = norito::decode_from_bytes::<crate::NetworkMessage>(&encoded)
+            .expect("decode QueuePlan tag-21 network message");
+        let crate::NetworkMessage::QueuePlanAdmissionCertificate(delivered_certificate) = decoded
+        else {
+            panic!("tag-21 roundtrip changed the QueuePlan message kind")
+        };
+        assert_eq!(delivered_certificate.as_slice(), certificate.as_slice());
+
+        let (mut leader, leader_keys) = queue_plan_tag21_restart_fixture(Some(leader_index_usize));
+        assert_eq!(leader.context, follower.context);
+        assert_eq!(leader.local_peer, leader_peer);
+        assert_eq!(
+            leader.key_pair.public_key(),
+            leader_keys[leader_index_usize].public_key()
+        );
+        leader
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("install the exact outside-coordinator leader view");
+        leader.drain_effects(usize::MAX);
+        assert_eq!(
+            leader.accept_relay_message(
+                LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: follower_peer,
+                    certificate: Arc::clone(&delivered_certificate),
+                },
+                view,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(
+            leader
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                .expect("read leader-staged QueuePlan source")
+                .as_deref(),
+            Some(certificate.as_slice())
+        );
+        assert!(leader.merge_entries.values().any(|pending| {
+            matches!(
+                &pending.stage,
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions == vec![certificate.clone()]
+            )
+        }));
+
+        let leader_context = leader.context.clone();
+        let leader_state = Arc::clone(&leader.state);
+        let leader_kura = Arc::clone(&leader.kura);
+        let leader_limits = leader.limits;
+        drop(leader);
+        let mut leader = V2LaneWorkAdapter::new(
+            leader_context,
+            leader_peer.clone(),
+            leader_keys[leader_index_usize].clone(),
+            true,
+            leader_state,
+            leader_kura,
+            leader_limits,
+            None,
+        )
+        .expect("reopen outside-coordinator QueuePlan leader");
+        leader
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("reconstruct leader candidate from the exact Kura source");
+        let candidate = leader
+            .merge_entries
+            .values()
+            .find_map(|pending| match &pending.stage {
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.queue_plan_admissions == vec![certificate.clone()] =>
+                {
+                    Some(candidate.clone())
+                }
+                PendingMergeStage::Collecting(_) | PendingMergeStage::Certified(_) => None,
+            })
+            .expect("leader restart reconstructs the QueuePlan merge candidate");
+        let digest = crate::merge::merge_qc_message_digest(
+            &leader.context.chain_id,
+            &candidate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            leader.frozen_validator_set_hash(),
+        );
+        let merge_key = MergeKey {
+            epoch_id: candidate.epoch_id,
+            view: candidate.view,
+            digest,
+        };
+        for index in 0..leader_keys.len() {
+            let signer = u32::try_from(index).expect("fixture signer index fits u32");
+            if signer == leader_index {
+                continue;
+            }
+            let share = signed_merge_share_for_test(&leader, &leader_keys, &candidate, signer);
+            assert_eq!(
+                leader
+                    .accept_merge_signature(share, view)
+                    .expect("admit QueuePlan merge signature"),
+                V2LaneIngressOutcome::Inserted
+            );
+            if !leader.merge_entries.contains_key(&merge_key) {
+                break;
+            }
+        }
+        assert!(
+            !leader.merge_entries.contains_key(&merge_key),
+            "global quorum must durably certify the handoff candidate"
+        );
+        let (_, certified_entry) = leader
+            .kura
+            .select_pending_certified_merge_entry()
+            .expect("read pending certified QueuePlan merge entry")
+            .expect("QueuePlan candidate reaches a real certified entry");
+        assert_eq!(
+            certified_entry.queue_plan_admissions,
+            vec![certificate.clone()]
+        );
+        let certified_binding =
+            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+                &leader.context.chain_id,
+                certified_entry.queue_plan_admissions[0].as_slice(),
+            )
+            .expect("revalidate the exact certified QueuePlan control")
+            .certificate
+            .binding;
+        assert_eq!(certified_binding, binding);
+        for adapter in [&follower, &leader] {
+            assert_eq!(
+                adapter
+                    .kura
+                    .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                    .expect("read pre-commit QueuePlan source")
+                    .as_deref(),
+                Some(certificate.as_slice()),
+                "send, receipt, restart, and certification must not retire before exact WSV commit"
+            );
+        }
+
+        // Cross the post-carrier WSV boundary with the binding decoded from
+        // the real certified entry, rather than from the original ingress
+        // fixture. The old-height adapters then exercise the production
+        // `Exact` reconciliation/retirement branch without an invalid partial
+        // height rollover.
+        install_autonomous_fixture_queue_plan_registry_value(
+            follower.state.as_ref(),
+            &certified_binding,
+        );
+        install_autonomous_fixture_queue_plan_registry_value(
+            leader.state.as_ref(),
+            &certified_binding,
+        );
+        follower
+            .refresh_merge_candidates(view)
+            .expect("retire sender source after exact registry commit");
+        leader
+            .refresh_merge_candidates(view)
+            .expect("retire receiver source after exact registry commit");
+        for adapter in [&follower, &leader] {
+            assert_eq!(
+                adapter
+                    .kura
+                    .pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+                    .expect("read retired QueuePlan source"),
+                None,
+                "only the exact committed registry value retires the durable source"
+            );
+        }
     }
 
     #[test]

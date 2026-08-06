@@ -481,7 +481,11 @@ CAS; a conflicting binding must fail closed and can never execute.
 execution before global CAS, two conflicting CAS attempts, restart ABA, local
 TTL expiry, deferred ingress, cancellation, guard drop, missing or mismatched
 binding material, duplicate execution, near-future leader handoff, far-future
-Torii publication, and durable future-evidence recovery. Inject every crash
+Torii publication, durable future-evidence recovery, and the tag-21 corridor
+where the global leader is outside the coordinator roster. That corridor must
+retain exact Kura bytes across sender and receiver restart, reach a real
+certified merge entry, and retire only after the exact WSV registry value.
+Inject every crash
 boundary between
 certificate persistence, wakeup, WSV publication, queue reservation, carrier
 application, and authenticated loser cleanup.
@@ -1145,15 +1149,15 @@ identical temporary), reservation duplication, base-state mismatch, bounded
 fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
-The release runner now inventories 313 exact, non-ignored multilane focus
-tests: 117 core multilane tests, 137 core queue-journal tests, seven
+The release runner now inventories 314 exact, non-ignored multilane focus
+tests: 118 core multilane tests, 137 core queue-journal tests, seven
 configuration tests, eight in `iroha_data_model`, 41 in Torii, one in
 Torii-shared, and two in the integration support library. The canonical
-inventory contains 314 TSV lines and has SHA-256
-`d82616565324fc5a939136e0c93921138ae75e7367a94fd31a68bdf8d74ececf`.
+inventory contains 315 TSV lines and has SHA-256
+`007cb768e76b304e849eb0541640c057fbe15d5762036a8e7f98e795eef041f8`.
 The exact-source reservation-journal slice passes `65/65`, and its local
 identity-bound refinement regression passes `1/1`. That source inventory is
-not a passing 313-test transcript; the full focused rerun and archived receipt
+not a passing 314-test transcript; the full focused rerun and archived receipt
 remain required.
 
 ### G-FORMAL — source-bound models and expected mutations
@@ -1201,7 +1205,8 @@ Fresh four-peer suites must cover clean idle stability, workload-driven
 non-empty progress, the exact PrepareQC/CommitQC/world-commit recovery cuts,
 automatic expansion/contraction, restart
 recovery, same-ID A/B/A recreation, grouped and mixed-role Native application,
-same-route handling, offline/Byzantine validator rotation, body pruning,
+same-route handling, offline validator rotation plus supported rotating
+observer omission, body pruning,
 evidence-aware drain, archive, and useful autonomous execution through the
 canonical carrier. Required anchors include
 `nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart`,
@@ -1213,6 +1218,12 @@ The six mandatory four-peer lifecycle, rotating-validator Native, EX-297 idle,
 and EX-297 recovery-cut tests are now non-ignored and source-bound into the
 release launcher, receipt validator, and bootstrap consumer, but no fresh
 completion artifact is recorded here.
+The `G-4P` source must bind each observer window to an exact three-of-four
+signer bitmap that excludes the configured observer. The launcher and receipt
+must require one exact marker emitted only after all four lifecycle assertions
+and bind `observer_omission_evidence=passed` into completion accounting. This is
+not Byzantine-injection evidence; any Byzantine fault claim requires a
+separately named adversarial gate and artifact.
 
 ### G-12P — twelve lane validators on a 13-peer global committee
 

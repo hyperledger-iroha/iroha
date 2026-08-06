@@ -149,8 +149,13 @@ Run every required DA/RBC case with skips treated as failures:
 3. Exercise grouped and mixed-role Native AMX, including same-route
    coordinator handling, wrong predecessor, stale incarnation, body pruning,
    missing-sidecar recovery from authenticated holders, and forged evidence.
-4. Rotate one validator offline and one Byzantine input source while committees
-   and global leaders change.
+4. Rotate one validator offline and rotate the supported observer-omission role
+   across two validators while committees and global leaders change. The
+   `G-4P` receipt must prove that each observer is absent from the exact
+   three-of-four signer bitmap by retaining the exact post-assertion lifecycle
+   marker and `observer_omission_evidence=passed` completion field; this gate
+   does not claim Byzantine input injection, which requires separately named
+   adversarial evidence.
 5. Drain only after ordinary queue work, reservations, certified-unmerged
    bundles, delayed work, pending merge entries, and unverifiable Native
    controls clear. Carry the exact drain certificate, retire in a later block,

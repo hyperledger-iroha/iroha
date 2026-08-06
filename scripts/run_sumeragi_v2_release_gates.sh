@@ -2077,6 +2077,7 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_lane_work::tests::historical_recovery_diagnostics_are_typed_bounded_and_payload_free
   sumeragi::v2_lane_work::tests::native_participant_pruned_carrier_retries_queue_pressure_and_retires_carrier_siblings
   sumeragi::v2_lane_work::tests::merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_journal
+  sumeragi::v2_lane_work::tests::queue_plan_tag21_handoff_survives_restarts_to_outside_coordinator_leader_and_retires_exactly
   sumeragi::v2_lane_work::tests::queue_plan_leader_rejects_future_handoff_until_canonical_frontier
   sumeragi::v2_lane_work::tests::queue_plan_durable_future_source_waits_for_canonical_frontier
 )
@@ -2292,7 +2293,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=313
+readonly expected_multilane_focus_test_count=314
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2463,7 +2464,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 313-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 314-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2571,8 +2572,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 314 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 313 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 315 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 314 focused tests" >&2
     exit 1
   fi
 fi
@@ -2581,6 +2582,7 @@ fi
 # harness/name inventory source-bound and non-ignored even though ordinary
 # developer runs may opt out inside the test body.
 readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
+readonly multilane_autoscale_observer_omission_marker="[multilane-release-observer-omission-evidence] windows=2 exact_three_of_four=passed first_autonomous=passed first_drain_carrier=passed first_drain_certificate=passed second_autonomous=passed"
 readonly multilane_autoscale_restart_release_test="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
 readonly multilane_autoscale_drain_release_test="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly multilane_native_amx_rotating_release_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
@@ -2589,6 +2591,15 @@ readonly multilane_ex297_idle_release_test="sumeragi_localnet_smoke::permissione
 readonly multilane_ex297_idle_release_marker="[ex-297-idle-evidence] clean_idle=passed external_non_empty=passed internal_non_empty=passed"
 readonly multilane_ex297_phase_cut_release_test="musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay"
 readonly multilane_ex297_phase_cut_release_marker="[ex-297-phase-cut-evidence] after_prepare_qc=passed after_commit_qc=passed before_world_commit=passed exact_once=passed"
+if [[ "$(grep -Fxc -- "readonly AUTOSCALE_OBSERVER_OMISSION_MARKER=\"${multilane_autoscale_observer_omission_marker}\"" scripts/run_nexus_cross_dataspace_atomic_swap.sh || true)" != 1 ]]; then
+  echo "mandatory four-peer launcher is not source-bound to observer-omission evidence" >&2
+  exit 1
+fi
+if [[ "$(grep -Foc -- "\"${multilane_autoscale_observer_omission_marker}\"" integration_tests/tests/nexus/autoscale_localnet.rs || true)" != 1 \
+  || "$(grep -Fxc -- '    eprintln!("{FOUR_PEER_OBSERVER_OMISSION_RELEASE_MARKER}");' integration_tests/tests/nexus/autoscale_localnet.rs || true)" != 1 ]]; then
+  echo "mandatory four-peer lifecycle test is not source-bound to observer-omission evidence" >&2
+  exit 1
+fi
 if [[ "$(grep -Fxc -- "readonly NATIVE_AMX_GROUPED_PRUNING_MARKER=\"${multilane_native_amx_grouped_pruning_marker}\"" scripts/run_nexus_cross_dataspace_atomic_swap.sh || true)" != 1 ]]; then
   echo "mandatory four-peer launcher is not source-bound to grouped Native AMX pruning evidence" >&2
   exit 1
@@ -3256,16 +3267,16 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^327 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^329 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 327 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 329 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 327 \
+  preflight-release-receipt pytest 329 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -3561,6 +3572,7 @@ if [[ "$profile" == "--release" ]]; then
     $'passed_runs\t6' \
     $'failed_runs\t0' \
     $'skipped_runs\t0' \
+    $'observer_omission_evidence\tpassed' \
     $'native_grouped_pruning_evidence\tpassed' \
     $'ex297_idle_evidence\tpassed' \
     $'ex297_phase_cut_evidence\tpassed'; do
@@ -3796,4 +3808,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 313/313 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 314/314 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

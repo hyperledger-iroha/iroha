@@ -448,7 +448,7 @@ evidence.
 ## Sumeragi V2 production multilane release closure
 
 On the current tree, the independent 81-leg release inventory contract is
-sealed at 826 production tests across 38 modules, 313 G-UNIT rows, and six
+sealed at 826 production tests across 38 modules, 314 G-UNIT rows, and six
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 The fresh guard and its exact production-count, ten-iteration Native AMX,
 reserved-control, effective-assignment, and full-qualified idle-marker
@@ -517,7 +517,7 @@ regressions established an earlier 289-test source-inventory checkpoint. The fre
 exact-source isolated reservation-journal slice is green at `65/65`, and the
 identity-bound in-flight refinement regression is green at `1/1`. The complete
 289-test archived execution receipt was never produced and does not attest the
-current 313-test inventory.
+current 314-test inventory.
 
 The in-flight carrier formal corpus is now bound to the versions that
 production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
@@ -527,11 +527,11 @@ multilane binding ledger keeps this as
 reservation, queue-order, Kura persistence/recovery, runner, and release
 receipt consumers, and requires a distinct fifth layout-only Apalache result
 after the four refinement rows. The schema-4 structural/source-binding checks,
-exact 826-test production inventory, 313-test G-UNIT source inventory, 12
+exact 826-test production inventory, 314-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
-contract controls require a fresh source-bound rerun. The G-UNIT inventory has 314 TSV lines
+contract controls require a fresh source-bound rerun. The G-UNIT inventory has 315 TSV lines
 and SHA-256
-`d82616565324fc5a939136e0c93921138ae75e7367a94fd31a68bdf8d74ececf`.
+`007cb768e76b304e849eb0541640c057fbe15d5762036a8e7f98e795eef041f8`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
 claimed by those static checks, and the total Rust transition projection
@@ -578,7 +578,7 @@ The remaining work is evidence-driven and must stay in order:
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 313 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 314 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -594,6 +594,11 @@ The remaining work is evidence-driven and must stay in order:
   required language surface together.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
+  The source gate now checks exact three-of-four signer exclusion during both
+  supported rotating observer-omission windows and does not represent that
+  evidence as Byzantine fault injection. Its post-assertion evidence marker is
+  mandatory in the exact lifecycle log and is carried into G-4P completion and
+  aggregate receipt accounting.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
   fault soak on its 13-peer global committee (twelve lane validators plus one
   global-only lane observer). The source-side correction and bounded stage diagnostics for the

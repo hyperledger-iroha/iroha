@@ -53,6 +53,7 @@ readonly NATIVE_AMX_FAULT_SOAK_TEST="native_amx_rotating_validator_fault_soak_pr
 readonly NATIVE_AMX_RELEASE_ITERATIONS=10
 readonly NATIVE_AMX_GROUPED_PRUNING_MARKER="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
 readonly AUTOSCALE_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
+readonly AUTOSCALE_OBSERVER_OMISSION_MARKER="[multilane-release-observer-omission-evidence] windows=2 exact_three_of_four=passed first_autonomous=passed first_drain_carrier=passed first_drain_certificate=passed second_autonomous=passed"
 readonly AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
 readonly AUTOSCALE_DRAIN_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly EX297_IDLE_CHAIN_RELEASE_TEST="sumeragi_localnet_smoke::permissioned_idle_chain_advances_only_for_external_or_internal_work"
@@ -403,6 +404,11 @@ validate_multilane_release_markers() {
     echo "${test_name} reported a forbidden developer opt-out in release mode" >&2
     return 1
   fi
+  if [[ "$test_name" == "$AUTOSCALE_FOUR_PEER_RELEASE_TEST" ]] \
+    && [[ "$(grep -Fxc -- "$AUTOSCALE_OBSERVER_OMISSION_MARKER" "$log_path" || true)" != 1 ]]; then
+    echo "${test_name} did not prove both exact three-of-four observer-omission windows" >&2
+    return 1
+  fi
   if grep -Eq -- "sandbox(ed| restrictions) skip" "$log_path"; then
     echo "${test_name} reported a forbidden sandbox skip in release mode" >&2
     return 1
@@ -622,6 +628,7 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
     passed_runs "$passed_runs" \
     failed_runs 0 \
     skipped_runs 0 \
+    observer_omission_evidence passed \
     native_grouped_pruning_evidence passed \
     ex297_idle_evidence passed \
     ex297_phase_cut_evidence passed \

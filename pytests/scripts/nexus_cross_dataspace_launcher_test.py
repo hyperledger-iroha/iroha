@@ -24,6 +24,12 @@ AUTOSCALE = (
     "nexus::autoscale_localnet::"
     "nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
 )
+OBSERVER_OMISSION_MARKER = (
+    "[multilane-release-observer-omission-evidence] windows=2 "
+    "exact_three_of_four=passed first_autonomous=passed "
+    "first_drain_carrier=passed first_drain_certificate=passed "
+    "second_autonomous=passed"
+)
 AUTOSCALE_RESTART = (
     "nexus::autoscale_localnet::"
     "nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
@@ -125,6 +131,9 @@ case "$test_name" in
     ;;
 esac
 case "$test_name" in
+  '{AUTOSCALE}')
+    printf '%s\n' '{OBSERVER_OMISSION_MARKER}'
+    ;;
   '{NATIVE_AMX}')
     printf '%s\n' '[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed'
     ;;
@@ -207,7 +216,9 @@ def test_multilane_release_pins_native_amx_iterations(
     assert pointer.is_file()
     completion = Path(pointer.read_text(encoding="utf-8").strip())
     assert completion.is_file()
-    assert "passed_runs\t6\n" in completion.read_text(encoding="utf-8")
+    completion_text = completion.read_text(encoding="utf-8")
+    assert "passed_runs\t6\n" in completion_text
+    assert "observer_omission_evidence\tpassed\n" in completion_text
     observed = capture.read_text(encoding="utf-8").splitlines()
     assert len(observed) == len(RELEASE_TESTS) * 3
     assert set(observed) == {"10"}
