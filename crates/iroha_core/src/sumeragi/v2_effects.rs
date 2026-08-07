@@ -2847,14 +2847,22 @@ pub(crate) trait EffectRuntime {
         context: &wire::HeightContext,
         certificate: &wire::QuorumCertificate,
     ) -> Result<(), String>;
-    /// Report whether an exact Store/Validate candidate already has its sole
-    /// terminal completion queued in runtime ingress or Busy-deferred storage.
-    fn body_pipeline_candidate_has_terminal(
+    /// Plan an exact Store/Validate terminal retry under the runtime's
+    /// immutable incumbent owner without committing authority refinement.
+    fn plan_body_pipeline_candidate_terminal(
         &mut self,
         _effect: &AdapterEffect,
         _ownership: &RuntimeEffectOwnership,
-    ) -> Result<bool, String> {
-        Ok(false)
+    ) -> Result<Option<RuntimeEffectOwnership>, String> {
+        Ok(None)
+    }
+    /// Commit previously planned terminal authority refinements after the
+    /// executor has discharged the complete macro-step positional gate.
+    fn commit_body_pipeline_candidate_terminals(
+        &mut self,
+        _terminals: &[(&AdapterEffect, &RuntimeEffectOwnership)],
+    ) -> Result<(), String> {
+        Ok(())
     }
     fn queued_commands(&self) -> usize;
     fn remaining_completion_capacity(&self) -> usize;
@@ -3279,12 +3287,19 @@ impl EffectRuntime for SerializedV2Runtime {
             .map_err(|error| error.to_string())
     }
 
-    fn body_pipeline_candidate_has_terminal(
+    fn plan_body_pipeline_candidate_terminal(
         &mut self,
         effect: &AdapterEffect,
         ownership: &RuntimeEffectOwnership,
-    ) -> Result<bool, String> {
-        SerializedV2Runtime::body_pipeline_candidate_has_terminal(self, effect, ownership)
+    ) -> Result<Option<RuntimeEffectOwnership>, String> {
+        SerializedV2Runtime::plan_body_pipeline_candidate_terminal(self, effect, ownership)
+    }
+
+    fn commit_body_pipeline_candidate_terminals(
+        &mut self,
+        terminals: &[(&AdapterEffect, &RuntimeEffectOwnership)],
+    ) -> Result<(), String> {
+        SerializedV2Runtime::commit_body_pipeline_candidate_terminals(self, terminals)
     }
 
     fn queued_commands(&self) -> usize {
@@ -3443,6 +3458,15 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .reconcile_active_view_producer(tag, retain)
             .map_err(|_| RuntimeClockError::ProducerReservation)?;
         self.runtime.arm_live_clocks(now)
+    }
+
+    /// Freeze the already-due timeout owner for production-ordering fixtures.
+    #[cfg(test)]
+    pub(crate) fn freeze_due_timeout_owner_for_test(
+        &mut self,
+        now: Instant,
+    ) -> Result<RuntimeLifecycleOwner, String> {
+        self.runtime.frozen_timeout_owner_for_test(now)
     }
 
     /// Whether production may consume and register another local proposal.
@@ -5097,6 +5121,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let mut retain_effect = Vec::with_capacity(effects.len());
         let mut retire_parked_fetch_lineages = BTreeSet::new();
         let mut retire_parked_body_stage_lineages = BTreeSet::new();
+        let mut runtime_terminal_commits = Vec::new();
         let mut candidate_position = 0u8;
         for (index, (effect, evidence)) in effects.iter().zip(&mut ownership).enumerate() {
             let candidate = production_adapter_effect_candidate_semantic_identity(effect);
@@ -5112,20 +5137,44 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "one adapter macro-step effect position was not representable".to_owned(),
                 )
             })?;
-            let candidate_semantic_identity = evidence.candidate_semantic_identity();
-            let exact_incumbent = candidate_semantic_identity
+            let mut candidate_semantic_identity = evidence.candidate_semantic_identity();
+            let mut exact_incumbent = candidate_semantic_identity
                 .as_ref()
                 .and_then(|identity| retained_candidate_owners.get(identity))
                 .cloned();
-            let runtime_terminal_incumbent = self
+            if let Some(incumbent) = exact_incumbent.as_ref()
+                && incumbent != &*evidence
+            {
+                return Err(EffectExecutorError::Contract(
+                    "one semantic candidate lifecycle attempted exact owner replacement".to_owned(),
+                ));
+            }
+            let runtime_terminal_ownership = self
                 .runtime
-                .body_pipeline_candidate_has_terminal(effect, evidence)
+                .plan_body_pipeline_candidate_terminal(effect, evidence)
                 .map_err(EffectExecutorError::Runtime)?;
+            let runtime_terminal_incumbent = runtime_terminal_ownership.is_some();
             if runtime_terminal_incumbent && exact_incumbent.is_some() {
                 return Err(EffectExecutorError::Contract(
                     "one body candidate was owned by both executor work and a runtime terminal"
                         .to_owned(),
                 ));
+            }
+            if let Some(adopted) = runtime_terminal_ownership {
+                let adopted_identity = adopted.candidate_semantic_identity().ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "one runtime body terminal omitted its candidate identity".to_owned(),
+                    )
+                })?;
+                if retained_candidate_owners.contains_key(&adopted_identity) {
+                    return Err(EffectExecutorError::Contract(
+                        "one body candidate was owned by both executor work and a runtime terminal"
+                            .to_owned(),
+                    ));
+                }
+                *evidence = adopted;
+                candidate_semantic_identity = Some(adopted_identity);
+                exact_incumbent = None;
             }
             let fetch_key = match effect {
                 AdapterEffect::FetchBody {
@@ -5221,34 +5270,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     )
                 })?;
             let _authorized_effect_candidate = checked.into_projection();
-            if let Some(incumbent) = exact_incumbent
-                && incumbent != *evidence
-            {
-                let adopted = incumbent
-                    .adopt_incumbent_candidate_for_retry(evidence, effect)
-                    .map_err(EffectExecutorError::Contract)?;
-                let adopted_projection = production_adapter_effect_candidate_trace_projection(
-                    effect,
-                    &adopted,
-                    effect_position,
-                    effect_count,
-                    candidate.as_ref().map_or(0, |_| candidate_position),
-                    candidate_count,
-                    candidate_owner_count_before,
-                    candidate_owner_count_after,
-                    true,
-                )
-                .map_err(EffectExecutorError::Contract)?;
-                let _authorized_incumbent_retry =
-                    check_production_effect_to_candidate_transition(adopted_projection)
-                        .ok_or_else(|| {
-                            EffectExecutorError::Contract(
-                                "coalesced candidate retry failed its incumbent-owner refinement"
-                                    .to_owned(),
-                            )
-                        })?;
-                *evidence = adopted;
-            }
             let mut fetch_authority_relation = None;
             if let Some(incumbent) = lineage_only_incumbent {
                 let (adopted, relation) = incumbent
@@ -5357,6 +5378,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
             }
+            if runtime_terminal_incumbent {
+                runtime_terminal_commits.push(index);
+            }
             if retain_effect.last() == Some(&true)
                 && let Some(key) = replacing_body_stage_lineage
             {
@@ -5380,6 +5404,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     retire_parked_fetch_lineages.insert(key);
                 }
             }
+        }
+        if !runtime_terminal_commits.is_empty() {
+            let terminals = runtime_terminal_commits
+                .iter()
+                .map(|index| (&effects[*index], &ownership[*index]))
+                .collect::<Vec<_>>();
+            self.runtime
+                .commit_body_pipeline_candidate_terminals(&terminals)
+                .map_err(EffectExecutorError::Runtime)?;
         }
         debug_assert!(effects.iter().all(|effect| {
             Self::restart_effect_source(effect) != RestartEffectSource::DiagnosticOnly
@@ -11921,7 +11954,8 @@ mod tests {
         next_lifecycle_ordinal: u128,
         effect_ownership_calls: usize,
         effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
-        terminal_body_candidate_identities: BTreeSet<Hash>,
+        terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
+        terminal_body_candidate_commits: usize,
         external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
         external_lifecycle_owner_capacity: Option<usize>,
         active_view_producer_retained: bool,
@@ -12713,16 +12747,16 @@ mod tests {
                 .map_err(|error| error.to_string())
         }
 
-        fn body_pipeline_candidate_has_terminal(
+        fn plan_body_pipeline_candidate_terminal(
             &mut self,
             effect: &AdapterEffect,
             ownership: &RuntimeEffectOwnership,
-        ) -> Result<bool, String> {
+        ) -> Result<Option<RuntimeEffectOwnership>, String> {
             if !matches!(
                 effect,
                 AdapterEffect::StoreBody { .. } | AdapterEffect::ValidateBody { .. }
             ) {
-                return Ok(false);
+                return Ok(None);
             }
             if !ownership.exactly_binds_adapter_effect(effect) {
                 return Err(
@@ -12732,7 +12766,62 @@ mod tests {
             let identity = ownership.candidate_semantic_identity().ok_or_else(|| {
                 "fake runtime terminal query omitted the candidate identity".to_owned()
             })?;
-            Ok(self.terminal_body_candidate_identities.contains(&identity))
+            let Some(incumbent) = self.terminal_body_candidate_owners.get(&identity) else {
+                return Ok(None);
+            };
+            if incumbent.owner() != ownership.owner() {
+                return Err(
+                    "fake runtime terminal query rejected exact owner replacement".to_owned(),
+                );
+            }
+            incumbent
+                .adopt_incumbent_body_stage_for_retry_or_authority(ownership, effect)
+                .map(Some)
+        }
+
+        fn commit_body_pipeline_candidate_terminals(
+            &mut self,
+            terminals: &[(&AdapterEffect, &RuntimeEffectOwnership)],
+        ) -> Result<(), String> {
+            let mut identities = BTreeSet::new();
+            let mut replacements = Vec::with_capacity(terminals.len());
+            for (effect, ownership) in terminals {
+                if !ownership.exactly_binds_adapter_effect(effect) {
+                    return Err(
+                        "fake runtime terminal commit changed its exact effect binding".to_owned(),
+                    );
+                }
+                let identity = ownership.candidate_semantic_identity().ok_or_else(|| {
+                    "fake runtime terminal commit omitted the candidate identity".to_owned()
+                })?;
+                if !identities.insert(identity) {
+                    return Err(
+                        "fake runtime terminal commit duplicated one terminal target".to_owned(),
+                    );
+                }
+                let Some(incumbent) = self.terminal_body_candidate_owners.get(&identity) else {
+                    return Err("fake runtime terminal commit changed its exact owner".to_owned());
+                };
+                if incumbent.owner() != ownership.owner()
+                    || incumbent
+                        .adopt_incumbent_body_stage_for_retry_or_authority(ownership, effect)
+                        .as_ref()
+                        != Ok(*ownership)
+                {
+                    return Err("fake runtime terminal commit changed its exact owner".to_owned());
+                }
+                replacements.push((identity, (**ownership).clone()));
+            }
+            for (identity, ownership) in replacements {
+                let replaced = self
+                    .terminal_body_candidate_owners
+                    .insert(identity, ownership);
+                debug_assert!(replaced.is_some());
+            }
+            self.terminal_body_candidate_commits = self
+                .terminal_body_candidate_commits
+                .saturating_add(terminals.len());
+            Ok(())
         }
 
         fn queued_commands(&self) -> usize {
@@ -16182,18 +16271,36 @@ mod tests {
         assert_eq!(executor.pending_signatures.len(), 1);
         assert_eq!(services.sign_tasks.len(), 1);
         assert!(executor.retained_effect_batch.is_none());
+        let incumbent_sign_owner = executor
+            .pending_signatures
+            .values()
+            .next()
+            .expect("one exact Sign owner remains pending")
+            .ownership
+            .clone();
 
         let conflicting = bind_adapter_effect_batch_ownership(
             std::slice::from_ref(&effect),
             vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 999)],
         )
         .expect("construct an independently owned mutation candidate");
-        executor
-            .retain_effect_batch(vec![effect.clone()], conflicting)
-            .expect("an independently admitted exact Sign retry stutters");
+        assert!(matches!(
+            executor.retain_effect_batch(vec![effect.clone()], conflicting),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("owner replacement")
+        ));
         assert_eq!(executor.pending_signatures.len(), 1);
         assert_eq!(services.sign_tasks.len(), 1);
         assert!(executor.retained_effect_batch.is_none());
+        assert_eq!(
+            executor
+                .pending_signatures
+                .values()
+                .next()
+                .expect("foreign retry cannot retire the incumbent Sign owner")
+                .ownership,
+            incumbent_sign_owner
+        );
 
         let reincarnated = bind_adapter_effect_batch_ownership(
             std::slice::from_ref(&effect),
@@ -16203,12 +16310,23 @@ mod tests {
             )],
         )
         .expect("construct a local-incarnation owner replacement");
-        executor
-            .retain_effect_batch(vec![effect], reincarnated)
-            .expect("a later-incarnation exact Sign retry keeps the incumbent owner");
+        assert!(matches!(
+            executor.retain_effect_batch(vec![effect], reincarnated),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("owner replacement")
+        ));
         assert_eq!(executor.pending_signatures.len(), 1);
         assert_eq!(services.sign_tasks.len(), 1);
         assert!(executor.retained_effect_batch.is_none());
+        assert_eq!(
+            executor
+                .pending_signatures
+                .values()
+                .next()
+                .expect("reincarnation cannot replace the incumbent Sign owner")
+                .ownership,
+            incumbent_sign_owner
+        );
 
         let mut fetch_executor = fixture.executor(EffectQueueConfig::default());
         let mut fetch_services = fixture.services();
@@ -16247,19 +16365,13 @@ mod tests {
         );
         let foreign_owner = foreign[1].owner().clone();
         assert_ne!(foreign[1].owner(), incumbent.owner());
-        fetch_executor
-            .retain_effect_batch(retry_effects, foreign)
-            .expect("foreign Fetch retry adopts the incumbent owner at position two");
-        let retained = fetch_executor
-            .retained_effect_batch
-            .as_ref()
-            .expect("Broadcast and idempotent Fetch retry are redispatched");
-        assert_eq!(retained.effects.len(), 2);
-        assert_eq!(retained.effects[1].ownership, incumbent);
-        fetch_executor
-            .drain_retained_effect_batch(&mut fetch_services, true)
-            .expect("adopted Fetch retry reaches the incumbent task");
+        assert!(matches!(
+            fetch_executor.retain_effect_batch(retry_effects, foreign),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("owner replacement")
+        ));
         assert_eq!(fetch_executor.pending_fetches.len(), 1);
+        assert_eq!(fetch_services.fetch_tasks.len(), 1);
         let retained_fetch = fetch_executor
             .pending_fetches
             .values()
@@ -16276,7 +16388,7 @@ mod tests {
         assert!(fetch_executor.retained_effect_batch.is_none());
         let external = fetch_executor
             .external_lifecycle_owners()
-            .expect("inspect external lifecycle ownership after coalescing");
+            .expect("inspect external lifecycle ownership after rejecting replacement");
         assert!(
             external.iter().all(|owner| owner != incumbent.owner()),
             "passive network Fetch ownership is deliberately not runnable clock work"
@@ -16341,8 +16453,8 @@ mod tests {
                 .expect("Store/Validate has one route-neutral identity");
             executor
                 .runtime
-                .terminal_body_candidate_identities
-                .insert(identity);
+                .terminal_body_candidate_owners
+                .insert(identity, bound.clone());
 
             executor
                 .consume_effects(vec![effect.clone()], &mut services)
@@ -16354,7 +16466,98 @@ mod tests {
             assert!(executor.runtime.completions.is_empty());
             assert!(executor.retained_effect_batch.is_none());
             assert!(!executor.status().fail_closed);
+
+            let foreign = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 90_001)],
+            )
+            .expect("bind a foreign terminal retry")
+            .pop()
+            .expect("one foreign body-stage owner");
+            assert_ne!(foreign, bound);
+            assert!(matches!(
+                executor.retain_effect_batch(vec![effect], vec![foreign]),
+                Err(EffectExecutorError::Runtime(reason))
+                    if reason.contains("owner replacement")
+            ));
+            assert!(executor.retained_effect_batch.is_none());
         }
+    }
+
+    #[test]
+    fn runtime_terminal_authority_commits_only_after_full_positional_gate() {
+        let fixture = Fixture::new();
+        let effect = AdapterEffect::StoreBody {
+            tag: tag(0),
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+        };
+        let sibling = timeout_sign(&fixture, 0);
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let roots = vec![
+            executor.runtime.test_effect_ownership(&effect),
+            executor.runtime.test_effect_ownership(&sibling),
+        ];
+        let malformed_batch =
+            bind_adapter_effect_batch_ownership(&[effect.clone(), sibling.clone()], roots)
+                .expect("bind a two-effect terminal carrier");
+        let incumbent = malformed_batch[0].clone();
+        let identity = incumbent
+            .candidate_semantic_identity()
+            .expect("StoreBody has one route-neutral identity");
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(identity, incumbent.clone());
+
+        assert!(matches!(
+            executor.retain_effect_batch(vec![effect.clone()], vec![incumbent.clone()]),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("exact candidate-ownership refinement")
+        ));
+        assert_eq!(
+            executor.runtime.terminal_body_candidate_commits, 0,
+            "a malformed positional binding cannot refine the runtime terminal"
+        );
+        assert!(executor.retained_effect_batch.is_none());
+
+        let roots = vec![
+            executor.runtime.test_effect_ownership(&effect),
+            executor.runtime.test_effect_ownership(&sibling),
+        ];
+        let mut later_malformed =
+            bind_adapter_effect_batch_ownership(&[effect.clone(), sibling.clone()], roots)
+                .expect("bind a two-effect terminal carrier");
+        later_malformed[1] = later_malformed[1]
+            .rebind_same_adapter_effect(&sibling)
+            .expect("make only the later positional binding malformed");
+        let incumbent = later_malformed[0].clone();
+        let identity = incumbent
+            .candidate_semantic_identity()
+            .expect("StoreBody retains its route-neutral identity");
+        executor
+            .runtime
+            .terminal_body_candidate_owners
+            .insert(identity, incumbent.clone());
+        assert!(matches!(
+            executor.retain_effect_batch(vec![effect.clone(), sibling], later_malformed),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("exact candidate-ownership refinement")
+        ));
+        assert_eq!(
+            executor.runtime.terminal_body_candidate_commits, 0,
+            "a valid first terminal cannot commit before a later batch position fails"
+        );
+        assert!(executor.retained_effect_batch.is_none());
+
+        let exact = incumbent
+            .rebind_same_adapter_effect(&effect)
+            .expect("rebind the same terminal owner to a one-effect batch");
+        executor
+            .retain_effect_batch(vec![effect], vec![exact])
+            .expect("the exact 1-to-1 terminal retry stutters");
+        assert_eq!(executor.runtime.terminal_body_candidate_commits, 1);
+        assert!(executor.retained_effect_batch.is_none());
     }
 
     #[test]

@@ -123,7 +123,9 @@ IndexedDecisionWitness(initialContext) ==
        asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
-         IndexedFixedCorridorDeadlines(initialContext)
+         IndexedFixedCorridorDeadlines(initialContext),
+       asyncServeProducerEpisodeDue <-
+         IndexedServeProducerEpisodeDue(initialContext)
 
 (***************************************************************************
 Exact Decision-source safety over one indexed Async instance.
@@ -244,7 +246,9 @@ IndexedDecisionServiceWitness(initialContext) ==
        asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
-         IndexedFixedCorridorDeadlines(initialContext)
+         IndexedFixedCorridorDeadlines(initialContext),
+       asyncServeProducerEpisodeDue <-
+         IndexedServeProducerEpisodeDue(initialContext)
 
 (***************************************************************************
 Generic local adequate-leader witness over the same indexed state.
@@ -363,7 +367,9 @@ IndexedAdequateLeaderWitness(initialContext) ==
        asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
-         IndexedFixedCorridorDeadlines(initialContext)
+         IndexedFixedCorridorDeadlines(initialContext),
+       asyncServeProducerEpisodeDue <-
+         IndexedServeProducerEpisodeDue(initialContext)
 
 (***************************************************************************
 Exact indexed producer ownership.
@@ -422,7 +428,8 @@ BY Isa
        IndexedDecisionWitness!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
-       IndexedFixedCorridorDeadlines
+       IndexedFixedCorridorDeadlines,
+       IndexedServeProducerEpisodeDue
 
 THEOREM IndexedAdequateLeaderWitnessVariablesAreExact ==
   IndexedAsyncStateShape
@@ -438,7 +445,8 @@ BY Isa
        IndexedAdequateLeaderWitness!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
-       IndexedFixedCorridorDeadlines
+       IndexedFixedCorridorDeadlines,
+       IndexedServeProducerEpisodeDue
 
 THEOREM IndexedAsyncLiveSpecProjectsAdequateLeaderWitnessLiveSpec ==
   \A initialContext \in AdmissibleContextRecords:
@@ -451,7 +459,8 @@ BY Isa
        IndexedAsyncStateAt,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
-       IndexedFixedCorridorDeadlines
+       IndexedFixedCorridorDeadlines,
+       IndexedServeProducerEpisodeDue
 
 THEOREM IndexedDecisionServiceWitnessVariablesAreExact ==
   IndexedAsyncStateShape
@@ -467,7 +476,8 @@ BY Isa
        IndexedDecisionServiceWitness!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
-       IndexedFixedCorridorDeadlines
+       IndexedFixedCorridorDeadlines,
+       IndexedServeProducerEpisodeDue
 
 THEOREM IndexedInitProjectsEveryDecisionWitnessInit ==
   \A initialContext \in AdmissibleContextRecords:
@@ -526,7 +536,8 @@ PROOF
                IndexedDecisionWitness!vars,
                IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
                IndexedRecovery, IndexedProducer,
-               IndexedFixedCorridorDeadlines
+               IndexedFixedCorridorDeadlines,
+               IndexedServeProducerEpisodeDue
       <3> QED BY <3>2
     <2> QED BY <1>1, <2>1, <2>2
   <1> QED BY <1>1
@@ -566,7 +577,8 @@ PROOF
                IndexedAdequateLeaderWitness!vars,
                IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
                IndexedRecovery, IndexedProducer,
-               IndexedFixedCorridorDeadlines
+               IndexedFixedCorridorDeadlines,
+               IndexedServeProducerEpisodeDue
       <3> QED BY <3>2
     <2> QED BY <1>1, <2>1, <2>2
   <1> QED BY <1>1
@@ -591,7 +603,8 @@ BY IndexedBracketStepProjectsEveryDecisionWitnessStep, Isa
        IndexedDecisionWitness!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
-       IndexedFixedCorridorDeadlines
+       IndexedFixedCorridorDeadlines,
+       IndexedServeProducerEpisodeDue
 
 THEOREM IndexedChainInitEstablishesDecisionWitnessSupport ==
   IndexedChainInit => IndexedDecisionWitnessSupport

@@ -7,10 +7,12 @@ import argparse
 import base64
 import csv
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
 import importlib.util
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -99,6 +101,7 @@ _MAX_PREBUILT_BINARY_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_RELEASE_TSV_BYTES = 16 * 1024 * 1024
 _MAX_RELEASE_TEXT_BYTES = 256 * 1024 * 1024
 _MAX_RELEASE_JSON_BYTES = 128 * 1024 * 1024
+_MAX_TLAPS_RESOURCE_RECORDS = 1_000_000
 _PREBUILT_MANIFEST_NAME = ".sumeragi-v2-prebuilt-binaries.tsv"
 _PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
 _PREBUILT_TRIPLE_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_.]+)+")
@@ -198,6 +201,13 @@ _FORMAL_FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
     "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
     "recovery/ownership mutations, bounded TLC, trace replay, and production Verus"
+)
+_TLAPS_RESOURCE_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
+_TLAPS_RESOURCE_SAMPLE_INTERVAL_SECONDS = 0.25
+_TLAPS_RESOURCE_PHYSICAL_FOOTPRINT_INTERVAL_SECONDS = 5.0
+_TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE = "max_rss_physical_footprint"
+_TLAPS_RESOURCE_TIMESTAMP_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"
 )
 _SCALING_REPORT_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.validation.v1"
 _SCALING_SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -369,7 +379,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 826
+_PRODUCTION_TEST_COUNT = 829
 _G_UNIT_TEST_COUNT = 309
 _G_UNIT_GROUPS = (
     (
@@ -455,7 +465,7 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        41,
+        43,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -490,7 +500,7 @@ _PRODUCTION_MODULES = (
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 131),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 132),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -4142,6 +4152,359 @@ def _validate_multilane_apalache_evidence(
             )
 
 
+def _tlaps_resource_int(value: Any, name: str, *, minimum: int = 0) -> int:
+    if type(value) is not int or value < minimum:
+        raise ReceiptError(f"{name} is not one bounded integer")
+    return value
+
+
+def _tlaps_resource_float(value: Any, name: str) -> float:
+    if type(value) is not float or not math.isfinite(value) or value < 0.0:
+        raise ReceiptError(f"{name} is not one finite non-negative decimal")
+    return value
+
+
+def _tlaps_resource_timestamp(value: Any, name: str) -> datetime:
+    if (
+        not isinstance(value, str)
+        or _TLAPS_RESOURCE_TIMESTAMP_RE.fullmatch(value) is None
+    ):
+        raise ReceiptError(f"{name} is not one canonical UTC timestamp")
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError as error:
+        raise ReceiptError(f"{name} is not one valid UTC timestamp") from error
+
+
+def _validate_tlaps_resource_evidence(
+    jsonl_snapshot: EvidenceSnapshot,
+    summary_snapshot: EvidenceSnapshot,
+) -> None:
+    """Validate the exact successful resource-guard stream and its summary."""
+
+    data = jsonl_snapshot.data
+    if not data or not data.endswith(b"\n") or b"\r" in data or b"\0" in data:
+        raise ReceiptError("TLAPS resource samples are not canonical LF-only JSONL")
+    lines = data.splitlines(keepends=True)
+    if len(lines) > _MAX_TLAPS_RESOURCE_RECORDS:
+        raise ReceiptError("TLAPS resource samples exceed the record-count bound")
+    records = [
+        _decode_canonical_json(line, f"TLAPS resource record {index}")
+        for index, line in enumerate(lines)
+    ]
+    if len(records) < 4:
+        raise ReceiptError(
+            "TLAPS resource samples lack start, spawn, sample, and summary records"
+        )
+
+    summary = _decode_canonical_json(
+        summary_snapshot.data, "TLAPS resource summary"
+    )
+    summary_fields = {
+        "child_exit_code",
+        "ended_utc",
+        "event",
+        "exit_reason",
+        "exit_status",
+        "evidence_peak_rss_bytes",
+        "kernel_peak_rss_bytes",
+        "kernel_peak_rss_method",
+        "kernel_peak_rss_scope",
+        "memory_limit_bytes",
+        "memory_enforcement_mode",
+        "physical_footprint_interval_seconds",
+        "peak_memory_bytes",
+        "peak_physical_footprint_bytes",
+        "peak_rss_bytes",
+        "report_context",
+        "sample_count",
+        "sample_interval_seconds",
+        "schema_version",
+        "started_utc",
+        "supervisor_pid",
+    }
+    _require_exact_json_fields(summary, summary_fields, "TLAPS resource summary")
+    if records[-1] != summary:
+        raise ReceiptError(
+            "TLAPS resource samples do not terminate in the exact published summary"
+        )
+
+    start = _require_exact_json_fields(
+        records[0],
+        {
+            "event",
+            "memory_limit_bytes",
+            "memory_enforcement_mode",
+            "physical_footprint_interval_seconds",
+            "report_context",
+            "sample_interval_seconds",
+            "schema_version",
+            "started_utc",
+            "supervisor_pid",
+        },
+        "TLAPS resource start record",
+    )
+    spawn = _require_exact_json_fields(
+        records[1],
+        {
+            "event",
+            "process_group_id",
+            "schema_version",
+            "timestamp_utc",
+            "wrapper_pid",
+        },
+        "TLAPS resource spawn record",
+    )
+    sample_records = records[2:-1]
+    sample_fields = {
+        "accounting_method",
+        "elapsed_seconds",
+        "event",
+        "memory_bytes",
+        "memory_limit_bytes",
+        "physical_footprint_bytes",
+        "process_count",
+        "process_group_id",
+        "rss_bytes",
+        "schema_version",
+        "timestamp_utc",
+    }
+
+    summary_schema = _tlaps_resource_int(
+        summary.get("schema_version"), "TLAPS resource summary.schema_version"
+    )
+    summary_child_status = _tlaps_resource_int(
+        summary.get("child_exit_code"), "TLAPS resource summary.child_exit_code"
+    )
+    summary_exit_status = _tlaps_resource_int(
+        summary.get("exit_status"), "TLAPS resource summary.exit_status"
+    )
+    summary_limit = _tlaps_resource_int(
+        summary.get("memory_limit_bytes"),
+        "TLAPS resource summary.memory_limit_bytes",
+        minimum=1,
+    )
+    summary_samples = _tlaps_resource_int(
+        summary.get("sample_count"),
+        "TLAPS resource summary.sample_count",
+        minimum=1,
+    )
+    summary_supervisor = _tlaps_resource_int(
+        summary.get("supervisor_pid"),
+        "TLAPS resource summary.supervisor_pid",
+        minimum=2,
+    )
+    peak_memory = _tlaps_resource_int(
+        summary.get("peak_memory_bytes"),
+        "TLAPS resource summary.peak_memory_bytes",
+    )
+    peak_rss = _tlaps_resource_int(
+        summary.get("peak_rss_bytes"), "TLAPS resource summary.peak_rss_bytes"
+    )
+    peak_footprint = _tlaps_resource_int(
+        summary.get("peak_physical_footprint_bytes"),
+        "TLAPS resource summary.peak_physical_footprint_bytes",
+    )
+    kernel_peak_rss = _tlaps_resource_int(
+        summary.get("kernel_peak_rss_bytes"),
+        "TLAPS resource summary.kernel_peak_rss_bytes",
+    )
+    evidence_peak_rss = _tlaps_resource_int(
+        summary.get("evidence_peak_rss_bytes"),
+        "TLAPS resource summary.evidence_peak_rss_bytes",
+    )
+    summary_sample_interval = _tlaps_resource_float(
+        summary.get("sample_interval_seconds"),
+        "TLAPS resource summary.sample_interval_seconds",
+    )
+    summary_footprint_interval = _tlaps_resource_float(
+        summary.get("physical_footprint_interval_seconds"),
+        "TLAPS resource summary.physical_footprint_interval_seconds",
+    )
+    started = _tlaps_resource_timestamp(
+        summary.get("started_utc"), "TLAPS resource summary.started_utc"
+    )
+    ended = _tlaps_resource_timestamp(
+        summary.get("ended_utc"), "TLAPS resource summary.ended_utc"
+    )
+    expected_kernel_method = (
+        "wait4_ru_maxrss" if kernel_peak_rss > 0 else "unavailable"
+    )
+    if (
+        summary_schema != 1
+        or summary.get("event") != "summary"
+        or summary.get("exit_reason") != "completed"
+        or summary_child_status != 0
+        or summary_exit_status != 0
+        or summary_limit != _TLAPS_RESOURCE_MEMORY_LIMIT_BYTES
+        or summary.get("memory_enforcement_mode")
+        != _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE
+        or summary_sample_interval
+        != _TLAPS_RESOURCE_SAMPLE_INTERVAL_SECONDS
+        or summary_footprint_interval
+        != _TLAPS_RESOURCE_PHYSICAL_FOOTPRINT_INTERVAL_SECONDS
+        or summary.get("report_context") is not None
+        or summary.get("kernel_peak_rss_method") != expected_kernel_method
+        or summary.get("kernel_peak_rss_scope") != "direct_guarded_body"
+        or summary_samples != len(sample_records)
+        or ended < started
+        or peak_memory > summary_limit
+        or kernel_peak_rss > summary_limit
+        or evidence_peak_rss > summary_limit
+        or evidence_peak_rss != max(peak_rss, kernel_peak_rss)
+    ):
+        raise ReceiptError(
+            "TLAPS resource summary is not a successful bounded release run"
+        )
+
+    start_schema = _tlaps_resource_int(
+        start.get("schema_version"), "TLAPS resource start.schema_version"
+    )
+    start_limit = _tlaps_resource_int(
+        start.get("memory_limit_bytes"),
+        "TLAPS resource start.memory_limit_bytes",
+        minimum=1,
+    )
+    start_supervisor = _tlaps_resource_int(
+        start.get("supervisor_pid"),
+        "TLAPS resource start.supervisor_pid",
+        minimum=2,
+    )
+    start_sample_interval = _tlaps_resource_float(
+        start.get("sample_interval_seconds"),
+        "TLAPS resource start.sample_interval_seconds",
+    )
+    start_footprint_interval = _tlaps_resource_float(
+        start.get("physical_footprint_interval_seconds"),
+        "TLAPS resource start.physical_footprint_interval_seconds",
+    )
+    start_time = _tlaps_resource_timestamp(
+        start.get("started_utc"), "TLAPS resource start.started_utc"
+    )
+    if (
+        start_schema != 1
+        or start.get("event") != "start"
+        or start_limit != summary_limit
+        or start.get("memory_enforcement_mode")
+        != _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE
+        or start_sample_interval != summary_sample_interval
+        or start_footprint_interval != summary_footprint_interval
+        or start.get("report_context") is not None
+        or start_supervisor != summary_supervisor
+        or start.get("started_utc") != summary.get("started_utc")
+        or start_time != started
+    ):
+        raise ReceiptError("TLAPS resource start record is not bound to its summary")
+
+    spawn_schema = _tlaps_resource_int(
+        spawn.get("schema_version"), "TLAPS resource spawn.schema_version"
+    )
+    process_group_id = _tlaps_resource_int(
+        spawn.get("process_group_id"),
+        "TLAPS resource spawn.process_group_id",
+        minimum=2,
+    )
+    wrapper_pid = _tlaps_resource_int(
+        spawn.get("wrapper_pid"), "TLAPS resource spawn.wrapper_pid", minimum=2
+    )
+    spawn_time = _tlaps_resource_timestamp(
+        spawn.get("timestamp_utc"), "TLAPS resource spawn.timestamp_utc"
+    )
+    if (
+        spawn_schema != 1
+        or spawn.get("event") != "spawn"
+        or process_group_id == wrapper_pid
+        or process_group_id == summary_supervisor
+        or wrapper_pid == summary_supervisor
+        or spawn_time < started
+        or spawn_time > ended
+    ):
+        raise ReceiptError("TLAPS resource spawn record is not one guarded body")
+
+    observed_memory: list[int] = []
+    observed_rss: list[int] = []
+    observed_footprint: list[int] = []
+    previous_elapsed = -1.0
+    previous_timestamp = spawn_time
+    for index, raw_sample in enumerate(sample_records):
+        sample = _require_exact_json_fields(
+            raw_sample, sample_fields, f"TLAPS resource sample record {index}"
+        )
+        sample_schema = _tlaps_resource_int(
+            sample.get("schema_version"),
+            f"TLAPS resource sample {index}.schema_version",
+        )
+        sample_limit = _tlaps_resource_int(
+            sample.get("memory_limit_bytes"),
+            f"TLAPS resource sample {index}.memory_limit_bytes",
+            minimum=1,
+        )
+        sample_group = _tlaps_resource_int(
+            sample.get("process_group_id"),
+            f"TLAPS resource sample {index}.process_group_id",
+            minimum=2,
+        )
+        _tlaps_resource_int(
+            sample.get("process_count"),
+            f"TLAPS resource sample {index}.process_count",
+            minimum=1,
+        )
+        memory = _tlaps_resource_int(
+            sample.get("memory_bytes"),
+            f"TLAPS resource sample {index}.memory_bytes",
+        )
+        rss = _tlaps_resource_int(
+            sample.get("rss_bytes"), f"TLAPS resource sample {index}.rss_bytes"
+        )
+        footprint = _tlaps_resource_int(
+            sample.get("physical_footprint_bytes"),
+            f"TLAPS resource sample {index}.physical_footprint_bytes",
+        )
+        elapsed = _tlaps_resource_float(
+            sample.get("elapsed_seconds"),
+            f"TLAPS resource sample {index}.elapsed_seconds",
+        )
+        timestamp = _tlaps_resource_timestamp(
+            sample.get("timestamp_utc"),
+            f"TLAPS resource sample {index}.timestamp_utc",
+        )
+        accounting_method = sample.get("accounting_method")
+        if accounting_method == "rss":
+            accounting_is_exact = footprint == 0 and memory == rss
+        elif accounting_method == _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE:
+            accounting_is_exact = footprint > 0 and memory == max(rss, footprint)
+        else:
+            accounting_is_exact = False
+        if (
+            sample_schema != 1
+            or sample.get("event") != "sample"
+            or sample_limit != summary_limit
+            or sample_group != process_group_id
+            or memory > sample_limit
+            or not accounting_is_exact
+            or elapsed < previous_elapsed
+            or timestamp < previous_timestamp
+            or timestamp > ended
+        ):
+            raise ReceiptError(
+                f"TLAPS resource sample {index} is not exact bounded guard evidence"
+            )
+        previous_elapsed = elapsed
+        previous_timestamp = timestamp
+        observed_memory.append(memory)
+        observed_rss.append(rss)
+        observed_footprint.append(footprint)
+
+    if (
+        peak_memory != max(observed_memory)
+        or peak_rss != max(observed_rss)
+        or peak_footprint != max(observed_footprint)
+    ):
+        raise ReceiptError(
+            "TLAPS resource summary peaks do not match the authenticated sample stream"
+        )
+
+
 def _validate_formal_snapshot_replays(
     *,
     snapshots: dict[str, EvidenceSnapshot],
@@ -4399,22 +4762,9 @@ def _formal_artifacts(
         multilane_apalache_evidence,
         sealed["workspace_source_manifest_sha256"],
     )
-    resource_summary = _decode_canonical_json(
-        tlaps_resource_summary.data, "TLAPS resource summary"
+    _validate_tlaps_resource_evidence(
+        tlaps_resource_jsonl, tlaps_resource_summary
     )
-    if (
-        resource_summary.get("schema_version") != 1
-        or resource_summary.get("event") != "summary"
-        or resource_summary.get("exit_reason") != "completed"
-        or resource_summary.get("exit_status") != 0
-        or resource_summary.get("memory_limit_bytes") != 2 * 1024 * 1024 * 1024
-        or resource_summary.get("sample_interval_seconds") != 0.25
-        or not isinstance(resource_summary.get("peak_memory_bytes"), int)
-        or resource_summary["peak_memory_bytes"] < 0
-        or resource_summary["peak_memory_bytes"]
-        > resource_summary["memory_limit_bytes"]
-    ):
-        raise ReceiptError("TLAPS resource summary is not a successful bounded release run")
     if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
         raise ReceiptError("formal harness lock is not the pinned dependency graph")
     toolchain = _tsv_fields_from_snapshot(

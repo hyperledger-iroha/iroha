@@ -6,7 +6,7 @@
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 826 tests",
+            "must contain exactly 829 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -20,7 +20,7 @@
                 f"production ownership regression {test_name} must be pinned exactly once; found 0",
             )
             for test_name in (
-                "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+                "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner",
                 "sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
                 "sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
                 "sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded",
@@ -36,9 +36,9 @@
             )
         ),
         (
-            "readonly expected_production_liveness_test_count=826",
-            "readonly expected_production_liveness_test_count=825",
-            "production liveness source count must be sealed as 826",
+            "readonly expected_production_liveness_test_count=829",
+            "readonly expected_production_liveness_test_count=828",
+            "production liveness source count must be sealed as 829",
         ),
         (
             "readonly expected_typed_rollover_formal_mutation_count=45",
@@ -389,6 +389,46 @@ def test_production_release_inventory_seals_successor_parent_binding(
         ), errors
         adapter_path.write_text(canonical_source, encoding="utf-8")
 
+    semantic_mutations = (
+        (
+            "Hash::new(b\"substituted successor execution policy\")",
+            "successor.execution_policy_hash",
+            "successor authentication must reject execution-policy substitution "
+            "against the durable parent context",
+        ),
+        (
+            "proposal_subject.payload_hash = Hash::new(&proposal_body);",
+            "proposal_subject.payload_hash = Hash::new(b\"unbound parent body\");",
+            "successor parent-certificate authentication must use a canonical "
+            "payload-bound proposal fixture",
+        ),
+        (
+            "&locally_validated_payload,\n        )\n"
+            "        .expect(\"encode locally validated payload\")",
+            "&[0x88, 2],\n        )\n"
+            "        .expect(\"encode locally validated payload\")",
+            "execution-commitment conflict authentication must bind the locally "
+            "validated canonical payload fixture",
+        ),
+        (
+            "encode_payload(&context, proposal_round, proposal_subject, &proposal_body)\n"
+            "                .expect(\"encode later-view proposal payload\")",
+            "encode_payload(&context, proposal_round, proposal_subject, &[0x83, 3])\n"
+            "                .expect(\"encode later-view proposal payload\")",
+            "embedded-certificate conflict authentication must bind the "
+            "later-view canonical payload fixture",
+        ),
+    )
+    for old, new, expected_error in semantic_mutations:
+        assert canonical_source.count(old) == 1, old
+        adapter_path.write_text(
+            canonical_source.replace(old, new, 1),
+            encoding="utf-8",
+        )
+        errors = module._production_liveness_release_inventory_errors(tmp_path)
+        assert any(expected_error in error for error in errors), errors
+        adapter_path.write_text(canonical_source, encoding="utf-8")
+
 
 def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     tmp_path: Path,
@@ -450,27 +490,27 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current inventory to 826 tests across 38 modules.\n"
+            "current inventory to 829 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 81 legs.",
-            "current inventory to 826 tests across 38 modules.\n"
+            "current inventory to 829 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 80 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 826-test,\n38-module inventory. The complete source-sealed\n"
+            "current 829-test,\n38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 81 legs",
-            "current 826-test,\n38-module inventory. The complete source-sealed\n"
+            "current 829-test,\n38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 80 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current source-bound inventory to 826 exact tests "
+            "current source-bound inventory to 829 exact tests "
             "across\n38 modules and 81 pre-network legs.",
-            "current source-bound inventory to 826 exact tests "
+            "current source-bound inventory to 829 exact tests "
             "across\n38 modules and 80 pre-network legs.",
         ),
     ),
@@ -521,17 +561,17 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 826",
-            "_PRODUCTION_TEST_COUNT = 825",
-            "production test count must equal the exact shell inventory count 826",
+            "_PRODUCTION_TEST_COUNT = 829",
+            "_PRODUCTION_TEST_COUNT = 828",
+            "production test count must equal the exact shell inventory count 829",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
             '        "sumeragi::authoritative_runtime_gate_tests",\n'
-            "        41,\n"
+            "        43,\n"
             "    ),",
             '        "sumeragi::authoritative_runtime_gate_tests",\n'
-            "        40,\n"
+            "        42,\n"
             "    ),",
             "production module receipt tuple must equal the exact shell",
         ),
@@ -567,8 +607,8 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 132),',
             '("production-v2-worker", "sumeragi::v2_worker::tests", 131),',
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 130),',
             "production module receipt tuple must equal the exact shell",
         ),
         (

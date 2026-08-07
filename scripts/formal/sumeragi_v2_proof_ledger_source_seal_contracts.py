@@ -483,7 +483,9 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::try_recv_if_at_checked_classified": (
         "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
     ),
-    "runner::run_inner": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
     "runner::drain_v2_ingress": (
         "dad59f9959e17dd1d504935ab1bacb07e7dc8652d71727ff96e6316ec6f3f5c5"
     ),
@@ -689,126 +691,126 @@ _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
 _TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": {
         "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "1df06952a3664f7770385d6d4175e73bfbeddc53200715e3ccd627ac925a39f9"
         ),
         "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "88bd8b5a5262c9e4220a14c1041492fea1435795035c0df5833da6b01ae7b8f6"
         ),
         "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission": (
             "09724aa3803ff9a87bbc61b24f101afa4d2ead895f167a3c05beb3bd59403698"
         ),
         "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "44874f718618e4409812b99ff62e28cefa9dc904a4938889e04104a5a4f1485b"
         ),
         "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "4c25562e7e3e5ba4b301a083caf80fc507ca23793fdff5f0d83a61d98ab598db"
         ),
         "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "402d555a2123de59812a33b3beb9efd8018fa08f70d293b34284ea83d12ebd12"
         ),
         "AsyncTimeoutRecoveryUpdatedEpisodeIsRetainedByAdmissionState": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "81b6e5c8ab71af82a8099a563a96db2e5ee106fc31c9d773b86db2c7652c064e"
         ),
         "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "f23a0f081c1b20572022d0756f8daa9ee1dbc06da96b1e4ed933fe2406b53686"
         ),
         "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "4ff696a18c898ff16ba41a705e464668de9083c018efdafe1baccbeceeae3cb7"
         ),
         "AsyncTimeoutRecoveryRetainedEpisodesContainFramedEpisode": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "21fad6c95f6d72febeaea68a67b42c917c44c5d3958203eb2fc2e442227c1529"
         ),
         "AsyncTimeoutVoteFairIngressDrainLeavesCoreState": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "579691707af9891234bdee0b535a018dd864baac48548c17ddac66f428dec26e"
         ),
         "AsyncPostGstHasNoControlServiceReset": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "d738c3b56078f2a44f76f15c319d310288f9fad7a2ec011a7cdc04af5d06e36d"
         ),
         "AsyncTimeoutRecoveryEpisodeCurrentBoundaryForNode": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "d3cd30a1100860fd8c718fce20f20379aba20ed13974fa7eed912503f9138ce8"
         ),
         "AsyncUnchangedCoreStatePreservesTimeoutBoundary": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "47d944b51bd1a575c066d1d3218e62de883b07984b04725ae9355234f73a20cc"
         ),
         "AsyncTimeoutVoteIngressDrainRetainsCurrentEpisodeBoundary": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "2ea11aa8dc93fa7684d2ecb2a96cb4af7dbbbc8da63d30a008048a2a1fd045aa"
         ),
         "AsyncUnchangedCoreStateExcludesPersistInstall": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "095b9ab62786836bcfbb5a4363477378905311a89aebc4d1fcf4feb4bd7ba97f"
         ),
         "AsyncFairIngressDrainPreservesRetransmitTimerState": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "b473620a788d1b0f680dc34677d31471a8f218415ab2572c2d18835c1e64b2d9"
         ),
         "AsyncFairIngressDrainExcludesDirectRetransmit": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "ad31fdd4ae63ba80ec7d6ca8e9944f5dcc0f8c237ceb6596b35d23d12f7ea674"
         ),
         "AsyncTypedOutstandingTagRemovalChangesFunction": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "8ea219351421de1566369e590290bebafc6fd19d80ef1f3173b81d9cafdc11de"
         ),
         "AsyncDeferredRetransmitRemovesOutstandingTag": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "4b85c87bc746d4fee0e6844c5f1f3cb72c53a9acaf3cdb8b0f15a2fd69744bb0"
         ),
         "AsyncFairIngressDrainExcludesDeferredRetransmit": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "bc19fc379f8da8f848667b77cb0c859605fae3153e2ba6d2a2be334f0b40c17b"
         ),
         "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "21b37b8848a7bd3922bf934c2ae2533af315f563465cd07866562762a82dd959"
         ),
         "AsyncIngressDrainFramesDeferredAndCausalQueues": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "ed85c48c72dd007237193ba7a5087ba3f635b4fb2c5d9e3c05f5ac3fd78ceb59"
         ),
         "AsyncTimeoutVoteFairIngressFramesCommandAndWork": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "9ec8a9f5753e50c531e67e7ff18140a6a442f82afee336a0da542aa24f370c9c"
         ),
         "AsyncSequenceSetAfterAppendAddsOnlyValue": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "54303c304b4d75584ef078930e256dbc611662ba19d72a80907c555c4d328ee2"
         ),
         "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "41fef605e80b132b9fa9dc1e8be04bbcdc05b95cd3ecb7816db3866d2bcdf01e"
         ),
         "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "333bf376ecd4a6de1510f3ef6be559e847804cfc5b5c99abe06bff76a27e241b"
         ),
         "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "ec3bf0910e32f4ff43e9c2de072985cfce9ee193894b49857cba30fb2a95222c"
         ),
         "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "9f877ab73f3e7dd856d0e815adcd53f49537531203273d688470bee4af9cf8bf"
         ),
         "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "9e91b44806f1f022f7b864cf76c6195a7e4a7d4e47e47685f5cb8db75e426053"
         ),
         "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "7895a9a9334907f80dafa4f489440db25dd1834c76d1aec5aad4fbf6b3343ae2"
         ),
         "AsyncOwnedTimeoutRecoveryCurrentOriginHasBeginTimeoutPhase": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "24f1cc906957182fcb9cc2070f04a36d3d412c649f7eb3266efaac4af6fc3774"
         ),
         "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "6738b6c3ff4b2f59e8a76c0f3d48a45a1596f33c1034e63bbccee12f687aef9b"
         ),
         "AsyncTimeoutVoteDeliveryOriginHasDistinctPhase": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "8575237ea078b3f9aa6ae52221c7005926d933edd1f64e6f76d105ee10b1bde1"
         ),
         "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "ef4c3d237655ff50311beb25ccd505c64a08ec4d7101dc8cfb8561eb27a442ad"
         ),
         "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "f042e10c01d4109284f2557ce3da9806f771009526a3ea528b8d899ad794cb64"
         ),
         "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "43b470ee0007250242614c689a697ece3ba3c5b97a508ae5dd184f12d9431c28"
         ),
         "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "47d20f52eb8495d81169989c68ba754f7f36bfa6622b02a56433240f41367c54"
         ),
         "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "9b7852d4c48d9c782e1e06ad51abdf998b9fe770e65a4c656a13231ce080f93f"
         ),
     },
     "SumeragiV2AdequateLeaderServiceClosureProofs.tla": {
         "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode": (
-            "PENDING_BEHAVIOR_VALIDATION"
+            "3cb5653b8cceb88b3a193570b5b344cde20f58e5759bfb770fa343f9e392126c"
         ),
     },
 }
@@ -902,13 +904,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 826
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 829
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 81
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc"
+    "aade985a59315e4e94a0933d175065594e063cd041a2c5009b6d6ea03c4b0c0c"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "e0cbc059d724b0cf5172d864b563d094f3d3d975f2140cfcbfc4075c521175bd"
+    "64096be7977ae27db644ad5cdd0fb7f5a2e633ba9f20ea4a3244bba1fc5af64f"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
@@ -922,7 +924,7 @@ _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
 _PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 309
 _PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 310
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb"
+    "bd13d718a1362dd242aad04a75d6c55113181f84545b061cf8517236ac6057fe"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -982,14 +984,14 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
         "79c2caea8dfd6f17885ff3d72253a41cb34db7a99d7976b52d5fdab45c0e9a89"
     ),
     "successor_context_requires_the_durable_cryptographic_parent": (
-        "43ac1f9d461eaebc54570a59b0846abadaa9e8791a8bfc89e02a234e99276555"
+        "f7ff90422e2b67a0d696eecd7da5ca64fcc692cf13f69779c2ea74f58da4e7a3"
     ),
     "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter": (
-        "414c5f5bf9c7156f38222f256673c42e1ce2394293193487fe9d5d2d24044286"
+        "423991082e2c3a6151fdd80b69b643d56b56d2cb7963331024453b2fab7c037c"
     ),
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
-    "ae4bca0b785e6d7d5db41dd5516ce2859464f0f0526d5d7d3a52a3c930f6025e"
+    "b0457ed9453abd1999e7246c3cd2d96aa1dc6e4763466a5f7c76635699997344"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 13),
@@ -998,7 +1000,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        41,
+        43,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -1033,7 +1035,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 131),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 132),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -1118,7 +1120,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_effects::tests::effect_dispatch_consumes_leader_wire_terminal_created_while_batch_drains",
     "sumeragi::v2_effects::tests::retained_live_retry_consumes_decision_retirement_terminal_same_cycle",
     "sumeragi::v2_effects::tests::retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle",
-    "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+    "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner",
     "sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
     "sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
     "sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded",
@@ -1189,7 +1191,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_lane_work::tests::duplicate_reply_effect_retains_alternate_sources_across_source_update",
     "sumeragi::v2_lane_work::tests::temporarily_unserviceable_effect_requeues_behind_later_reserved_work",
     "sumeragi::v2_lane_work::tests::retired_sidecar_route_between_drain_and_lane_queue_preserves_live_sibling",
-    "sumeragi::v2_runtime::tests::commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+    "sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix",
     "peer::run::tests::authenticated_source_credit_precedes_network_and_subscriber_backlogs",
     "peer::run::tests::recoverable_post_acknowledges_only_after_full_write_and_flush",
     "peer::run::tests::partial_write_error_closes_ack_without_false_completion",
@@ -1463,7 +1465,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_effects::tests::authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally",
     "sumeragi::v2_effects::tests::reproposal_commit_qc_applies_the_exact_unchanged_body",
     "sumeragi::v2_effects::tests::reproposal_commit_signing_uses_its_same_round_validation_marker",
-    "sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot",
+    "sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer",
     "sumeragi::v2_runtime::tests::body_available_rebind_accepts_same_view_higher_generation",
     "sumeragi::v2_transport::tests::reproposal_commit_qc_authenticates_its_exact_same_round_body",
     "block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round",
@@ -1535,7 +1537,8 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack",
     "sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection",
     "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
-    "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
+    "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry",
+    "sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry",
     "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
     "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
     "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
@@ -1931,8 +1934,12 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    # TODO: Approve after the three-mode timeout-episode runner mutations pass.
-    "run_inner": "PENDING_BEHAVIOR_VALIDATION",
+    "run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
+    # TODO: Approve with the helper's exact-output alias after its focused
+    # non-descent and handoff mutations pass.
+    "rollover_finalized_height_outputs": "PENDING_BEHAVIOR_VALIDATION",
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -1962,22 +1969,22 @@ _RUNTIME_AFTER_GST_REQUIREMENT = (
 
 _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
     "V2IoCertifiedServeIngressReservation": (
-        "0d557912a3a40130e201547acf520ed5c9c4ec33e5dda93b52ab6bd79dfa0dcf"
+        "3691c0fd33c09e59c339ee7cb869b2bffd836cd4361bb2d2259c07e6013f18f8"
     ),
     "CertifiedServeProducerEpisode": (
         "e1e0bdfc4854c5553d5fbf70a67a153998be353b7e7016e890af3bbe9a76a67b"
     ),
     "V2IoCommandQueueState": (
-        "d5984aed11709061a31526159de2d21b91daff351892499e2d28d07099f0063f"
+        "95fe80ab3bb8703ea55dfcac5a8b107f6dd7f35a663e4100ed5923cf2f8fa5db"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256 = {
     "barrier": (
-        "0fd794936441324fa30589c8b167829bd9653da162d7155717d01017e0084ad1"
+        "bce35afb422de5e3b0b7a2667bea940f9170f0ba95dfae03bbea01c36de5a9ad"
     ),
     "matches_barrier": (
-        "3e4b041edb19097dedb4907b8ac46217cac63bd6db20364af4e1fd7979f5c002"
+        "d4ba831e00f4262e51db685213bd83bbdac6edb12ebc691b9aaa62774880a3b8"
     ),
 }
 
@@ -1986,16 +1993,19 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "926626c686c14d453e18bf20dd7232e33383b26b814178e2d2b7e2c2beb161e3"
     ),
     "V2IoCommandQueue::reserve_serve_ingress": (
-        "879cf4ba9107a88226a572068e941693ffd3c2f69c8f1dce943c709cc1321693"
+        "310f5f50fcf4e1bc7c99823c0c8b5c53f60bd8ab3b5ac4166c559287909312b3"
+    ),
+    "V2IoCommandQueue::retire_selected_serve_ingress_occurrence": (
+        "c0821d882ae2997fa2632ab0855afde09bf051d353a4a1bd76293b9491d0dce1"
     ),
     "V2IoCommandQueue::try_begin_producer_episode": (
-        "918c8208cde905cc74c7146a81eca81a4f6df71c73ddab94b1728cea02c726c0"
+        "31abb399d6e4ee100a51caa5c7213977aa99835a586d1e129057d4a9f9f2c8d0"
     ),
     "V2IoCommandQueue::suspend_materialized_serve_barrier_for_runtime_predecessor": (
         "af55e56ebf4bffef6b765e06aec105ede58a1be56f9612c310799fe67aef2ec1"
     ),
     "V2IoCommandQueue::serve_barrier": (
-        "dee6a2b1e77fa2dcf0293a601b25a21006eefd2d8557051d9be4beef33630003"
+        "1104236dd8cfd0ccec5ea0f3171b9d23c6dc1b0f257f0ec13ff6fe8685ad7d4e"
     ),
     "V2IoCommandQueue::claim_serve_runtime_episode": (
         "776649d85722700536fff55e1af781a66aa8694492c550ba3361255d516d0c2e"
@@ -2007,7 +2017,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "02d2bb266994d99ca4fdef5ec8d90fef193a969fe2136eb6e0f0a7f0ae47f0df"
     ),
     "V2IoCommandQueue::try_send_as": (
-        "4b09b1fb37cd30d067a58a3f9902ebb3f23d22af95e5f72b49bfccbb39a1587f"
+        "6c7a0afdfa074b745803704e6910671ab28099c9bc294c21c5fe67a55fd3905d"
     ),
     "ProductionV2Services::certified_serve_barrier": (
         "2daa1fafb0049a95cb78d01630aa55932539b3de9a0db99eb169c0e5e031f56d"
@@ -2025,13 +2035,16 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "b86f953644efbd6a73d81bba2a3cbc23195cc9dcb68e44bc90e6b9a4a8cfd15f"
     ),
     "ProductionV2Services::take_exact_serve_predecessor_completion": (
-        "08a9eddfb80c1b792988ce4433b0f200e2dccd9a8498b9c8869feb3758647307"
+        "c033089df5ad252d912aec754b9535d16f5a96d99c718a47239116c5916dad88"
+    ),
+    "ProductionV2Services::take_lifecycle_prefix_completion": (
+        "4e8e73973d093f5b642996a26b0995247a38b2c13726567d2b719fbae232d1b6"
     ),
     "ProductionV2Services::drain_exact_serve_runtime_predecessor": (
         "aa2d628cbb2b5f54d0901f9949d3581d6188efe72a3656958e95e9e9dacbae92"
     ),
     "ProductionV2Services::drain_completions_inner": (
-        "412bd6deef3d72f2cf66d11b56c36ad6e85bbeb9f66c602a821b0d4929dd12ec"
+        "08bc6f3ac8bb6d47a59a3c7812717ad06ffab68821cee79559d3f588df129098"
     ),
 }
 
@@ -2070,7 +2083,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256 = {
 
 _EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256 = {
     "oldest_active_lifecycle_ordinal": (
-        "fa6fbffb7201f69529caec900bafba3eb4f9433f00ec31289ca3e23e2363c7d4"
+        "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "uses_lifecycle_ordinal": (
         "248f70bfe769734211acc566c8b91b7e0faf037990be47f95b231d5f102a557a"
@@ -2078,14 +2091,17 @@ _EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256 = {
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
+    "final_serve_retirement_yields_one_producer_episode_before_replenishment": (
+        "059218b1bec2859b84f8fe440c785360072fca157e1ea7a4579bff252cd6dde0"
+    ),
     "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io": (
         "51623ab6cf102b45554a8135cb4fbca35062b0d5db6bea99cbabba0eb2305d9f"
     ),
     "repeated_exact_serve_claims_close_all_older_sources_before_later_io": (
-        "7dd6f52990432a274101c3d3ef6f6295d6537a13553db2a405549dfef33457e8"
+        "e97bed021406e0a72e692d2ac6ed58e491a4826b5a9054f17ca8a64d95ef0968"
     ),
     "exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission": (
-        "ac73fa43251f1cbf99d71722f412cf2c6fda79c5b109d41af20cd762b3422d19"
+        "ebeeb9606074ce7e7d51aea4d55d54dabacd23435d639d81ac6f0a9849616e21"
     ),
     "worker_completion_is_retained_behind_a_full_runtime_fifo": (
         "4e807f3dd45e855a96923c803bd970dbc2a6684583b8dfa84aa6db788c5206c1"
@@ -2094,22 +2110,22 @@ _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
         "913796745fa6c589f20dd309da632c1dfb05f84aa963377b04ffa9a0556e21eb"
     ),
     "drained_exact_retransmission_gets_fresh_scheduler_ordinal": (
-        "f21eea2060d0b4f969dda5681df7ea0e208af2b0080aaa9fc23271cef72e1b56"
+        "8c4b30a4d0c7d2730d6d2e4c702efb2cc48e514a64513d6b84751f8c91654811"
     ),
     "certified_serve_future_slot_blocks_control_and_consensus_replenishment": (
-        "d1ff8afcad02c99641e66021fd334b88f7f93eb8d3713dc346c08cff915d3342"
+        "4eb2da42d968642c6eaf184f0ddda6f726e4a7fe49d6b6c2499092ee3c97d075"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256 = {
     "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
-        "653fac9ef34bfb376711f643fe231ee9860cb7c1ef29570d514a3f870a531c1c"
+        "4173b41c9622f676b9c9d412a267cb0b3b2aca91ed9725e2a5c450485d7442d9"
     ),
 }
 
 _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
     "restored_productive_retry_freezes_the_current_physical_source_prefix": (
-        "3fa33cdfc0eb55bf7e025c57d340439fbe527c5cf1ba29b48e8779db5be8cd65"
+        "0717cee735d0b0a435bdcd502ca6e29c87a554a9f017cb7edbf1efb46ef33d20"
     ),
     "restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire": (
         "e994c3391ce2626972c26c57a37039f71573adb9d82bbcfa64619edb70640255"
@@ -2118,11 +2134,11 @@ _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
 
 _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
     "fair_v2_ingress_admit_leader_wire": (
-        "140325f2b05a0c93744b2fbd483e485d95f17a0c8ce08ac1bf41808047e306f4"
+        "bda06e6c542397e50d18cde8fd85fb568e619de471719967a594cfbdfc850350"
     ),
-    # TODO: Approve the complete classified selector only after both ordinary
-    # and timeout-episode barrier mutations pass.
-    "try_recv_if_at_checked_classified": "PENDING_BEHAVIOR_VALIDATION",
+    "try_recv_if_at_checked_classified": (
+        "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
+    ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
     ),
@@ -2132,8 +2148,12 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    # TODO: Approve after the three-mode timeout-episode runner mutations pass.
-    "run_inner": "PENDING_BEHAVIOR_VALIDATION",
+    "run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
+    "service_certified_serve_barrier_liveness_turn": (
+        "d6afb60b54ec1b0a482ac76cdcc4f14469dbd39930a21ae26904c1a2d4cacb88"
+    ),
     "advance_executor": "ce2f1975fd47aac0b33326547595f05779ab0a920e5996499bf450330c457f93",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
@@ -2152,6 +2172,48 @@ _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
     ),
     "ProductionV2Services::drain_completions": (
         "dbdb63d50e19b3dfe3617aaedf53e7d7f13c105c4b844c5367d31487fad10ea3"
+    ),
+}
+
+# Exact comment/literal-free source seals for the production-shaped selected
+# Serve timeout-recovery regression. These are approved independently only
+# after each corresponding digest-refreshed semantic mutation is rejected.
+_PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256 = {
+    "runner::CertifiedServeBarrierLivenessAction": (
+        "4a520a5e830e2eb78e6384de5e353c50d488698ab1f3ee622bcb97a7b8dc2d5b"
+    ),
+    "runner::complete_certified_serve_episode_cannot_veto_pacemaker": (
+        "7de69abaf47816cabdc50c70d9eff0b7fa69342a24b5962ef1da2f1c133c2e47"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture": (
+        "93ec9360435a8cd4e38ba96fd646aac445ba2c5cda6f2e1d06afeda9e6d22629"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::new": (
+        "21c7fd7fcca5641266d01a3c0a3446490c7e130c0f626e46f0d49b442b825f4a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix": (
+        "26a00adf1b9a47ba3ca88124cd9e2a93ff4b693db65c6f4d7c0fa9e88c53d89a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_vote_episode": (
+        "aa266e22920cc2b8b5ce8ea0095b519da73c93827d9d916e075df8002ddeca50"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_recovery_prefix": (
+        "26f8db46c991874a993888431415631adee676513c41ba1671176f8e7b91bd9a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_pacemaker": (
+        "38dbb93aa1cb6f4326767382a354244d21e07a97c78119472da994558d96f65c"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::entered_view_one": (
+        "dff5113863756090795cfd2ff950a3bfd390e5120260d9ef7986b8a95772d93c"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::assert_complete": (
+        "6f322ae1a6658bfa8b5275ed3c7220a8e9a0dbffcd86851340e00358005fdda9"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::assert_missing_proposal_serve_selected": (
+        "72b5987aae636d8c8be84bcc96617451c63fc3d0b2765a189737a7bb04365c7a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::drop": (
+        "ce14c1b4e75b8ba5c1b225653eac74cfa39a0432dfd7a84592791342f6cb9881"
     ),
 }
 
@@ -2457,14 +2519,50 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 }
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
-    # TODO: Approve these separately after the three-mode drain mutations pass.
-    "run_inner": "PENDING_BEHAVIOR_VALIDATION",
+    # TODO: Approve drain_v2_ingress separately after its three-mode drain
+    # mutations pass.
+    "run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
     "drain_v2_ingress": "PENDING_BEHAVIOR_VALIDATION",
+    # TODO: Approve after the exact-output handoff mutation survives refreshing
+    # this helper's own token digest.
+    "rollover_finalized_height_outputs": "PENDING_BEHAVIOR_VALIDATION",
     "dispatch_lane_work_effects": (
         "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c"
     ),
     "dispatch_lane_work_effect": (
         "4f26246db63b064c5b6f6389e9960f36968df9861ae9520d911eedbe4c5b317c"
+    ),
+}
+
+# Exact joint ownership of the two per-height fair-ingress gates. Each pending
+# seal is promoted only after a focused mutation refreshes that exact item
+# digest and the semantic close/validate/atomic-unbind contract still rejects
+# the change.
+_PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
+    "runner::LeaderWireIngressBinding::bind": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::LeaderWireIngressBinding::retire": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::LeaderWireIngressBinding::drop": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::HeightIngressBindings::new": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::HeightIngressBindings::retire": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::HeightIngressBindings::drop": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::close_ingress_for_rollover": "PENDING_BEHAVIOR_VALIDATION",
+    "ingress::unbind_leader_wire_lifecycle_gate": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "ingress::unbind_height_ingress_gates": "PENDING_BEHAVIOR_VALIDATION",
+    "ingress::close": "PENDING_BEHAVIOR_VALIDATION",
+}
+_PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256 = {
+    "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "worker::closed_height_atomically_retires_serve_and_leader_ingress": (
+        "PENDING_BEHAVIOR_VALIDATION"
     ),
 }
 
@@ -2578,9 +2676,9 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
     "runtime::has_certified_fence_escape_credit": (
         "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
-    # TODO: Approve after Spent certificate credit is shown not to suppress the
-    # independent TimeoutVote producer episode.
-    "runner::run_inner": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
     "test::retained_response_certificate_escape_is_charged_only_once": (
         "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
     ),
@@ -3355,9 +3453,9 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "try_push_at": (
         "30ae6c2db810338e07a3dc33562d38ecb45ca07df2ecc5780f1baff01b7d4f70"
     ),
-    # TODO: Approve the complete classified selector after focused barrier
-    # mutations; ordinary wrappers are sealed independently above.
-    "try_recv_if_at_checked_classified": "PENDING_BEHAVIOR_VALIDATION",
+    "try_recv_if_at_checked_classified": (
+        "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
+    ),
 }
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
     "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (

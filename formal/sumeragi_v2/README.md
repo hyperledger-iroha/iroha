@@ -270,7 +270,13 @@ height-context state are not migrated in place.
   `2 * |ValidatorIds| + 3` owners. Exact duplicates coalesce, while a distinct
   same-owner item retries without displacing another protected slot. Immutable
   authenticated history remains separate from this consumer state. Fair
-  transport ingress for a non-empty roster has the exact minimum
+  adapter-candidate admission is stricter: a 1-to-1 retry must present the
+  exact incumbent lifecycle owner, and a different owner for the same semantic
+  lifecycle is rejected before any refinement projection is produced. The
+  narrower Fetch/Store/Validate physical-lineage path remains available only
+  for a typed monotone authority refinement whose phase/commitment identity is
+  deliberately distinct. Fair transport ingress for a non-empty roster has
+  the exact minimum
   `5 * |ValidatorIds| + 3 * H + 2` entries, where `H` is the configured maximum
   number of simultaneously materialized authenticated non-validator source
   lanes. The potential separately reserves five owners per validator, three
@@ -863,6 +869,18 @@ semantic rank, so servicing one owner cannot hide another. Equal-count
 replacement and count-increasing replenishment remain explicit non-progress
 cases and require a prior finite or coalesced producer argument.
 
+The production queue closes the corresponding final-retirement race with a
+one-shot local handoff. Removing the last owner in a frozen Serve batch arms
+`producer_episode_due` under the same mutex; fresh Serve admission returns
+`Busy` while that bit is due or while `producer_episode_active` owns its bounded
+outer turn. The runner atomically consumes due into active, and the local lease
+clears active on drop before Serve admission reopens. Rejected replenishment
+does not allocate either an actor-global scheduler ordinal or a logical Serve
+lifecycle. Digest-refreshed checker mutations cover both Busy boundaries, the
+ordinal high-water marks, exact timeout-owner ordering, the strict predecessor
+prefix, and the real timeout-certificate/EnterView suffix. This is a source
+refinement boundary, not proof promotion or an additional fairness premise.
+
 The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
 drain, fresh causal Completion admission, or local Control enqueue; and
@@ -1169,7 +1187,10 @@ limit. A separate lifeline session cleans
 the body after supervisor death, while inherited lock descriptors keep the
 per-user heavy-job lock shared with Kagemusha V4 candidate generation until
 cleanup finishes. Release receipts bind the resulting JSONL samples and
-canonical resource summary. The inherited one-shot launch capability prevents
+canonical resource summary. Receipt validation also requires the exact
+successful start/spawn/sample/terminal-summary event grammar, rejects JSON
+boolean aliases for integer fields, and recomputes every reported peak from
+the authenticated samples. The inherited one-shot launch capability prevents
 stale environment markers from skipping the wrapper; it is not a security
 boundary against a malicious same-UID process.
 
@@ -1206,7 +1227,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 826 named tests
+Before network startup, the executable wrapper inventories 829 named tests
 across 38 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1307,8 +1328,10 @@ the 813-test checkpoint. Five admission/coalescing, Busy pre-runtime ownership,
 and reconstructed-chunk terminality regressions bring the 818-test checkpoint.
 Thirteen exact admission, retry, tombstone, and high-water regressions bring the
 inventory to the 831-test checkpoint. Retiring five obsolete peer-genesis
-protocol regressions brings the
-current inventory to 826 tests across 38 modules.
+protocol regressions produces the 826-test checkpoint. Replacing one obsolete
+restart selector with its two distinct raw/coalesced crash boundaries and
+restoring two implemented certified-ingress regressions adds three real rows,
+bringing the current inventory to 829 tests across 38 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 81 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1383,7 +1406,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc`.
+`aade985a59315e4e94a0933d175065594e063cd041a2c5009b6d6ea03c4b0c0c`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1558,7 +1581,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and the exact
-826-test inventory, the pinned harness lock and resolved toolchain, the formal
+829-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

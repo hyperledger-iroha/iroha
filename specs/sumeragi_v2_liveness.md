@@ -171,6 +171,15 @@ restarts `ValidateBody`, and a validated body restarts `Apply`. Dropping any
 one volatile owner therefore leaves a deterministic reconstruction path from
 the durable Decision and body-stage record.
 
+Adapter candidate admission has the same exact-owner boundary. A first
+semantic lifecycle moves its owner count from zero to one; an exact retry may
+remain one-to-one only when it carries that immutable incumbent owner. A
+different owner for the same semantic lifecycle fails closed before the
+effect-to-candidate refinement projection is constructed. Monotone certified
+Fetch, Store, and Validate authority upgrades remain separate: their stronger
+phase/commitment identity can retain the one physical stage lineage only after
+the typed authority relation is checked and re-projected.
+
 Application retransmission has the matching terminal rule. While `Apply` is
 in flight, an exact rediscovery coalesces with the incumbent work identifier
 and lifecycle owner. After Kura returns the typed finality receipt and exact
@@ -279,6 +288,19 @@ or newer ingress; this decreases that debt without allowing one turn to
 monopolize the runtime.
 The adapter cannot report terminal readiness while any deferred Completion,
 Progress input, or ordinary input remains.
+
+Certified-body Serve traffic has a separate atomic handoff at the outer runner.
+When the final member of one frozen Serve batch retires, the queue records one
+producer episode as due under the same lock that removes the selected owner.
+Fresh Serve admission remains Busy while that episode is due or active, so a
+new response replenishment cannot reserve the released slot before proposal or
+other ordinary producer work receives one bounded turn. Beginning the episode
+atomically consumes `due` and acquires `active`; dropping its local lease clears
+`active` and reopens Serve admission. Neither a rejected replenishment nor the
+handoff itself allocates a scheduler or semantic-lifecycle ordinal. This finite
+handoff prevents an endless sequence of individually finite Serve batches from
+starving proposal production; it does not treat replenishment as consensus
+progress and does not add a network fairness premise.
 
 Effect admission has two retryable capacity boundaries. General pending-work
 exhaustion is retryable for ordinary effects. Independently, certified-request
@@ -1236,8 +1258,10 @@ regressions produce the 813-test checkpoint. Five admission/coalescing, Busy
 pre-runtime ownership, and reconstructed-chunk terminality regressions bring
 the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
 high-water regressions bring the inventory to the 831-test checkpoint. Retiring
-five obsolete peer-genesis protocol regressions brings the
-current source-bound inventory to 826 exact tests across
+five obsolete peer-genesis protocol regressions produces the 826-test
+checkpoint. Replacing one obsolete restart selector with its two raw/coalesced
+crash boundaries and restoring two implemented certified-ingress regressions
+brings the current source-bound inventory to 829 exact tests across
 38 modules and 81 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1246,10 +1270,10 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc`.
+`aade985a59315e4e94a0933d175065594e063cd041a2c5009b6d6ea03c4b0c0c`.
 Nine of those legs execute the separate 309-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 310 TSV lines and has SHA-256
-`b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb`.
+`bd13d718a1362dd242aad04a75d6c55113181f84545b061cf8517236ac6057fe`.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1494,7 +1518,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 826-test inventory is a mechanically checked
+The current 829-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1684,7 +1708,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 826 exact production
+Before those longer scenarios, the PR gate inventories 829 exact production
 liveness tests and executes all 38 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 309-test
 focus inventory. The
@@ -1835,8 +1859,10 @@ pre-runtime ownership, and reconstructed-chunk terminality regressions bring
 the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
 high-water regressions bring the inventory to the 831-test checkpoint, again
 without adding a module or leg. Retiring five obsolete peer-genesis protocol
-regressions brings the current inventory to 826 tests and removes one owning
-module and one leg overall. The rollover slice covers
+regressions produces the 826-test checkpoint and removes one owning module and
+one leg overall. Replacing one obsolete restart selector with its two distinct
+crash boundaries and restoring two implemented certified-ingress regressions
+then produces the current 829-test inventory. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -2120,13 +2146,16 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 81 pre-network corridor legs and
-their exact 826-test production inventory, the separate 309-test G-UNIT
+their exact 829-test production inventory, the separate 309-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,
 proof ledger/evidence/log, multilane Apalache evidence, and the TLAPS resource
-JSONL and summary. The
-receipt also carries all 160 matrix logs; exact G-4P completion, summary, and
+JSONL and summary. The validator requires the exact successful resource-guard
+event grammar, strict scalar types, identical terminal summaries, and
+sample-derived peak accounting rather than accepting those artifacts by digest
+alone. The receipt also carries all 160 matrix logs; exact G-4P completion,
+summary, and
 four run logs; exact deterministic G-12 seed completion, summary, and ten run
 logs; the two-hour G-12 fault-soak completion and log; the closed multilane
 scaling bundle, retained validator, four authenticated digest anchors, retained
