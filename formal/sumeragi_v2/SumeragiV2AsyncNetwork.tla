@@ -2442,7 +2442,8 @@ VARIABLES
   asyncHistoricalLockRestartAuthorities,
   asyncProducerKnownObligations,
   asyncProducerConsumedEpisodes,
-  asyncProducerOriginHistory
+  asyncProducerOriginHistory,
+  asyncServeProducerEpisodeDue
 
 AsyncSchedulerVars ==
   <<asyncNow, asyncCommandQueues, asyncNextCommandClass,
@@ -2623,11 +2624,14 @@ AsyncProducerVars ==
 
 AsyncAllVars ==
   <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars,
-    asyncFixedCorridorDeadlines>>
+    asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>
+
+AsyncServeProducerEpisodeDebt ==
+  asyncServeProducerEpisodeDue
 
 AsyncServiceActivationFrameVars ==
   <<gst, vars, AsyncSchedulerExceptServiceActivation, AsyncRecoveryVars,
-    AsyncProducerVars>>
+    AsyncProducerVars, asyncServeProducerEpisodeDue>>
 
 (***************************************************************************
 The control service table is one bounded per-height structure.  Its
@@ -4615,6 +4619,7 @@ ReserveExactServeCapacityVia(node, candidate, authenticatedSource) ==
      /\ authenticatedSource \in AsyncAuthenticatedDeliverySources
      /\ AsyncServeSourceAttemptRecords(node, identity) = {}
      /\ ~AsyncServeIngressAdmissionOwned(node, identity)
+     /\ ~asyncServeProducerEpisodeDue[node]
      /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
      /\ AsyncServeOffQueueReservations(node) = {}
      /\ ~AsyncServeLifecycleFamilyOwned(node, family)
@@ -4666,6 +4671,7 @@ AdvanceExactServeCapacityVia(node, candidate, authenticatedSource) ==
      /\ authenticatedSource \in AsyncAuthenticatedDeliverySources
      /\ AsyncServeSourceAttemptRecords(node, identity) = {}
      /\ ~AsyncServeIngressAdmissionOwned(node, identity)
+     /\ ~asyncServeProducerEpisodeDue[node]
      /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
      /\ AsyncServeOffQueueReservations(node) = {}
      /\ ~AsyncServeLifecycleOwned(node, identity)
@@ -11473,19 +11479,20 @@ ExactServeTransportAdmissionCanAdvanceVia(
           THEN TRUE
      ELSE IF AsyncServeLifecycleConflict(node, request)
           THEN TRUE
-          ELSE IF ~AsyncServeLifecycleFamilyOwned(node, family)
-                    THEN /\ AsyncServeIngressLifecycleOwnerIdentities(
-                               node) = {}
-                         /\ AsyncServeOffQueueReservations(node) = {}
-                    ELSE /\ AsyncServeFamilyTombstoneRecords(
-                                 node, family) # {}
-                         /\ AsyncServeIngressLifecycleOwnerIdentities(
-                              node) = {}
-                         /\ AsyncServeOffQueueReservations(node) = {}
-                         /\ roundView >
-                              AsyncServeFamilyHighWatermark(node, family)
-                         /\ AsyncServeFamilyAdvanceRetiresPriorRequests(
-                              node, request)
+          ELSE /\ ~asyncServeProducerEpisodeDue[node]
+               /\ IF ~AsyncServeLifecycleFamilyOwned(node, family)
+                  THEN /\ AsyncServeIngressLifecycleOwnerIdentities(
+                             node) = {}
+                       /\ AsyncServeOffQueueReservations(node) = {}
+                  ELSE /\ AsyncServeFamilyTombstoneRecords(
+                               node, family) # {}
+                       /\ AsyncServeIngressLifecycleOwnerIdentities(
+                            node) = {}
+                       /\ AsyncServeOffQueueReservations(node) = {}
+                       /\ roundView >
+                            AsyncServeFamilyHighWatermark(node, family)
+                       /\ AsyncServeFamilyAdvanceRetiresPriorRequests(
+                            node, request)
 
 ExactServeTransportAdmissionCanAdvance(node, request) ==
   ExactServeTransportAdmissionCanAdvanceVia(
@@ -12074,38 +12081,6 @@ AsyncProducerProjectionStep ==
   /\ asyncProducerOriginHistory' =
        asyncProducerOriginHistory
          \cup AsyncProducerAdmittedIngressOrigins
-
-\* Every action named by weak fairness is the exact fully framed AsyncNext arm,
-\* not only its inner scheduler or reducer component.  These suffixes bind
-\* every otherwise-outer primed variable before TLC evaluates ENABLED.  Do not
-\* conjoin the complete Core `Next` relation here: the action itself already
-\* supplies an exact Core transition or `UNCHANGED vars`, and redundantly
-\* searching every Core branch makes ENABLED both noisy and needlessly costly.
-\* `AsyncFairActionsRefineAsyncNext` states the typed executable-relation
-\* claim once, outside the fairness queries;
-\* `SumeragiV2AsyncFairnessRefinementProofs` owns its deductive discharge
-\* without changing this executable action relation.
-AsyncCoreOuterFrame ==
-  /\ UNCHANGED <<height, context>>
-  /\ AsyncFixedCorridorDeadlineTransition
-  /\ AsyncProducerProjectionStep
-
-AsyncNonCrashOuterFrame ==
-  /\ UNCHANGED up
-  /\ UNCHANGED asyncServiceActivationState
-  /\ UNCHANGED AsyncRecoveryControlVars
-  /\ AsyncHistoricalLockRestartAuthorityTransition
-  /\ AsyncCoreOuterFrame
-
-AsyncNonRunnerOuterFrame ==
-  /\ UNCHANGED asyncNodeServiceDeadlines
-  /\ AsyncNonCrashOuterFrame
-
-AsyncRecoveryOuterFrame ==
-  /\ UNCHANGED up
-  /\ UNCHANGED asyncServiceActivationState
-  /\ AsyncHistoricalLockRestartAuthorityTransition
-  /\ AsyncCoreOuterFrame
 
 AsyncProducerJournalMonotoneStep ==
   /\ asyncProducerKnownObligations
@@ -16018,20 +15993,6 @@ RunHistoricalRecoveryNode(node) ==
   /\ HistoricalRecoveryTarget(node)
   /\ RunNodeWork(node)
 
-ResponsiveReplayRunNode ==
-  LET node == asyncRecoveryNode
-  IN /\ ~gst
-     /\ ResponsiveReplayDraining(node)
-     /\ RunNode(node)
-     /\ AsyncNonCrashOuterFrame
-
-ResponsiveReplayServiceIoWorker ==
-  LET node == asyncRecoveryNode
-  IN /\ ~gst
-     /\ ResponsiveReplayDraining(node)
-     /\ ServiceIoWorker(node)
-     /\ AsyncNonRunnerOuterFrame
-
 HistoricalIdleStep ==
   /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
                  asyncFifoOwed,
@@ -16714,16 +16675,6 @@ BY Isa
        CertifiedResponseClaimForRequests,
        CertifiedResponseClaimsAt
 
-AsyncSetGST ==
-  /\ ~gst
-  /\ asyncRecoveryPhase
-       \notin {"RestartRequired", "ReplayRequired", "Replaying"}
-  /\ Responsive \subseteq up
-  /\ Responsive \subseteq AsyncActiveServiceNodes
-  /\ SetGST
-  /\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryVars>>
-  /\ AsyncNonRunnerOuterFrame
-
 (***************************************************************************
 Faults outside the trusted product loop.  Before GST packets may be lost and
 non-responsive validators may crash.  Byzantine noise is bounded in its own
@@ -16905,6 +16856,116 @@ BY Isa
        AsyncServeTombstoneRecords,
        AsyncServeIngressAdmissionOwned,
        AsyncServeIngressAdmissionRecords
+
+(***************************************************************************
+The concrete queue lock publishes one one-shot producer debt when the last
+selected Serve ingress occurrence retires without promoting another waiter.
+Fresh Serve admission is already blocked above while this bit is set.  The
+next ordinary runner turn atomically consumes the bit; TLA actions have no
+intermediate call frame, so `ActiveThisStep` is deliberately action-local
+rather than another persistent state or a new fairness assumption.
+
+Restart and receiver teardown clear the volatile bit.  They are classified by
+their inner state transformers instead of the enclosing pre-GST wrappers, so
+the dependency graph remains acyclic.  Normal final drains arm the bit only
+when both the logical ingress-owner set and every off-queue reservation are
+empty afterwards.  A materialized Serve I/O job may remain, matching the Rust
+separation between physical ingress retirement and logical Serve completion.
+***************************************************************************)
+AsyncServeProducerEpisodeRestartStep(node) ==
+  \/ ResetNodeSchedulerForRestart(node, <<>>)
+  \/ ResetNodeSchedulerForRestart(
+       node, FreshRestartCandidateSequence(RestartReplay(node)))
+
+AsyncServeProducerEpisodeReceiverCloseStep(node) ==
+  \E reservation \in asyncServeReservations:
+    /\ reservation.node = node
+    /\ PreGstServeReceiverCloseRollback(
+         node, reservation.identity)
+
+AsyncServeProducerEpisodeFinalRetirementStep(node) ==
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+  /\ AsyncServeOffQueueReservations(node)' = {}
+  /\ \/ DrainFairIngressSelected(node)
+     \/ DrainHistoricalIngressSelected(node)
+     \/ DrainInterruptedTipRecoveryIngressSelected(node)
+
+AsyncServeProducerEpisodeActiveThisStep(node) ==
+  /\ asyncServeProducerEpisodeDue[node]
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+  /\ AsyncServeOffQueueReservations(node) = {}
+  /\ \/ RunNodeWork(node)
+     \/ RunHistoricalServer(node)
+
+AsyncServeProducerEpisodeTransition ==
+  asyncServeProducerEpisodeDue' =
+    [node \in ValidatorIds |->
+       IF AsyncServeProducerEpisodeRestartStep(node)
+            \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
+       THEN FALSE
+       ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
+            THEN TRUE
+            ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
+                 THEN FALSE
+                 ELSE asyncServeProducerEpisodeDue[node]]
+
+\* Every action named by weak fairness is the exact fully framed AsyncNext arm,
+\* not only its inner scheduler or reducer component.  These suffixes bind
+\* every otherwise-outer primed variable before TLC evaluates ENABLED.  Do not
+\* conjoin the complete Core `Next` relation here: the action itself already
+\* supplies an exact Core transition or `UNCHANGED vars`, and redundantly
+\* searching every Core branch makes ENABLED both noisy and needlessly costly.
+\* `AsyncFairActionsRefineAsyncNext` states the typed executable-relation
+\* claim once, outside the fairness queries;
+\* `SumeragiV2AsyncFairnessRefinementProofs` owns its deductive discharge
+\* without changing this executable action relation.
+AsyncCoreOuterFrame ==
+  /\ UNCHANGED <<height, context>>
+  /\ AsyncFixedCorridorDeadlineTransition
+  /\ AsyncProducerProjectionStep
+  /\ AsyncServeProducerEpisodeTransition
+
+AsyncNonCrashOuterFrame ==
+  /\ UNCHANGED up
+  /\ UNCHANGED asyncServiceActivationState
+  /\ UNCHANGED AsyncRecoveryControlVars
+  /\ AsyncHistoricalLockRestartAuthorityTransition
+  /\ AsyncCoreOuterFrame
+
+AsyncNonRunnerOuterFrame ==
+  /\ UNCHANGED asyncNodeServiceDeadlines
+  /\ AsyncNonCrashOuterFrame
+
+AsyncRecoveryOuterFrame ==
+  /\ UNCHANGED up
+  /\ UNCHANGED asyncServiceActivationState
+  /\ AsyncHistoricalLockRestartAuthorityTransition
+  /\ AsyncCoreOuterFrame
+
+ResponsiveReplayRunNode ==
+  LET node == asyncRecoveryNode
+  IN /\ ~gst
+     /\ ResponsiveReplayDraining(node)
+     /\ RunNode(node)
+     /\ AsyncNonCrashOuterFrame
+
+ResponsiveReplayServiceIoWorker ==
+  LET node == asyncRecoveryNode
+  IN /\ ~gst
+     /\ ResponsiveReplayDraining(node)
+     /\ ServiceIoWorker(node)
+     /\ AsyncNonRunnerOuterFrame
+
+AsyncSetGST ==
+  /\ ~gst
+  /\ asyncRecoveryPhase
+       \notin {"RestartRequired", "ReplayRequired", "Replaying"}
+  /\ Responsive \subseteq up
+  /\ Responsive \subseteq AsyncActiveServiceNodes
+  /\ SetGST
+  /\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryVars>>
+  /\ AsyncNonRunnerOuterFrame
 
 PreGstLosePacket(packet) ==
   /\ ~gst
@@ -17595,6 +17656,53 @@ AsyncNonCrashStep ==
      /\ UNCHANGED up
   \/ /\ RearmResponsiveRecovery
      /\ UNCHANGED up
+
+AsyncServeProducerEpisodeMeasure(node) ==
+  IF asyncServeProducerEpisodeDue[node] THEN 1 ELSE 0
+
+THEOREM AsyncServeProducerEpisodeMeasureIsFinite ==
+  asyncServeProducerEpisodeDue \in [ValidatorIds -> BOOLEAN]
+    => \A node \in ValidatorIds:
+         /\ AsyncServeProducerEpisodeMeasure(node) \in Nat
+         /\ AsyncServeProducerEpisodeMeasure(node) <= 1
+BY Isa DEF AsyncServeProducerEpisodeMeasure
+
+THEOREM AsyncServeProducerEpisodeBlocksFreshServeAdmission ==
+  \A node \in ValidatorIds,
+     candidate \in AsyncCandidateSet,
+     authenticatedSource \in AsyncAuthenticatedDeliverySources:
+    asyncServeProducerEpisodeDue[node]
+      => /\ ~ReserveExactServeCapacityVia(
+                  node, candidate, authenticatedSource)
+         /\ ~AdvanceExactServeCapacityVia(
+                  node, candidate, authenticatedSource)
+BY DEF ReserveExactServeCapacityVia,
+       AdvanceExactServeCapacityVia
+
+THEOREM AsyncServeProducerEpisodeFinalRetirementArmsOneShotDebt ==
+  \A node \in ValidatorIds:
+    /\ AsyncServeProducerEpisodeTransition
+    /\ AsyncServeProducerEpisodeFinalRetirementStep(node)
+    /\ ~AsyncServeProducerEpisodeRestartStep(node)
+    /\ ~AsyncServeProducerEpisodeReceiverCloseStep(node)
+      => /\ asyncServeProducerEpisodeDue'[node]
+         /\ AsyncServeProducerEpisodeMeasure(node)' = 1
+BY Isa DEF AsyncServeProducerEpisodeTransition,
+           AsyncServeProducerEpisodeMeasure
+
+THEOREM AsyncServeProducerEpisodeRunnerTurnStrictlyConsumesDebt ==
+  \A node \in ValidatorIds:
+    /\ AsyncServeProducerEpisodeTransition
+    /\ AsyncServeProducerEpisodeActiveThisStep(node)
+    /\ ~AsyncServeProducerEpisodeRestartStep(node)
+    /\ ~AsyncServeProducerEpisodeReceiverCloseStep(node)
+    /\ ~AsyncServeProducerEpisodeFinalRetirementStep(node)
+      => /\ ~asyncServeProducerEpisodeDue'[node]
+         /\ AsyncServeProducerEpisodeMeasure(node)' + 1
+              = AsyncServeProducerEpisodeMeasure(node)
+BY Isa DEF AsyncServeProducerEpisodeTransition,
+           AsyncServeProducerEpisodeActiveThisStep,
+           AsyncServeProducerEpisodeMeasure
 
 (***************************************************************************
 One global frame owns the bounded control-slot table, the recipient-local
@@ -24281,6 +24389,7 @@ AsyncNext ==
   /\ AsyncIngressPhysicalOrdinalTransition
   /\ AsyncServiceActivationTransition
   /\ AsyncProducerProjectionStep
+  /\ AsyncServeProducerEpisodeTransition
   /\ UNCHANGED <<height, context>>
   /\ [Next]_vars
 
@@ -25704,7 +25813,8 @@ BY SameHeightRestartPreservesServeHighWatermarks,
 \* through their outer frame, and the same complete-successor witness hides
 \* those redundant copies as well.
 AsyncOriginalAllVars ==
-  <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars>>
+  <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars,
+    asyncServeProducerEpisodeDue>>
 
 AsyncNextBeforeFixedCorridorDeadlineReceipt ==
   \E nextOriginal:
@@ -26975,6 +27085,10 @@ AsyncProducerInit ==
   /\ asyncProducerConsumedEpisodes = {}
   /\ asyncProducerOriginHistory = {}
 
+AsyncServeProducerEpisodeInit ==
+  asyncServeProducerEpisodeDue =
+    [node \in ValidatorIds |-> FALSE]
+
 AsyncBaseInitAt(initialContext) ==
   /\ InitAt(initialContext)
   /\ AsyncConfiguration
@@ -26985,6 +27099,7 @@ AsyncBaseInitAt(initialContext) ==
   /\ AsyncIngressInit
   /\ AsyncRecoveryInit
   /\ AsyncProducerInit
+  /\ AsyncServeProducerEpisodeInit
 
 AsyncBaseInit == AsyncBaseInitAt(ContextRecord(0, <<>>))
 
@@ -29391,6 +29506,15 @@ AsyncProducerTypeInvariant ==
             \in asyncProducerConsumedEpisodes
        /\ origin.owner.request = origin.producerEpisode.request
 
+AsyncServeProducerEpisodeTypeInvariant ==
+  asyncServeProducerEpisodeDue \in [ValidatorIds -> BOOLEAN]
+
+AsyncServeProducerEpisodeOwnershipInvariant ==
+  \A node \in ValidatorIds:
+    asyncServeProducerEpisodeDue[node]
+      => /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+         /\ AsyncServeOffQueueReservations(node) = {}
+
 AsyncSchedulerTypeInvariant ==
   /\ AsyncRuntimeTypeInvariant
   /\ AsyncIoTypeInvariant
@@ -29403,6 +29527,7 @@ AsyncSchedulerTypeInvariant ==
 AsyncTypeInvariant ==
   /\ TypeInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ AsyncServeProducerEpisodeTypeInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ ReceivedTimeoutVotePoolInvariant
 
@@ -29442,6 +29567,8 @@ AsyncGstRecoveryPhaseInvariant ==
 AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ AsyncServeProducerEpisodeTypeInvariant
+  /\ AsyncServeProducerEpisodeOwnershipInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ AsyncControlServiceStateTypeInvariant
   /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant

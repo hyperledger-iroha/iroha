@@ -979,7 +979,8 @@ remain available to RunHistoricalServer after validators advance.
 The nested tuple layout is exactly the production `AsyncAllVars` projection:
 the duplicated GST scalar, 49 Core components, 46 scheduler/transport
 components, five responsive-node recovery components, three monotone producer-
-journal components, and the proof-only fixed-corridor receipt set.  The
+journal components, the proof-only fixed-corridor receipt set, and the
+per-node post-Serve producer-episode debt function.  The
 duplicated scalar is pinned to Core component
 7; retaining that established semantic shape makes source drift explicit
 rather than silently normalizing the authoritative action tuple.  Immediately
@@ -1011,6 +1012,9 @@ IndexedProducer(initialContext, component) ==
 
 IndexedFixedCorridorDeadlines(initialContext) ==
   indexedAsyncState[initialContext][6]
+
+IndexedServeProducerEpisodeDue(initialContext) ==
+  indexedAsyncState[initialContext][7]
 
 IndexedAsyncStateAt(initialContext) ==
   indexedAsyncState[initialContext]
@@ -1149,7 +1153,9 @@ IndexedAsync(initialContext) ==
        asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
-         IndexedFixedCorridorDeadlines(initialContext)
+         IndexedFixedCorridorDeadlines(initialContext),
+       asyncServeProducerEpisodeDue <-
+         IndexedServeProducerEpisodeDue(initialContext)
 
 (***************************************************************************
 The context-indexed proof provider uses the identical production state tuple.
@@ -1266,7 +1272,9 @@ IndexedAsyncSafetyProof(initialContext) ==
        asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
-         IndexedFixedCorridorDeadlines(initialContext)
+         IndexedFixedCorridorDeadlines(initialContext),
+       asyncServeProducerEpisodeDue <-
+         IndexedServeProducerEpisodeDue(initialContext)
 
 THEOREM IndexedAsyncInitEstablishesStrongTypeInvariant ==
   \A initialContext:
@@ -1396,6 +1404,9 @@ VerificationProducer(component) ==
 VerificationFixedCorridorDeadlines ==
   IndexedFixedCorridorDeadlines(VerificationContext)
 
+VerificationServeProducerEpisodeDue ==
+  IndexedServeProducerEpisodeDue(VerificationContext)
+
 VerificationAsyncProof ==
   INSTANCE SumeragiV2AsyncTemporalClosureProofs
     WITH
@@ -1502,7 +1513,9 @@ VerificationAsyncProof ==
        asyncProducerKnownObligations <- VerificationProducer(1),
        asyncProducerConsumedEpisodes <- VerificationProducer(2),
        asyncProducerOriginHistory <- VerificationProducer(3),
-       asyncFixedCorridorDeadlines <- VerificationFixedCorridorDeadlines
+       asyncFixedCorridorDeadlines <- VerificationFixedCorridorDeadlines,
+       asyncServeProducerEpisodeDue <-
+         VerificationServeProducerEpisodeDue
 
 AdmissibleContextRecords ==
   {initialContext \in ContextRecords:
@@ -1511,8 +1524,8 @@ AdmissibleContextRecords ==
 IndexedAsyncStateShape ==
   /\ DOMAIN indexedAsyncState = AdmissibleContextRecords
   /\ \A initialContext \in AdmissibleContextRecords:
-       /\ Len(indexedAsyncState[initialContext]) = 6
-       /\ DOMAIN indexedAsyncState[initialContext] = 1..6
+       /\ Len(indexedAsyncState[initialContext]) = 7
+       /\ DOMAIN indexedAsyncState[initialContext] = 1..7
        /\ indexedAsyncState[initialContext][1]
             = indexedAsyncState[initialContext][2][7]
        /\ Len(indexedAsyncState[initialContext][2]) = 49
@@ -3148,7 +3161,8 @@ BY Isa DEF IndexedAsyncStateShape, IndexedAsyncStateAt,
            IndexedAsync!vars,
            IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
            IndexedRecovery, IndexedProducer,
-           IndexedFixedCorridorDeadlines
+           IndexedFixedCorridorDeadlines,
+           IndexedServeProducerEpisodeDue
 
 (***************************************************************************
 Exact indexed field-order pins.
@@ -3158,7 +3172,7 @@ scheduler can leave every tuple well typed while shifting a later durable or
 fairness owner onto the wrong state component.  These extensional equalities
 pin the duplicated GST scalar, all 49 Core fields, all 46 scheduler fields,
 the five recovery fields, all three producer-journal fields, and the proof-only
-fixed-corridor receipt.
+fixed-corridor receipt, and the per-node post-Serve producer debt.
 ***************************************************************************)
 THEOREM IndexedDuplicatedGstProjectionIsExact ==
   IndexedAsyncStateShape
@@ -3286,6 +3300,14 @@ THEOREM IndexedFixedCorridorDeadlineProjectionIsExact ==
 BY DEF IndexedAsync!AsyncFixedCorridorDeadlineReceipts,
        IndexedFixedCorridorDeadlines
 
+THEOREM IndexedServeProducerEpisodeDueProjectionIsExact ==
+  IndexedAsyncStateShape
+    => \A initialContext \in AdmissibleContextRecords:
+         IndexedAsync(initialContext)!AsyncServeProducerEpisodeDebt
+           = IndexedServeProducerEpisodeDue(initialContext)
+BY DEF IndexedAsync!AsyncServeProducerEpisodeDebt,
+       IndexedServeProducerEpisodeDue
+
 (***************************************************************************
 The producer journal is part of the authoritative transition state.  These
 equalities prevent indexed contexts from aliasing a hidden global journal and
@@ -3331,9 +3353,11 @@ BY Isa
        VerificationCore, VerificationScheduler, VerificationRecovery,
        VerificationProducer,
        VerificationFixedCorridorDeadlines,
+       VerificationServeProducerEpisodeDue,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
-       IndexedFixedCorridorDeadlines
+       IndexedFixedCorridorDeadlines,
+       IndexedServeProducerEpisodeDue
 
 (***************************************************************************
 The seven Serve lifecycle fields are pinned separately from the aggregate

@@ -2069,10 +2069,17 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "event": "summary",
         "exit_reason": "completed",
         "exit_status": 0,
+        "evidence_peak_rss_bytes": 4096,
+        "kernel_peak_rss_bytes": 4096,
+        "kernel_peak_rss_method": "wait4_ru_maxrss",
+        "kernel_peak_rss_scope": "direct_guarded_body",
         "memory_limit_bytes": 2 * 1024 * 1024 * 1024,
+        "memory_enforcement_mode": "max_rss_physical_footprint",
+        "physical_footprint_interval_seconds": 5.0,
         "peak_memory_bytes": 4096,
         "peak_physical_footprint_bytes": 4096,
         "peak_rss_bytes": 4096,
+        "report_context": None,
         "sample_count": 1,
         "sample_interval_seconds": 0.25,
         "schema_version": 1,
@@ -2086,20 +2093,37 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             {
                 "event": "start",
                 "memory_limit_bytes": 2 * 1024 * 1024 * 1024,
+                "memory_enforcement_mode": "max_rss_physical_footprint",
+                "physical_footprint_interval_seconds": 5.0,
+                "report_context": None,
                 "sample_interval_seconds": 0.25,
                 "schema_version": 1,
+                "started_utc": "2026-07-22T00:00:00.000Z",
+                "supervisor_pid": 1234,
             }
         )
         + canonical_json(
             {
-                "accounting_method": "physical_footprint",
+                "event": "spawn",
+                "process_group_id": 5678,
+                "schema_version": 1,
+                "timestamp_utc": "2026-07-22T00:00:00.100Z",
+                "wrapper_pid": 5677,
+            }
+        )
+        + canonical_json(
+            {
+                "accounting_method": "max_rss_physical_footprint",
+                "elapsed_seconds": 0.25,
                 "event": "sample",
                 "memory_bytes": 4096,
                 "memory_limit_bytes": 2 * 1024 * 1024 * 1024,
                 "physical_footprint_bytes": 4096,
                 "process_count": 1,
+                "process_group_id": 5678,
                 "rss_bytes": 4096,
                 "schema_version": 1,
+                "timestamp_utc": "2026-07-22T00:00:00.250Z",
             }
         )
         + canonical_json(resource_summary)
@@ -2562,6 +2586,27 @@ def rewrite_json(path: Path, value: dict[str, object]) -> None:
     path.chmod(0o600)
     path.write_bytes(canonical_json(value))
     path.chmod(0o400)
+
+
+def rewrite_tlaps_resource_evidence(
+    evidence: dict[str, object],
+    records: list[dict[str, object]],
+    summary: dict[str, object],
+) -> None:
+    jsonl = evidence["formal_tlaps_resource_jsonl"]
+    summary_path = evidence["formal_tlaps_resource_summary"]
+    completion = evidence["formal_completion"]
+    assert isinstance(jsonl, Path)
+    assert isinstance(summary_path, Path)
+    assert isinstance(completion, Path)
+    jsonl.chmod(0o600)
+    jsonl.write_bytes(b"".join(canonical_json(record) for record in records))
+    jsonl.chmod(0o400)
+    rewrite_json(summary_path, summary)
+    fields = read_tsv_fields(completion)
+    fields["tlaps_resource_jsonl_sha256"] = sha256(jsonl)
+    fields["tlaps_resource_summary_sha256"] = sha256(summary_path)
+    write_tsv(completion, fields)
 
 
 def read_tsv_fields(path: Path) -> dict[str, str]:
@@ -4105,25 +4150,151 @@ def test_receipt_rejects_resource_summary_above_the_formal_memory_ceiling(
     tmp_path: Path,
 ) -> None:
     evidence = make_evidence(tmp_path)
-    summary = evidence["formal_tlaps_resource_summary"]
-    completion = evidence["formal_completion"]
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    document = json.loads(summary.read_text(encoding="utf-8"))
+    jsonl = evidence["formal_tlaps_resource_jsonl"]
+    summary_path = evidence["formal_tlaps_resource_summary"]
+    assert isinstance(jsonl, Path)
+    assert isinstance(summary_path, Path)
+    records = [
+        json.loads(line)
+        for line in jsonl.read_text(encoding="utf-8").splitlines()
+    ]
+    document = json.loads(summary_path.read_text(encoding="utf-8"))
     document["peak_memory_bytes"] = document["memory_limit_bytes"] + 1
-    rewrite_json(summary, document)
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["tlaps_resource_summary_sha256"] = sha256(summary)
-    write_tsv(completion, fields)
+    records[-1] = document
+    rewrite_tlaps_resource_evidence(evidence, records, document)
     writer = fixture_writer(tmp_path)
 
     result = run_writer(evidence, terminal_output_path(evidence), writer)
 
     assert result.returncode == 1
     assert "not a successful bounded release run" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("schema_version", True, id="boolean-schema-version"),
+        pytest.param("exit_status", False, id="boolean-exit-status"),
+        pytest.param("peak_memory_bytes", False, id="boolean-peak-memory"),
+    ],
+)
+def test_receipt_rejects_boolean_tlaps_resource_summary_integers(
+    tmp_path: Path, field: str, value: bool
+) -> None:
+    evidence = make_evidence(tmp_path)
+    jsonl = evidence["formal_tlaps_resource_jsonl"]
+    summary_path = evidence["formal_tlaps_resource_summary"]
+    assert isinstance(jsonl, Path)
+    assert isinstance(summary_path, Path)
+    records = [
+        json.loads(line)
+        for line in jsonl.read_text(encoding="utf-8").splitlines()
+    ]
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary[field] = value
+    records[-1] = summary
+    rewrite_tlaps_resource_evidence(evidence, records, summary)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "not one bounded integer" in result.stderr
+
+
+def test_receipt_rejects_extra_tlaps_resource_summary_field(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    jsonl = evidence["formal_tlaps_resource_jsonl"]
+    summary_path = evidence["formal_tlaps_resource_summary"]
+    assert isinstance(jsonl, Path)
+    assert isinstance(summary_path, Path)
+    records = [
+        json.loads(line)
+        for line in jsonl.read_text(encoding="utf-8").splitlines()
+    ]
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["unreviewed"] = 0
+    records[-1] = summary
+    rewrite_tlaps_resource_evidence(evidence, records, summary)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "fields do not match its canonical schema" in result.stderr
+
+
+def test_receipt_rejects_tlaps_resource_stream_with_forged_aggregate(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    jsonl = evidence["formal_tlaps_resource_jsonl"]
+    summary_path = evidence["formal_tlaps_resource_summary"]
+    assert isinstance(jsonl, Path)
+    assert isinstance(summary_path, Path)
+    records = [
+        json.loads(line)
+        for line in jsonl.read_text(encoding="utf-8").splitlines()
+    ]
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    sample = records[2]
+    sample["memory_bytes"] = 2048
+    sample["physical_footprint_bytes"] = 2048
+    sample["rss_bytes"] = 2048
+    rewrite_tlaps_resource_evidence(evidence, records, summary)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "summary peaks do not match" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-spawn",
+        "extra-start-field",
+        "spawn-supervisor-collision",
+        "spawn-wrapper-group-collision",
+        "wrong-sample-process-group",
+        "terminal-summary-mismatch",
+    ],
+)
+def test_receipt_rejects_noncanonical_tlaps_resource_stream(
+    tmp_path: Path, mutation: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    jsonl = evidence["formal_tlaps_resource_jsonl"]
+    summary_path = evidence["formal_tlaps_resource_summary"]
+    assert isinstance(jsonl, Path)
+    assert isinstance(summary_path, Path)
+    records = [
+        json.loads(line)
+        for line in jsonl.read_text(encoding="utf-8").splitlines()
+    ]
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if mutation == "missing-spawn":
+        records.pop(1)
+    elif mutation == "extra-start-field":
+        records[0]["unreviewed"] = 0
+    elif mutation == "spawn-supervisor-collision":
+        records[1]["wrapper_pid"] = summary["supervisor_pid"]
+    elif mutation == "spawn-wrapper-group-collision":
+        records[1]["wrapper_pid"] = records[1]["process_group_id"]
+    elif mutation == "wrong-sample-process-group":
+        records[2]["process_group_id"] += 1
+    else:
+        records[-1] = {**summary, "ended_utc": "2026-07-22T00:00:02.000Z"}
+    rewrite_tlaps_resource_evidence(evidence, records, summary)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "TLAPS resource" in result.stderr
 
 
 def test_receipt_rejects_substituted_cross_tool_evidence(

@@ -1912,6 +1912,22 @@ struct RuntimeEffectCandidateBinding {
     projection_hash: iroha_crypto::Hash,
 }
 
+#[derive(Clone, Copy)]
+struct RuntimeEffectCandidateBindingProjectionParts<'a> {
+    owner_projection_hash: &'a iroha_crypto::Hash,
+    parent_owner_projection_hash: Option<&'a iroha_crypto::Hash>,
+    effect_kind: u8,
+    effect_identity: &'a iroha_crypto::Hash,
+    candidate_kind: u8,
+    candidate_statement: Option<RuntimeCandidateSemanticStatement>,
+    candidate_semantic_identity: Option<&'a iroha_crypto::Hash>,
+    candidate_identity: Option<&'a iroha_crypto::Hash>,
+    effect_position: u8,
+    effect_count: u8,
+    candidate_position: u8,
+    candidate_count: u8,
+}
+
 fn append_optional_runtime_hash(projection: &mut Vec<u8>, value: Option<&iroha_crypto::Hash>) {
     match value {
         None => projection.push(0),
@@ -1925,41 +1941,52 @@ fn append_optional_runtime_hash(projection: &mut Vec<u8>, value: Option<&iroha_c
 fn runtime_effect_candidate_binding_projection_hash(
     owner: &RuntimeLifecycleOwner,
     causality: RuntimeEffectCausality,
-    binding: &RuntimeEffectCandidateBinding,
+    parts: RuntimeEffectCandidateBindingProjectionParts<'_>,
 ) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
     projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-effect-binding:v1");
     append_runtime_identity_field(&mut projection, owner.projection_hash.as_ref());
     projection.push(runtime_effect_causality_code(causality));
     projection.push(runtime_effect_fresh_root_code(causality));
-    append_runtime_identity_field(&mut projection, binding.owner_projection_hash.as_ref());
-    append_optional_runtime_hash(
-        &mut projection,
-        binding.parent_owner_projection_hash.as_ref(),
-    );
-    projection.push(binding.effect_kind);
-    append_runtime_identity_field(&mut projection, binding.effect_identity.as_ref());
-    projection.push(binding.candidate_kind);
-    match binding.candidate_statement {
+    append_runtime_identity_field(&mut projection, parts.owner_projection_hash.as_ref());
+    append_optional_runtime_hash(&mut projection, parts.parent_owner_projection_hash);
+    projection.push(parts.effect_kind);
+    append_runtime_identity_field(&mut projection, parts.effect_identity.as_ref());
+    projection.push(parts.candidate_kind);
+    match parts.candidate_statement {
         None => projection.push(0),
         Some(statement) => {
             projection.push(1);
             append_runtime_identity_field(&mut projection, &statement.semantic_identity());
         }
     }
-    append_optional_runtime_hash(
-        &mut projection,
-        binding.candidate_semantic_identity.as_ref(),
-    );
-    append_optional_runtime_hash(&mut projection, binding.candidate_identity.as_ref());
-    projection.push(binding.effect_position);
-    projection.push(binding.effect_count);
-    projection.push(binding.candidate_position);
-    projection.push(binding.candidate_count);
+    append_optional_runtime_hash(&mut projection, parts.candidate_semantic_identity);
+    append_optional_runtime_hash(&mut projection, parts.candidate_identity);
+    projection.push(parts.effect_position);
+    projection.push(parts.effect_count);
+    projection.push(parts.candidate_position);
+    projection.push(parts.candidate_count);
     iroha_crypto::Hash::new(projection)
 }
 
 impl RuntimeEffectCandidateBinding {
+    fn projection_parts(&self) -> RuntimeEffectCandidateBindingProjectionParts<'_> {
+        RuntimeEffectCandidateBindingProjectionParts {
+            owner_projection_hash: &self.owner_projection_hash,
+            parent_owner_projection_hash: self.parent_owner_projection_hash.as_ref(),
+            effect_kind: self.effect_kind,
+            effect_identity: &self.effect_identity,
+            candidate_kind: self.candidate_kind,
+            candidate_statement: self.candidate_statement,
+            candidate_semantic_identity: self.candidate_semantic_identity.as_ref(),
+            candidate_identity: self.candidate_identity.as_ref(),
+            effect_position: self.effect_position,
+            effect_count: self.effect_count,
+            candidate_position: self.candidate_position,
+            candidate_count: self.candidate_count,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         owner: &RuntimeLifecycleOwner,
@@ -2024,8 +2051,27 @@ impl RuntimeEffectCandidateBinding {
                 _ => return Err(EnqueueError::FailClosed),
             };
         let parent_owner_projection_hash = parent.map(|owner| owner.projection_hash);
-        let mut binding = Self {
-            owner_projection_hash: owner.projection_hash,
+        let owner_projection_hash = owner.projection_hash;
+        let projection_hash = runtime_effect_candidate_binding_projection_hash(
+            owner,
+            causality,
+            RuntimeEffectCandidateBindingProjectionParts {
+                owner_projection_hash: &owner_projection_hash,
+                parent_owner_projection_hash: parent_owner_projection_hash.as_ref(),
+                effect_kind,
+                effect_identity: &effect_identity,
+                candidate_kind,
+                candidate_statement,
+                candidate_semantic_identity: candidate_semantic_identity.as_ref(),
+                candidate_identity: candidate_identity.as_ref(),
+                effect_position,
+                effect_count,
+                candidate_position,
+                candidate_count,
+            },
+        );
+        let binding = Self {
+            owner_projection_hash,
             parent_owner_projection_hash,
             effect_kind,
             effect_identity,
@@ -2037,10 +2083,8 @@ impl RuntimeEffectCandidateBinding {
             effect_count,
             candidate_position,
             candidate_count,
-            projection_hash: iroha_crypto::Hash::new([]),
+            projection_hash,
         };
-        binding.projection_hash =
-            runtime_effect_candidate_binding_projection_hash(owner, causality, &binding);
         binding
             .validate_exact(owner, causality)
             .then_some(binding)
@@ -2105,7 +2149,11 @@ impl RuntimeEffectCandidateBinding {
             && usize::from(self.candidate_count) <= MAX_CAUSAL_SUCCESSORS_PER_COMMAND
             && exact_candidate
             && self.projection_hash
-                == runtime_effect_candidate_binding_projection_hash(owner, causality, self)
+                == runtime_effect_candidate_binding_projection_hash(
+                    owner,
+                    causality,
+                    self.projection_parts(),
+                )
     }
 }
 
@@ -2933,75 +2981,6 @@ impl RuntimeEffectOwnership {
                 candidate_count,
             )
             .map_err(|_| "Sumeragi v2 exact effect rebind failed closed".to_owned())
-    }
-
-    /// Bind a later, route-neutral retry to the exact incumbent async owner.
-    ///
-    /// Fair ingress deliberately gives an authenticated retransmission a new
-    /// lifecycle after the first physical command has drained.  The original
-    /// async candidate can still be live at that point.  Once both positional
-    /// bindings prove the same semantic candidate, the retry must retain the
-    /// incumbent task owner instead of replacing it or creating a second
-    /// physical task.  The retry's macro-step positions remain independently
-    /// checked and are copied into the adopted binding.
-    pub(crate) fn adopt_incumbent_candidate_for_retry(
-        &self,
-        incoming: &Self,
-        effect: &AdapterEffect,
-    ) -> Result<Self, String> {
-        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
-            return Err(
-                "Sumeragi v2 candidate retry omitted an exact ownership binding".to_owned(),
-            );
-        }
-        let incumbent_identity = self.candidate_semantic_identity().ok_or_else(|| {
-            "Sumeragi v2 incumbent async owner omitted its candidate identity".to_owned()
-        })?;
-        if incoming.candidate_semantic_identity() != Some(incumbent_identity) {
-            return Err(
-                "Sumeragi v2 candidate retry changed its route-neutral identity".to_owned(),
-            );
-        }
-        let incoming_binding = incoming
-            .binding
-            .as_ref()
-            .expect("validated bound ownership has one positional binding");
-        let inherited = self.candidate_semantic_statement();
-        let candidate = production_adapter_effect_candidate_binding(effect, inherited.as_ref())?
-            .ok_or_else(|| {
-                "Sumeragi v2 candidate retry rebound to a non-candidate effect".to_owned()
-            })?;
-        let rebound_identity =
-            runtime_effect_candidate_semantic_hash(candidate.kind, &candidate.semantic_identity);
-        if rebound_identity != incumbent_identity {
-            return Err(
-                "Sumeragi v2 candidate retry changed its incumbent semantic statement".to_owned(),
-            );
-        }
-        let ownership = match self.causality {
-            RuntimeEffectCausality::Inherit => {
-                RuntimeEffectOwnership::inherited(self.owner.clone())
-            }
-            RuntimeEffectCausality::Fresh(kind) => {
-                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
-            }
-        };
-        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
-            .then(|| ownership.owner.clone());
-        ownership
-            .bind_runtime_effect(
-                parent.as_ref(),
-                production_adapter_effect_kind(effect),
-                &production_adapter_effect_semantic_identity(effect),
-                Some(&candidate),
-                incoming_binding.effect_position,
-                incoming_binding.effect_count,
-                incoming_binding.candidate_position,
-                incoming_binding.candidate_count,
-            )
-            .map_err(|_| {
-                "Sumeragi v2 candidate retry could not retain its incumbent owner".to_owned()
-            })
     }
 
     /// Bind a later StoreBody or ValidateBody carrier to the one physical
@@ -7754,6 +7733,71 @@ struct RuntimeBodyCompletionOwnershipPlan {
 impl RuntimeBodyCompletionOwnershipPlan {
     fn effective_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
         self.replacement_statement.or(self.retained_statement)
+    }
+
+    /// Rebind the reviewed retry under the immutable terminal owner without
+    /// committing an authority refinement.
+    ///
+    /// The caller uses this sidecar for the complete positional refinement
+    /// gate. Only after that gate succeeds may the serialized runtime commit
+    /// `replacement_statement` to the queued or Busy terminal.
+    fn adopt_effect_ownership(
+        &self,
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+    ) -> Result<RuntimeEffectOwnership, String> {
+        if !self.retained_owner.validate_exact()
+            || !incoming.validate_bound_exact()
+            || !incoming.exactly_binds_adapter_effect(effect)
+        {
+            return Err(
+                "Sumeragi v2 body terminal retry omitted exact effect ownership".to_owned(),
+            );
+        }
+        let incoming_binding = incoming
+            .binding()
+            .expect("validated terminal retry has one positional binding");
+        let retained_statement = self.effective_statement().ok_or_else(|| {
+            "Sumeragi v2 body terminal retry omitted its retained authority statement".to_owned()
+        })?;
+        let candidate =
+            production_adapter_effect_candidate_binding(effect, Some(&retained_statement))?
+                .ok_or_else(|| {
+                    "Sumeragi v2 body terminal retry rebound to a non-candidate effect".to_owned()
+                })?;
+        if candidate.statement != Some(retained_statement)
+            || candidate.kind != incoming_binding.candidate_kind
+        {
+            return Err(
+                "Sumeragi v2 body terminal retry changed its retained candidate statement"
+                    .to_owned(),
+            );
+        }
+
+        let ownership = match incoming.causality() {
+            RuntimeEffectCausality::Inherit => {
+                RuntimeEffectOwnership::inherited(self.retained_owner.clone())
+            }
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.retained_owner.clone(), kind)
+            }
+        };
+        let parent = matches!(ownership.causality(), RuntimeEffectCausality::Inherit)
+            .then(|| self.retained_owner.clone());
+        ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                production_adapter_effect_kind(effect),
+                &production_adapter_effect_semantic_identity(effect),
+                Some(&candidate),
+                incoming_binding.effect_position,
+                incoming_binding.effect_count,
+                incoming_binding.candidate_position,
+                incoming_binding.candidate_count,
+            )
+            .map_err(|_| {
+                "Sumeragi v2 body terminal retry could not retain its incumbent owner".to_owned()
+            })
     }
 }
 
@@ -14681,7 +14725,15 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             };
             match relation {
                 RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
-                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => None,
+                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
+                    if retained_owner != *ownership.owner() {
+                        self.latch_fail_closed(
+                            "coalesced body completion changed its exact lifecycle owner",
+                        );
+                        return Err(EnqueueError::FailClosed);
+                    }
+                    None
+                }
             }
         } else {
             if retained_owner != *ownership.owner() {
@@ -14897,16 +14949,13 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
     }
 
-    /// Return whether the runtime already owns the terminal completion for an
-    /// exact Store/Validate candidate. This closes the executor visibility
-    /// gap after asynchronous work retires but before its queued completion is
-    /// consumed. The query never transfers or replaces the incumbent owner;
-    /// a stronger compatible authority statement is refined under that owner.
-    pub(crate) fn body_pipeline_candidate_has_terminal(
+    /// Resolve the sole serialized terminal for an exact Store/Validate
+    /// candidate without committing an authority refinement.
+    fn body_pipeline_candidate_terminal_ownership_plan(
         &mut self,
         effect: &AdapterEffect,
         ownership: &RuntimeEffectOwnership,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<RuntimeBodyCompletionOwnershipPlan>, String> {
         if self.fail_closed {
             return Err("Sumeragi v2 body terminal query entered a closed runtime".to_owned());
         }
@@ -14914,7 +14963,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             effect,
             AdapterEffect::StoreBody { .. } | AdapterEffect::ValidateBody { .. }
         ) {
-            return Ok(false);
+            return Ok(None);
         }
         if !ownership.exactly_binds_adapter_effect(effect) {
             self.latch_fail_closed("body terminal query omitted its exact predecessor capability");
@@ -14940,7 +14989,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         let [(tag, candidate)] = candidates.as_slice() else {
             return if candidates.is_empty() {
-                Ok(false)
+                Ok(None)
             } else {
                 self.latch_fail_closed(
                     "one body candidate retained multiple terminal completion owners",
@@ -14955,11 +15004,76 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 self.latch_fail_closed("body terminal query lost its serialized completion owner");
                 "Sumeragi v2 body terminal query lost ownership".to_owned()
             })?;
+        Ok(Some(plan))
+    }
+
+    /// Plan one terminal Store/Validate retry under its immutable incumbent
+    /// owner. This is a read-only success path: the returned binding can be
+    /// passed through the complete effect/candidate refinement gate before a
+    /// stronger compatible authority statement is committed.
+    pub(crate) fn plan_body_pipeline_candidate_terminal(
+        &mut self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<Option<RuntimeEffectOwnership>, String> {
+        self.body_pipeline_candidate_terminal_ownership_plan(effect, ownership)?
+            .map(|plan| plan.adopt_effect_ownership(effect, ownership))
+            .transpose()
+    }
+
+    /// Commit previously checked terminal authority refinements atomically.
+    ///
+    /// The serialized runtime cannot advance between plan and commit. The
+    /// second exact lookups nevertheless revalidate every retained owner and
+    /// target. All refinements are prepared before the assignment-only commit
+    /// tail, so a malformed later effect cannot partially refine an earlier
+    /// terminal in the same adapter macro-step.
+    pub(crate) fn commit_body_pipeline_candidate_terminals(
+        &mut self,
+        terminals: &[(&AdapterEffect, &RuntimeEffectOwnership)],
+    ) -> Result<(), String> {
+        let mut plans = Vec::with_capacity(terminals.len());
+        for (effect, ownership) in terminals {
+            let plan = self
+                .body_pipeline_candidate_terminal_ownership_plan(effect, ownership)?
+                .ok_or_else(|| {
+                    self.latch_fail_closed(
+                        "body terminal refinement lost its serialized completion owner",
+                    );
+                    "Sumeragi v2 body terminal refinement lost ownership".to_owned()
+                })?;
+            plans.push(plan);
+        }
         let prepared = self
-            .prepare_body_pipeline_completion_refinements(std::slice::from_ref(&plan))
+            .prepare_body_pipeline_completion_refinements(&plans)
             .map_err(|error| error.to_string())?;
         self.commit_prepared_body_pipeline_completion_refinements(prepared)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.to_string())
+    }
+
+    /// Commit one previously checked terminal authority refinement.
+    pub(crate) fn commit_body_pipeline_candidate_terminal(
+        &mut self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), String> {
+        self.commit_body_pipeline_candidate_terminals(&[(effect, ownership)])
+    }
+
+    /// Return whether the runtime already owns the terminal completion for an
+    /// exact Store/Validate candidate, committing an authority upgrade only
+    /// after producing the incumbent-owner plan. Executor production uses the
+    /// explicit plan/commit pair so its total positional refinement gate sits
+    /// between these two operations.
+    pub(crate) fn body_pipeline_candidate_has_terminal(
+        &mut self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<bool, String> {
+        let Some(adopted) = self.plan_body_pipeline_candidate_terminal(effect, ownership)? else {
+            return Ok(false);
+        };
+        self.commit_body_pipeline_candidate_terminal(effect, &adopted)?;
         Ok(true)
     }
 
@@ -24637,11 +24751,16 @@ mod tests {
             .lifecycle_ordinals
             .reserve_one()
             .expect("mint a later exact Serve ticket");
+        assert_eq!(
+            runtime.minimum_active_lifecycle_ordinal(),
+            Ok(Some(1)),
+            "the complete active inventory retains restart-dormant lifecycle debt"
+        );
         assert!(
-            runtime
+            !runtime
                 .older_lifecycle_predates_exact_serve(started_at, later_serve)
-                .expect("latent FIFO owner participates in the active minimum"),
-            "the restart-dormant owner must remain ahead of later Serve work"
+                .expect("inspect passive dormant ownership at the Serve cut"),
+            "passive dormant debt cannot open an executable Serve predecessor episode"
         );
 
         for value in [1, 2, 3] {
@@ -24679,16 +24798,8 @@ mod tests {
         .expect("a trusted completion fills the last unreserved position");
         assert_eq!(runtime.remaining_completion_capacity(), 0);
         assert!(
-            matches!(runtime.step(started_at), Ok(RuntimeStep::Idle)),
-            "later Completion, Progress, and Normal commands must idle behind the latent minimum"
-        );
-        let idle_ownership = runtime
-            .take_last_scheduler_ownership()
-            .expect("the blocked turn retains exact idle ownership");
-        assert_eq!(idle_ownership.selected, RuntimeSelectedOwnerKind::Idle);
-        assert!(
             runtime.driver.delivered.is_empty(),
-            "no younger physical command may dispatch before exact replacement"
+            "the full-capacity cut is retained before exact replacement"
         );
 
         runtime.driver.admission_preflight_override =
@@ -29388,7 +29499,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_body_terminal_is_visible_across_store_and_validate_authority_upgrades() {
+    fn queued_body_terminal_adopts_only_authority_upgrades_and_rejects_same_authority_owners() {
         let directory = TempDir::new().expect("temporary body-terminal visibility directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
             &directory,
@@ -29540,14 +29651,26 @@ mod tests {
         );
         assert!(
             runtime
+                .body_pipeline_candidate_has_terminal(&validate_effect, &validate_ownership[0],)
+                .expect("the incumbent Commit Validate observes its queued terminal")
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(!runtime.fail_closed);
+        assert_ne!(
+            certified_validate_ownership.owner(),
+            validate_ownership[0].owner(),
+            "the negative retry must carry a distinct lifecycle owner"
+        );
+        assert!(
+            runtime
                 .body_pipeline_candidate_has_terminal(
                     &validate_effect,
                     &certified_validate_ownership,
                 )
-                .expect("Commit Validate observes the ordinary queued terminal")
+                .is_err(),
+            "same-authority terminal retry must reject a foreign owner"
         );
-        assert_eq!(runtime.queued_commands(), 1);
-        assert!(!runtime.fail_closed);
+        assert!(runtime.fail_closed);
     }
 
     #[test]
@@ -29600,6 +29723,9 @@ mod tests {
             .mint_non_fifo_lifecycle_ordinal()
             .expect("mint Prepare-authorized StoreBody owner");
         let prepare_store = bind_store(&fetch(prepare), prepare_ordinal);
+        let prepare_statement = prepare_store
+            .candidate_semantic_statement()
+            .expect("Prepare-authorized StoreBody carries its exact statement");
         let evidence = BodyPipelineCompletionEvidence::BodyStored {
             round: manifest.round,
             subject: manifest.subject,
@@ -29633,11 +29759,23 @@ mod tests {
             .candidate_semantic_statement()
             .expect("Commit-authorized StoreBody carries its exact statement");
         assert_ne!(commit_store.owner(), &incumbent);
-        assert!(
-            runtime
-                .body_pipeline_candidate_has_terminal(&store_effect, &commit_store)
-                .expect("terminal query accepts the monotonic Commit refinement")
+        let planned = runtime
+            .plan_body_pipeline_candidate_terminal(&store_effect, &commit_store)
+            .expect("terminal query accepts the monotonic Commit refinement")
+            .expect("queued StoreBody terminal produces one incumbent-owner plan");
+        assert_eq!(planned.owner(), &incumbent);
+        assert_eq!(
+            planned.candidate_semantic_statement(),
+            Some(commit_statement)
         );
+        assert_eq!(
+            runtime.ingress.commands[0].candidate_semantic_statement,
+            Some(prepare_statement),
+            "planning cannot refine terminal authority before the caller's total gate"
+        );
+        runtime
+            .commit_body_pipeline_candidate_terminal(&store_effect, &planned)
+            .expect("commit the checked monotonic terminal refinement");
         assert_eq!(runtime.queued_commands(), 1);
         assert_eq!(
             runtime.ingress.commands[0]

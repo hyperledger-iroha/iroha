@@ -1726,6 +1726,10 @@ def test_terminal_receipt_requires_every_extended_release_field(
         'receipt["evidence"]["prebuilt_binary_bundle"]["profile"] = "debug"',
         'receipt["evidence"]["prebuilt_binary_bundle"]["bundle_dir"] = str(candidate)',
         'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["cargo"]["argv"][0] = str(candidate / "payload")',
+        pytest.param(
+            'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["cargo"]["argv"][0] = str(release_root / "scripts" / "run_sumeragi_v2_release_gates.sh")',
+            id="prebuilt-cargo-transcript-authenticated-tool-substitution",
+        ),
         'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["cargo"]["argv"][1] = "-V"',
         'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["cargo"]["sha256"] = "0" * 64',
         'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["cargo"]["size_bytes"] = 0',
@@ -1938,6 +1942,10 @@ def test_terminal_receipt_rejects_extra_live_closed_inventory_files(
             'directories = receipt["evidence"]["multilane_scaling_bundle"]["directories"]\n'
             "directories.append(directories[-1])",
             id="duplicate-directories",
+        ),
+        pytest.param(
+            'receipt["evidence"]["multilane_scaling_bundle"]["directories"][0] = "../escape"',
+            id="directory-traversal",
         ),
     ],
 )

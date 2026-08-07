@@ -1116,6 +1116,14 @@ receipt, exact artifact, and original reducer tag as a completion tombstone.
 An exact post-drain retry is absorbed; tag, subject, context, or CommitQC drift
 fails closed. This closes old-stage recreation in source but does not promote
 the application theorem or any cross-tool production-refinement obligation.
+At the enclosing adapter boundary, a zero-to-one semantic candidate publishes
+its immutable owner, while a one-to-one retry must present that exact owner.
+A different owner for the same semantic lifecycle is rejected before the
+effect-to-candidate trace projection is constructed. The separate physical
+Fetch/Store/Validate lineage may retain a stronger carrier only after its
+distinct phase/commitment identity passes the typed monotone authority gate and
+the adopted lineage is re-projected. These source and mutation checks do not
+promote the effect-to-candidate cross-tool obligation before its strict pass.
 Recovered publication requires absent
 process-visible predecessor ownership plus durable complete-tip authority. For
 a tip whose canonical block owns lane payloads, that authority additionally
@@ -1220,6 +1228,18 @@ rank counts every distinct target/leader owner at the frozen semantic rank,
 preventing one serviced owner from hiding another. Equal-count replacement
 and count-increasing replenishment remain explicit non-progress cases and
 require a prior finite or coalesced producer argument.
+
+The production queue closes the matching final-retirement race with a one-shot
+local handoff. The last owner in a frozen Serve batch arms
+`producer_episode_due` under the same mutex that retires it; fresh Serve
+admission is `Busy` while the handoff is due or while
+`producer_episode_active` owns its bounded outer turn. The runner atomically
+consumes due into active, and the local lease clears active before admission
+reopens. Rejected replenishment cannot mint either scheduler or logical
+lifecycle ordinals. Digest-refreshed mutations bind both Busy boundaries, the
+high-water marks, timeout-owner ordering, strict predecessor service, and the
+real timeout-certificate/EnterView suffix. This source refinement does not
+count replenishment as progress, add fairness, or promote a ledger row.
 
 The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
@@ -1403,7 +1423,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 826 tests across thirty-eight Rust
+The current pre-network release inventory names 829 tests across thirty-eight Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1502,7 +1522,9 @@ checkpoint. Five admission/coalescing, Busy pre-runtime ownership, and
 reconstructed-chunk terminality regressions yield the 818-test checkpoint.
 Thirteen exact admission, retry, tombstone, and high-water regressions yield the
 831-test checkpoint. Retiring five obsolete peer-genesis protocol regressions
-yields the current 826-test,
+yields the 826-test checkpoint. Replacing one obsolete restart selector with
+its separate raw/coalesced crash boundaries and restoring two implemented
+certified-ingress regressions yields the current 829-test,
 38-module inventory. The complete source-sealed
 pre-network corridor
 contains 81 legs. Six source-sealed command legs and the G-SCALE
@@ -1574,7 +1596,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc`.
+`aade985a59315e4e94a0933d175065594e063cd041a2c5009b6d6ea03c4b0c0c`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1673,7 +1695,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 826-name tree still requires a clean committed, detached,
+names; the current 829-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

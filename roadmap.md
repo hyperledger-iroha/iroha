@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-03
+Last updated: 2026-08-07
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -23,6 +23,17 @@ regressions, generated-artifact determinism, exact profile-config admission,
 and public consensus wire roundtrips are complete. The outstanding revision-4
 work is limited to:
 
+- Finish source-seal, proof, and release validation for the selected-Serve
+  Taira `missing_proposal` repair. The focused composed regression now drives a
+  completed predecessor claim, local absolute timeout, two responsive remote
+  TimeoutVotes, grouped three-signer TC, and `EnterView`; the post-retirement
+  queue handoff also blocks fresh Serve replenishment until one ordinary
+  producer turn runs. The remaining closure is the digest-refreshed mutation
+  matrix, strict non-promotional proof pass, complete four-peer release build,
+  deployment, and observed Taira height advancement. Keep exact semantic
+  retries on their immutable owner, reject owner replacement before refinement,
+  and retain only the separately typed monotone Fetch/Store/Validate authority
+  lineage.
 - Repair or isolate the unrelated committed `iroha_core`, `iroha_data_model`,
   and daemon test-harness compilation failures, and extend the host guard
   allowlist to the reviewed Python and pinned Java/TLC formal commands. Then
@@ -427,7 +438,7 @@ evidence.
 ## Sumeragi V2 production multilane release closure
 
 On the current tree, the independent 81-leg release inventory contract is
-sealed at 826 production tests across 38 modules, 309 G-UNIT rows, and four
+sealed at 829 production tests across 38 modules, 309 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -484,11 +495,11 @@ multilane binding ledger keeps this as
 reservation, queue-order, Kura persistence/recovery, runner, and release
 receipt consumers, and requires a distinct fifth layout-only Apalache result
 after the four refinement rows. The schema-4 structural/source-binding checks,
-exact 826-test production inventory, 309-test G-UNIT source inventory, 12
+exact 829-test production inventory, 309-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
 contract controls require a fresh source-bound rerun. The G-UNIT inventory has 310 TSV lines
 and SHA-256
-`b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb`.
+`bd13d718a1362dd242aad04a75d6c55113181f84545b061cf8517236ac6057fe`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
 claimed by those static checks, and the total Rust transition projection
@@ -530,7 +541,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 826-test,
+  mutations before promotion, then finish the remaining 829-test,
   38-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -26386,7 +26397,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-826-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+829-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -26692,7 +26703,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  826-test target above supersedes that checkpoint. The 38-module pre-network
+  829-test target above supersedes that checkpoint. The 38-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,
