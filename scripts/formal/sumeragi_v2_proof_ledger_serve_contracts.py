@@ -1608,7 +1608,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "56da29380176de548e84bec7c703a14da8ce267a1a5e499d7a7971fda14db25c"
     ),
     "freeze_due_clock_owners": (
-        "72400e4f0322887b55caf39ccb20693960aaf607db8c5a36ec393014adef01cd"
+        "d28538a60f9391277b1db6c60b71ed694c1d776de425305c52f8703450ebae85"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -1623,7 +1623,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
     "step": (
-        "5054f687f343932ca8be815fc7690d0a0bb2e6490af8ad97ec5f7dacb0c36ac1"
+        "b6fff2e4570afb934840f7d1f6cb9070490d66638101f31d1d4efc74c9180617"
     ),
     "finish_dispatched_step": (
         "79b15a8142c81629b078a64822c4bba3a7cc930d1da75eb816c7f64609021285"
@@ -1632,7 +1632,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "0e3ec4c7653e66a28e606fece27d17500419e87a47525d4b39a8aa53810614f2"
     ),
     "dispatch_one_pacemaker_progress": (
-        "1f8c56de61b568271a2d4aae7f403ad1ab6573b6b0165eeb53b1f234aa144b7e"
+        "fc7d5f12b41f703242826e8926dd91f4267b78d775b1d8c2453d85006a3ac965"
     ),
     "step_recovery": (
         "6237cbe71023254491c5cfa8024f57bb71183da8dc8ed557a9b06776de33ceed"

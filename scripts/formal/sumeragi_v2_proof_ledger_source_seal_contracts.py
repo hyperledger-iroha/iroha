@@ -89,7 +89,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "399605c9add8c3bf579fc03c6b46b52533c1ca726cc175fcd80cd33536882ce7"
     ),
     "budget": (
-        "8da4eaa39048654d522ba93b3549224a5f478a8f5e054956c1f82f4d30d2b697"
+        "db8200b278278f301d4a254f04ca49d42353b486baac55c104cb4461ba5d125f"
     ),
     "deferred_work_is_serviceable": (
         "1036f93b127acad65512fcb095d7f19bdc547f93d22ebebbd227277a0a30405c"
@@ -124,13 +124,16 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "45b2891248d62b2a998ebcaf2e29d35bfeb1687a8869a0b27776904ee6b3f778"
     ),
     "freeze_due_clock_owners": (
-        "72400e4f0322887b55caf39ccb20693960aaf607db8c5a36ec393014adef01cd"
+        "d28538a60f9391277b1db6c60b71ed694c1d776de425305c52f8703450ebae85"
     ),
     "validate_clock_owner_physical_cuts": (
-        "d032de42de6c77bf66ae4955295a4066f9735eb2cc1f531c6fa5986b0361821b"
+        "0c32bff217ddf2b631eba89320a3b6fad6dda20830ed9e0ed7778ab47d2185d6"
+    ),
+    "clock_owner_reservation_blockers_occurrence": (
+        "940ef5e22bf2e2a1d9ef78fca48d2517d6294259b1b8108892420d0de78ba34e"
     ),
     "clock_owner_reservation_blocks_occurrence": (
-        "3429be87183f81ffd68b1da7d1f6ee32f1536de8f7a72098d868ca2d747ae882"
+        "9fa4051663d34eab5a8ecbfc1192ca92789ca710085e95726a796a29b20450da"
     ),
     "clock_owner_reservation_blocks": (
         "f6db1825402a97f52f35c0ef7cabda380be9055ca7507dfae0476d339057304c"
@@ -157,7 +160,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
     "runtime_step": (
-        "07f2cca3bebd7dc32b9f4a4eb969a66d028d09504bdde4dceba8fd15cb4db1a3"
+        "b6fff2e4570afb934840f7d1f6cb9070490d66638101f31d1d4efc74c9180617"
     ),
     "runtime_step_recovery": (
         "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
@@ -270,7 +273,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "aa0a41501d13d502e119566bb4fc55e202f820ece97cf66e486ac851b458c64d"
     ),
     "dispatch_one_pacemaker_progress": (
-        "54493a9c9ee90735c473e7a11b8abcb171be883e0b4d708256b297b98793de4e"
+        "fc7d5f12b41f703242826e8926dd91f4267b78d775b1d8c2453d85006a3ac965"
     ),
     "occurrence_owner_validate_exact": (
         "0f018cbe8ab36b2a5e1f3aa128d7c22c367083b399184aedc8c829f9228db8e3"
@@ -307,6 +310,9 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
     ),
     "runtime_driver_command_is_blocked_by_deferred_fence": (
         "63b773eb42e48fc13be96b5aecd992d9e23a264ba28d0720e450eace4578dc5d"
+    ),
+    "runtime_driver_default_command_matches_deferred_authenticated_owner": (
+        "f7890a72aa8fe05e4f16321614d6fc96b31de12353b923fe34724a1e46109b61"
     ),
     "runtime_driver_pacemaker_escape_is_parked": (
         "4ed5db3024338e14145b7186c4392feb1c14348e887f3695d813f980ad6680e7"
@@ -380,6 +386,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "runtime_driver_seal_deferred_runtime_ownership": (
         "2948fe28ee3912010c5f0628e6688a329de631c8c5c3f9456178c17e7f58358a"
     ),
+    "runtime_driver_command_matches_deferred_authenticated_owner": (
+        "8b4d64222b3f18e244c28e62aeb60075cb7995d920d55e08c67540db0a663fa8"
+    ),
     "runtime_ingress_physical_ownership_validate_exact": (
         "488ba0d5d7896c09a4966d90d16c831090f516c42ab213c70c62aead6b49f0b5"
     ),
@@ -419,12 +428,14 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "accept_driver_dispatch": (
         "650c7e0b0c9e1af79cb835080e7ff5f9cdf63a0e80e476586c211e6566e6d9f9"
     ),
-    # TODO: Replace these individually after the timeout-episode semantic
-    # mutations prove the reviewed pre-runtime and mutating admission paths.
-    "enqueue_network_with_ingress_ownership": "PENDING_BEHAVIOR_VALIDATION",
-    "can_admit_pre_runtime_leader_wire": "PENDING_BEHAVIOR_VALIDATION",
+    "enqueue_network_with_ingress_ownership": (
+        "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
+    ),
+    "can_admit_pre_runtime_leader_wire": (
+        "c87bffb9117487d2697e1cb242859927e0083d8c965674acc9b475a56b50d360"
+    ),
     "can_admit_network_message_with_ingress_ownership": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "338ddd65e84755b37a84a618375f27631ddabc72e478b2405ee7f9904b5ecad3"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
@@ -453,10 +464,11 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     "distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner": (
         "9fd964c7159754e3a01d6d905f40423fb1fb4d573f033f031b3497b02969c1d4"
     ),
-    # TODO: Replace with the reviewed token digest after the focused production
-    # replay regressions and negative mutations pass.
+    "pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_busy_producer": (
+        "5ae5c533c0498b9d067634d88722b736f52ff78c6a63983111a390c36c3603fe"
+    ),
     "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
     ),
 }
 
@@ -484,7 +496,7 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
     ),
     "runner::run_inner": (
-        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+        "8422b8d295af43003273d9ae79c47b20c528e2581ac1e0225ceeae759d95219b"
     ),
     "runner::drain_v2_ingress": (
         "dad59f9959e17dd1d504935ab1bacb07e7dc8652d71727ff96e6316ec6f3f5c5"
@@ -586,6 +598,15 @@ _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
         "AsyncTimeoutRecoveryEpisodeKeySet": (
             "35f54e3863b1adea21d2f768a5be5862d13d9c4aaff3e41c9eb54fbb3db3a37a"
         ),
+        "AsyncTimeoutRecoveryEpisodeParameterSet": (
+            "97e276e0aa217f74f2670a2bd2102ff27100a460d14fcd07af09e96d201de2e6"
+        ),
+        "AsyncTimeoutRecoveryEpisodeFromParameters": (
+            "e545c3e4954c93475837024ba05441adbd7e847c72af1ef7293099a2c40603f4"
+        ),
+        "AsyncTimeoutRecoveryEpisodeSet": (
+            "25949f35225bb00891c0ce09e0f52a9b73677ef92d0336b5337c9d1d11966fbd"
+        ),
         "AsyncTimeoutRecoveryVoteOwnerSlot": (
             "681ac1b76eedfd4cf39b4407c5f75a199fc3088fcb89ff2704ef0450e32e757f"
         ),
@@ -681,6 +702,50 @@ _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
         ),
         "AsyncTimeoutRecoveryProducerEpisodeMeasure": (
             "316131577d432419223b8e039fc85c66144da1996701736cf6a04882105747b7"
+        ),
+        "AsyncTimeoutRecoveryEpisodeCreationReadyIn": (
+            "463fcd6b8a67c383cd62b258d220831cd60d0854df625b77b359ff3859827283"
+        ),
+        "AsyncTimeoutRecoveryTransitionGateIn": (
+            "02e689cac6c1aba321ea319591aff3feb1957c946608e9cc86f3826c854445ed"
+        ),
+        "AsyncTimeoutRecoveryEpisodeRetiresThisStep": (
+            "ec514a038cee6fb9f31e63409040bee22defb732edc7208e3a683779a24ad686"
+        ),
+        "AsyncTimeoutRecoveryExistingCaptureClearsThisStep": (
+            "92a31d4bd2a3c6b1a57c6bbbcf5d67d33da9b575922159aa12074e373226eb1d"
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterTransition": (
+            "043fa928e89e959c987aa19209e2c3ef68541a551017062b9f38ae1a0d267fbc"
+        ),
+        "AsyncTimeoutRecoveryRetainedEpisodesAfterTransition": (
+            "15b01a6485f2446a013ff833d7ed3831dca42ba6933642afa74bb123622d7f76"
+        ),
+        "AsyncTimeoutRecoveryNewEpisodeIn": (
+            "dfb0f545e1804325d054d841731c71e8da09565a9ae99177980e66b42f828b54"
+        ),
+        "AsyncTimeoutRecoveryNewEpisodesAfterTransition": (
+            "0bb56383a4306a31b7df629c7908fd37f772a5c31305ee641b887c287a46b3f2"
+        ),
+    },
+    "SumeragiV2AsyncRecoveryVoteEpochProofs.tla": {
+        "AsyncTimeoutRecoveryEpisodeBoundaryIn": (
+            "a45ca5da201b0d81c538304cfbd4740029c9b8aaa17190f2c0f835a99ec5bc8a"
+        ),
+        "AsyncTimeoutRecoveryBoundaryFrameShape": (
+            "7b851fbaf17ebee465208fbde0c47b447c6cf9e278cc54b369ce00da2146eecf"
+        ),
+        "AsyncTimeoutRecoveryMutationFrameShape": (
+            "f85b7549b33097ba1cf31adbb63d48a85fdf0b61f409b60e128451acbf37656f"
+        ),
+        "AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor": (
+            "5bb5d4962bbc9db7fcbe00c53e70d5532ed39550ee5da04acdac6048dc0fc5c3"
+        ),
+        "AsyncTimeoutRecoveryNewBaseEpisodeIn": (
+            "aebba5c89eb28cc959098eef0a148c0a3defe3818d71f7aacc07ab8f2fd73136"
+        ),
+        "AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn": (
+            "e90869e129c22b6a56cdac3759bcf47be53b7c89276675019eeb1b7e39891d2b"
         ),
     },
 }
@@ -808,6 +873,71 @@ _TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256 = {
             "9b7852d4c48d9c782e1e06ad51abdf998b9fe770e65a4c656a13231ce080f93f"
         ),
     },
+    "SumeragiV2AsyncRecoveryVoteEpochProofs.tla": {
+        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
+            "87a2bae16488fb91aa75fe1a768cf789af85395501336a69ad8049ea81dc41f3"
+        ),
+        "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
+            "ef5e61577913d1fac48f01db1ba8cfefb0ee72f722bf9a2bda30da5db92384a2"
+        ),
+        "AsyncNextPreservesServeProducerEpisodeTypeInvariant": (
+            "341a2e27665c84e9a483ddb897b03535d3b81406d299f17a81db1ec920e9b90a"
+        ),
+        "AsyncNextPreservesServeProducerEpisodeInvariants": (
+            "09da7c9d7814236562f6a87fb5f88d48777db0dd5f739ae99a5e77f65f51739f"
+        ),
+        "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame": (
+            "1b4c3dfb92c959259a888b735f68844adab19402ea9fb2898dbddea784965c8a"
+        ),
+        "AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape": (
+            "4d2c2d79ef909af71925238d588ed7c64d76a589f2792b699ea1adc63ede7a1f"
+        ),
+        "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape": (
+            "919a0a8655b7d59f9ff637e654c32dbacaa5e3111f06495a757fd9b4a5926050"
+        ),
+        "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary": (
+            "d83c752c87732813a8c874cbc6767d8e094b8babe60b5fb9d2c7a03055b12ed6"
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary": (
+            "8dcef1fda3370f5227fd39b43c1361a7607e16f41e7ccce7d8c2fae1220a96a7"
+        ),
+        "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary": (
+            "165cbd893a1cea61c0c91cfd04ce9d7f955bd66ff0ec6c342fcd1668a4b04429"
+        ),
+        "AsyncTimeoutRecoveryNewEpisodeDecomposition": (
+            "b5ee625013c0ceb306bc595c023bd508605aa53015dc870417f70c046f8532ff"
+        ),
+        "AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary": (
+            "7904b774302b1d694602a1998453a7eda81b24476c907a6f0ad9db82a4e062a4"
+        ),
+        "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary": (
+            "e2805c35555463b3deb60c7406ca6857bbf8be56c176e865e64417085519a43d"
+        ),
+        "AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary": (
+            "ff78a382b38ce79b326523adc660a8b44be48edfdccb4cce8125f9cea9319cd8"
+        ),
+        "AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary": (
+            "9729dc41b99b9e312a7720b1d13eba71eae422822ff341a3d22b3dddf9c8146f"
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary": (
+            "5c0bf320cc8859bf01595208361885d31718a1b6cf99fcad84a0104de0927cbf"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary": (
+            "2373ca20ddef74981b6efe3ca4d917b3f305aed0a6eda616559c7ab770954b9f"
+        ),
+        "AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet": (
+            "63b50294ef186208a2a221563512cf3954df54e9325cec390b70c782af1b189c"
+        ),
+        "AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet": (
+            "3ae8217b29fadcf0f9bd24bf30e60d03c4951f3c51bc89a536455201430adfa2"
+        ),
+        "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary": (
+            "cd37abed710d6c5fda8727bc5131ffd5127e4ce6e8ff057d590e58973a978b41"
+        ),
+        "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant": (
+            "e7333ca33c4b997ae139c209748ae603fac1b24002c319dab295bcb02325ae4a"
+        ),
+    },
     "SumeragiV2AdequateLeaderServiceClosureProofs.tla": {
         "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode": (
             "3cb5653b8cceb88b3a193570b5b344cde20f58e5759bfb770fa343f9e392126c"
@@ -818,10 +948,11 @@ _TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256 = {
 # Exact production effect-executor entry points which retain the authenticated
 # ingress carrier and latch a fail-stop restart on malformed ownership.
 _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
-    # TODO: Approve separately after timeout-episode capacity mutations pass.
-    "enqueue_network_with_ingress_ownership": "PENDING_BEHAVIOR_VALIDATION",
+    "enqueue_network_with_ingress_ownership": (
+        "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
+    ),
     "can_admit_network_message_with_ingress_ownership": (
-        "PENDING_BEHAVIOR_VALIDATION"
+        "338ddd65e84755b37a84a618375f27631ddabc72e478b2405ee7f9904b5ecad3"
     ),
 }
 
@@ -1935,7 +2066,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "run_inner": (
-        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+        "8422b8d295af43003273d9ae79c47b20c528e2581ac1e0225ceeae759d95219b"
     ),
     # TODO: Approve with the helper's exact-output alias after its focused
     # non-descent and handoff mutations pass.
@@ -1989,8 +2120,14 @@ _EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256 = {
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
+    "build_v2_io_command_channel": (
+        "2623e948dc4a847491de8d93a1930a4657868f40dfb7ade6932007e2e6970a06"
+    ),
     "CertifiedServeProducerEpisode::drop": (
         "926626c686c14d453e18bf20dd7232e33383b26b814178e2d2b7e2c2beb161e3"
+    ),
+    "V2IoCommandQueue::close_receiver": (
+        "fefb2552e1b12444fab81480a8d9b1ba0dff351a60113207ac02ac6336020bf7"
     ),
     "V2IoCommandQueue::reserve_serve_ingress": (
         "310f5f50fcf4e1bc7c99823c0c8b5c53f60bd8ab3b5ac4166c559287909312b3"
@@ -2149,7 +2286,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
     "run_inner": (
-        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+        "8422b8d295af43003273d9ae79c47b20c528e2581ac1e0225ceeae759d95219b"
     ),
     "service_certified_serve_barrier_liveness_turn": (
         "d6afb60b54ec1b0a482ac76cdcc4f14469dbd39930a21ae26904c1a2d4cacb88"
@@ -2522,7 +2659,7 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     # TODO: Approve drain_v2_ingress separately after its three-mode drain
     # mutations pass.
     "run_inner": (
-        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+        "8422b8d295af43003273d9ae79c47b20c528e2581ac1e0225ceeae759d95219b"
     ),
     "drain_v2_ingress": "PENDING_BEHAVIOR_VALIDATION",
     # TODO: Approve after the exact-output handoff mutation survives refreshing
@@ -2677,7 +2814,7 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
         "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
     "runner::run_inner": (
-        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+        "8422b8d295af43003273d9ae79c47b20c528e2581ac1e0225ceeae759d95219b"
     ),
     "test::retained_response_certificate_escape_is_charged_only_once": (
         "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"

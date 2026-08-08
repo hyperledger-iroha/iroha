@@ -51,11 +51,13 @@ RELEASE_PROOF_MODULES = (
 )
 
 # Theorem-bearing modules outside the release proof surface must be explicit.
-# The former debt shard is intentionally theorem-free; the two scratch modules
-# only recheck already-authoritative release bridges. None may be used to
-# promote a ledger obligation.
+# The former debt shard is intentionally theorem-free and therefore absent;
+# the bounded TLC kernel and two scratch modules cannot promote a ledger
+# obligation.
 NON_RELEASE_THEOREM_MODULES = {
-    ASYNC_LIVENESS_DEBT_SHARD: ASYNC_LIVENESS_DEBT_THEOREMS,
+    "SumeragiV2Revision4CertifiedFenceReservation": (
+        "BodyAvailableReservationAtomicallyReplacesConflict",
+    ),
     "SumeragiV2HistoricalLockedBodyRecoveryBridgeScratch": (
         "HistoricalLockedBodyRecoveryProductionRefinementBridgeScratch",
     ),

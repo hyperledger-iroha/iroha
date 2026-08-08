@@ -15072,6 +15072,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     }
 
     /// Commit one previously checked terminal authority refinement.
+    #[cfg(test)]
     pub(crate) fn commit_body_pipeline_candidate_terminal(
         &mut self,
         effect: &AdapterEffect,
@@ -15085,6 +15086,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// after producing the incumbent-owner plan. Executor production uses the
     /// explicit plan/commit pair so its total positional refinement gate sits
     /// between these two operations.
+    #[cfg(test)]
     pub(crate) fn body_pipeline_candidate_has_terminal(
         &mut self,
         effect: &AdapterEffect,

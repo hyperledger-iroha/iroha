@@ -1065,6 +1065,37 @@ THEOREM AsyncStrongTypeProjectsControlServiceStateType ==
   AsyncStrongTypeInvariant => AsyncControlServiceStateTypeInvariant
 BY DEF AsyncStrongTypeInvariant
 
+AsyncTimeoutRecoveryEpisodeBoundaryIn(
+    episode, currentContext, currentNodeView,
+    currentGeneration, currentDecisions) ==
+  /\ episode.key.context = currentContext
+  /\ episode.timeoutOwnerOrigin.height = currentContext.height
+  /\ episode.key.view = currentNodeView[episode.node]
+  /\ episode.generation = currentGeneration[episode.node]
+  /\ ~AsyncNodeHasDecisionIn(
+       episode.node, currentContext, currentDecisions)
+
+THEOREM AsyncInitEstablishesTimeoutRecoveryCurrentBoundary ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
+BY AsyncTimeoutRecoveryRolloverInstanceStartsEmpty, Isa
+   DEF AsyncInitAt, AsyncBaseInitAt,
+       AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant,
+       AsyncTimeoutRecoveryEpisodes,
+       AsyncTimeoutRecoveryEpisodesIn
+
+THEOREM AsyncInitEstablishesServeProducerEpisodeInvariants ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => /\ AsyncServeProducerEpisodeTypeInvariant
+         /\ AsyncServeProducerEpisodeOwnershipInvariant
+BY Isa
+   DEF AsyncInitAt, AsyncBaseInitAt,
+       AsyncServeProducerEpisodeInit,
+       AsyncServeProducerEpisodeTypeInvariant,
+       AsyncServeProducerEpisodeOwnershipInvariant
+
 THEOREM AsyncInitEstablishesStrongTypeInvariant ==
   \A initialContext:
     AsyncInitAt(initialContext) => AsyncStrongTypeInvariant
@@ -1130,6 +1161,11 @@ PROOF
     <2>3e. AsyncOrdinaryIngressCarrierOwnershipInvariant
       BY <1>1,
          AsyncInitEstablishesOrdinaryIngressCarrierOwnership
+    <2>3p. /\ AsyncServeProducerEpisodeTypeInvariant
+             /\ AsyncServeProducerEpisodeOwnershipInvariant
+      BY <1>1, AsyncInitEstablishesServeProducerEpisodeInvariants
+    <2>3t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
+      BY <1>1, AsyncInitEstablishesTimeoutRecoveryCurrentBoundary
     <2>4. ReceivedTimeoutVotePoolInvariant
       BY <1>1, AsyncInitEstablishesTimeoutPoolInvariant
     <2>5. /\ AsyncRecoveryTypeInvariant
@@ -1151,7 +1187,7 @@ PROOF
              AsyncGstRecoveryPhaseInvariant
     <2>7. AsyncSerializedBusyKernelInvariant
       BY <1>1, AsyncInitEstablishesSerializedBusyKernelInvariant
-    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e, <2>4,
+    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e, <2>3p, <2>3t, <2>4,
                 <2>5, <2>6, <2>7
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
@@ -1203,6 +1239,9 @@ PROOF
            /\ HistoricalLockRestartAuthoritySourceRetentionInvariant
            /\ AsyncGstRecoveryPhaseInvariant
            /\ AsyncSerializedBusyKernelInvariant
+           /\ AsyncServeProducerEpisodeTypeInvariant
+           /\ AsyncServeProducerEpisodeOwnershipInvariant
+           /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2. UNCHANGED vars
       BY <1>1, Isa DEF AsyncAllVars
@@ -1286,8 +1325,25 @@ PROOF
     <2>8. AsyncSerializedBusyKernelInvariant'
       BY <2>1, <2>2,
          CoreVarsStutterPreservesSerializedBusyKernelInvariant
+    <2>8p. /\ AsyncServeProducerEpisodeTypeInvariant'
+             /\ AsyncServeProducerEpisodeOwnershipInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars,
+             AsyncServeProducerEpisodeTypeInvariant,
+             AsyncServeProducerEpisodeOwnershipInvariant,
+             AsyncServeIngressLifecycleOwnerIdentities,
+             AsyncServeIngressAdmissionIdentities,
+             AsyncServeOffQueueReservations,
+             AsyncServeJobQueued, AsyncIoServeIdentities
+    <2>8t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars, vars,
+             AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant,
+             AsyncTimeoutRecoveryEpisodes,
+             AsyncTimeoutRecoveryEpisodesIn,
+             NodeHasDecision, AsyncNodeHasDecisionIn
     <2> QED BY <2>3, <2>4, <2>4aa, <2>4a, <2>4b, <2>4bb, <2>4c, <2>4d,
-                <2>5, <2>6, <2>7, <2>8
+                <2>5, <2>6, <2>7, <2>8, <2>8p, <2>8t
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -2177,6 +2233,79 @@ BY RunNodeWorkPreservesEmptyServeIngressOwners,
    HistoricalServerPreservesEmptyServeIngressOwners,
    Isa
    DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode
+
+THEOREM AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ asyncServeProducerEpisodeDue[node]
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ AsyncNetworkStep
+    => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+BY AsyncServeProducerEpisodeBlocksFreshServeAdmission,
+   PopSelectedIngressDoesNotCreateServeIngressOwners,
+   HiddenIngressAdmissionPreservesOtherNodeOwners,
+   ServeIngressAdmissionStutterPreservesOwnerIdentities,
+   IsaT(3600)
+   DEF AsyncNetworkStep, AdmitIngressPacket, AdmitHiddenPacket,
+       AcceptOrReserveExactServeIngressVia,
+       ReserveExactServeCapacityVia, AdvanceExactServeCapacityVia,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       DropExactActiveLeaderWireRetry,
+       DrainInterruptedTipRecoveryIngressSelected,
+       RetireLeaderWireLifecycleSlot,
+       AsyncServeLifecycleAdmissionRequired,
+       ExactServeTransportAdmissionCanAdvanceVia,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncServeLifecycleTypeInvariant,
+       AsyncIoVars, AsyncIoExceptServeAttemptsVars,
+       AsyncServeLifecycleVars, AsyncServeIngressAdmissionVars
+
+THEOREM AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ asyncServeProducerEpisodeDue[node]
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ AsyncNext
+    => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+BY AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue,
+   RunnerStepPreservesEmptyServeIngressOwners,
+   FaultStepPreservesEmptyServeIngressOwners,
+   PopSelectedIngressDoesNotCreateServeIngressOwners,
+   ServeReceiverCloseRollbackDoesNotCreateIngressOwners,
+   HiddenIngressAdmissionPreservesOtherNodeOwners,
+   ServeIngressAdmissionStutterPreservesOwnerIdentities,
+   IsaT(7200)
+   DEF AsyncNext, AsyncNonCrashStep, AsyncNonRunnerStep,
+       AsyncNetworkStep, AsyncFaultStep,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       AcceptOrReserveExactServeIngressVia,
+       ReserveExactServeCapacityVia, AdvanceExactServeCapacityVia,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       DropExactActiveLeaderWireRetry,
+       DrainInterruptedTipRecoveryIngressSelected,
+       RetireLeaderWireLifecycleSlot,
+       AsyncSetGST, AsyncTick, AsyncNonClockVars,
+       OpenHistoricalRecovery,
+       DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       CommitCertificateDiscoveryStepWork,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       EnqueueIoLocalControlWork,
+       ResolveCandidateProducerContinuation,
+       DriveResponsiveReplayHead, FinishResponsiveReplay,
+       RearmResponsiveRecovery,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode, AsyncServiceActivationFrameVars,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart,
+       AsyncSchedulerVars,
+       AsyncSchedulerExceptCausalAndControlService,
+       AsyncSchedulerExceptHistoricalRecoveryTargets,
+       AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
+       AsyncServeLifecycleVars, AsyncServeIngressAdmissionVars
 
 THEOREM ReplayingOrdinaryStepPreservesEmptyServeIngressOwners ==
   /\ AsyncRecoveryExecutionInvariant
@@ -4110,6 +4239,939 @@ BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
        CandidateScheduledIn, EnqueueCandidate,
        AsyncAllVars, AsyncSchedulerVars
 
+THEOREM AsyncNextPreservesServeProducerEpisodeTypeInvariant ==
+  /\ AsyncServeProducerEpisodeTypeInvariant
+  /\ AsyncNext
+  => AsyncServeProducerEpisodeTypeInvariant'
+PROOF
+  <1>1. ASSUME AsyncServeProducerEpisodeTypeInvariant,
+                AsyncNext
+         PROVE AsyncServeProducerEpisodeTypeInvariant'
+    <2>1. asyncServeProducerEpisodeDue
+             \in [ValidatorIds -> BOOLEAN]
+      BY <1>1 DEF AsyncServeProducerEpisodeTypeInvariant
+    <2>2. AsyncServeProducerEpisodeTransition
+      BY <1>1 DEF AsyncNext
+    <2>3. \A node \in ValidatorIds:
+             (IF AsyncServeProducerEpisodeRestartStep(node)
+                   \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
+              THEN FALSE
+              ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
+                   THEN TRUE
+                   ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
+                        THEN FALSE
+                        ELSE asyncServeProducerEpisodeDue[node])
+               \in BOOLEAN
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE (IF AsyncServeProducerEpisodeRestartStep(node)
+                          \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
+                    THEN FALSE
+                    ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
+                         THEN TRUE
+                         ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
+                              THEN FALSE
+                              ELSE asyncServeProducerEpisodeDue[node])
+                     \in BOOLEAN
+        <4>1. asyncServeProducerEpisodeDue[node] \in BOOLEAN
+          BY <2>1, <3>1, FunctionValueHasCodomain
+        <4> QED BY <4>1, Isa
+      <3> QED BY <3>1
+    <2>4. [node \in ValidatorIds |->
+             IF AsyncServeProducerEpisodeRestartStep(node)
+                  \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
+             THEN FALSE
+             ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
+                  THEN TRUE
+                  ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
+                       THEN FALSE
+                       ELSE asyncServeProducerEpisodeDue[node]]
+             \in [ValidatorIds -> BOOLEAN]
+      BY <2>3, Isa
+    <2>5. asyncServeProducerEpisodeDue'
+             \in [ValidatorIds -> BOOLEAN]
+      BY <2>2, <2>4
+         DEF AsyncServeProducerEpisodeTransition
+    <2> QED BY <2>5
+         DEF AsyncServeProducerEpisodeTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM AsyncNextPreservesServeProducerEpisodeInvariants ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncNext
+  => /\ AsyncServeProducerEpisodeTypeInvariant'
+     /\ AsyncServeProducerEpisodeOwnershipInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncNext
+         PROVE /\ AsyncServeProducerEpisodeTypeInvariant'
+               /\ AsyncServeProducerEpisodeOwnershipInvariant'
+    <2>1. /\ StrongInductiveInvariant
+           /\ AsyncTypeInvariant
+           /\ AsyncRecoveryTypeInvariant
+           /\ AsyncServeProducerEpisodeTypeInvariant
+           /\ AsyncServeProducerEpisodeOwnershipInvariant
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+         DEF AsyncStrongTypeInvariant
+    <2>2. AsyncServeProducerEpisodeTypeInvariant'
+      BY <1>1, <2>1,
+         AsyncNextPreservesServeProducerEpisodeTypeInvariant
+    <2>3. AsyncSchedulerTypeInvariant'
+      BY <1>1, <2>1, AsyncNextPreservesSchedulerType
+    <2>4. \A node \in ValidatorIds:
+             asyncServeProducerEpisodeDue'[node]
+               => /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+                  /\ AsyncServeOffQueueReservations(node)' = {}
+      <3>1. ASSUME NEW node \in ValidatorIds,
+                    asyncServeProducerEpisodeDue'[node]
+             PROVE /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+                   /\ AsyncServeOffQueueReservations(node)' = {}
+        <4>1. CASE AsyncServeProducerEpisodeFinalRetirementStep(node)
+          BY <4>1
+             DEF AsyncServeProducerEpisodeFinalRetirementStep
+        <4>2. CASE ~AsyncServeProducerEpisodeFinalRetirementStep(node)
+          <5>1. asyncServeProducerEpisodeDue[node]
+            BY <1>1, <3>1, <4>2, Isa
+               DEF AsyncNext, AsyncServeProducerEpisodeTransition
+          <5>2. /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+                 /\ AsyncServeOffQueueReservations(node) = {}
+            BY <2>1, <3>1, <5>1
+               DEF AsyncServeProducerEpisodeOwnershipInvariant
+          <5>3. AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+            BY <1>1, <2>1, <3>1, <5>1, <5>2,
+               AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue
+          <5>4. AsyncServeOffQueueReservations(node)' = {}
+            <6>1. ASSUME AsyncServeOffQueueReservations(node)' # {}
+                   PROVE FALSE
+              <7>1. PICK reservation
+                       \in AsyncServeOffQueueReservations(node)': TRUE
+                BY <6>1, FS_EmptySet, Zenon
+              <7>2. AsyncServeIngressAdmissionOwned(
+                       node, reservation.identity)'
+                BY <2>3, <7>1
+                   DEF AsyncSchedulerTypeInvariant,
+                       AsyncIoTypeInvariant,
+                       AsyncServeLifecycleTypeInvariant,
+                       AsyncServeBarrierOwnsEarliestIngressOrdinalInvariant
+              <7>3. PICK admission
+                       \in AsyncServeIngressAdmissionRecords(
+                            node, reservation.identity)': TRUE
+                BY <7>2, FS_EmptySet, Zenon
+                   DEF AsyncServeIngressAdmissionOwned
+              <7>4. reservation.identity
+                       \in AsyncServeIngressLifecycleOwnerIdentities(node)'
+                BY <7>3, Isa
+                   DEF AsyncServeIngressLifecycleOwnerIdentities,
+                       AsyncServeIngressAdmissionIdentities,
+                       AsyncServeIngressAdmissionRecords
+              <7> QED BY <5>3, <7>4
+            <6> QED BY <6>1
+          <5> QED BY <5>3, <5>4
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2>5. AsyncServeProducerEpisodeOwnershipInvariant'
+      BY <2>4 DEF AsyncServeProducerEpisodeOwnershipInvariant
+    <2> QED BY <2>2, <2>5
+  <1> QED BY <1>1
+
+AsyncTimeoutRecoveryBoundaryFrameShape(episode) ==
+  {"node", "key", "generation", "timeoutOwnerOrigin"}
+    \subseteq DOMAIN episode
+
+AsyncTimeoutRecoveryMutationFrameShape(episode) ==
+  {"node", "key", "generation", "timeoutOwnerOrigin",
+   "timeoutOwnerOrdinal", "physicalCut",
+   "preFrozenRetransmitOrdinal", "preFrozenRetransmitPhysicalCut",
+   "timeoutVoteOwnerUniverse", "admittedTimeoutVoteOwners"}
+    \subseteq DOMAIN episode
+
+THEOREM AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame ==
+  \A episode:
+    AsyncTimeoutRecoveryMutationFrameShape(episode)
+      => AsyncTimeoutRecoveryBoundaryFrameShape(episode)
+BY Zenon
+   DEF AsyncTimeoutRecoveryMutationFrameShape,
+       AsyncTimeoutRecoveryBoundaryFrameShape
+
+THEOREM AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape ==
+  \A parameters:
+    AsyncTimeoutRecoveryMutationFrameShape(
+      AsyncTimeoutRecoveryEpisodeFromParameters(parameters))
+BY Isa
+   DEF AsyncTimeoutRecoveryMutationFrameShape,
+       AsyncTimeoutRecoveryEpisodeFromParameters,
+       AsyncTimeoutRecoveryEpisode
+
+THEOREM AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape ==
+  \A episode \in AsyncTimeoutRecoveryEpisodeSet:
+    AsyncTimeoutRecoveryMutationFrameShape(episode)
+PROOF
+  <1>1. ASSUME NEW episode \in AsyncTimeoutRecoveryEpisodeSet
+         PROVE AsyncTimeoutRecoveryMutationFrameShape(episode)
+    <2>1. PICK parameters \in AsyncTimeoutRecoveryEpisodeParameterSet:
+             episode =
+               AsyncTimeoutRecoveryEpisodeFromParameters(parameters)
+      BY <1>1, Zenon DEF AsyncTimeoutRecoveryEpisodeSet
+    <2>2. AsyncTimeoutRecoveryMutationFrameShape(
+             AsyncTimeoutRecoveryEpisodeFromParameters(parameters))
+      BY AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(episode) ==
+  [[episode EXCEPT !.preFrozenRetransmitOrdinal = 0]
+    EXCEPT !.preFrozenRetransmitPhysicalCut = 0]
+
+THEOREM AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary ==
+  ASSUME NEW episode,
+         AsyncTimeoutRecoveryMutationFrameShape(episode),
+         AsyncTimeoutRecoveryEpisodeBoundaryIn(
+           episode, context', nodeView', generation', decisions')
+  PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+             AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+               episode))
+        /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+             AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+               episode),
+             context', nodeView', generation', decisions')
+PROOF
+  <1> DEFINE First ==
+         [episode EXCEPT !.preFrozenRetransmitOrdinal = 0]
+  <1> DEFINE Cleared ==
+         [First EXCEPT !.preFrozenRetransmitPhysicalCut = 0]
+  <1>1. {"node", "key", "generation", "timeoutOwnerOrigin",
+           "timeoutOwnerOrdinal", "physicalCut",
+           "preFrozenRetransmitOrdinal",
+           "preFrozenRetransmitPhysicalCut",
+           "timeoutVoteOwnerUniverse", "admittedTimeoutVoteOwners"}
+           \subseteq DOMAIN episode
+    BY DEF AsyncTimeoutRecoveryMutationFrameShape
+  <1>1a. AsyncTimeoutRecoveryBoundaryFrameShape(episode)
+    BY AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame
+  <1>2. DOMAIN First = DOMAIN episode
+    BY <1>1, FunctionalReplacePreservesDomain DEF First
+  <1>3. DOMAIN Cleared = DOMAIN First
+    BY <1>1, <1>2, FunctionalReplacePreservesDomain DEF Cleared
+  <1>4. AsyncTimeoutRecoveryMutationFrameShape(Cleared)
+    BY <1>1, <1>2, <1>3
+       DEF AsyncTimeoutRecoveryMutationFrameShape
+  <1>5a. First.node = episode.node
+    BY <1>1a, FunctionalUpdateAwayFromKey
+       DEF First, AsyncTimeoutRecoveryBoundaryFrameShape
+  <1>5b. First.key = episode.key
+    BY <1>1a, FunctionalUpdateAwayFromKey
+       DEF First, AsyncTimeoutRecoveryBoundaryFrameShape
+  <1>5c. First.generation = episode.generation
+    BY <1>1a, FunctionalUpdateAwayFromKey
+       DEF First, AsyncTimeoutRecoveryBoundaryFrameShape
+  <1>5d. First.timeoutOwnerOrigin = episode.timeoutOwnerOrigin
+    BY <1>1a, FunctionalUpdateAwayFromKey
+       DEF First, AsyncTimeoutRecoveryBoundaryFrameShape
+  <1>6a. Cleared.node = First.node
+    BY <1>1a, <1>2, FunctionalUpdateAwayFromKey
+       DEF Cleared, AsyncTimeoutRecoveryBoundaryFrameShape
+  <1>6b. Cleared.key = First.key
+    BY <1>1a, <1>2, FunctionalUpdateAwayFromKey
+       DEF Cleared, AsyncTimeoutRecoveryBoundaryFrameShape
+  <1>6c. Cleared.generation = First.generation
+    BY <1>1a, <1>2, FunctionalUpdateAwayFromKey
+       DEF Cleared, AsyncTimeoutRecoveryBoundaryFrameShape
+  <1>6d. Cleared.timeoutOwnerOrigin = First.timeoutOwnerOrigin
+    BY <1>1a, <1>2, FunctionalUpdateAwayFromKey
+       DEF Cleared, AsyncTimeoutRecoveryBoundaryFrameShape
+  <1>7. AsyncTimeoutRecoveryEpisodeBoundaryIn(
+           Cleared, context', nodeView', generation', decisions')
+    BY <1>5a, <1>5b, <1>5c, <1>5d,
+       <1>6a, <1>6b, <1>6c, <1>6d, Isa
+       DEF AsyncTimeoutRecoveryEpisodeBoundaryIn
+  <1>8. Cleared =
+           AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+             episode)
+    BY DEF First, Cleared,
+           AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor
+  <1> QED BY <1>4, <1>7, <1>8
+
+THEOREM AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary ==
+  ASSUME NEW preClockState, NEW episode,
+         AsyncTimeoutRecoveryMutationFrameShape(episode),
+         AsyncTimeoutRecoveryEpisodeBoundaryIn(
+           episode, context', nodeView', generation', decisions')
+  PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+             AsyncTimeoutRecoveryEpisodeAfterTransition(
+               preClockState, episode))
+        /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+             AsyncTimeoutRecoveryEpisodeAfterTransition(
+               preClockState, episode),
+             context', nodeView', generation', decisions')
+PROOF
+  <1>1. CASE AsyncTimeoutRecoveryExistingCaptureClearsThisStep(
+                preClockState, episode.node)
+    <2>1. AsyncTimeoutRecoveryEpisodeAfterTransition(
+             preClockState, episode) =
+           AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+             episode)
+      BY <1>1, FunctionalReplacePreservesDomain,
+         FunctionalReplaceUpdateAtKey, FunctionalUpdateAwayFromKey,
+         Isa
+         DEF AsyncTimeoutRecoveryMutationFrameShape,
+             AsyncTimeoutRecoveryEpisodeAfterTransition,
+             AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor
+    <2>2. /\ AsyncTimeoutRecoveryMutationFrameShape(
+                  AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+                    episode))
+           /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+                  episode),
+                context', nodeView', generation', decisions')
+      BY AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary
+    <2> QED BY <2>1, <2>2
+  <1>2. CASE ~AsyncTimeoutRecoveryExistingCaptureClearsThisStep(
+                 preClockState, episode.node)
+    BY <1>2 DEF AsyncTimeoutRecoveryEpisodeAfterTransition
+  <1> QED BY <1>1, <1>2
+
+THEOREM AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary ==
+  \A preClockState, state:
+    state.timeoutRecoveryEpisodes \subseteq AsyncTimeoutRecoveryEpisodeSet
+      => \A episode \in
+           AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+             preClockState, state):
+           /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+           /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                episode, context', nodeView', generation', decisions')
+PROOF
+  <1>1. ASSUME NEW preClockState, NEW state,
+                state.timeoutRecoveryEpisodes
+                  \subseteq AsyncTimeoutRecoveryEpisodeSet
+         PROVE \A result \in
+                   AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+                     preClockState, state):
+                 /\ AsyncTimeoutRecoveryMutationFrameShape(result)
+                 /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                      result, context', nodeView', generation', decisions')
+    <2>1. ASSUME NEW result \in
+                    AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+                      preClockState, state)
+           PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(result)
+                 /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                      result, context', nodeView', generation', decisions')
+      <3>1. PICK retained \in state.timeoutRecoveryEpisodes:
+               /\ ~AsyncTimeoutRecoveryEpisodeRetiresThisStep(retained)
+               /\ result =
+                    AsyncTimeoutRecoveryEpisodeAfterTransition(
+                      preClockState, retained)
+        BY <2>1, Zenon
+           DEF AsyncTimeoutRecoveryRetainedEpisodesAfterTransition
+      <3>2. retained \in AsyncTimeoutRecoveryEpisodeSet
+        BY <1>1, <3>1
+      <3>3. AsyncTimeoutRecoveryMutationFrameShape(retained)
+        BY <3>2, AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape
+      <3>4. AsyncTimeoutRecoveryEpisodeBoundaryIn(
+               retained, context', nodeView', generation', decisions')
+        BY <3>1, Isa
+           DEF AsyncTimeoutRecoveryEpisodeBoundaryIn,
+               AsyncTimeoutRecoveryEpisodeRetiresThisStep,
+               AsyncNodeHasDecisionIn
+      <3> QED BY <3>1, <3>3, <3>4,
+           AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+AsyncTimeoutRecoveryNewBaseEpisodeIn(
+    preClockState, timeoutBaseState, node) ==
+  LET timeoutOrdinal ==
+        AsyncTimeoutLifecycleOrdinalForStep(timeoutBaseState, node)
+      physicalCut ==
+        AsyncTimeoutLifecyclePhysicalCutForStep(timeoutBaseState, node)
+      preOrdinal == preClockState.retransmitLifecycleOrdinal[node]
+      prePhysicalCut ==
+        preClockState.retransmitLifecyclePhysicalCut[node]
+  IN AsyncTimeoutRecoveryEpisode(
+       node, AsyncCurrentTimeoutCausalOrigin(node), generation'[node],
+       timeoutOrdinal, physicalCut, preOrdinal, prePhysicalCut, {})
+
+AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn(
+    preClockState, node) ==
+  /\ preClockState.retransmitLifecycleOrdinal[node] # 0
+  /\ \/ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)
+     \/ AsyncTimeoutLifecycleTransfersThisStep(node)
+
+THEOREM AsyncTimeoutRecoveryNewEpisodeDecomposition ==
+  \A preClockState, timeoutBaseState, node:
+    AsyncTimeoutRecoveryNewEpisodeIn(
+      preClockState, timeoutBaseState, node)
+      = IF AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn(
+             preClockState, node)
+        THEN AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+               AsyncTimeoutRecoveryNewBaseEpisodeIn(
+                 preClockState, timeoutBaseState, node))
+        ELSE AsyncTimeoutRecoveryNewBaseEpisodeIn(
+               preClockState, timeoutBaseState, node)
+BY Isa
+   DEF AsyncTimeoutRecoveryNewEpisodeIn,
+       AsyncTimeoutRecoveryNewBaseEpisodeIn,
+       AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn,
+       AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor
+
+THEOREM AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary ==
+  ASSUME NEW preClockState, NEW timeoutBaseState,
+         NEW node \in ValidatorIds,
+         AsyncTimeoutRecoveryEpisodeCreationReadyIn(
+           preClockState, timeoutBaseState, node)
+  PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+             AsyncTimeoutRecoveryNewBaseEpisodeIn(
+               preClockState, timeoutBaseState, node))
+        /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+             AsyncTimeoutRecoveryNewBaseEpisodeIn(
+               preClockState, timeoutBaseState, node),
+             context', nodeView', generation', decisions')
+PROOF
+  <1> DEFINE BaseEpisode ==
+         AsyncTimeoutRecoveryNewBaseEpisodeIn(
+           preClockState, timeoutBaseState, node)
+  <1> DEFINE Origin == AsyncCurrentTimeoutCausalOrigin(node)
+  <1>1. AsyncTimeoutRecoveryMutationFrameShape(BaseEpisode)
+    BY Isa
+       DEF AsyncTimeoutRecoveryMutationFrameShape,
+           AsyncTimeoutRecoveryNewBaseEpisodeIn,
+           AsyncTimeoutRecoveryEpisode, BaseEpisode
+  <1>2. BaseEpisode.node = node
+    BY DEF AsyncTimeoutRecoveryNewBaseEpisodeIn,
+           AsyncTimeoutRecoveryEpisode, BaseEpisode
+  <1>3. BaseEpisode.key.context = Origin.context
+    BY DEF AsyncTimeoutRecoveryNewBaseEpisodeIn,
+           AsyncTimeoutRecoveryEpisode,
+           AsyncTimeoutRecoveryEpisodeKey, BaseEpisode, Origin
+  <1>4. BaseEpisode.timeoutOwnerOrigin.height = Origin.height
+    BY DEF AsyncTimeoutRecoveryNewBaseEpisodeIn,
+           AsyncTimeoutRecoveryEpisode, BaseEpisode, Origin
+  <1>5. BaseEpisode.key.view = Origin.view
+    BY DEF AsyncTimeoutRecoveryNewBaseEpisodeIn,
+           AsyncTimeoutRecoveryEpisode,
+           AsyncTimeoutRecoveryEpisodeKey, BaseEpisode, Origin
+  <1>6. BaseEpisode.generation = generation'[node]
+    BY DEF AsyncTimeoutRecoveryNewBaseEpisodeIn,
+           AsyncTimeoutRecoveryEpisode, BaseEpisode
+  <1>7. Origin.context = context'
+    BY Isa DEF AsyncTimeoutRecoveryEpisodeCreationReadyIn, Origin
+  <1>8. Origin.height = context'.height
+    BY Isa DEF AsyncTimeoutRecoveryEpisodeCreationReadyIn, Origin
+  <1>9. Origin.view = nodeView'[node]
+    BY Isa DEF AsyncTimeoutRecoveryEpisodeCreationReadyIn, Origin
+  <1>10. ~AsyncNodeHasDecisionIn(node, context', decisions')
+    BY Isa DEF AsyncTimeoutRecoveryEpisodeCreationReadyIn
+  <1>11. AsyncTimeoutRecoveryEpisodeBoundaryIn(
+            BaseEpisode, context', nodeView', generation', decisions')
+    BY <1>2, <1>3, <1>4, <1>5, <1>6,
+       <1>7, <1>8, <1>9, <1>10, Isa
+       DEF AsyncTimeoutRecoveryEpisodeBoundaryIn
+  <1> QED BY <1>1, <1>11 DEF BaseEpisode
+
+THEOREM AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary ==
+  ASSUME NEW preClockState, NEW timeoutBaseState,
+         NEW node \in ValidatorIds,
+         AsyncTimeoutRecoveryEpisodeCreationReadyIn(
+           preClockState, timeoutBaseState, node)
+  PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+             AsyncTimeoutRecoveryNewEpisodeIn(
+               preClockState, timeoutBaseState, node))
+        /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+             AsyncTimeoutRecoveryNewEpisodeIn(
+               preClockState, timeoutBaseState, node),
+             context', nodeView', generation', decisions')
+PROOF
+  <1> DEFINE BaseEpisode ==
+         AsyncTimeoutRecoveryNewBaseEpisodeIn(
+           preClockState, timeoutBaseState, node)
+  <1>1. /\ AsyncTimeoutRecoveryMutationFrameShape(BaseEpisode)
+         /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+              BaseEpisode,
+              context', nodeView', generation', decisions')
+    BY AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary
+       DEF BaseEpisode
+  <1>2. /\ AsyncTimeoutRecoveryMutationFrameShape(
+              AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+                BaseEpisode))
+         /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+              AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+                BaseEpisode),
+              context', nodeView', generation', decisions')
+    BY <1>1,
+       AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary
+  <1>3. AsyncTimeoutRecoveryNewEpisodeIn(
+           preClockState, timeoutBaseState, node)
+           = IF AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn(
+                  preClockState, node)
+             THEN AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+                    BaseEpisode)
+             ELSE BaseEpisode
+    BY AsyncTimeoutRecoveryNewEpisodeDecomposition
+       DEF BaseEpisode
+  <1>4. CASE AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn(
+                preClockState, node)
+    BY <1>2, <1>3, <1>4
+  <1>5. CASE ~AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn(
+                 preClockState, node)
+    BY <1>1, <1>3, <1>5
+  <1> QED BY <1>4, <1>5
+
+THEOREM AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary ==
+  \A preClockState, timeoutBaseState:
+    AsyncTimeoutRecoveryTransitionGateIn(preClockState, timeoutBaseState)
+      => \A episode \in
+           AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+             preClockState, timeoutBaseState):
+           /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+           /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                episode, context', nodeView', generation', decisions')
+PROOF
+  <1>1. ASSUME NEW preClockState, NEW timeoutBaseState,
+                AsyncTimeoutRecoveryTransitionGateIn(
+                  preClockState, timeoutBaseState)
+         PROVE \A result \in
+                   AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+                     preClockState, timeoutBaseState):
+                 /\ AsyncTimeoutRecoveryMutationFrameShape(result)
+                 /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                      result, context', nodeView', generation', decisions')
+    <2>1. ASSUME NEW result \in
+                    AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+                      preClockState, timeoutBaseState)
+           PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(result)
+                 /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                      result, context', nodeView', generation', decisions')
+      <3>1. PICK node \in ValidatorIds:
+               /\ AsyncTimeoutRecoveryEpisodeCreationRequiredIn(
+                    timeoutBaseState, node)
+               /\ result = AsyncTimeoutRecoveryNewEpisodeIn(
+                    preClockState, timeoutBaseState, node)
+        BY <2>1, Zenon
+           DEF AsyncTimeoutRecoveryNewEpisodesAfterTransition
+      <3>2. AsyncTimeoutRecoveryEpisodeCreationReadyIn(
+               preClockState, timeoutBaseState, node)
+        BY <1>1, <3>1, Zenon
+           DEF AsyncTimeoutRecoveryTransitionGateIn
+      <3>3. /\ AsyncTimeoutRecoveryMutationFrameShape(
+                    AsyncTimeoutRecoveryNewEpisodeIn(
+                      preClockState, timeoutBaseState, node))
+             /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                  AsyncTimeoutRecoveryNewEpisodeIn(
+                    preClockState, timeoutBaseState, node),
+                  context', nodeView', generation', decisions')
+        BY <3>2,
+           AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary
+      <3> QED BY <3>1, <3>3
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+THEOREM AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary ==
+  ASSUME NEW preClockState, NEW timeoutBaseState, NEW state,
+         NEW episodes,
+         state.timeoutRecoveryEpisodes
+           \subseteq AsyncTimeoutRecoveryEpisodeSet,
+         AsyncTimeoutRecoveryTransitionGateIn(
+           preClockState, timeoutBaseState),
+         episodes =
+           AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+             preClockState, state)
+             \cup
+           AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+             preClockState, timeoutBaseState)
+  PROVE \A episode \in episodes:
+          /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+          /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+               episode, context', nodeView', generation', decisions')
+PROOF
+  <1>1. \A episode \in
+             AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+               preClockState, state):
+           /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+           /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                episode, context', nodeView', generation', decisions')
+    BY AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary
+  <1>2. \A episode \in
+             AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+               preClockState, timeoutBaseState):
+           /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+           /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                episode, context', nodeView', generation', decisions')
+    BY AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary
+  <1> QED BY <1>1, <1>2, Zenon
+
+THEOREM AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary ==
+  ASSUME NEW state, NEW episode,
+         AsyncTimeoutRecoveryMutationFrameShape(episode),
+         AsyncTimeoutRecoveryEpisodeBoundaryIn(
+           episode, context', nodeView', generation', decisions')
+  PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+             AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+               state, episode))
+        /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+             AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+               state, episode),
+             context', nodeView', generation', decisions')
+PROOF
+  <1> DEFINE MatchingNodes ==
+         {candidateNode \in AsyncTimeoutRecoveryVoteAdmissionNodesThisStep:
+            LET item == AsyncSelectedFairIngressItem(candidateNode)
+                candidate ==
+                  AsyncTimeoutRecoveryVoteCandidateOwner(
+                    candidateNode, item)
+            IN candidate.slot.episode = episode.key}
+  <1>1. CASE MatchingNodes = {}
+    BY <1>1
+       DEF AsyncTimeoutRecoveryEpisodeAfterVoteAdmission,
+           MatchingNodes
+  <1>2. CASE MatchingNodes # {}
+    <2> DEFINE Node ==
+           CHOOSE candidateNode \in MatchingNodes: TRUE
+    <2> DEFINE Item == AsyncSelectedFairIngressItem(Node)
+    <2> DEFINE Candidate ==
+           AsyncTimeoutRecoveryVoteCandidateOwner(Node, Item)
+    <2>1. CASE "FirstAdmission"
+                   \in AsyncTimeoutRecoveryVoteAdmissionPlan(Node, Item)
+      <3> DEFINE Updated ==
+             [episode EXCEPT
+                !.admittedTimeoutVoteOwners = @ \cup {Candidate}]
+      <3>1. "admittedTimeoutVoteOwners" \in DOMAIN episode
+        BY DEF AsyncTimeoutRecoveryMutationFrameShape
+      <3>2. DOMAIN Updated = DOMAIN episode
+        BY <3>1, FunctionalReplacePreservesDomain DEF Updated
+      <3>3. AsyncTimeoutRecoveryMutationFrameShape(Updated)
+        BY <3>2 DEF AsyncTimeoutRecoveryMutationFrameShape
+      <3>4. Updated.node = episode.node
+        BY FunctionalUpdateAwayFromKey
+           DEF AsyncTimeoutRecoveryMutationFrameShape, Updated
+      <3>5. Updated.key = episode.key
+        BY FunctionalUpdateAwayFromKey
+           DEF AsyncTimeoutRecoveryMutationFrameShape, Updated
+      <3>6. Updated.generation = episode.generation
+        BY FunctionalUpdateAwayFromKey, Isa
+           DEF AsyncTimeoutRecoveryMutationFrameShape, Updated
+      <3>7. Updated.timeoutOwnerOrigin = episode.timeoutOwnerOrigin
+        BY FunctionalUpdateAwayFromKey, Isa
+           DEF AsyncTimeoutRecoveryMutationFrameShape, Updated
+      <3>8. AsyncTimeoutRecoveryEpisodeBoundaryIn(
+               Updated, context', nodeView', generation', decisions')
+        BY <3>4, <3>5, <3>6, <3>7, Isa
+           DEF AsyncTimeoutRecoveryEpisodeBoundaryIn
+      <3>9. AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+               state, episode) = Updated
+        BY <1>2, <2>1, Isa
+           DEF AsyncTimeoutRecoveryEpisodeAfterVoteAdmission,
+               MatchingNodes, Node, Item, Candidate, Updated
+      <3> QED BY <3>3, <3>8, <3>9
+    <2>2. CASE "FirstAdmission"
+                   \notin AsyncTimeoutRecoveryVoteAdmissionPlan(Node, Item)
+      <3>1. AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+               state, episode) = episode
+        BY <1>2, <2>2, Isa
+           DEF AsyncTimeoutRecoveryEpisodeAfterVoteAdmission,
+               MatchingNodes, Node, Item, Candidate
+      <3> QED BY <3>1
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1, <1>2
+
+THEOREM AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary ==
+  ASSUME NEW state, NEW episodes,
+         \A episode \in state.timeoutRecoveryEpisodes:
+           /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+           /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                episode, context', nodeView', generation', decisions'),
+         episodes =
+           {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(state, episode):
+              episode \in state.timeoutRecoveryEpisodes}
+  PROVE \A episode \in episodes:
+          /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+          /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+               episode, context', nodeView', generation', decisions')
+PROOF
+  <1>1. ASSUME NEW result \in episodes
+         PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(result)
+               /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                    result, context', nodeView', generation', decisions')
+    <2>1. PICK episode \in state.timeoutRecoveryEpisodes:
+             result =
+               AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+                 state, episode)
+      BY <1>1, Zenon
+    <2>2. /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+           /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                episode, context', nodeView', generation', decisions')
+      BY <2>1
+    <2> QED BY <2>1, <2>2,
+         AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary
+  <1> QED BY <1>1
+
+THEOREM AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet ==
+  AsyncControlServiceStateTypeInvariant
+    => asyncControlServiceState.timeoutRecoveryEpisodes
+         \subseteq AsyncTimeoutRecoveryEpisodeSet
+BY DEF AsyncControlServiceStateTypeInvariant,
+       AsyncTimeoutRecoveryEpisodeTypeInvariantIn,
+       AsyncTimeoutRecoveryEpisodesIn
+
+THEOREM AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet ==
+  \A state, resetNodes:
+    state.timeoutRecoveryEpisodes
+      \subseteq AsyncTimeoutRecoveryEpisodeSet
+      => (AsyncControlServiceStateAfterReset(state, resetNodes))
+           .timeoutRecoveryEpisodes
+           \subseteq AsyncTimeoutRecoveryEpisodeSet
+PROOF
+  <1>1. ASSUME NEW state, NEW resetNodes,
+                state.timeoutRecoveryEpisodes
+                  \subseteq AsyncTimeoutRecoveryEpisodeSet
+         PROVE (AsyncControlServiceStateAfterReset(state, resetNodes))
+                 .timeoutRecoveryEpisodes
+                 \subseteq AsyncTimeoutRecoveryEpisodeSet
+    <2>1. (AsyncControlServiceStateAfterReset(state, resetNodes))
+             .timeoutRecoveryEpisodes
+             = {episode \in state.timeoutRecoveryEpisodes:
+                  episode.node \notin resetNodes}
+      BY DEF AsyncControlServiceStateAfterReset
+    <2>2. {episode \in state.timeoutRecoveryEpisodes:
+             episode.node \notin resetNodes}
+             \subseteq state.timeoutRecoveryEpisodes
+      BY Zenon
+    <2> QED BY <1>1, <2>1, <2>2, FS_Subset
+  <1> QED BY <1>1
+
+THEOREM AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary ==
+  ASSUME AsyncControlServiceStateTypeInvariant,
+         AsyncControlServiceSlotTransition
+  PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
+PROOF
+  <1>1. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
+    <2> DEFINE ResetState ==
+           AsyncControlServiceStateAfterReset(
+             asyncControlServiceState,
+             AsyncControlServiceResetNodesThisStep)
+    <2> DEFINE AdmittedState ==
+           IF AsyncControlServiceAdmissionsThisStep = {}
+           THEN ResetState
+           ELSE AsyncControlServiceStateAfterAdmission(
+                  ResetState,
+                  CHOOSE item \in
+                    AsyncControlServiceAdmissionsThisStep: TRUE)
+    <2> DEFINE ServicedState ==
+           IF AsyncControlServicesThisStep = {}
+           THEN AdmittedState
+           ELSE AsyncControlServiceStateAfterService(
+                  AdmittedState,
+                  CHOOSE item \in AsyncControlServicesThisStep: TRUE)
+    <2> DEFINE ResponseRetirementState ==
+           AsyncCertifiedResponseClaimStateAfterRetirement(ServicedState)
+    <2> DEFINE ResponseState ==
+           IF AsyncCertifiedResponseClaimAdmissionsThisStep = {}
+           THEN ResponseRetirementState
+           ELSE AsyncCertifiedResponseClaimStateAfterAdmission(
+                  ResponseRetirementState,
+                  CHOOSE item \in
+                    AsyncCertifiedResponseClaimAdmissionsThisStep: TRUE)
+    <2> DEFINE TimeoutRetirementState ==
+           AsyncControlServiceStateAfterTimeoutRetirement(ResponseState)
+    <2> DEFINE CandidateReclamationState ==
+           AsyncCandidateServiceStateAfterReclamation(
+             TimeoutRetirementState)
+    <2> DEFINE CandidateMarkedState ==
+           IF AsyncCandidateServicesThisStep # {}
+           THEN AsyncCandidateServiceStateAfterSuccessfulService(
+                  CandidateReclamationState,
+                  CHOOSE candidate \in
+                    AsyncCandidateServicesThisStep: TRUE)
+           ELSE IF AsyncCandidateEligibleTerminalDiscardsThisStep # {}
+                THEN AsyncCandidateServiceStateAfterTerminalRetirement(
+                       CandidateReclamationState)
+                ELSE CandidateReclamationState
+    <2> DEFINE CandidateOwnedState ==
+           IF AsyncCandidateLifecycleDeparturesThisStep # {}
+           THEN AsyncCandidateLifecycleStateAfterServiceSlotTransfer(
+                  CandidateMarkedState,
+                  CHOOSE candidate \in
+                    AsyncCandidateLifecycleDeparturesThisStep: TRUE)
+           ELSE CandidateMarkedState
+    <2> DEFINE CandidateServiceState ==
+           IF AsyncCandidateLifecycleDeparturesThisStep # {}
+           THEN AsyncCandidateProducerContinuationStateAfterDeparture(
+                  CandidateOwnedState,
+                  CHOOSE candidate \in
+                    AsyncCandidateLifecycleDeparturesThisStep: TRUE)
+           ELSE CandidateOwnedState
+    <2> DEFINE OrdinaryCarrierState ==
+           AsyncOrdinaryIngressCarrierStateAfterTransition(
+             CandidateServiceState)
+    <2> DEFINE CarrierState ==
+           AsyncCandidateLifecycleStateAfterCarrierUpdate(
+             OrdinaryCarrierState)
+    <2> DEFINE CompactedState ==
+           AsyncCandidateLifecycleStateAfterCompaction(CarrierState)
+    <2> DEFINE LeaderWireState ==
+           AsyncCandidateLifecycleStateAfterLeaderWireAdmission(
+             CompactedState)
+    <2> DEFINE ServeIngressState ==
+           AsyncCandidateLifecycleStateAfterServeIngressAdmission(
+             LeaderWireState)
+    <2> DEFINE LifecycleState ==
+           AsyncCandidateLifecycleStateAfterAdmission(ServeIngressState)
+    <2> DEFINE TimeoutState ==
+           AsyncCandidateLifecycleStateAfterTimeoutOwnership(
+             ServeIngressState, LifecycleState)
+    <2> DEFINE RecoveryState ==
+           AsyncTimeoutRecoveryEpisodeStateAfterTransition(
+             LeaderWireState, ServeIngressState, TimeoutState)
+    <2> DEFINE VoteState ==
+           AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission(RecoveryState)
+    <2> DEFINE AtomicFacts ==
+           /\ AsyncTimeoutRecoveryTransitionGateIn(
+                LeaderWireState, ServeIngressState)
+           /\ RecoveryState.timeoutRecoveryEpisodes =
+                AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+                  LeaderWireState, TimeoutState)
+                  \cup
+                AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+                  LeaderWireState, ServeIngressState)
+           /\ VoteState.timeoutRecoveryEpisodes =
+                {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+                   RecoveryState, episode):
+                   episode \in RecoveryState.timeoutRecoveryEpisodes}
+           /\ TimeoutState.timeoutRecoveryEpisodes =
+                ResetState.timeoutRecoveryEpisodes
+           /\ asyncControlServiceState'.timeoutRecoveryEpisodes =
+                VoteState.timeoutRecoveryEpisodes
+    <2>1. asyncControlServiceState.timeoutRecoveryEpisodes
+             \subseteq AsyncTimeoutRecoveryEpisodeSet
+      BY AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet
+    <2>2. ResetState.timeoutRecoveryEpisodes
+             \subseteq AsyncTimeoutRecoveryEpisodeSet
+      BY <2>1,
+         AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet
+         DEF ResetState
+    <2>3. AtomicFacts
+      <3>1. AsyncTimeoutRecoveryTransitionGateIn(
+               LeaderWireState, ServeIngressState)
+        BY AsyncControlServiceTransitionRequiresAtomicLifecycleReservation,
+           Zenon
+           DEF ResetState, AdmittedState, ServicedState,
+               ResponseRetirementState, ResponseState,
+               TimeoutRetirementState, CandidateReclamationState,
+               CandidateMarkedState, CandidateOwnedState,
+               CandidateServiceState, OrdinaryCarrierState,
+               CarrierState, CompactedState, LeaderWireState,
+               ServeIngressState, LifecycleState, TimeoutState,
+               RecoveryState, VoteState
+      <3>2. RecoveryState.timeoutRecoveryEpisodes =
+               AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+                 LeaderWireState, TimeoutState)
+                 \cup
+               AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+                 LeaderWireState, ServeIngressState)
+        BY AsyncControlServiceTransitionRequiresAtomicLifecycleReservation,
+           Zenon
+           DEF ResetState, AdmittedState, ServicedState,
+               ResponseRetirementState, ResponseState,
+               TimeoutRetirementState, CandidateReclamationState,
+               CandidateMarkedState, CandidateOwnedState,
+               CandidateServiceState, OrdinaryCarrierState,
+               CarrierState, CompactedState, LeaderWireState,
+               ServeIngressState, LifecycleState, TimeoutState,
+               RecoveryState, VoteState
+      <3>3. VoteState.timeoutRecoveryEpisodes =
+               {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+                  RecoveryState, episode):
+                  episode \in RecoveryState.timeoutRecoveryEpisodes}
+        BY AsyncControlServiceTransitionRequiresAtomicLifecycleReservation,
+           Zenon
+           DEF ResetState, AdmittedState, ServicedState,
+               ResponseRetirementState, ResponseState,
+               TimeoutRetirementState, CandidateReclamationState,
+               CandidateMarkedState, CandidateOwnedState,
+               CandidateServiceState, OrdinaryCarrierState,
+               CarrierState, CompactedState, LeaderWireState,
+               ServeIngressState, LifecycleState, TimeoutState,
+               RecoveryState, VoteState
+      <3>4. TimeoutState.timeoutRecoveryEpisodes =
+               ResetState.timeoutRecoveryEpisodes
+        BY AsyncControlServiceTransitionRequiresAtomicLifecycleReservation,
+           IsaT(120)
+           DEF ResetState, AdmittedState, ServicedState,
+               ResponseRetirementState, ResponseState,
+               TimeoutRetirementState, CandidateReclamationState,
+               CandidateMarkedState, CandidateOwnedState,
+               CandidateServiceState, OrdinaryCarrierState,
+               CarrierState, CompactedState, LeaderWireState,
+               ServeIngressState, LifecycleState, TimeoutState,
+               RecoveryState, VoteState
+      <3>5. asyncControlServiceState'.timeoutRecoveryEpisodes =
+               VoteState.timeoutRecoveryEpisodes
+        BY AsyncControlServiceTransitionRequiresAtomicLifecycleReservation,
+           Zenon
+           DEF ResetState, AdmittedState, ServicedState,
+               ResponseRetirementState, ResponseState,
+               TimeoutRetirementState, CandidateReclamationState,
+               CandidateMarkedState, CandidateOwnedState,
+               CandidateServiceState, OrdinaryCarrierState,
+               CarrierState, CompactedState, LeaderWireState,
+               ServeIngressState, LifecycleState, TimeoutState,
+               RecoveryState, VoteState
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5
+           DEF AtomicFacts
+    <2>4. TimeoutState.timeoutRecoveryEpisodes
+             \subseteq AsyncTimeoutRecoveryEpisodeSet
+      BY <2>2, <2>3, Zenon
+         DEF AtomicFacts
+    <2>5. AsyncTimeoutRecoveryTransitionGateIn(
+             LeaderWireState, ServeIngressState)
+      BY <2>3 DEF AtomicFacts
+    <2>6. RecoveryState.timeoutRecoveryEpisodes =
+             AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+               LeaderWireState, TimeoutState)
+               \cup
+             AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+               LeaderWireState, ServeIngressState)
+      BY <2>3 DEF AtomicFacts
+    <2>7. \A episode \in RecoveryState.timeoutRecoveryEpisodes:
+             /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+             /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                  episode, context', nodeView', generation', decisions')
+      BY <2>4, <2>5, <2>6,
+         AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary
+    <2>8. VoteState.timeoutRecoveryEpisodes =
+             {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+                RecoveryState, episode):
+                episode \in RecoveryState.timeoutRecoveryEpisodes}
+      BY <2>3 DEF AtomicFacts
+    <2>9. \A episode \in VoteState.timeoutRecoveryEpisodes:
+             /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+             /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                  episode, context', nodeView', generation', decisions')
+      BY <2>7, <2>8,
+         AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary
+    <2>10. asyncControlServiceState'.timeoutRecoveryEpisodes =
+              VoteState.timeoutRecoveryEpisodes
+      BY <2>3 DEF AtomicFacts
+    <2>11. \A episode \in
+                asyncControlServiceState'.timeoutRecoveryEpisodes:
+              AsyncTimeoutRecoveryEpisodeBoundaryIn(
+                episode, context', nodeView', generation', decisions')
+      BY <2>9, <2>10, Zenon
+    <2> QED BY <2>11, Isa
+         DEF AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant,
+             AsyncTimeoutRecoveryEpisodes,
+             AsyncTimeoutRecoveryEpisodesIn,
+             AsyncTimeoutRecoveryEpisodeBoundaryIn,
+             NodeHasDecision, AsyncNodeHasDecisionIn
+  <1> QED BY <1>1
+
+THEOREM AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant ==
+  ASSUME AsyncControlServiceStateTypeInvariant,
+         AsyncNext
+  PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
+PROOF
+  <1>1. AsyncControlServiceSlotTransition
+    BY DEF AsyncNext
+  <1> QED BY <1>1,
+       AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary
+
 THEOREM AsyncNextPreservesStrongTypeInvariant ==
   AsyncStrongTypeInvariant /\ AsyncNext
     => AsyncStrongTypeInvariant'
@@ -4159,6 +5221,12 @@ PROOF
          AsyncNextPreservesControlServiceStateTypeInvariant
     <2>4c. AsyncCandidateLifecycleSchedulerCoverageInvariant'
       BY <1>1, AsyncNextPreservesCandidateLifecycleSchedulerCoverage
+    <2>4d. /\ AsyncServeProducerEpisodeTypeInvariant'
+             /\ AsyncServeProducerEpisodeOwnershipInvariant'
+      BY <1>1, AsyncNextPreservesServeProducerEpisodeInvariants
+    <2>4e. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
+      BY <1>1, <2>2h,
+         AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>2, AsyncNextPreservesTimeoutPoolInvariant
     <2>6. /\ AsyncRecoveryTypeInvariant'
@@ -4187,7 +5255,7 @@ PROOF
     <2>13. AsyncOrdinaryIngressCarrierOwnershipInvariant'
       BY <1>1, <2>2k,
          AsyncNextPreservesOrdinaryIngressCarrierOwnership
-    <2> QED BY <2>2l, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5, <2>6, <2>7,
+    <2> QED BY <2>2l, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>4d, <2>4e, <2>5, <2>6, <2>7,
                 <2>8, <2>9, <2>10, <2>11, <2>12, <2>13
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
