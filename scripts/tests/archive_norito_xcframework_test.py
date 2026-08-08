@@ -164,7 +164,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
         }
         manifest = {
             "version": "0.1.0",
-            "native_bridge_abi_version": 21,
+            "native_bridge_abi_version": 22,
             "privacy_production_enabled": False,
             "cargo_features": [],
             "build_environment": build_environment,
@@ -718,7 +718,7 @@ print(f"{digest} {size}")
         self.assertGreaterEqual(builder.count("--archive-output requires a value"), 2)
         self.assertIn('output.suffix != ".zip"', builder)
         self.assertIn(
-            'header_abis != ["21"]',
+            'header_abis != ["22"]',
             builder,
         )
         self.assertIn(

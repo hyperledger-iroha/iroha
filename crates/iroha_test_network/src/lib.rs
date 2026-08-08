@@ -7548,19 +7548,18 @@ impl NetworkBuilder {
         let zk_config = resolved_genesis_config
             .as_ref()
             .map(|config| config.zk.clone());
-        let (mut parameter_state, preview_staged_policy_hashes) = match custom_genesis_block
-            .as_ref()
-        {
-            Some(custom) => (
-                consensus_parameters_from_genesis_with_overrides(
-                    custom,
-                    &genesis_isi,
-                    &genesis_post_topology_isi,
+        let (mut parameter_state, preview_staged_policy_hashes) =
+            match custom_genesis_block.as_ref() {
+                Some(custom) => (
+                    consensus_parameters_from_genesis_with_overrides(
+                        custom,
+                        &genesis_isi,
+                        &genesis_post_topology_isi,
+                    ),
+                    None,
                 ),
-                None,
-            ),
-            None => {
-                let (preview_genesis, staged_hash) =
+                None => {
+                    let (preview_genesis, staged_hash) =
                     config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
                         genesis_isi.clone(),
                         genesis_post_topology_isi.clone(),
@@ -7581,13 +7580,13 @@ impl NetworkBuilder {
                         }),
                         confidential_policy_hash,
                     );
-                assert_genesis_voting_roster_matches_network(&preview_genesis, &peer_topology);
-                (
-                    consensus_parameters_from_genesis(&preview_genesis),
-                    Some(staged_hash),
-                )
-            }
-        };
+                    assert_genesis_voting_roster_matches_network(&preview_genesis, &peer_topology);
+                    (
+                        consensus_parameters_from_genesis(&preview_genesis),
+                        Some(staged_hash),
+                    )
+                }
+            };
         parameter_state.sumeragi.block_cadence_ms = std::num::NonZeroU64::new(
             u64::try_from(block_cadence.as_millis())
                 .expect("signed block cadence fits into u64 milliseconds"),
@@ -7757,13 +7756,21 @@ impl NetworkBuilder {
             _permit: permit,
         };
 
+        let exact_genesis_hash = network.genesis().0.hash();
+        let network_id = NetworkId::from_genesis_hash(exact_genesis_hash);
+        for peer in network.all_peers() {
+            peer.network_id
+                .set(network_id)
+                .expect("test-network peer lineage must be initialized exactly once");
+        }
+
         // The test-network generator is the operator provisioning both the
         // signed in-memory genesis and its independent runtime trust anchor.
         // Insert this generated layer before caller layers so deliberate
         // wrong-hash configurations remain observable by negative tests.
         let expected_hash_layer = Table::new().write(
             ["genesis", "expected_hash"],
-            genesis_expected_hash_config_literal(&network.genesis().0.hash().to_string()),
+            genesis_expected_hash_config_literal(&exact_genesis_hash.to_string()),
         );
         debug_assert!(
             !network.config_layers.is_empty(),
@@ -7937,6 +7944,7 @@ pub struct NetworkPeer {
     mnemonic: String,
     span: tracing::Span,
     key_pair: KeyPair,
+    network_id: Arc<OnceLock<NetworkId>>,
     streaming_key_pair: KeyPair,
     soranet_transport_key_pair: KeyPair,
     bls_key_pair: Option<KeyPair>,
@@ -9169,6 +9177,21 @@ impl NetworkPeer {
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
+                    .write(
+                        "network_id",
+                        norito::literal::format(
+                            "hash",
+                            &self
+                                .network_id
+                                .get()
+                                .copied()
+                                .expect(
+                                    "peer must be attached to a network before creating clients",
+                                )
+                                .to_string()
+                                .to_ascii_uppercase(),
+                        ),
+                    )
                     .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "public_key"],
@@ -9668,6 +9691,7 @@ impl NetworkPeerBuilder {
             mnemonic,
             span,
             key_pair,
+            network_id: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair,
@@ -11217,6 +11241,7 @@ mod tests {
             mnemonic: "once-block-fallback".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
+            network_id: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11263,6 +11288,7 @@ mod tests {
             mnemonic: "wait-block-watchdog".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate wait-block watchdog peer key"),
+            network_id: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11311,6 +11337,7 @@ mod tests {
             mnemonic: "wait-block-best-effort".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate wait-block best-effort peer key"),
+            network_id: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,

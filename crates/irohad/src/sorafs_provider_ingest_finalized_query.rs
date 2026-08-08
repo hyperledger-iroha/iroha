@@ -45,8 +45,8 @@ use iroha_data_model::{
 };
 use sorafs_node::{
     ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedAssignmentV1,
-    ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
-    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
+    ProviderIngestFinalizedClaimFactoryV1, ProviderIngestFinalizedCursorV1,
+    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
 };
 
 const LIVE_SELECTION_ATTEMPTS_V1: usize = 4;
@@ -1097,8 +1097,9 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         )
     }
 
-    fn read_page(
+    fn read_page_with_claim_factory(
         &self,
+        claim_factory: Option<&ProviderIngestFinalizedClaimFactoryV1>,
         at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
         after_order_id: Option<[u8; 32]>,
         limit: usize,
@@ -1140,17 +1141,28 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             .archive
             .read_provider_page(&key, self.provider_id, cursor.as_ref(), limit)
             .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
-        let page = map_archive_page(self.provider_id, &archive_page)?;
+        let page = map_archive_page(self.provider_id, &archive_page, claim_factory)?;
         *active = archive_page
             .next_cursor
             .map(|cursor| ActiveArchiveScanV1 { key, cursor });
         Ok(page)
+    }
+
+    #[cfg(test)]
+    fn read_page_without_musubi_claims_for_test(
+        &self,
+        at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
+        after_order_id: Option<[u8; 32]>,
+        limit: usize,
+    ) -> Result<ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedLedgerErrorV1> {
+        self.read_page_with_claim_factory(None, at_finalized_cursor, after_order_id, limit)
     }
 }
 
 impl ProviderIngestFinalizedLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1 {
     fn read_assignment_page(
         &self,
+        claim_factory: ProviderIngestFinalizedClaimFactoryV1,
         at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
         after_order_id: Option<[u8; 32]>,
         limit: usize,
@@ -1161,7 +1173,12 @@ impl ProviderIngestFinalizedLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1
         let query = self.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                query.read_page(at_finalized_cursor, after_order_id, limit)
+                query.read_page_with_claim_factory(
+                    Some(&claim_factory),
+                    at_finalized_cursor,
+                    after_order_id,
+                    limit,
+                )
             })
             .await
             .unwrap_or(Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable))
@@ -1172,6 +1189,7 @@ impl ProviderIngestFinalizedLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1
 fn map_archive_page(
     expected_provider_id: ProviderId,
     page: &ProviderIngestFinalizedArchivePageV1,
+    claim_factory: Option<&ProviderIngestFinalizedClaimFactoryV1>,
 ) -> Result<ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedLedgerErrorV1> {
     if page.provider_id != expected_provider_id {
         return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
@@ -1205,12 +1223,51 @@ fn map_archive_page(
                 return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
             }
         };
+        let musubi_archive = row
+            .musubi_archive
+            .clone()
+            .map(|binding| {
+                claim_factory
+                    .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?
+                    .seal_musubi_archive(
+                        &page.key.chain_id,
+                        finalized_cursor,
+                        *row.replication_order.order_id.as_bytes(),
+                        &row.pin_manifest,
+                        binding,
+                    )
+            })
+            .transpose()?;
+        let completed_musubi_archive = match row.musubi_archive.clone() {
+            Some(binding)
+                if row
+                    .replication_order
+                    .provider_completion(expected_provider_id)
+                    .is_some() =>
+            {
+                Some(
+                    claim_factory
+                        .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?
+                        .seal_completed_musubi_archive(
+                            &page.key.chain_id,
+                            finalized_cursor,
+                            expected_provider_id,
+                            &row.replication_order,
+                            &row.pin_manifest,
+                            binding,
+                        )?,
+                )
+            }
+            Some(_) | None => None,
+        };
         rows.push(ProviderIngestFinalizedAssignmentV1 {
             pin: PinManifestFinalizedRecordV1 {
                 finalized_cursor: pin_cursor,
                 manifest: row.pin_manifest.clone(),
             },
             order: row.replication_order.clone(),
+            musubi_archive,
+            completed_musubi_archive,
             provider_owner: row.expected_owner.clone(),
             completion_authority,
             completion_epoch: row.completion_epoch,
@@ -1240,11 +1297,28 @@ fn map_archive_page(
 mod tests {
     use iroha_core::{
         query::{
-            provider_ingest_finalized::ProviderIngestFinalizedArchiveV1, store::LiveQueryStore,
+            provider_ingest_finalized::{
+                ProviderIngestFinalizedArchiveAssignmentV1, ProviderIngestFinalizedArchiveV1,
+            },
+            store::LiveQueryStore,
         },
         state::{State, World},
     };
-    use iroha_data_model::sorafs::pin_registry::ReplicationOrderId;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        metadata::Metadata,
+        musubi::{
+            MusubiArchiveCommitmentV1, MusubiContentDigestV1,
+            MusubiReplicationOrderArchiveBindingV1,
+        },
+        sorafs::pin_registry::{
+            ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy,
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderCompletionRecord, ReplicationOrderId,
+            ReplicationOrderRecord, ReplicationOrderStatus,
+        },
+    };
 
     use super::*;
 
@@ -1277,6 +1351,123 @@ mod tests {
             LiveQueryStore::start_test(),
             chain_id.clone(),
         ))
+    }
+
+    fn account(seed: u8) -> AccountId {
+        let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("deterministic account key");
+        AccountId::new(key.public_key().clone())
+    }
+
+    fn completion_record(
+        provider_id: ProviderId,
+        completed_by: AccountId,
+    ) -> ReplicationOrderCompletionRecord {
+        ReplicationOrderCompletionRecord {
+            provider_id,
+            completed_by: completed_by.clone(),
+            completion_epoch: 7,
+            assignment_revision: 1,
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                completed_by,
+                ProviderIngestCompletionSignerPolicyV1 {
+                    policy_id: [0x91; 32],
+                    revision: 1,
+                    predecessor_digest: None,
+                    policy_digest: [0x92; 32],
+                },
+            ),
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: 7,
+                block_hash: [0x79; 32],
+            },
+        }
+    }
+
+    fn archive_page_with_raw_musubi_binding() -> ProviderIngestFinalizedArchivePageV1 {
+        let provider_id = ProviderId::new([0x51; 32]);
+        let order_id = ReplicationOrderId::new([0x61; 32]);
+        let digest = ManifestDigest::new([0x71; 32]);
+        let root_cid = ManifestRootCid::from_blake3_digest([0x72; 32]).expect("root CID");
+        let chunker = ChunkerProfileHandle {
+            profile_id: 1,
+            namespace: "sorafs".to_owned(),
+            name: "sf1".to_owned(),
+            semver: "1.0.0".to_owned(),
+            multihash_code: 0x1f,
+        };
+        let pin_manifest = PinManifestRecord::new(
+            digest,
+            root_cid.clone(),
+            chunker.clone(),
+            [0x73; 32],
+            [0x74; 32],
+            4_096,
+            PinPolicy::default(),
+            account(1),
+            1,
+            None,
+            None,
+            Metadata::default(),
+        );
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: root_cid.clone(),
+            chunker,
+            chunk_plan_digest: MusubiContentDigestV1::new([0x73; 32]),
+            por_root: MusubiContentDigestV1::new([0x74; 32]),
+            content_length: 4_096,
+            car_digest: MusubiContentDigestV1::new([0x75; 32]),
+            car_size: 5_120,
+            bundle_digest: MusubiContentDigestV1::new([0x76; 32]),
+            source_tree_digest: MusubiContentDigestV1::new([0x77; 32]),
+            descriptor_digest: MusubiContentDigestV1::new([0x78; 32]),
+            file_count: 1,
+            chunk_count: 1,
+        };
+        let key = ProviderIngestFinalizedArchiveKeyV1::try_new(
+            ChainId::from("provider-ingest-raw-musubi-claim"),
+            7,
+            [0x79; 32],
+            7_000,
+        )
+        .expect("archive key");
+        ProviderIngestFinalizedArchivePageV1 {
+            key: key.clone(),
+            provider_id,
+            provider_state_root: [0x7A; 32],
+            rows: vec![ProviderIngestFinalizedArchiveAssignmentV1 {
+                provider_id,
+                expected_owner: None,
+                expected_signer_policy: None,
+                expected_assignment_revision: 1,
+                finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                    height: key.height,
+                    block_hash: key.block_hash,
+                },
+                finalized_at_unix_ms: key.finalized_at_unix_ms,
+                pin_manifest,
+                replication_order: ReplicationOrderRecord {
+                    order_id,
+                    manifest_digest: digest,
+                    manifest_root_cid: root_cid,
+                    musubi_archive: Some(commitment.archive_id()),
+                    issued_by: account(1),
+                    issued_epoch: 1,
+                    deadline_epoch: 10,
+                    canonical_order: vec![1],
+                    assignment_revision: 1,
+                    provider_completions: Vec::new(),
+                    status: ReplicationOrderStatus::Pending,
+                },
+                musubi_archive: Some(MusubiReplicationOrderArchiveBindingV1::new(
+                    order_id,
+                    commitment.archive_id(),
+                    commitment,
+                )),
+                completion_epoch: Some(7),
+            }],
+            next_cursor: None,
+        }
     }
 
     #[test]
@@ -1437,11 +1628,11 @@ mod tests {
             },
         );
         assert_eq!(
-            query.read_page(None, None, 0),
+            query.read_page_without_musubi_claims_for_test(None, None, 0),
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
         );
         assert_eq!(
-            query.read_page(None, None, 3),
+            query.read_page_without_musubi_claims_for_test(None, None, 3),
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
         );
     }
@@ -1498,12 +1689,12 @@ mod tests {
         });
 
         assert_eq!(
-            query.read_page(None, None, 1),
+            query.read_page_without_musubi_claims_for_test(None, None, 1),
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
             "an interleaved first page must not replace the retained full cursor"
         );
         assert_eq!(
-            query.read_page(
+            query.read_page_without_musubi_claims_for_test(
                 Some(ProviderIngestFinalizedCursorV1 {
                     height: 7,
                     block_hash: [0x72; 32],
@@ -1515,7 +1706,7 @@ mod tests {
             "a substituted public hash must fail before archive access"
         );
         assert_eq!(
-            query.read_page(
+            query.read_page_without_musubi_claims_for_test(
                 Some(ProviderIngestFinalizedCursorV1 {
                     height: 7,
                     block_hash: [0x71; 32],
@@ -1526,5 +1717,32 @@ mod tests {
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
             "a substituted exclusive boundary must fail before archive access"
         );
+    }
+
+    #[test]
+    fn raw_musubi_binding_requires_runtime_issued_claim_factory() {
+        let mut page = archive_page_with_raw_musubi_binding();
+        assert_eq!(
+            map_archive_page(page.provider_id, &page, None),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+            "publisher-shaped binding data cannot become a finalized claim"
+        );
+
+        page.rows[0]
+            .replication_order
+            .provider_completions
+            .push(completion_record(page.provider_id, account(8)));
+        assert_eq!(
+            map_archive_page(page.provider_id, &page, None),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+            "a finalized completion plus publisher-shaped binding still cannot forge either opaque claim"
+        );
+
+        page.rows[0].musubi_archive = None;
+        page.rows[0].replication_order.musubi_archive = None;
+        let generic = map_archive_page(page.provider_id, &page, None)
+            .expect("generic replication orders need no Musubi claim capability");
+        assert!(generic.rows[0].musubi_archive.is_none());
+        assert!(generic.rows[0].completed_musubi_archive.is_none());
     }
 }

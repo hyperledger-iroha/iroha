@@ -1882,6 +1882,7 @@ mod tests {
             manifest_view_root: vec![2; 32],
             expiry_slot: 1,
             max_clock_skew_ms: None,
+            issuer_signature: Some(iroha_crypto::Signature::from_bytes(&[1_u8; 64])),
         }
     }
 
@@ -2374,6 +2375,7 @@ seiyaku AxtLiteralValidation {
             manifest_view_root: vec![2; 32],
             expiry_slot: 1,
             max_clock_skew_ms: None,
+            issuer_signature: Some(iroha_crypto::Signature::from_bytes(&[1_u8; 64])),
         };
         let valid_handle_literal = literal(&valid_handle);
         assert!(

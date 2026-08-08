@@ -1351,7 +1351,7 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
-        let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)
+        let envelope = LaneRelayEnvelope::new(block_header, None, settlement_commitment, 0)
             .expect("valid lane relay envelope")
             .with_manifest_root(Some(manifest_root))
             .with_lane_block_descriptor_hash(Some(iroha_crypto::Hash::new(
@@ -1440,7 +1440,7 @@ mod tests {
             native_amx_receipts: Vec::new(),
         };
         let manifest_root = [0x42; 32];
-        let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)?
+        let envelope = LaneRelayEnvelope::new(block_header, None, settlement_commitment, 0)?
             .with_manifest_root(Some(manifest_root))
             .with_lane_block_descriptor_hash(Some(iroha_crypto::Hash::new(
                 b"isi-test-lane-block-descriptor",

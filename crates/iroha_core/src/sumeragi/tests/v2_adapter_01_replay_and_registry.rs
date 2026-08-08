@@ -1150,6 +1150,17 @@
         let proposer = adapter.wire_context.leader(wire_round.view);
         let unsafe_proposal = proposal(&adapter.wire_context, proposer, subject(0xC5));
         let conflicting_proposal = proposal(&adapter.wire_context, proposer, subject(0xC6));
+        let (
+            wire::ConsensusMessageV2Payload::Proposal(first_proposal),
+            wire::ConsensusMessageV2Payload::Proposal(second_proposal),
+        ) = (&unsafe_proposal.payload, &conflicting_proposal.payload)
+        else {
+            unreachable!("proposal fixtures")
+        };
+        let expected_evidence = wire::SumeragiV2Equivocation::Proposal {
+            first: first_proposal.clone(),
+            second: second_proposal.clone(),
+        };
         let reducer_before = adapter.reducer.clone();
         let registry_before = (
             adapter.registry.subjects.len(),
@@ -1184,12 +1195,7 @@
         assert_eq!(
             conflict.effects(),
             &[AdapterEffect::ReportEquivocation {
-                offender: adapter.wire_context.roster
-                    [usize::try_from(proposer).expect("small proposer index")]
-                .validator
-                .clone(),
-                round: wire_round,
-                kind: reducer::EquivocationKind::Proposal,
+                evidence: Box::new(expected_evidence),
             }]
         );
 

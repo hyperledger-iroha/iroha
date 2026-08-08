@@ -315,16 +315,13 @@ final class TxBuilderTests: XCTestCase {
     private func makeRegisterZkAssetRequest(authority: String,
                                             ttlMs: UInt64? = 30) throws -> RegisterZkAssetRequest {
         let unshieldVk = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_unshield")
-        return RegisterZkAssetRequest(chainId: Self.fixtureChainId,
-                                      authority: authority,
-                                      assetDefinitionId: Self.fixtureAssetDefinition,
-                                      mode: .hybrid,
-                                      allowShield: true,
-                                      allowUnshield: true,
-                                      unshieldVerifyingKey: unshieldVk,
-                                      shieldVerifyingKey: nil,
-                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                      ttlMs: ttlMs)
+        return try RegisterZkAssetRequest(chainId: Self.fixtureChainId,
+                                          authority: authority,
+                                          assetDefinitionId: Self.fixtureAssetDefinition,
+                                          unshieldVerifyingKey: unshieldVk,
+                                          shieldVerifyingKey: nil,
+                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                          ttlMs: ttlMs)
     }
 
     private func makeClaimIdentifierRequest(authority: String,
@@ -1307,6 +1304,24 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(envelope.norito.first, 1)
         XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
         XCTAssertEqual(envelope.transactionHash.count, 32)
+    }
+
+    func testRegisterZkAssetRejectsShieldWithoutUnshieldVerifier() throws {
+        let shield = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_shield")
+        XCTAssertThrowsError(
+            try RegisterZkAssetRequest(
+                chainId: Self.fixtureChainId,
+                authority: "authority",
+                assetDefinitionId: Self.fixtureAssetDefinition,
+                shieldVerifyingKey: shield,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? RegisterZkAssetRequestError,
+                .shieldVerifierRequiresUnshieldVerifier
+            )
+        }
     }
 
     func testBuildClaimIdentifierProducesEnvelope() throws {

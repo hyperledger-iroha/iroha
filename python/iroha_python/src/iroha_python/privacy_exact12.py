@@ -55,10 +55,13 @@ _BASE64_RE_V1: Final = re.compile(r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[
 _PROOF_SYSTEM_AND_ENGINE_TAGS_V1: Final = (0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0)
 # The protocol enum variants carry closed structs, so accepting an arbitrary
 # number of compact fields would silently create a second schema in Python.
-_STATEMENT_FIELD_COUNTS_V1: Final = (10, 10, 6, 9, 15, 20, 4, 8, 8, 8, 12, 13)
+_STATEMENT_FIELD_COUNTS_V1: Final = (11, 10, 6, 9, 15, 20, 4, 8, 9, 8, 13, 13)
 # These statement fields are additionally zeroed by Rust intent projection.
 # Field zero is the shared statement context and is handled separately.
-_PROJECTION_DERIVED_STATEMENT_FIELD_V1: Final = {0: 9, 4: 10, 10: 4}
+_PROJECTION_DERIVED_STATEMENT_FIELD_V1: Final = {0: 10, 4: 10, 10: 5}
+# Reserve-backed statements carry the exact typed transparent balance scope at
+# these protocol-specific field indexes.
+_PUBLIC_BALANCE_SCOPE_STATEMENT_FIELD_V1: Final = {0: 7, 8: 2, 10: 2}
 
 _ROW_BYTE_FIELDS_V1: Final = (
     "statement_norito",
@@ -430,6 +433,20 @@ def _decode_digest_wrapper_v1(payload: bytes, context: str, *, allow_zero: bool)
     return digest
 
 
+def _validate_public_balance_scope_v1(payload: bytes, context: str) -> None:
+    """Require the sole canonical Norito shape of a usable balance scope."""
+
+    if payload == struct.pack("<I", 0):
+        return
+    if len(payload) == 14 and payload[:6] == b"\x01\x00\x00\x00\x09\x08":
+        dataspace = struct.unpack_from("<Q", payload, 6)[0]
+        if dataspace != 0:
+            return
+    raise PrivacyExact12FixtureErrorV1(
+        f"{context} has an invalid or universal public balance scope"
+    )
+
+
 def _decode_statement_context_v1(
     statement_payload: bytes,
     expected_tag: int,
@@ -445,6 +462,12 @@ def _decode_statement_context_v1(
         f"{context}.variant",
         PRIVACY_EXACT12_MAX_STATEMENT_BYTES_V1,
     )
+    scope_index = _PUBLIC_BALANCE_SCOPE_STATEMENT_FIELD_V1.get(expected_tag)
+    if scope_index is not None:
+        _validate_public_balance_scope_v1(
+            statement_fields[scope_index],
+            f"{context}.public_balance_scope",
+        )
     context_fields = _decode_fields_v1(
         statement_fields[0],
         8,

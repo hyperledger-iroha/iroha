@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 
 use derive_more::Display;
+use iroha_crypto::HashOf;
 use iroha_data_model_derive::{EnumRef, model};
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
@@ -10,7 +11,8 @@ use norito::core::{DecodeFromSlice, Error as NoritoError};
 pub use self::model::*;
 use crate::error::ParseError;
 use crate::{
-    account, asset, domain, nexus, nft, parameter, peer, permission, repo, role, rwa, trigger,
+    account, asset, block::BlockHeader, domain, nexus, nft, parameter, peer, permission, repo,
+    role, rwa, trigger,
 };
 
 /// Maximum byte length of a canonical [`ChainId`].
@@ -23,6 +25,80 @@ pub const MAX_CHAIN_ID_BYTES: usize = 128;
 #[model]
 mod model {
     use super::*;
+
+    /// Exact deployment identity derived from the consensus hash of the genesis header.
+    ///
+    /// Unlike [`ChainId`], this value is not an operator-selected label. Distinct genesis
+    /// headers necessarily produce distinct network identities, so signed protocol messages can
+    /// use this type as an exact-lineage domain separator.
+    #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+    #[repr(transparent)]
+    #[schema(transparent)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+    pub struct NetworkId(HashOf<BlockHeader>);
+
+    impl NetworkId {
+        /// Construct the network identity from the exact genesis consensus-header hash.
+        #[must_use]
+        pub const fn from_genesis_hash(hash: HashOf<BlockHeader>) -> Self {
+            Self(hash)
+        }
+
+        /// Borrow the exact genesis consensus-header hash.
+        #[must_use]
+        pub const fn as_genesis_hash(&self) -> &HashOf<BlockHeader> {
+            &self.0
+        }
+
+        /// Recover the exact genesis consensus-header hash.
+        #[must_use]
+        pub const fn into_genesis_hash(self) -> HashOf<BlockHeader> {
+            self.0
+        }
+
+        /// Borrow the canonical 32-byte identity.
+        #[must_use]
+        pub fn as_bytes(&self) -> &[u8; iroha_crypto::Hash::LENGTH] {
+            self.0.as_ref()
+        }
+    }
+
+    impl From<HashOf<BlockHeader>> for NetworkId {
+        fn from(value: HashOf<BlockHeader>) -> Self {
+            Self::from_genesis_hash(value)
+        }
+    }
+
+    impl From<NetworkId> for HashOf<BlockHeader> {
+        fn from(value: NetworkId) -> Self {
+            value.into_genesis_hash()
+        }
+    }
+
+    impl core::str::FromStr for NetworkId {
+        type Err = iroha_crypto::error::ParseError;
+
+        fn from_str(value: &str) -> Result<Self, Self::Err> {
+            value.parse::<HashOf<BlockHeader>>().map(Self::from)
+        }
+    }
+
+    #[cfg(feature = "json")]
+    impl norito::json::FastJsonWrite for NetworkId {
+        fn write_json(&self, out: &mut String) {
+            norito::json::FastJsonWrite::write_json(&self.0, out);
+        }
+    }
+
+    #[cfg(feature = "json")]
+    impl norito::json::JsonDeserialize for NetworkId {
+        fn json_deserialize(
+            parser: &mut norito::json::Parser<'_>,
+        ) -> Result<Self, norito::json::Error> {
+            <HashOf<BlockHeader> as norito::json::JsonDeserialize>::json_deserialize(parser)
+                .map(Self::from_genesis_hash)
+        }
+    }
 
     /// Canonical, deployment-selected identifier of a blockchain.
     ///
@@ -198,6 +274,43 @@ mod model {
         CustomParameterId(parameter::CustomParameterId),
         /// [`RepoAgreementId`](`repo::RepoAgreementId`) variant.
         RepoAgreementId(repo::RepoAgreementId),
+    }
+}
+
+impl norito::core::NoritoSerialize for NetworkId {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(self.as_genesis_hash(), writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(iroha_crypto::Hash::LENGTH)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(iroha_crypto::Hash::LENGTH)
+    }
+}
+
+impl<'a> norito::core::NoritoDeserialize<'a> for NetworkId {
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("NetworkId deserialization must succeed for a valid genesis hash")
+    }
+
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        <HashOf<BlockHeader> as norito::core::NoritoDeserialize<'a>>::try_deserialize(
+            archived.cast(),
+        )
+        .map(Self::from_genesis_hash)
+    }
+}
+
+impl<'a> DecodeFromSlice<'a> for NetworkId {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
+        <HashOf<BlockHeader> as DecodeFromSlice<'a>>::decode_from_slice(bytes)
+            .map(|(hash, used)| (Self::from_genesis_hash(hash), used))
     }
 }
 
@@ -385,6 +498,57 @@ mod tests {
 
     #[derive(Encode)]
     struct ChainIdEnvelope(ChainId);
+
+    fn network_id_fixture() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]),
+        ))
+    }
+
+    #[test]
+    fn network_id_is_the_exact_transparent_genesis_hash_wire() {
+        let network_id = network_id_fixture();
+        let genesis_hash = *network_id.as_genesis_hash();
+        let encoded = network_id.encode();
+
+        assert_eq!(encoded.len(), iroha_crypto::Hash::LENGTH);
+        assert_eq!(encoded, genesis_hash.encode());
+        assert_eq!(network_id.encoded_len(), iroha_crypto::Hash::LENGTH);
+        assert_eq!(network_id.as_bytes(), genesis_hash.as_ref());
+        assert_eq!(
+            NetworkId::decode_from_slice(&encoded).expect("decode exact network identity"),
+            (network_id, iroha_crypto::Hash::LENGTH)
+        );
+
+        let framed = norito::to_bytes(&network_id).expect("frame network identity");
+        assert_eq!(
+            norito::decode_from_bytes::<NetworkId>(&framed).expect("framed roundtrip"),
+            network_id
+        );
+        assert_eq!(
+            network_id
+                .to_string()
+                .parse::<NetworkId>()
+                .expect("text roundtrip"),
+            network_id
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn network_id_json_is_the_canonical_hash_literal() {
+        let network_id = network_id_fixture();
+        let network_json = norito::json::to_json(&network_id).expect("serialize network identity");
+        let hash_json =
+            norito::json::to_json(network_id.as_genesis_hash()).expect("serialize genesis hash");
+
+        assert_eq!(network_json, hash_json);
+        assert!(network_json.starts_with("\"hash:"));
+        assert_eq!(
+            norito::json::from_str::<NetworkId>(&network_json).expect("JSON roundtrip"),
+            network_id
+        );
+    }
 
     #[test]
     fn chain_id_from_str() {

@@ -447,6 +447,16 @@ whitespace normalization fail closed.
 
 ## Build Instructions
 
+Rust/Kotlin parity tests require a freshly built `kotlin-fixture-gen`
+executable supplied explicitly through `IROHA_KOTLIN_FIXTURE_GEN_BIN`. Relative
+paths are resolved from the repository root. The test runner rejects an unset,
+blank, missing, non-file, or non-executable value and never invokes Cargo:
+
+```bash
+export IROHA_KOTLIN_FIXTURE_GEN_BIN=/absolute/path/to/kotlin-fixture-gen
+./gradlew :core-jvm:test --console=plain
+```
+
 ### Prerequisites
 
 | Tool | Version | Required For |

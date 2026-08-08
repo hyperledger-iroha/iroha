@@ -1,10 +1,12 @@
-//! Wrapper around immutable, shared text guaranteed to contain valid JSON.
+//! Wrapper around immutable, shared text in one canonical JSON representation.
 //!
 //! [`Json::new`] serializes any [`norito::json::JsonSerialize`] value using the
-//! Norito JSON serializer and ensures that parsing it back succeeds. This keeps
-//! the canonical, minified representation that other components expect.
+//! Norito JSON serializer, parses it back into the bounded semantic value, and
+//! stores only the canonical compact rendering. Text constructors do the same;
+//! Norito decoding rejects alternate lexical spellings instead of normalizing a
+//! signed wire payload.
 
-use core::{fmt::Write as _, str::FromStr};
+use core::str::FromStr;
 use std::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 
 use derive_more::Display;
@@ -13,8 +15,6 @@ use norito::{
     Decode, Encode,
     json::{self, JsonDeserializeOwned, JsonSerialize, Parser, Value},
 };
-
-const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
 
 /// Maximum UTF-8 byte length of one [`Json`] document.
 ///
@@ -26,21 +26,18 @@ pub const MAX_JSON_BYTES: usize = 1_048_576;
 /// Maximum structural nesting depth of one [`Json`] document.
 pub const MAX_JSON_NESTING_DEPTH: usize = json::MAX_JSON_VALUE_NESTING_DEPTH;
 
-/// A wrapper around immutable, reference-counted text that is guaranteed to
-/// contain a valid JSON document.
+/// A wrapper around immutable, reference-counted text that contains exactly one
+/// canonical rendering of a valid JSON document.
 ///
-/// Use [`Json::new`] to serialize a value into a JSON string and ensure the
-/// result is well-formed.
+/// Use [`Json::new`] to serialize a value and establish the canonical lexical
+/// invariant.
 #[derive(Debug, Display, Clone, PartialOrd, PartialEq, Ord, Eq)]
 #[display("{_0}")]
 pub struct Json(Arc<String>);
 
-// These helpers deliberately retain the derived wire layout of the former
-// `Json(String)` representation. `Cow<str>` and `String` are both
-// self-delimiting Norito fields, so the borrowed serializer writes the same
-// bytes without first copying the shared JSON text. Norito does not encode
-// field names, so the named owned helper has the same single-field wire layout
-// while also getting a strict slice decoder that reports the parsed prefix.
+// Canonical Json is one self-delimiting string field. The borrowed serializer
+// avoids copying the shared text, while the owned helper provides a strict
+// slice decoder that reports the parsed prefix.
 #[derive(Encode)]
 struct JsonWireRef<'a>(Cow<'a, str>);
 
@@ -123,16 +120,16 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Json {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
             let (value, _) = Self::decode_wire_text(payload)?;
-            return Ok(Self::from_validated_string(value));
+            return Ok(Self::from_canonical_string(value));
         }
 
         let wire = <JsonWireOwned as norito::core::NoritoDeserialize>::try_deserialize(
             archived.cast::<JsonWireOwned>(),
         )?;
-        Self::validate_text(&wire.value).map_err(|error| {
+        Self::require_canonical_text(&wire.value).map_err(|error| {
             norito::core::Error::Message(format!("invalid Json payload: {error}"))
         })?;
-        Ok(Self::from_validated_string(wire.value))
+        Ok(Self::from_canonical_string(wire.value))
     }
 }
 
@@ -151,7 +148,7 @@ impl Json {
         json::validate_json(value).map_err(|error| norito::Error::from(error.to_string()))
     }
 
-    fn from_validated_string(value: String) -> Self {
+    fn from_canonical_string(value: String) -> Self {
         Self(Arc::new(value))
     }
 
@@ -179,104 +176,41 @@ impl Json {
             .get(header_len..end)
             .ok_or(norito::core::Error::LengthMismatch)?;
         let value = core::str::from_utf8(raw).map_err(|_| norito::core::Error::InvalidUtf8)?;
-        Self::validate_text(value).map_err(|error| {
+        norito::core::reserve_decode_allocation(len)?;
+        Self::require_canonical_text(value).map_err(|error| {
             norito::core::Error::Message(format!("invalid Json payload: {error}"))
         })?;
-        norito::core::reserve_decode_allocation(len)?;
         norito::core::note_payload_access(bytes, field_end);
         Ok((value.to_owned(), field_end))
     }
 
-    fn escape_json_string_plain(s: &str, out: &mut String) {
-        out.push('"');
-        for ch in s.chars() {
-            match ch {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                c if (c as u32) < 0x20 => {
-                    out.push_str("\\u00");
-                    out.push(HEX_DIGITS[((c as u32 >> 4) & 0xF) as usize] as char);
-                    out.push(HEX_DIGITS[(c as u32 & 0xF) as usize] as char);
-                }
-                _ => out.push(ch),
-            }
-        }
-        out.push('"');
+    fn serialize_canonical_value(value: &json::Value) -> String {
+        // `Value`'s Norito writer is iterative, orders object keys through its
+        // `BTreeMap`, and is the codec's single authority for JSON string and
+        // finite-f64 spelling. Reusing it here prevents the ledger wrapper from
+        // drifting from the JSON emitted by every other Norito component.
+        json::to_json(value).expect("serializing a parsed JSON Value cannot fail")
     }
 
-    fn serialize_json_value_plain(value: &json::Value, out: &mut String) {
-        use norito::json::native::Number;
-
-        enum Task<'a> {
-            Value(&'a json::Value),
-            Escaped(&'a str),
-            Byte(char),
-        }
-
-        let mut tasks = vec![Task::Value(value)];
-        while let Some(task) = tasks.pop() {
-            match task {
-                Task::Escaped(value) => Self::escape_json_string_plain(value, out),
-                Task::Byte(value) => out.push(value),
-                Task::Value(value) => match value {
-                    json::Value::Null => out.push_str("null"),
-                    json::Value::Bool(value) => {
-                        out.push_str(if *value { "true" } else { "false" });
-                    }
-                    json::Value::Number(value) => match value {
-                        Number::I64(value) => out.push_str(&value.to_string()),
-                        Number::U64(value) => out.push_str(&value.to_string()),
-                        Number::F64(value) => {
-                            const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0; // 2^53
-                            if !value.is_finite() {
-                                // Match Norito's JSON serializer: JSON has no
-                                // non-finite number representation, so these
-                                // values normalize to null instead of
-                                // producing text that fails the Json
-                                // invariant.
-                                out.push_str("null");
-                            } else if value.fract() == 0.0 && value.abs() <= F64_SAFE_INT {
-                                let _ = write!(out, "{value:.1}");
-                            } else {
-                                let _ = write!(out, "{value:?}");
-                            }
-                        }
-                    },
-                    json::Value::String(value) => Self::escape_json_string_plain(value, out),
-                    json::Value::Array(items) => {
-                        out.push('[');
-                        tasks.push(Task::Byte(']'));
-                        for (index, item) in items.iter().enumerate().rev() {
-                            if index + 1 < items.len() {
-                                tasks.push(Task::Byte(','));
-                            }
-                            tasks.push(Task::Value(item));
-                        }
-                    }
-                    json::Value::Object(map) => {
-                        out.push('{');
-                        tasks.push(Task::Byte('}'));
-                        for (index, (key, value)) in map.iter().enumerate().rev() {
-                            if index + 1 < map.len() {
-                                tasks.push(Task::Byte(','));
-                            }
-                            tasks.push(Task::Value(value));
-                            tasks.push(Task::Byte(':'));
-                            tasks.push(Task::Escaped(key));
-                        }
-                    }
-                },
-            }
-        }
+    fn canonicalize_text(value: &str) -> Result<String, norito::Error> {
+        Self::ensure_size(value)?;
+        let parsed =
+            json::parse_value(value).map_err(|error| norito::Error::from(error.to_string()))?;
+        let canonical = Self::serialize_canonical_value(&parsed);
+        Self::drop_json_value_iteratively(parsed);
+        Self::ensure_size(&canonical)?;
+        Ok(canonical)
     }
 
-    fn serialize_json_value_plain_str(value: &json::Value) -> String {
-        let mut out = String::new();
-        Self::serialize_json_value_plain(value, &mut out);
-        out
+    fn require_canonical_text(value: &str) -> Result<(), norito::Error> {
+        let canonical = Self::canonicalize_text(value)?;
+        if canonical == value {
+            Ok(())
+        } else {
+            Err(norito::Error::from(
+                "Json payload is valid but not in canonical lexical form",
+            ))
+        }
     }
 
     fn drop_json_value_iteratively(value: Value) {
@@ -330,58 +264,40 @@ impl Json {
     /// [`MAX_JSON_BYTES`].
     #[allow(clippy::needless_pass_by_value)]
     pub fn try_new<T: JsonSerialize>(payload: T) -> Result<Self, norito::Error> {
-        // Primary path: canonical Norito serializer.
         let serialized =
             norito::json::to_json(&payload).map_err(|e| norito::Error::from(e.to_string()))?;
-        Self::ensure_size(&serialized)?;
-        if norito::json::validate_json(&serialized).is_ok() {
-            return Ok(Self::from_validated_string(serialized));
-        }
-
-        // Fallback: materialize a `Value` and serialize it plainly.
-        if let Ok(value) = norito::json::to_value(&payload) {
-            let plain = Self::serialize_json_value_plain_str(&value);
-            let valid = Self::validate_text(&plain).is_ok();
-            Self::drop_json_value_iteratively(value);
-            if valid {
-                return Ok(Self::from_validated_string(plain));
-            }
-        }
-
-        Err(norito::Error::from(
-            "Json serializer produced an invalid JSON document",
-        ))
+        let canonical = Self::canonicalize_text(&serialized).map_err(|error| {
+            norito::Error::from(format!(
+                "Json serializer produced an invalid JSON document: {error}"
+            ))
+        })?;
+        Ok(Self::from_canonical_string(canonical))
     }
 
     /// Fallible constructor from `&str` using Norito's JSON helper.
     ///
-    /// Like `FromStr`, this helper is strict and rejects non-JSON text. It
-    /// canonicalizes valid input; use [`Json::from_raw_json`] when insignificant
-    /// whitespace or object-key order must be retained.
+    /// Like `FromStr`, this helper is strict and rejects non-JSON text. Valid
+    /// input is normalized into the single compact, key-ordered representation.
     ///
     /// # Errors
     /// Returns an error if the input string is not valid, is too deeply
     /// nested, or exceeds [`MAX_JSON_BYTES`].
     pub fn from_str_norito(s: &str) -> Result<Self, norito::Error> {
-        Self::validate_text(s)?;
-        let value = json::parse_value(s).map_err(|e| norito::Error::from(e.to_string()))?;
-        let result = Self::from_norito_value_ref(&value);
-        Self::drop_json_value_iteratively(value);
-        result
+        Self::from_raw_json(s.to_owned())
     }
 
     /// Creates a [`Json`] value from an already serialized JSON document.
     ///
-    /// Unlike [`Json::from_str_norito`], this preserves insignificant
-    /// whitespace and object-key order. It still enforces every `Json` type
-    /// invariant before constructing the value.
+    /// The supplied text is parsed as one bounded semantic value and stored in
+    /// canonical compact form. Insignificant whitespace, alternate escapes,
+    /// number spellings, and object insertion order are never retained.
     ///
     /// # Errors
     /// Returns an error if `value` is not exactly one valid JSON document, is
     /// too deeply nested, or exceeds [`MAX_JSON_BYTES`].
     pub fn from_raw_json(value: String) -> Result<Self, norito::Error> {
-        Self::validate_text(&value)?;
-        Ok(Self::from_validated_string(value))
+        let canonical = Self::canonicalize_text(&value)?;
+        Ok(Self::from_canonical_string(canonical))
     }
 
     /// Returns a reference to the inner JSON string.
@@ -407,9 +323,9 @@ impl Json {
     /// Returns an error if serialization of the value fails, if the result is
     /// too deeply nested, or if it exceeds [`MAX_JSON_BYTES`].
     pub fn from_norito_value_ref(v: &Value) -> Result<Self, norito::Error> {
-        let plain = Self::serialize_json_value_plain_str(v);
-        Self::validate_text(&plain)?;
-        Ok(Self::from_validated_string(plain))
+        let canonical = Self::serialize_canonical_value(v);
+        Self::validate_text(&canonical)?;
+        Ok(Self::from_canonical_string(canonical))
     }
 }
 
@@ -491,7 +407,7 @@ impl FromStr for Json {
 
 impl Default for Json {
     fn default() -> Self {
-        Self::from_validated_string("null".to_owned())
+        Self::from_canonical_string("null".to_owned())
     }
 }
 
@@ -500,7 +416,7 @@ impl Default for Json {
 impl<'a> norito::core::DecodeFromSlice<'a> for Json {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (value, consumed) = Self::decode_wire_text(bytes)?;
-        Ok((Self::from_validated_string(value), consumed))
+        Ok((Self::from_canonical_string(value), consumed))
     }
 }
 
@@ -525,11 +441,9 @@ mod tests {
     use super::*;
     use norito::codec::{Decode as _, Encode as _};
 
-    /// Mirrors the derived representation used before `Json` adopted shared
-    /// backing. Keeping this local wire oracle makes representation drift
-    /// visible without coupling the production type back to owned strings.
+    /// Wire oracle for the canonical single-string representation.
     #[derive(Encode, Decode)]
-    struct LegacyJsonWire(String);
+    struct CanonicalJsonWire(String);
 
     #[derive(
         Debug,
@@ -563,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_backing_preserves_legacy_schema() {
+    fn shared_backing_has_the_canonical_string_schema() {
         let schema = Json::schema();
 
         assert_eq!(<Json as TypeId>::id(), "Json");
@@ -579,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_backing_preserves_legacy_norito_wire() {
+    fn canonical_json_roundtrips_the_single_string_norito_wire() {
         let inputs = [
             "null".to_owned(),
             "{\"a\":1}".to_owned(),
@@ -590,7 +504,7 @@ mod tests {
             let json = Json::from_raw_json(input.clone()).expect("valid JSON wire fixture");
             let encoded = json.encode();
 
-            assert_eq!(encoded, LegacyJsonWire(input.clone()).encode());
+            assert_eq!(encoded, CanonicalJsonWire(input.clone()).encode());
             assert_eq!(
                 encoded,
                 JsonWireOwned {
@@ -667,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_clone_preserves_exact_json_output() {
+    fn shared_clone_preserves_canonical_json_output() {
         let raw = "{ \"order\": [3, 2, 1], \"escaped\": \"a\\nb\" }";
         let json = Json::from_raw_json(raw.to_owned()).expect("valid raw JSON fixture");
         let cloned = json.clone();
@@ -675,9 +589,53 @@ mod tests {
 
         cloned.json_serialize(&mut serialized);
 
-        assert_eq!(serialized, raw);
-        assert_eq!(cloned.to_string(), raw);
-        assert_eq!(cloned.get(), raw);
+        let canonical = r#"{"escaped":"a\nb","order":[3,2,1]}"#;
+        assert_eq!(serialized, canonical);
+        assert_eq!(cloned.to_string(), canonical);
+        assert_eq!(cloned.get(), canonical);
+    }
+
+    #[test]
+    fn text_boundaries_canonicalize_every_accepted_lexical_variant() {
+        for (raw, canonical) in [
+            ("1 ", "1"),
+            (r#"{"z":0,"a":1}"#, r#"{"a":1,"z":0}"#),
+            (r#""\u0061""#, r#""a""#),
+            ("1e0", "1.0"),
+            ("-0", "-0.0"),
+        ] {
+            let constructed =
+                Json::from_raw_json(raw.to_owned()).expect("valid JSON must canonicalize");
+            let parsed: Json = raw.parse().expect("FromStr must canonicalize valid JSON");
+            let decoded: Json =
+                norito::json::from_json(raw).expect("JSON decoding must canonicalize valid JSON");
+
+            assert_eq!(constructed.get(), canonical, "raw constructor: {raw}");
+            assert_eq!(parsed.get(), canonical, "FromStr: {raw}");
+            assert_eq!(decoded.get(), canonical, "JSON decoder: {raw}");
+        }
+    }
+
+    #[test]
+    fn norito_decoders_reject_noncanonical_json_spellings() {
+        for raw in ["1 ", r#"{"z":0,"a":1}"#, r#""\u0061""#, "1e0", "-0"] {
+            let encoded = CanonicalJsonWire(raw.to_owned()).encode();
+            let error = <Json as norito::core::DecodeFromSlice>::decode_from_slice(&encoded)
+                .expect_err("binary Json must have one lexical representation");
+            assert!(
+                error.to_string().contains("canonical lexical form"),
+                "unexpected slice error for {raw}: {error}"
+            );
+
+            let framed = norito::to_bytes(&Json(Arc::new(raw.to_owned())))
+                .expect("encode hostile noncanonical Json fixture");
+            let error = norito::decode_from_bytes::<Json>(&framed)
+                .expect_err("framed binary Json must reject alternate spelling");
+            assert!(
+                error.to_string().contains("canonical lexical form"),
+                "unexpected framed error for {raw}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -728,7 +686,7 @@ mod tests {
             err.to_string().contains("JSON error"),
             "unexpected parse error: {err}"
         );
-        // Proper JSON is preserved.
+        // Proper JSON is canonicalized.
         let j2 = Json::from_str_norito("{\"k\":1}").expect("json object");
         let v: norito::json::Value = norito::json::from_str(j2.get()).expect("parse value");
         assert_eq!(v, norito::json!({"k": 1}));
@@ -752,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn plain_serializer_roundtrips_values() {
+    fn canonical_value_serializer_roundtrips_values() {
         let values = [
             norito::json::Value::String("00000000-0000-0000-0000-000000000000".to_owned()),
             norito::json::Value::String("addr:127.0.0.1:33337#D694".to_owned()),
@@ -778,7 +736,7 @@ mod tests {
         ];
 
         for value in values {
-            let serialized = Json::serialize_json_value_plain_str(&value);
+            let serialized = Json::serialize_canonical_value(&value);
             let reparsed = norito::json::parse_value(&serialized).expect("parse plain");
             assert_eq!(reparsed, value, "mismatch for {serialized}");
         }
@@ -795,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn plain_serializer_covers_the_full_kotodama_boundary_depth() {
+    fn canonical_value_serializer_covers_the_full_kotodama_boundary_depth() {
         let levels = norito::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
         let mut nested = norito::json::Value::from(7_u64);
         for _ in 0..levels {
@@ -858,15 +816,6 @@ mod tests {
                 if converted.get() != &at_255 {
                     return Err("owned Value conversion changed canonical text".to_owned());
                 }
-                let retry = Json::try_new(RetryJson {
-                    calls: std::cell::Cell::new(0),
-                    valid: at_255.clone(),
-                })
-                .map_err(|error| error.to_string())?;
-                if retry.get() != &at_255 {
-                    return Err("try_new fallback changed canonical text".to_owned());
-                }
-
                 let encoded = JsonWireOwned {
                     value: at_255.clone(),
                 }
@@ -917,23 +866,6 @@ mod tests {
     impl JsonSerialize for BadJson {
         fn json_serialize(&self, out: &mut String) {
             out.push_str("bad json trailing");
-        }
-    }
-
-    struct RetryJson {
-        calls: std::cell::Cell<u8>,
-        valid: String,
-    }
-
-    impl JsonSerialize for RetryJson {
-        fn json_serialize(&self, out: &mut String) {
-            let call = self.calls.get();
-            self.calls.set(call.saturating_add(1));
-            if call == 0 {
-                out.push_str("invalid fallback trigger");
-            } else {
-                out.push_str(&self.valid);
-            }
         }
     }
 

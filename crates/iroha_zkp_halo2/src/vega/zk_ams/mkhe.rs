@@ -81,6 +81,8 @@ mod phase23_encrypted;
 mod phase23_ingress;
 #[path = "mkhe/phase23_mask_proof.rs"]
 mod phase23_mask_proof;
+#[path = "mkhe/phase23_rns_link.rs"]
+mod phase23_rns_link;
 #[path = "mkhe/resource.rs"]
 mod resource;
 #[path = "mkhe/security.rs"]
@@ -3823,6 +3825,8 @@ mod tests {
         assert_ne!(manifest.security_candidate_input_digest, [0; 32]);
         assert_ne!(manifest.resource_certificate_digest, [0; 32]);
         assert_ne!(manifest.phase23_equation_certificate_digest, [0; 32]);
+        assert_ne!(manifest.active_exact_binding_audit_digest, [0; 32]);
+        assert_ne!(manifest.decryption_resource_evidence_digest, [0; 32]);
         assert_eq!(manifest.release_kat_digest, [0; 32]);
 
         let noise = zk_ams_mkhe_noise_certificate_v1().unwrap();
@@ -3883,6 +3887,17 @@ mod tests {
             manifest.resource_certificate_digest,
             zk_ams_mkhe_resource_certificate_digest_v1().unwrap()
         );
+
+        let phase23 = zk_ams_phase23_equation_certificate_v1();
+        assert!(phase23.encrypted_sparse_maps_complete);
+        assert!(phase23.encrypted_cross_term_complete);
+        assert!(phase23.encrypted_commitment_complete);
+        assert!(phase23.accumulator_materialization_complete);
+        assert!(phase23.padding_and_final_proof_complete);
+        assert!(!phase23.hidden_mask_proof_complete);
+        assert_eq!(phase23.hidden_mask_proof_blocker_mask, 0b1111);
+        assert_ne!(phase23.hidden_mask_proof_audit_digest, [0; 32]);
+        assert!(!phase23.is_complete());
 
         assert_ne!(zk_ams_mkhe_manifest_digest_v1().unwrap(), [0; 32]);
         assert_ne!(zk_ams_mkhe_readiness_digest_v1().unwrap(), [0; 32]);

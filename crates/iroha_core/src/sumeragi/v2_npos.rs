@@ -497,6 +497,44 @@ pub(crate) fn validate_candidate_records(
     Ok(())
 }
 
+/// Validate a finalized epoch record against the exact NPoS height context
+/// certified for its boundary block.
+///
+/// The caller must obtain `context` from a cryptographically verified finality
+/// artifact.  Keeping this check separate from candidate validation lets the
+/// next block derive non-reveal accountability from immutable, quorum-certified
+/// state rather than from the boundary proposer's transient observations.
+pub(crate) fn validate_finalized_epoch_record(
+    context: &wire::HeightContext,
+    record: &VrfEpochRecord,
+) -> Result<(), V2NposError> {
+    if context.mode != wire::ConsensusMode::Npos {
+        return Err(V2NposError::InvalidRecord(
+            "finalized VRF record is not anchored in an NPoS context",
+        ));
+    }
+    if context.height != context.epoch_end_height {
+        return Err(V2NposError::InvalidRecord(
+            "finalized VRF record is not anchored at an epoch boundary",
+        ));
+    }
+    let schedule = EpochSchedule::for_context(
+        VrfRecordValidationContext::from(context),
+        record.epoch_length,
+        record.commit_deadline_offset,
+        record.reveal_deadline_offset,
+    )?;
+    let roster_len =
+        u32::try_from(context.roster.len()).map_err(|_| V2NposError::RosterTooLarge)?;
+    validate_authenticated_record(
+        VrfRecordValidationContext::from(context),
+        schedule,
+        record,
+        roster_len,
+        true,
+    )
+}
+
 /// Authenticate the exact pre-boundary record and derive the immediate
 /// successor epoch seed from its canonically ordered, in-window reveals.
 ///
@@ -740,7 +778,9 @@ impl ActiveVrfLifecycle {
         if reveal.epoch != self.context.epoch {
             return Err(V2VrfRejection::EpochMismatch);
         }
-        if self.schedule.position <= self.schedule.commit_end {
+        if self.schedule.position <= self.schedule.commit_end
+            || self.schedule.position == self.schedule.length
+        {
             return Err(V2VrfRejection::OutOfWindow);
         }
         let peer = self.bound_sender(reveal.signer, sender)?;
@@ -1050,6 +1090,7 @@ fn validate_extension_at_candidate_height(
                 "new late reveal is missing its proof",
             ))?;
         if schedule.position <= schedule.reveal_end
+            || schedule.position == schedule.length
             || proof.observed_at_height != context.height
             || old_commitment_without_reveal(&existing_participants, late.signer).is_none()
         {
@@ -1229,6 +1270,7 @@ fn validate_authenticated_record(
             || proof.reveal != late.reveal
             || proof.observed_at_height != late.noted_at_height
             || proof.observed_at_height > record.updated_at_height
+            || proof.observed_at_height >= context.epoch_end_height
             || window_position(context, schedule, proof.observed_at_height)
                 .is_none_or(|position| position <= schedule.reveal_end)
         {
@@ -2270,6 +2312,37 @@ mod tests {
     }
 
     #[test]
+    fn finalized_epoch_record_requires_exact_boundary_context_and_offender_partition() {
+        let keys = keys();
+        let committed = lifecycle_at(2, 2, None, Some(0), &keys)
+            .pending_records()
+            .pop()
+            .expect("authenticated commitment record");
+        let boundary_context = context(10, &keys);
+        let seal = lifecycle_at(10, 10, Some(committed), None, &keys)
+            .pending_records()
+            .pop()
+            .expect("finalized boundary seal");
+
+        validate_finalized_epoch_record(&boundary_context, &seal)
+            .expect("exact boundary context authenticates the final record");
+
+        let mut forged_partition = seal.clone();
+        forged_partition.committed_no_reveal.clear();
+        assert!(
+            validate_finalized_epoch_record(&boundary_context, &forged_partition).is_err(),
+            "a finality context must not authorize a rewritten non-reveal partition"
+        );
+
+        let mut non_boundary = boundary_context;
+        non_boundary.height = 9;
+        assert!(
+            validate_finalized_epoch_record(&non_boundary, &seal).is_err(),
+            "only the certified epoch-boundary context can authorize penalties"
+        );
+    }
+
+    #[test]
     fn committed_local_commit_recovers_and_emits_reveal_after_restart() {
         let keys = keys();
         let commit_height = lifecycle_at(2, 2, None, Some(0), &keys);
@@ -2357,6 +2430,26 @@ mod tests {
         let seal = boundary.pending_records().pop().expect("boundary seal");
         assert!(!seal.committed_no_reveal.contains(&0));
         assert!(!seal.no_participation.contains(&0));
+
+        let boundary_context = context(10, &keys);
+        let boundary_reveal = sign_reveal(
+            &keys[0],
+            &boundary_context,
+            VrfReveal {
+                epoch: 0,
+                reveal,
+                signer: 0,
+                vrf_proof: Vec::new(),
+                bls_sig: Vec::new(),
+            },
+        );
+        let mut boundary_without_late = lifecycle_at(10, 10, Some(committed), None, &keys);
+        assert_eq!(
+            boundary_without_late
+                .accept_reveal(boundary_reveal, Some(&boundary_context.roster[0].validator)),
+            V2VrfIngressOutcome::Rejected(V2VrfRejection::OutOfWindow),
+            "the boundary seal must be derived only from committed pre-state"
+        );
     }
 
     #[test]

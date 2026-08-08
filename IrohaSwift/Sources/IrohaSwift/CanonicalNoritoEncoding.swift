@@ -1111,7 +1111,9 @@ public enum CanonicalNorito {
             guard number.isFinite else {
                 throw CanonicalNoritoError.invalidMetadata("non-finite number")
             }
-            if number.rounded(.towardZero) == number && abs(number) <= maxSafeInteger {
+            if number == 0 && number.sign == .minus {
+                out.append("-0.0")
+            } else if number.rounded(.towardZero) == number && abs(number) <= maxSafeInteger {
                 out.append(String(format: "%.0f", number))
             } else {
                 out.append(String(number))
@@ -1127,7 +1129,7 @@ public enum CanonicalNorito {
             out.append("]")
         case .object(let object):
             out.append("{")
-            let keys = object.keys.sorted()
+            let keys = object.keys.sorted(by: unicodeScalarLexicographicallyPrecedes)
             for idx in keys.indices {
                 if idx > 0 { out.append(",") }
                 let key = keys[idx]
@@ -1151,6 +1153,10 @@ public enum CanonicalNorito {
                 out.append("\\\"")
             case "\\":
                 out.append("\\\\")
+            case "\u{08}":
+                out.append("\\b")
+            case "\u{0c}":
+                out.append("\\f")
             case "\n":
                 out.append("\\n")
             case "\r":
@@ -1173,9 +1179,27 @@ public enum CanonicalNorito {
     }
 
     private static func hexDigit(_ value: UInt32) -> String {
-        let digits = "0123456789ABCDEF"
+        let digits = "0123456789abcdef"
         let idx = digits.index(digits.startIndex, offsetBy: Int(value))
         return String(digits[idx])
+    }
+
+    private static func unicodeScalarLexicographicallyPrecedes(_ left: String,
+                                                               _ right: String) -> Bool {
+        var leftScalars = left.unicodeScalars.makeIterator()
+        var rightScalars = right.unicodeScalars.makeIterator()
+        while true {
+            switch (leftScalars.next(), rightScalars.next()) {
+            case let (.some(leftScalar), .some(rightScalar)):
+                if leftScalar.value != rightScalar.value {
+                    return leftScalar.value < rightScalar.value
+                }
+            case (.none, .some):
+                return true
+            case (.some, .none), (.none, .none):
+                return false
+            }
+        }
     }
 }
 

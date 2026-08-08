@@ -76,9 +76,10 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
-    asset::AssetDefinitionId,
+    asset::{AssetBalanceScope, AssetDefinitionId},
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
+    nexus::DataSpaceId,
     prelude::{AccountId, ChainId},
     privacy::{
         AnonymousPgcKOutOfNStatementV1, BootleLanternAttributeValueV1,
@@ -127,6 +128,42 @@ pub const PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1: usize = 10 * 10
 pub const PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1: usize = 256 * 1024;
 /// Exact maximum X5S1 proof returned by the profile-owned worker.
 pub const PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1: usize = ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1;
+
+/// Parse the sole canonical public spelling of a transparent balance scope.
+///
+/// `dataspace:0` is intentionally unrepresentable because dataspace zero is
+/// the universal coordinator route, not a restricted balance partition.
+#[must_use]
+pub(crate) fn parse_canonical_public_balance_scope_v1(value: &str) -> Option<AssetBalanceScope> {
+    if value == "global" {
+        return Some(AssetBalanceScope::Global);
+    }
+    let raw = value.strip_prefix("dataspace:")?;
+    if raw.is_empty()
+        || raw.len() > 20
+        || raw.starts_with('0')
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let dataspace = raw.parse::<u64>().ok()?;
+    if dataspace == DataSpaceId::UNIVERSAL.as_u64() {
+        return None;
+    }
+    Some(AssetBalanceScope::Dataspace(DataSpaceId::new(dataspace)))
+}
+
+/// Return the sole canonical public spelling of a valid balance scope.
+#[must_use]
+pub(crate) fn canonical_public_balance_scope_v1(scope: AssetBalanceScope) -> Option<String> {
+    match scope {
+        AssetBalanceScope::Global => Some("global".to_owned()),
+        AssetBalanceScope::Dataspace(dataspace) if dataspace != DataSpaceId::UNIVERSAL => {
+            Some(format!("dataspace:{}", dataspace.as_u64()))
+        }
+        AssetBalanceScope::Dataspace(_) => None,
+    }
+}
 
 /// Capability bit for hidden amounts.
 pub const PRIVACY_NATIVE_FEATURE_HIDE_AMOUNT_V1: u8 = 1;
@@ -471,6 +508,8 @@ pub struct FcmpMembershipPaymentActionRequestV1 {
 pub struct OrchardNoteActionRequestV1 {
     /// Public asset represented by the Orchard pool.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent reserve partition used by directional value bridges.
+    pub public_balance_scope: AssetBalanceScope,
     /// Governed Orchard pool.
     pub pool_id: PrivacyPoolIdV1,
     /// Exact retained anchor.
@@ -499,6 +538,8 @@ pub struct IvmPrivateNoteOutputRequestV1 {
 pub struct IvmPrivateNoteActionRequestV1 {
     /// Public asset manipulated by the program.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent reserve partition used by directional value bridges.
+    pub public_balance_scope: AssetBalanceScope,
     /// Governed private-note pool.
     pub pool_id: PrivacyPoolIdV1,
     /// Exact retained program-state root.
@@ -1898,6 +1939,11 @@ pub fn build_signed_orchard_note_action_v1(
     if request.anchor_epoch == 0 || request.expiry_height == 0 {
         return Err(PrivacyNativeActionErrorV1::at("orchard-epoch-or-expiry"));
     }
+    if canonical_public_balance_scope_v1(request.public_balance_scope).is_none() {
+        return Err(PrivacyNativeActionErrorV1::at(
+            "orchard-public-balance-scope",
+        ));
+    }
     let profile = compiled_profile(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)?;
     let prepared = prepare_orchard_bundle_v1(
         request.anchor.into_bytes(),
@@ -1913,6 +1959,7 @@ pub fn build_signed_orchard_note_action_v1(
     let mut statement = OrchardHalo2ActionsStatementV1 {
         context: statement_context(&context, profile),
         asset_definition_id: request.asset_definition_id,
+        public_balance_scope: request.public_balance_scope,
         pool_id: request.pool_id,
         anchor: request.anchor,
         anchor_epoch: request.anchor_epoch,
@@ -2126,6 +2173,9 @@ pub fn build_signed_ivm_private_note_action_v1(
     if request.root_epoch == 0 {
         return Err(PrivacyNativeActionErrorV1::at("ivm-root-epoch"));
     }
+    if canonical_public_balance_scope_v1(request.public_balance_scope).is_none() {
+        return Err(PrivacyNativeActionErrorV1::at("ivm-public-balance-scope"));
+    }
     let profile = compiled_profile(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?;
     let program_id = derive_private_program_id_v1(&request.program)
         .map_err(|_| PrivacyNativeActionErrorV1::at("ivm-program-id"))?;
@@ -2163,6 +2213,7 @@ pub fn build_signed_ivm_private_note_action_v1(
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
         context: statement_context(&context, profile),
         asset_definition_id: request.asset_definition_id,
+        public_balance_scope: request.public_balance_scope,
         pool_id: request.pool_id,
         program_id,
         action_digest: PrivacyActionDigestV1::new([0; 32]),
@@ -2816,6 +2867,64 @@ mod tests {
 
     fn bounded_x509_test_proof(encoded: Vec<u8>) -> ZkX509CredentialProofBytesV1 {
         ZkX509CredentialProofBytesV1::try_new(encoded).expect("bounded X509 test proof")
+    }
+
+    #[test]
+    fn public_balance_scope_literals_are_exact_and_never_alias_universal() {
+        for (literal, expected) in [
+            ("global", AssetBalanceScope::Global),
+            (
+                "dataspace:1",
+                AssetBalanceScope::Dataspace(DataSpaceId::new(1)),
+            ),
+            (
+                "dataspace:18446744073709551615",
+                AssetBalanceScope::Dataspace(DataSpaceId::new(u64::MAX)),
+            ),
+        ] {
+            let parsed = parse_canonical_public_balance_scope_v1(literal)
+                .expect("canonical scope must parse");
+            assert_eq!(parsed, expected);
+            assert_eq!(
+                canonical_public_balance_scope_v1(parsed).as_deref(),
+                Some(literal)
+            );
+        }
+
+        for hostile in [
+            "",
+            "Global",
+            "GLOBAL",
+            " global",
+            "global ",
+            "universal",
+            "dataspace:",
+            "dataspace:0",
+            "dataspace:00",
+            "dataspace:01",
+            "dataspace:+1",
+            "dataspace:-1",
+            "dataspace: 1",
+            "dataspace:1 ",
+            "dataspace:１",
+            "dataspace:18446744073709551616",
+            "dataspace:999999999999999999999",
+            "dataspace:universal",
+        ] {
+            assert_eq!(
+                parse_canonical_public_balance_scope_v1(hostile),
+                None,
+                "hostile scope {hostile:?} was accepted"
+            );
+        }
+        assert_eq!(
+            canonical_public_balance_scope_v1(
+                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL,)
+            ),
+            None
+        );
+        let oversized = format!("dataspace:{}", "9".repeat(4_096));
+        assert_eq!(parse_canonical_public_balance_scope_v1(&oversized), None);
     }
 
     #[test]

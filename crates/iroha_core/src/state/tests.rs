@@ -2744,8 +2744,8 @@ fn asset_domain_index_rebuild_uses_only_definition_ownership() {
 fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     use iroha_data_model::privacy::{
         PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyActiveLifecycleV1, PrivacyNamespaceScopeV1,
-        PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
+        PrivacyNamespaceV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
     };
 
     let domain_id = DomainId::try_new("orchard_snapshot", "universal").expect("domain id");
@@ -2771,14 +2771,16 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
             pool_id: PrivacyPoolIdV1::new([0xA1; 32]),
         }),
     );
-    let bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new([0xA2; 32]);
-    let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
-        bootstrap_digest,
+    let bootstrap = iroha_data_model::privacy::PrivacyOrchardPoolBootstrapV1::new(
+        PrivacyPoolIdV1::new([0xA1; 32]),
         asset_definition_id.clone(),
         iroha_data_model::asset::AssetBalanceScope::Global,
         reserve_account.clone(),
     )
-    .expect("canonical Orchard pool state");
+    .expect("canonical Orchard pool bootstrap");
+    let bootstrap_digest = bootstrap.digest().expect("Orchard bootstrap digest");
+    let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(bootstrap)
+        .expect("canonical Orchard pool state");
     let root = pool_state.root();
     let provenance =
         crate::privacy_state::PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, 1)
@@ -22128,6 +22130,7 @@ fn autoscale_transition_preserves_cross_lane_axt_replay_for_surviving_target_lan
         manifest_view_root: [0xC3; 32],
         expiry_slot: 100,
         max_clock_skew_ms: Some(0),
+        issuer_signature: None,
     };
     let replay_key = AxtHandleReplayKey::from_handle(&handle);
     let envelope = AxtEnvelopeRecord {
@@ -22158,7 +22161,7 @@ fn autoscale_transition_preserves_cross_lane_axt_replay_for_surviving_target_lan
     };
 
     let mut state_block = state.block(second.header());
-    state_block.apply_axt_envelope(&envelope, 1);
+    state_block.record_replayed_axt_envelope(&envelope, 1);
     assert!(
         state_block
             .world
@@ -48482,6 +48485,7 @@ fn axt_replay_ledger_survives_state_restart() {
             manifest_view_root: manifest_root,
             expiry_slot: 5,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         },
         intent: RemoteSpendIntent {
             asset_dsid: dsid,
@@ -48541,6 +48545,7 @@ fn axt_replay_ledger_survives_state_restart() {
         manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(),
         expiry_slot: handle_fragment.handle.expiry_slot,
         max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms,
+        issuer_signature: handle_fragment.handle.issuer_signature.clone(),
     };
     let ivm_intent = ivm::axt::RemoteSpendIntent {
         asset_dsid: handle_fragment.intent.asset_dsid,
@@ -48567,7 +48572,8 @@ fn axt_replay_ledger_survives_state_restart() {
             proofs: vec![proof_fragment.clone()],
             handles: vec![handle_fragment.clone()],
             commit_height: 1,
-        });
+        })
+        .expect("exact AXT sequence should stage");
         stx.apply();
         block.commit().expect("commit recorded envelope");
     }
@@ -48715,6 +48721,7 @@ fn axt_replay_ledger_prunes_after_retention_window() {
             manifest_view_root: manifest_root,
             expiry_slot: 8,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         },
         intent: RemoteSpendIntent {
             asset_dsid: dsid,
@@ -48774,6 +48781,7 @@ fn axt_replay_ledger_prunes_after_retention_window() {
         manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(),
         expiry_slot: handle_fragment.handle.expiry_slot,
         max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms,
+        issuer_signature: handle_fragment.handle.issuer_signature.clone(),
     };
     let ivm_intent = ivm::axt::RemoteSpendIntent {
         asset_dsid: handle_fragment.intent.asset_dsid,
@@ -48801,7 +48809,8 @@ fn axt_replay_ledger_prunes_after_retention_window() {
             proofs: vec![proof_fragment.clone()],
             handles: vec![handle_fragment.clone()],
             commit_height: 1,
-        });
+        })
+        .expect("exact AXT sequence should stage");
         stx.apply();
     }
     block
@@ -49315,7 +49324,7 @@ fn axt_policy_refresh_resets_minimums_on_lane_change() {
 
     assert_eq!(entry.target_lane, new_lane);
     assert_eq!(entry.min_handle_era, 1);
-    assert_eq!(entry.min_sub_nonce, 0);
+    assert_eq!(entry.min_sub_nonce, 1);
 }
 
 #[test]
@@ -49349,8 +49358,8 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
             remaining: Quantity::from(10_u64),
             per_use: Some(Quantity::from(10_u64)),
         },
-        handle_era: 4,
-        sub_nonce: 7,
+        handle_era: 1,
+        sub_nonce: 1,
         group_binding: GroupBinding {
             composability_group_id: vec![0; 32],
             epoch_id: 1,
@@ -49360,6 +49369,7 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
         manifest_view_root: [0xAA; 32],
         expiry_slot: 50,
         max_clock_skew_ms: Some(0),
+        issuer_signature: None,
     };
     let envelope = AxtEnvelopeRecord {
         binding,
@@ -49388,9 +49398,48 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
         commit_height: 1,
     };
 
+    for (label, invalid_handle) in [
+        (
+            "future era",
+            iroha_data_model::nexus::AssetHandle {
+                handle_era: u64::MAX,
+                ..handle.clone()
+            },
+        ),
+        (
+            "future counter",
+            iroha_data_model::nexus::AssetHandle {
+                sub_nonce: u64::MAX,
+                ..handle.clone()
+            },
+        ),
+        (
+            "stale counter",
+            iroha_data_model::nexus::AssetHandle {
+                sub_nonce: 0,
+                ..handle.clone()
+            },
+        ),
+    ] {
+        let mut invalid_envelope = envelope.clone();
+        invalid_envelope.handles[0].handle = invalid_handle;
+        let mut rejected = block.transaction();
+        assert!(
+            rejected.record_axt_envelope(invalid_envelope).is_err(),
+            "{label} must not advance committed policy"
+        );
+    }
+    assert_eq!(
+        block.world.axt_policies.get(&dsid).copied(),
+        Some(initial_policy),
+        "invalid AXT sequences must be mutation-free"
+    );
+
     {
         let mut rejected = block.transaction();
-        rejected.record_axt_envelope(envelope.clone());
+        rejected
+            .record_axt_envelope(envelope.clone())
+            .expect("exact AXT sequence should stage");
         let staged = rejected
             .world
             .axt_policies()
@@ -49418,7 +49467,8 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
     );
 
     let mut stx = block.transaction();
-    stx.record_axt_envelope(envelope);
+    stx.record_axt_envelope(envelope)
+        .expect("exact AXT sequence should stage");
     stx.apply();
 
     let updated = block
@@ -49434,6 +49484,103 @@ fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
         .first()
         .map_or(0, |entry| entry.policy.current_slot);
     assert_eq!(updated.current_slot, expected_slot);
+}
+
+#[test]
+fn kura_replay_records_handle_without_ratcheting_post_state_again() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::new(), kura, query_handle);
+    let dsid = DataSpaceId::new(34);
+    let lane = LaneId::new(2);
+    let manifest_root = [0xAC; 32];
+    state.set_axt_policy(
+        dsid,
+        AxtPolicyEntry {
+            manifest_root,
+            target_lane: lane,
+            min_handle_era: 1,
+            // This is the post-state after accepting handle counter 1.
+            min_sub_nonce: 2,
+            current_slot: 1,
+        },
+    );
+
+    let binding = AxtBinding::new([0xAD; 32]);
+    let handle = iroha_data_model::nexus::AssetHandle {
+        scope: vec!["transfer".into()],
+        subject: HandleSubject {
+            account: ALICE_ID.to_string(),
+            origin_dsid: Some(dsid),
+        },
+        budget: HandleBudget {
+            remaining: Quantity::from(10_u64),
+            per_use: Some(Quantity::from(10_u64)),
+        },
+        handle_era: 1,
+        sub_nonce: 1,
+        group_binding: GroupBinding {
+            composability_group_id: vec![0; 32],
+            epoch_id: 1,
+        },
+        target_lane: lane,
+        axt_binding: binding,
+        manifest_view_root: manifest_root,
+        expiry_slot: 50,
+        max_clock_skew_ms: Some(0),
+        issuer_signature: None,
+    };
+    let replay_key = AxtHandleReplayKey::from_handle(&handle);
+    let envelope = AxtEnvelopeRecord {
+        binding,
+        lane,
+        descriptor: AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        },
+        touches: Vec::new(),
+        proofs: Vec::new(),
+        handles: vec![AxtHandleFragment {
+            handle,
+            intent: RemoteSpendIntent {
+                asset_dsid: dsid,
+                op: SpendOp {
+                    kind: "transfer".into(),
+                    from: ALICE_ID.to_string(),
+                    to: BOB_ID.to_string(),
+                    amount: Some(Quantity::from(5_u64)),
+                },
+            },
+            proof: None,
+            amount: Some(Quantity::from(5_u64)),
+            amount_commitment: None,
+        }],
+        commit_height: 1,
+    };
+
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    let mut state_block = state.block(header);
+    state_block.apply_replayed_axt_envelopes(core::slice::from_ref(&envelope), 1);
+    state_block.apply_replayed_axt_envelopes(core::slice::from_ref(&envelope), 1);
+
+    assert_eq!(
+        state_block
+            .world
+            .axt_policies
+            .get(&dsid)
+            .expect("post-state policy")
+            .min_sub_nonce,
+        2,
+        "Kura replay and restart replay must not advance an advertised post-state twice"
+    );
+    assert!(
+        state_block
+            .world
+            .axt_replay_ledger
+            .get(&replay_key)
+            .is_some(),
+        "replay must still rebuild the replay ledger"
+    );
 }
 
 #[test]
@@ -49472,8 +49619,8 @@ fn axt_replay_ledger_records_and_prunes() {
             remaining: Quantity::from(10_u64),
             per_use: Some(Quantity::from(10_u64)),
         },
-        handle_era: 3,
-        sub_nonce: 7,
+        handle_era: 1,
+        sub_nonce: 1,
         group_binding: iroha_data_model::nexus::GroupBinding {
             composability_group_id: vec![0; 32],
             epoch_id: 1,
@@ -49483,6 +49630,7 @@ fn axt_replay_ledger_records_and_prunes() {
         manifest_view_root: [0xCC; 32],
         expiry_slot: 2,
         max_clock_skew_ms: Some(0),
+        issuer_signature: None,
     };
     let envelope = AxtEnvelopeRecord {
         binding,
@@ -49515,7 +49663,8 @@ fn axt_replay_ledger_records_and_prunes() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_lane_id = Some(lane);
-    stx.record_axt_envelope(envelope);
+    stx.record_axt_envelope(envelope)
+        .expect("first exact AXT counter should stage");
     stx.apply();
 
     let key = AxtHandleReplayKey::from_handle(&handle);
@@ -49531,7 +49680,7 @@ fn axt_replay_ledger_records_and_prunes() {
     // Advance to a far-future slot and ensure stale entries are pruned before recording.
     let new_handle = iroha_data_model::nexus::AssetHandle {
         expiry_slot: 20,
-        sub_nonce: 8,
+        sub_nonce: 2,
         ..handle
     };
     let future_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10, 0);
@@ -49563,7 +49712,8 @@ fn axt_replay_ledger_records_and_prunes() {
         touches: Vec::new(),
         proofs: Vec::new(),
         commit_height: 2,
-    });
+    })
+    .expect("next exact AXT counter should stage");
     stx.apply();
 
     assert!(
@@ -49755,6 +49905,7 @@ fn axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation() {
             manifest_view_root: manifest_root,
             expiry_slot: 5,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         },
         intent: RemoteSpendIntent {
             asset_dsid: dsid,
@@ -65670,9 +65821,15 @@ fn musubi_snapshot_rejects_dangling_reverse_index_tombstones() {
     let by_order =
         Storage::<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>::default();
     let by_provider = Storage::<MusubiProviderLocationKeyV1, ()>::default();
+    let archives = Storage::default();
+    let pin_manifests = Storage::default();
+    let replication_orders = Storage::default();
 
     let error = super::deserialize::validate_musubi_location_reverse_indices(
+        &archives,
         &locations,
+        &pin_manifests,
+        &replication_orders,
         &by_pin,
         &by_order,
         &by_provider,

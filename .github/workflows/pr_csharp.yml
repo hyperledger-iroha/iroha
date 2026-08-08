@@ -29,9 +29,9 @@ on:
       - "fixtures/kagemusha_recursive_spend_abi7/**"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
-      - "scripts/check_native_sdk_abi21_artifact.py"
+      - "scripts/check_native_sdk_abi22_artifact.py"
       - "scripts/package_csharp_native_artifacts.py"
-      - "scripts/tests/check_native_sdk_abi21_artifact_test.py"
+      - "scripts/tests/check_native_sdk_abi22_artifact_test.py"
       - "scripts/tests/package_csharp_native_artifacts_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
@@ -95,22 +95,22 @@ jobs:
           fi
           cargo build --locked --release -p connect_norito_bridge --target "$target"
 
-      - name: Authenticate and stage exact ABI-21 C# native bridge
+      - name: Authenticate and stage exact ABI-22 C# native bridge
         shell: bash
         run: |
           target="${{ matrix.target }}"
           library_name="${{ matrix.library_name }}"
           artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
-          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi21.json"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi22.json"
           mkdir -p "$(dirname "$artifact")"
           cp "target/$target/release/$library_name" "$artifact"
-          python scripts/check_native_sdk_abi21_artifact.py record \
+          python scripts/check_native_sdk_abi22_artifact.py record \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" \
             --sdk csharp \
             --target "$target"
-          python scripts/check_native_sdk_abi21_artifact.py verify \
+          python scripts/check_native_sdk_abi22_artifact.py verify \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"

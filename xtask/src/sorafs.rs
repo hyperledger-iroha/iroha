@@ -4398,6 +4398,7 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
         order_payload,
         issued_epoch: 20,
         deadline_epoch: 28,
+        musubi_archive: None,
     }
     .execute(&pin_fixture_alice(), &mut tx)
     .map_err(|err| format!("failed to issue replication order: {err}"))?;

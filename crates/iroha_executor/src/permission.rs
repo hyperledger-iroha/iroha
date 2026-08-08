@@ -166,6 +166,7 @@ declare_permissions! {
 
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanModifyAssetDefinitionMetadata},
+    iroha_executor_data_model::permission::asset_definition::{CanManageAssetDefinitionConfidentialPolicy},
     iroha_executor_data_model::permission::asset_definition::{CanManageAssetDefinitionAlias},
 
     iroha_executor_data_model::permission::asset::{CanMintAssetWithDefinition},
@@ -1397,7 +1398,8 @@ pub mod asset_definition {
 
     use iroha_executor_data_model::permission::asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
-        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+        CanManageAssetDefinitionConfidentialPolicy, CanModifyAssetDefinitionMetadata,
+        CanUnregisterAssetDefinition,
     };
 
     use super::*;
@@ -1556,6 +1558,20 @@ pub mod asset_definition {
         }
     }
 
+    impl ValidateGrantRevoke for CanManageAssetDefinitionConfidentialPolicy {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+    }
+
     impl ValidateGrantRevoke for CanManageAssetDefinitionAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             match &self.scope {
@@ -1604,6 +1620,7 @@ pub mod asset_definition {
     impl_froms!(
         CanUnregisterAssetDefinition,
         CanModifyAssetDefinitionMetadata,
+        CanManageAssetDefinitionConfidentialPolicy,
         iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
@@ -2444,7 +2461,10 @@ mod tests {
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
         },
         asset::{CanMintAssetToAccount, CanMintAssetWithDefinition},
-        asset_definition::{AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias},
+        asset_definition::{
+            AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
+            CanManageAssetDefinitionConfidentialPolicy,
+        },
         domain::CanRegisterDomain,
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
@@ -2625,6 +2645,44 @@ mod tests {
             &role_permissions,
             &role_ids,
             &token,
+        ));
+    }
+
+    #[test]
+    fn confidential_policy_permission_holder_can_delegate_only_the_exact_asset_definition() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let target = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("currency", "paynet").expect("asset domain"),
+            "pkr".parse().expect("asset name"),
+        );
+        let other = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("currency", "paynet").expect("asset domain"),
+            "usd".parse().expect("asset name"),
+        );
+        let exact = CanManageAssetDefinitionConfidentialPolicy {
+            asset_definition: target,
+        };
+        let sibling = CanManageAssetDefinitionConfidentialPolicy {
+            asset_definition: other,
+        };
+        let held: PermissionObject = exact.clone().into();
+        let exact_dispatched =
+            AnyPermission::try_from(&held).expect("confidential-policy permission must be typed");
+        let sibling_dispatched = AnyPermission::try_from(&PermissionObject::from(sibling))
+            .expect("sibling confidential-policy permission must be typed");
+        let previous = test_override::replace_permissions(vec![held]);
+
+        let exact_grant = exact_dispatched.validate_grant(&authority, &context, &Iroha);
+        let exact_revoke = exact_dispatched.validate_revoke(&authority, &context, &Iroha);
+        let sibling_grant = sibling_dispatched.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(exact_grant.is_ok());
+        assert!(exact_revoke.is_ok());
+        assert!(matches!(
+            sibling_grant,
+            Err(ValidationFail::NotPermitted(_))
         ));
     }
 

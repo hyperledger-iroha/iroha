@@ -2078,20 +2078,23 @@ instructions. Public settlement belongs exclusively to Kagemusha V4:
 - `RedeemKagemushaRecursiveV4` consumes the authenticated note and nullifier,
   allocates exact finalized-anchor drawdown, and transfers the public amount
   out of that escrow. It never mints against an escrow-backed note.
-- Native anonymous escrow may use the confidential transfer relation only
-  through sealed, purpose-bound Core capabilities. No
-  executor, IVM guest, Torii client, or SDK can construct a generic movement
-  instruction.
+- The transfer-v2 relation remains only as an internal recursive-proof
+  component selected by Kagemusha's protocol-global canonical verifier. No
+  executor, IVM guest, Torii client, SDK, or escrow protocol can construct a
+  generic movement instruction.
 
-Each registered confidential asset persists its verifier bindings, spent
-nullifier set, append-only commitments, the sole first-release depth-16
-`PoseidonPastaV1` tree profile, a fixed 16-slot frontier, current root, bounded
-root history, and bounded reorg checkpoints. Admission requires a recent root,
-canonical public-input shape, an active asset-bound verifier, bounded proof and
-output counts, and a valid proof before any ledger mutation. Batch append is
-atomic and costs `O(batch * depth)`; snapshot decode and admitted audit rebuild
-the compact projection and compare the root, frontier, history, and
-checkpoints.
+Each registered confidential asset persists optional `vk_shield` and
+`vk_unshield` role bindings, its spent nullifier set, append-only commitments,
+the sole first-release depth-16 `PoseidonPastaV1` tree profile, a fixed 16-slot
+frontier, current root, bounded root history, and bounded reorg checkpoints.
+`RegisterZkAsset` has no mode or boolean enablement fields: presence of the
+corresponding verifier-key binding is the sole role-enablement signal. It also
+has no asset-bound transfer verifier. Admission requires a recent root,
+canonical public-input shape, the active canonical verifier for the exact
+Kagemusha operation, bounded proof and output counts, and a valid proof before
+any ledger mutation. Batch append is atomic and costs `O(batch * depth)`;
+snapshot decode and admitted audit rebuild the compact projection and compare
+the root, frontier, history, and checkpoints.
 
 The underlying Halo2/IPA-over-Pasta top-up, transfer, full-redemption, and
 change-redemption relations remain implementation components. Their typed

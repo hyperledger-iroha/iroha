@@ -172,6 +172,7 @@ fn transfer_handle_fixture(
             manifest_view_root,
             expiry_slot: 200,
             max_clock_skew_ms: Some(5_000),
+            issuer_signature: None,
         },
         intent: RemoteSpendIntent {
             asset_dsid: dsid,
@@ -218,6 +219,7 @@ fn lock_handle_fixture(
             manifest_view_root,
             expiry_slot: 160,
             max_clock_skew_ms: Some(2_000),
+            issuer_signature: None,
         },
         intent: RemoteSpendIntent {
             asset_dsid: dsid,

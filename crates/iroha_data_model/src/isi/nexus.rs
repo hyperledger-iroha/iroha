@@ -542,14 +542,8 @@ mod tests {
     }
 
     fn sample_envelope(height: u64) -> LaneRelayEnvelope {
-        LaneRelayEnvelope::new(
-            sample_header(height),
-            None,
-            None,
-            sample_commitment(height),
-            0,
-        )
-        .expect("valid lane relay envelope")
+        LaneRelayEnvelope::new(sample_header(height), None, sample_commitment(height), 0)
+            .expect("valid lane relay envelope")
     }
 
     fn sample_proof_blob(seed: u8) -> ProofBlob {

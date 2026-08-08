@@ -930,10 +930,6 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
           metadata: { description: "Rose asset" },
           mintable: "Not",
           spec: { scale: 4 },
-          confidentialPolicy: {
-            vk_set_hash: "deadbeef",
-            pending_transition: { stage: "Queued" },
-          },
         },
         mint: {
           accountId: NEW_ACCOUNT_ID_INPUT,
@@ -956,13 +952,6 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
         spec: { scale: 4 },
         balance_scope_policy: "Global",
         owning_domain: null,
-        confidential_policy: {
-          mode: "TransparentOnly",
-          vk_set_hash: "deadbeef",
-          poseidon_params_id: null,
-          pedersen_params_id: null,
-          pending_transition: { stage: "Queued" },
-        },
       },
     },
   });
@@ -974,6 +963,29 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
       },
     },
   });
+});
+
+test("buildRegisterAssetDefinitionAndMintTransaction rejects confidential policy bypass", () => {
+  assert.throws(
+    () =>
+      buildRegisterAssetDefinitionAndMintTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          owningDomain: null,
+          balanceScopePolicy: "Global",
+          confidentialPolicy: { mode: "Convertible" },
+        },
+        mint: {
+          accountId: NEW_ACCOUNT_ID_INPUT,
+          quantity: "1",
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+    /cannot carry confidential policy/u,
+  );
 });
 
 test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () => {

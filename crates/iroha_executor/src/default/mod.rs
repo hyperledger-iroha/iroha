@@ -3337,6 +3337,9 @@ pub mod domain {
             AnyPermission::CanModifyAssetDefinitionMetadata(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
+            AnyPermission::CanManageAssetDefinitionConfidentialPolicy(permission) => {
+                asset_definition_matches_domain(&permission.asset_definition)
+            }
             AnyPermission::CanMintAssetWithDefinition(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
@@ -3709,6 +3712,7 @@ pub mod account {
             | AnyPermission::CanRegisterAccount(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
+            | AnyPermission::CanManageAssetDefinitionConfidentialPolicy(_)
             | AnyPermission::CanMintAssetWithDefinition(_)
             | AnyPermission::CanBurnAssetWithDefinition(_)
             | AnyPermission::CanTransferAssetWithDefinition(_)
@@ -3969,6 +3973,9 @@ pub mod asset_definition {
                 &permission.asset_definition == asset_definition_id
             }
             AnyPermission::CanModifyAssetDefinitionMetadata(permission) => {
+                &permission.asset_definition == asset_definition_id
+            }
+            AnyPermission::CanManageAssetDefinitionConfidentialPolicy(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
             AnyPermission::CanMintAssetWithDefinition(permission) => {
@@ -5533,6 +5540,7 @@ pub mod trigger {
             | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
+            | AnyPermission::CanManageAssetDefinitionConfidentialPolicy(_)
             | AnyPermission::CanModifyAssetMetadataWithDefinition(_)
             | AnyPermission::CanMintAssetWithDefinition(_)
             | AnyPermission::CanBurnAssetWithDefinition(_)

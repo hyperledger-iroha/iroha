@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PrivateKey, PublicKey, Signature};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
@@ -469,6 +469,45 @@ pub struct HandleSubject {
     pub origin_dsid: Option<DataSpaceId>,
 }
 
+/// Domain separator for V1 issuer signatures over asset handles.
+pub const AXT_HANDLE_ISSUER_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:axt:asset-handle-issuer:v1\0";
+
+/// Canonical V1 statement authenticated by an AXT capability issuer.
+///
+/// The issuer key is deliberately absent: admission resolves it from the
+/// active Space Directory manifest and its committed UAID account binding.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+pub struct AssetHandleIssuerPayloadV1 {
+    /// Pointer/syscall ABI version whose handle semantics are authenticated.
+    pub abi_version: u16,
+    /// Canonical chain/network identifier bytes supplied by the validating host.
+    pub chain_id: Vec<u8>,
+    /// Dataspace whose committed policy authorizes the handle.
+    pub dataspace: DataSpaceId,
+    /// Declared operations permitted by the capability.
+    pub scope: Vec<String>,
+    /// Capability subject.
+    pub subject: HandleSubject,
+    /// Capability budget.
+    pub budget: HandleBudget,
+    /// Exact active policy era.
+    pub handle_era: u64,
+    /// Exact next per-dataspace capability counter.
+    pub sub_nonce: u64,
+    /// Composability group and epoch.
+    pub group_binding: GroupBinding,
+    /// Authorized execution lane.
+    pub target_lane: LaneId,
+    /// Descriptor/AXT execution context.
+    pub axt_binding: AxtBinding,
+    /// Exact active manifest root.
+    pub manifest_view_root: [u8; 32],
+    /// Capability expiry slot.
+    pub expiry_slot: u64,
+    /// Requested clock-skew allowance, if any.
+    pub max_clock_skew_ms: Option<u32>,
+}
+
 /// Subset of the asset handle ticket encoded by dataspace capability issuers.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -499,6 +538,142 @@ pub struct AssetHandle {
     /// Optional wall-clock skew allowance enforced by the host.
     #[norito(default)]
     pub max_clock_skew_ms: Option<u32>,
+    /// Issuer signature over the canonical V1 handle statement.
+    ///
+    /// `None` is useful only while constructing a handle and is rejected by
+    /// every admission boundary.
+    pub issuer_signature: Option<Signature>,
+}
+
+impl AssetHandle {
+    /// Build the exact statement authenticated by the dataspace issuer.
+    #[must_use]
+    pub fn issuer_payload_v1(
+        &self,
+        chain_id: &[u8],
+        dataspace: DataSpaceId,
+    ) -> AssetHandleIssuerPayloadV1 {
+        AssetHandleIssuerPayloadV1 {
+            abi_version: 1,
+            chain_id: chain_id.to_vec(),
+            dataspace,
+            scope: self.scope.clone(),
+            subject: self.subject.clone(),
+            budget: self.budget.clone(),
+            handle_era: self.handle_era,
+            sub_nonce: self.sub_nonce,
+            group_binding: self.group_binding.clone(),
+            target_lane: self.target_lane,
+            axt_binding: self.axt_binding,
+            manifest_view_root: self.manifest_view_root,
+            expiry_slot: self.expiry_slot,
+            max_clock_skew_ms: self.max_clock_skew_ms,
+        }
+    }
+
+    /// Encode the domain-separated canonical V1 issuer-signature preimage.
+    #[must_use]
+    pub fn issuer_signature_preimage_v1(&self, chain_id: &[u8], dataspace: DataSpaceId) -> Vec<u8> {
+        let payload = self.issuer_payload_v1(chain_id, dataspace);
+        let encoded = encode_adaptive(&payload);
+        let mut preimage = Vec::with_capacity(
+            AXT_HANDLE_ISSUER_SIGNATURE_DOMAIN_V1
+                .len()
+                .saturating_add(encoded.len()),
+        );
+        preimage.extend_from_slice(AXT_HANDLE_ISSUER_SIGNATURE_DOMAIN_V1);
+        preimage.extend_from_slice(&encoded);
+        preimage
+    }
+
+    /// Authenticate this handle with the committed dataspace issuer's key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cryptographic signing error when the private key is invalid.
+    pub fn sign_by_issuer_v1(
+        &mut self,
+        chain_id: &[u8],
+        dataspace: DataSpaceId,
+        private_key: &PrivateKey,
+    ) -> Result<(), iroha_crypto::Error> {
+        let preimage = self.issuer_signature_preimage_v1(chain_id, dataspace);
+        self.issuer_signature = Some(Signature::try_new(private_key, &preimage)?);
+        Ok(())
+    }
+
+    /// Verify this handle against the issuer key resolved from committed policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`iroha_crypto::Error::BadSignature`] when authentication is
+    /// missing or the signature does not bind the exact handle statement.
+    pub fn verify_issuer_signature_v1(
+        &self,
+        chain_id: &[u8],
+        dataspace: DataSpaceId,
+        issuer: &PublicKey,
+    ) -> Result<(), iroha_crypto::Error> {
+        let signature = self
+            .issuer_signature
+            .as_ref()
+            .ok_or(iroha_crypto::Error::BadSignature)?;
+        signature.verify(
+            issuer,
+            &self.issuer_signature_preimage_v1(chain_id, dataspace),
+        )
+    }
+}
+
+/// Error returned when a handle does not represent the one allowed ratchet step.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum AxtHandleSequenceError {
+    /// The handle does not use the exact active manifest era.
+    #[error("handle era mismatch: expected {expected}, found {actual}")]
+    EraMismatch {
+        /// Active manifest era.
+        expected: u64,
+        /// Caller-supplied era.
+        actual: u64,
+    },
+    /// The handle does not use the exact next counter.
+    #[error("handle sub-nonce mismatch: expected {expected}, found {actual}")]
+    SubNonceMismatch {
+        /// Next admissible counter.
+        expected: u64,
+        /// Caller-supplied counter.
+        actual: u64,
+    },
+    /// The counter cannot advance without wrapping.
+    #[error("handle sub-nonce counter is exhausted")]
+    CounterExhausted,
+}
+
+/// Validate one exact era/counter transition and return the next counter.
+///
+/// This deliberately rejects both stale values and caller-selected future
+/// values. The active manifest controls the era; accepted handles advance only
+/// the per-dataspace counter by one.
+pub fn next_axt_handle_sub_nonce(
+    policy: &AxtPolicyEntry,
+    handle: &AssetHandle,
+) -> Result<u64, AxtHandleSequenceError> {
+    if handle.handle_era != policy.min_handle_era {
+        return Err(AxtHandleSequenceError::EraMismatch {
+            expected: policy.min_handle_era,
+            actual: handle.handle_era,
+        });
+    }
+    if handle.sub_nonce != policy.min_sub_nonce {
+        return Err(AxtHandleSequenceError::SubNonceMismatch {
+            expected: policy.min_sub_nonce,
+            actual: handle.sub_nonce,
+        });
+    }
+    handle
+        .sub_nonce
+        .checked_add(1)
+        .ok_or(AxtHandleSequenceError::CounterExhausted)
 }
 
 /// Simplified representation of spend operations.
@@ -667,9 +842,9 @@ pub struct AxtPolicyEntry {
     pub manifest_root: [u8; 32],
     /// Lane the handle must target.
     pub target_lane: LaneId,
-    /// Minimum allowed handle era.
+    /// Exact active handle era (the historical field name is retained internally).
     pub min_handle_era: u64,
-    /// Minimum allowed sub-nonce.
+    /// Exact next admissible sub-nonce (the historical field name is retained internally).
     pub min_sub_nonce: u64,
     /// Current slot used for expiry checks.
     pub current_slot: u64,
@@ -1163,6 +1338,7 @@ fn validate_write_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtVa
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::{decode_from_bytes, to_bytes};
 
     use super::*;
@@ -1176,6 +1352,161 @@ mod tests {
                 write: vec!["ledger".into()],
             }],
         }
+    }
+
+    fn sample_asset_handle() -> AssetHandle {
+        AssetHandle {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: "issuer-bound-account".into(),
+                origin_dsid: Some(DataSpaceId::new(7)),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(50_u64),
+                per_use: Some(Quantity::from(10_u64)),
+            },
+            handle_era: 9,
+            sub_nonce: 3,
+            group_binding: GroupBinding {
+                composability_group_id: b"settlement".to_vec(),
+                epoch_id: 4,
+            },
+            target_lane: LaneId::new(2),
+            axt_binding: AxtBinding::new([0xA5; 32]),
+            manifest_view_root: [0x5A; 32],
+            expiry_slot: 100,
+            max_clock_skew_ms: Some(25),
+            issuer_signature: None,
+        }
+    }
+
+    #[test]
+    fn asset_handle_issuer_signature_binds_every_policy_field_and_network() {
+        let issuer = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        let impostor = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+        let chain_id = b"iroha-test-chain";
+        let dsid = DataSpaceId::new(7);
+        let mut signed = sample_asset_handle();
+        signed
+            .sign_by_issuer_v1(chain_id, dsid, issuer.private_key())
+            .expect("sign fixture handle");
+
+        assert!(
+            signed
+                .verify_issuer_signature_v1(chain_id, dsid, issuer.public_key())
+                .is_ok()
+        );
+        assert!(
+            signed
+                .verify_issuer_signature_v1(chain_id, dsid, impostor.public_key())
+                .is_err(),
+            "a forged issuer must not authenticate"
+        );
+        assert!(
+            signed
+                .verify_issuer_signature_v1(b"other-chain", dsid, issuer.public_key())
+                .is_err(),
+            "signatures must not cross networks"
+        );
+        assert!(
+            signed
+                .verify_issuer_signature_v1(chain_id, DataSpaceId::new(8), issuer.public_key())
+                .is_err(),
+            "signatures must not cross dataspaces"
+        );
+
+        let mut altered = Vec::new();
+        let mut handle = signed.clone();
+        handle.scope.push("mint".into());
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.subject.account.push_str("-altered");
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.budget.remaining = Quantity::from(51_u64);
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.handle_era += 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.sub_nonce += 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.group_binding.epoch_id += 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.target_lane = LaneId::new(3);
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.axt_binding = AxtBinding::new([0xA4; 32]);
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.manifest_view_root[0] ^= 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.expiry_slot += 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.max_clock_skew_ms = Some(26);
+        altered.push(handle);
+
+        for altered in altered {
+            assert!(
+                altered
+                    .verify_issuer_signature_v1(chain_id, dsid, issuer.public_key())
+                    .is_err(),
+                "altering an issuer-bound handle field must invalidate the signature"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_sequence_accepts_only_exact_checked_progression() {
+        let mut policy = AxtPolicyEntry {
+            manifest_root: [0x5A; 32],
+            target_lane: LaneId::new(2),
+            min_handle_era: 9,
+            min_sub_nonce: 3,
+            current_slot: 1,
+        };
+        let mut handle = sample_asset_handle();
+
+        assert_eq!(next_axt_handle_sub_nonce(&policy, &handle), Ok(4));
+        policy.min_sub_nonce = 4;
+        handle.sub_nonce = 4;
+        assert_eq!(next_axt_handle_sub_nonce(&policy, &handle), Ok(5));
+
+        handle.sub_nonce = 3;
+        assert!(matches!(
+            next_axt_handle_sub_nonce(&policy, &handle),
+            Err(AxtHandleSequenceError::SubNonceMismatch {
+                expected: 4,
+                actual: 3
+            })
+        ));
+        handle.sub_nonce = u64::MAX;
+        assert!(matches!(
+            next_axt_handle_sub_nonce(&policy, &handle),
+            Err(AxtHandleSequenceError::SubNonceMismatch { .. })
+        ));
+        handle.sub_nonce = policy.min_sub_nonce;
+        handle.handle_era = u64::MAX;
+        assert!(matches!(
+            next_axt_handle_sub_nonce(&policy, &handle),
+            Err(AxtHandleSequenceError::EraMismatch {
+                expected: 9,
+                actual: u64::MAX
+            })
+        ));
+
+        policy.min_handle_era = u64::MAX;
+        policy.min_sub_nonce = u64::MAX;
+        handle.handle_era = u64::MAX;
+        handle.sub_nonce = u64::MAX;
+        assert_eq!(
+            next_axt_handle_sub_nonce(&policy, &handle),
+            Err(AxtHandleSequenceError::CounterExhausted)
+        );
     }
 
     fn sample_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
@@ -1489,6 +1820,7 @@ mod tests {
                     manifest_view_root: [1u8; 32],
                     expiry_slot: 10,
                     max_clock_skew_ms: Some(0),
+                    issuer_signature: None,
                 },
                 intent: RemoteSpendIntent {
                     asset_dsid: dsid,

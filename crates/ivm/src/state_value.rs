@@ -1866,6 +1866,7 @@ mod tests {
             manifest_view_root: vec![2; 32],
             expiry_slot: 1,
             max_clock_skew_ms: None,
+            issuer_signature: None,
         };
         assert_eq!(
             validate_pointer_payload(

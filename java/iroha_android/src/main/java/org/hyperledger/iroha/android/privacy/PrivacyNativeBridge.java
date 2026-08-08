@@ -13,7 +13,7 @@ import java.util.List;
  * from live Torii before submitting a privacy proof.
  */
 public final class PrivacyNativeBridge {
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 21;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 22;
   public static final int COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES = 256 * 1024;
   public static final int EXACT12_FIXTURE_BUNDLE_MAX_BYTES = 2 * 1024 * 1024;
   private static final String LIBRARY_NAME = "connect_norito_bridge";

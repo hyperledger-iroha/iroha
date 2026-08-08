@@ -435,17 +435,21 @@ public struct VerifyingKeyIdReference: Equatable, Sendable {
     }
 }
 
-public enum ZkAssetMode: UInt8, Sendable {
-    case hybrid = 0
+public enum RegisterZkAssetRequestError: Error, LocalizedError, Equatable, Sendable {
+    case shieldVerifierRequiresUnshieldVerifier
+
+    public var errorDescription: String? {
+        switch self {
+        case .shieldVerifierRequiresUnshieldVerifier:
+            return "A shield verifier requires an unshield verifier so shielded funds remain redeemable."
+        }
+    }
 }
 
 public struct RegisterZkAssetRequest {
     public let chainId: String
     public let authority: String
     public let assetDefinitionId: String
-    public let mode: ZkAssetMode
-    public let allowShield: Bool
-    public let allowUnshield: Bool
     public let unshieldVerifyingKey: VerifyingKeyIdReference?
     public let shieldVerifyingKey: VerifyingKeyIdReference?
     public let feePayment: FeePaymentIntent
@@ -454,19 +458,16 @@ public struct RegisterZkAssetRequest {
     public init(chainId: String,
                 authority: String,
                 assetDefinitionId: String,
-                mode: ZkAssetMode = .hybrid,
-                allowShield: Bool = true,
-                allowUnshield: Bool = true,
                 unshieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 shieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) {
+                ttlMs: UInt64? = 100_000) throws {
+        guard shieldVerifyingKey == nil || unshieldVerifyingKey != nil else {
+            throw RegisterZkAssetRequestError.shieldVerifierRequiresUnshieldVerifier
+        }
         self.chainId = chainId
         self.authority = authority
         self.assetDefinitionId = assetDefinitionId
-        self.mode = mode
-        self.allowShield = allowShield
-        self.allowUnshield = allowUnshield
         self.unshieldVerifyingKey = unshieldVerifyingKey
         self.shieldVerifyingKey = shieldVerifyingKey
         self.feePayment = feePayment

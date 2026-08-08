@@ -603,9 +603,11 @@ async fn signed_query_token_rotation_cannot_escape_origin_and_authority_budgets(
     app_mut.query_preauth_rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(2));
     app_mut.query_authority_rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(2));
     let signed_query = || {
-        QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
-            .with_authority(authority.clone())
-            .sign(&key_pair)
+        authorize_query_for_test(
+            QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion)),
+            authority.clone(),
+        )
+        .sign(&key_pair)
     };
 
     for token in ["attacker-token-1", "attacker-token-2"] {

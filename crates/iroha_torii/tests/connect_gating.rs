@@ -827,6 +827,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
@@ -1030,6 +1032,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
@@ -1114,6 +1118,7 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
 
     iroha_torii::Torii::new_with_handle(
         cfg.common.chain.clone(),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

@@ -210,26 +210,30 @@ public sealed class TransactionBuilder
         string orderId,
         ReadOnlySpan<byte> orderPayload,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
     {
         return AddInstruction(TransactionInstruction.IssueReplicationOrder(
             orderId,
             orderPayload,
             issuedEpoch,
-            deadlineEpoch));
+            deadlineEpoch,
+            musubiArchiveId));
     }
 
     public TransactionBuilder IssueReplicationOrder(
         string orderId,
         string orderPayloadBase64,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
     {
         return AddInstruction(TransactionInstruction.IssueReplicationOrder(
             orderId,
             orderPayloadBase64,
             issuedEpoch,
-            deadlineEpoch));
+            deadlineEpoch,
+            musubiArchiveId));
     }
 
     public TransactionBuilder CompleteReplicationOrder(

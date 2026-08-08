@@ -1,7 +1,10 @@
 //! Frozen ZK-AMS MKHE release parameters and fail-closed readiness gates.
 
 use super::{
-    BgvProfile, PlaintextModulus, ZkAmsMkheErrorV1, modulus_product_bit_len,
+    BgvProfile, PlaintextModulus, ZkAmsMkheErrorV1,
+    active_exact_binding::exact_binding_release_state_v1,
+    decryption::zk_ams_mkhe_decryption_resource_evidence_v1,
+    modulus_product_bit_len,
     noise::{ZkAmsMkheNoiseCertificateV1, derive_noise_certificate_v1},
     packing::zk_ams_t256_release_packing_certificate_v1,
     phase23::{
@@ -200,6 +203,10 @@ pub struct ZkAmsMkheReleaseManifestV1 {
     pub packing_certificate_digest: [u8; 32],
     /// Digest of Equations (6)--(11), finalization semantics, and closure bits.
     pub phase23_equation_certificate_digest: [u8; 32],
+    /// Digest of the exact small-witness active-binding audit and blocker set.
+    pub active_exact_binding_audit_digest: [u8; 32],
+    /// Digest of the exact split-decryption resource and transport evidence.
+    pub decryption_resource_evidence_digest: [u8; 32],
     /// Release-size execution KAT digest; zero means absent.
     pub release_kat_digest: [u8; 32],
 }
@@ -386,6 +393,8 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
     let noise = zk_ams_mkhe_noise_certificate_v1()?;
     let security = zk_ams_mkhe_security_candidate_v1()?;
     let security_certificate = zk_ams_mkhe_security_certificate_v1()?;
+    let active_exact_binding = exact_binding_release_state_v1(&profile)?;
+    let decryption = zk_ams_mkhe_decryption_resource_evidence_v1()?;
     let sampled_eta = i16::from(profile.error_eta);
     if modulus_bits != ZK_AMS_MKHE_CIPHERTEXT_MODULUS_BITS_V1
         || profile.error_eta != 2
@@ -449,6 +458,8 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
         resource_certificate_digest: zk_ams_mkhe_resource_certificate_digest_v1()?,
         packing_certificate_digest: zk_ams_t256_release_packing_certificate_v1()?.digest,
         phase23_equation_certificate_digest: zk_ams_phase23_equation_certificate_digest_v1(),
+        active_exact_binding_audit_digest: active_exact_binding.audit_digest,
+        decryption_resource_evidence_digest: decryption.evidence_digest,
         release_kat_digest: [0; 32],
     })
 }
@@ -508,6 +519,8 @@ fn release_manifest_digest_v1(manifest: ZkAmsMkheReleaseManifestV1) -> [u8; 32] 
     frame.extend_from_slice(&manifest.resource_certificate_digest);
     frame.extend_from_slice(&manifest.packing_certificate_digest);
     frame.extend_from_slice(&manifest.phase23_equation_certificate_digest);
+    frame.extend_from_slice(&manifest.active_exact_binding_audit_digest);
+    frame.extend_from_slice(&manifest.decryption_resource_evidence_digest);
     frame.extend_from_slice(&manifest.release_kat_digest);
     keccak256(&frame)
 }
@@ -520,6 +533,11 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
     let packing = zk_ams_t256_release_packing_certificate_v1()?;
     let phase23 = zk_ams_phase23_equation_certificate_v1();
     let security = zk_ams_mkhe_security_certificate_v1()?;
+    let active_exact_binding = exact_binding_release_state_v1(&release_profile_v1())?;
+    let decryption = zk_ams_mkhe_decryption_resource_evidence_v1()?;
+    let active_exact_binding_gate = active_exact_binding.release_available
+        && active_exact_binding.blocker_mask == 0
+        && active_exact_binding.audit_digest != [0; 32];
     Ok(ZkAmsMkheReadinessV1 {
         parameter_gate: true,
         security_gate: security.security_parameters_digest()
@@ -561,8 +579,12 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
         // Static wire formulas and bounded toy-profile KATs are not a
         // substitute for a pinned release-parameter positive/negative KAT.
         wire_gate: false,
-        malicious_party_gate: false,
-        decryption_share_gate: false,
+        malicious_party_gate: active_exact_binding_gate
+            && active_exact_binding.audit_digest == manifest.active_exact_binding_audit_digest,
+        decryption_share_gate: active_exact_binding_gate
+            && active_exact_binding.split_decryption_wide_relation_certified
+            && decryption.split_transport_ready
+            && decryption.evidence_digest == manifest.decryption_resource_evidence_digest,
         packing_gate: packing.profile_digest == release_profile_v1().digest()?
             && packing.ring_degree == manifest.ring_degree
             && packing.slot_count == manifest.slot_count
@@ -747,6 +769,14 @@ mod tests {
                 packing_certificate_digest: [0; 32],
                 ..manifest
             },
+            ZkAmsMkheReleaseManifestV1 {
+                active_exact_binding_audit_digest: [0; 32],
+                ..manifest
+            },
+            ZkAmsMkheReleaseManifestV1 {
+                decryption_resource_evidence_digest: [0; 32],
+                ..manifest
+            },
         ] {
             assert_ne!(release_manifest_digest_v1(changed), manifest_digest);
         }
@@ -801,5 +831,22 @@ mod tests {
             require_release_ready_v1(),
             Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
         );
+    }
+
+    #[test]
+    fn readiness_derives_active_and_decryption_gates_from_exact_audits() {
+        let profile = release_profile_v1();
+        let active = exact_binding_release_state_v1(&profile).expect("active exact-binding audit");
+        let decryption =
+            zk_ams_mkhe_decryption_resource_evidence_v1().expect("decryption resource evidence");
+        let readiness = zk_ams_mkhe_readiness_v1().expect("readiness");
+
+        assert_eq!(active.blocker_mask, 0b1111_1100);
+        assert_ne!(active.audit_digest, [0; 32]);
+        assert!(!active.split_decryption_wide_relation_certified);
+        assert!(!active.release_available);
+        assert!(decryption.split_transport_ready);
+        assert!(!readiness.malicious_party_gate);
+        assert!(!readiness.decryption_share_gate);
     }
 }

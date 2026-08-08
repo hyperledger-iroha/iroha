@@ -262,7 +262,7 @@ pub use errors::{
     AmxStage, CanonicalError, CanonicalErrorKind, CircuitBreakerKind, SettlementRouterOutage,
 };
 pub use executor::ValidationFail;
-pub use id::{ChainId, IdBox};
+pub use id::{ChainId, IdBox, NetworkId};
 pub use level::Level;
 pub use nexus::{DataSpaceId, LaneId};
 
@@ -368,7 +368,7 @@ pub mod prelude {
     };
 
     pub use super::{
-        ChainId, Decode, Encode, HasMetadata, IdBox, Identifiable, Level, Registrable,
+        ChainId, Decode, Encode, HasMetadata, IdBox, Identifiable, Level, NetworkId, Registrable,
         ValidationFail,
         account::prelude::*,
         alias_setup::*,

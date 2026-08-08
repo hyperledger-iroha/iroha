@@ -57,6 +57,7 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
     let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
     iroha_torii::Torii::new_with_handle(
         ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

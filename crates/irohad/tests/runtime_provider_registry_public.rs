@@ -1,13 +1,51 @@
-//! Public-surface checks for deployment-owned daemon provider registries.
+//! Public-surface checks for deployment-owned daemon providers and publication factories.
 
 use std::sync::Arc;
 
 use irohad::{
     BuildLine, IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1,
     IrohaRuntimeProviderRegistryErrorV1, IrohaRuntimeProviderRegistryV1, MainError, ReportResult,
+    musubi_publication_service::{
+        MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateIngressFutureV1,
+        MusubiPublicationPrivateServiceContextV1, MusubiPublicationPrivateServiceFactoryErrorV1,
+        MusubiPublicationPrivateServiceFactoryV1, MusubiPublicationPrivateServiceRunnerV1,
+    },
 };
 
 struct DeploymentRegistry;
+
+struct ExternalMusubiPublicationFactory;
+
+struct ExternalMusubiPublicationRunner;
+
+impl MusubiPublicationPrivateServiceRunnerV1 for ExternalMusubiPublicationRunner {
+    fn serve(
+        self: Box<Self>,
+        shutdown: iroha_futures::supervisor::ShutdownSignal,
+    ) -> MusubiPublicationPrivateIngressFutureV1 {
+        Box::pin(async move {
+            shutdown.receive().await;
+            Ok(())
+        })
+    }
+}
+
+impl MusubiPublicationPrivateServiceFactoryV1 for ExternalMusubiPublicationFactory {
+    fn build(
+        self: Box<Self>,
+        context: MusubiPublicationPrivateServiceContextV1,
+    ) -> Result<MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateServiceFactoryErrorV1>
+    {
+        let _chain_id = context.chain_id();
+        let _genesis_hash = context.genesis_block_hash();
+        let _state = context.state();
+        let _queue = context.queue();
+        let _sorafs_node = context.sorafs_node();
+        Ok(MusubiPublicationPrivateDeploymentV1::new(Box::new(
+            ExternalMusubiPublicationRunner,
+        )))
+    }
+}
 
 impl IrohaRuntimeProviderRegistryV1 for DeploymentRegistry {
     fn resolve(
@@ -105,6 +143,26 @@ fn external_crate_can_implement_registry_and_name_standard_launcher() {
 }
 
 #[test]
+fn external_crate_can_implement_factory_and_name_publication_launchers() {
+    let standalone_launcher: fn(
+        BuildLine,
+        Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
+    ) -> ReportResult<(), MainError> = irohad::run_with_musubi_publication;
+    let combined_launcher: fn(
+        BuildLine,
+        &dyn IrohaRuntimeProviderRegistryV1,
+        Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
+    ) -> ReportResult<(), MainError> =
+        irohad::run_with_runtime_provider_registry_and_musubi_publication;
+    let factory: Box<dyn MusubiPublicationPrivateServiceFactoryV1> =
+        Box::new(ExternalMusubiPublicationFactory);
+
+    let _ = standalone_launcher;
+    let _ = combined_launcher;
+    drop(factory);
+}
+
+#[test]
 fn checked_in_binaries_are_explicitly_adapter_disabled() {
     let source = include_str!("../src/bin/irohad.rs");
     let compact: String = source
@@ -113,6 +171,7 @@ fn checked_in_binaries_are_explicitly_adapter_disabled() {
         .collect();
     assert!(compact.contains("irohad::main_entry("));
     assert!(!compact.contains("run_with_runtime_provider_registry"));
+    assert!(!compact.contains("run_with_musubi_publication"));
 }
 
 #[test]

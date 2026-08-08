@@ -21,7 +21,7 @@ public sealed class PrivacyNativeTests
     [Fact]
     public void ExactClosedRegistryIsStable()
     {
-        Assert.Equal(21U, PrivacyNative.RequiredBridgeAbiVersion);
+        Assert.Equal(22U, PrivacyNative.RequiredBridgeAbiVersion);
         Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(PrivacyProtocolIdV1)));
         Assert.Equal(12, PrivacyProtocolsV1.All.Count);
         Assert.Equal(Expected, PrivacyProtocolsV1.All.Select(value => value.CanonicalLabel()));
@@ -215,7 +215,7 @@ public sealed class PrivacyNativeTests
                     Environment.GetEnvironmentVariable("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"),
                     "1",
                     StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with compiled-profile catalog symbols is required.");
+                "ABI-22 connect_norito_bridge with compiled-profile catalog symbols is required.");
             return;
         }
 
@@ -283,7 +283,7 @@ public sealed class PrivacyNativeTests
                         "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"),
                     "1",
                     StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with exact-12 fixture symbols is required.");
+                "ABI-22 connect_norito_bridge with exact-12 fixture symbols is required.");
             return;
         }
 

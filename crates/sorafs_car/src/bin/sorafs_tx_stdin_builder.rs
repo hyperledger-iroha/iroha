@@ -8,6 +8,7 @@ use iroha_data_model::{
         RegisterCapacityDeclaration,
     },
     metadata::Metadata,
+    musubi::ArchiveId,
     prelude::{InstructionBox, Name},
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
@@ -62,7 +63,8 @@ Subcommands:
 
 Options:
   capacity-declaration --summary=<path>
-  replication-order --summary=<path> --issued-epoch=<u64> --deadline-epoch=<u64>
+  replication-order --summary=<path> --issued-epoch=<u64> --deadline-epoch=<u64> \
+[--musubi-archive-id-hex=<64-lowercase-hex>]
   complete-order --order-id-hex=<64-hex> --provider-id-hex=<64-hex> --completion-epoch=<positive-u64> \
 --expected-owner=<account-id> --assignment-revision=<positive-u64> \
 --signer-policy-id-hex=<64-hex> --signer-policy-revision=<positive-u64> \
@@ -117,6 +119,7 @@ fn run_replication_order(args: impl Iterator<Item = String>) -> Result<(), Strin
     let mut summary_path = None;
     let mut issued_epoch = None;
     let mut deadline_epoch = None;
+    let mut musubi_archive = None;
 
     for arg in args {
         let (key, value) = split_option(&arg)?;
@@ -124,6 +127,11 @@ fn run_replication_order(args: impl Iterator<Item = String>) -> Result<(), Strin
             "--summary" => set_once(&mut summary_path, value.to_owned(), key)?,
             "--issued-epoch" => set_once(&mut issued_epoch, parse_u64(value, key)?, key)?,
             "--deadline-epoch" => set_once(&mut deadline_epoch, parse_u64(value, key)?, key)?,
+            "--musubi-archive-id-hex" => set_once(
+                &mut musubi_archive,
+                ArchiveId::new(parse_hex_32(value, "musubi_archive_id_hex")?),
+                key,
+            )?,
             _ => return Err(format!("unknown option `{key}`")),
         }
     }
@@ -149,6 +157,10 @@ fn run_replication_order(args: impl Iterator<Item = String>) -> Result<(), Strin
         issued_epoch,
         deadline_epoch,
     );
+    let instruction = match musubi_archive {
+        Some(archive_id) => instruction.for_musubi_archive(archive_id),
+        None => instruction,
+    };
 
     print_instruction_json(InstructionBox::from(instruction))
 }

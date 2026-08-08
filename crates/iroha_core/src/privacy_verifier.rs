@@ -2388,13 +2388,13 @@ mod tests {
             PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
             PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyJindoFieldElementV1,
             PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1,
-            PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
-            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapDigestV1,
-            PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-            PrivacyPoolNamespaceV1, PrivacyPqMaspPoolBootstrapV1,
-            PrivacyProofManagedPoolBootstrapV1, PrivacyProofSystemIdV1, PrivacyProofV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1,
-            PrivacyRootPublicationV1, PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
+            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+            PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcBootstrapProofDigestV1,
+            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyPqMaspPoolBootstrapV1, PrivacyProofManagedPoolBootstrapV1,
+            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
+            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootPublicationV1,
+            PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
             PrivacyStatementValidationError, PrivacyTransactionIntentDigestV1,
             PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
             PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaMdlDateV1,
@@ -3302,7 +3302,6 @@ mod tests {
                 .expect("reserve keypair");
             let snapshot = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
                 namespace,
-                PrivacyOrchardPoolBootstrapDigestV1::new([0xB8; 32]),
                 asset_definition_id.clone(),
                 AssetBalanceScope::Global,
                 AccountId::new(reserve_key.public_key().clone()),
@@ -5176,7 +5175,6 @@ mod tests {
         );
         let other_pool = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
             other_namespace,
-            PrivacyOrchardPoolBootstrapDigestV1::new([0xC2; 32]),
             fixture.snapshot.state().asset_definition_id().clone(),
             fixture.snapshot.state().public_balance_scope(),
             fixture.snapshot.state().reserve_account().clone(),
@@ -5191,7 +5189,6 @@ mod tests {
 
         let wrong_asset = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
             fixture.namespace,
-            PrivacyOrchardPoolBootstrapDigestV1::new([0xC3; 32]),
             AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("wrong_orchard_asset").expect("name"),
@@ -5205,6 +5202,20 @@ mod tests {
             verify_privacy_envelope_v1(&fixture.envelope, context),
             Err(PrivacyVerificationErrorV1::OrchardState(detail))
                 if detail.code == PrivacyOrchardStateFailureCodeV1::AssetMismatch
+        ));
+
+        let wrong_scope = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
+            fixture.namespace,
+            fixture.snapshot.state().asset_definition_id().clone(),
+            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
+            fixture.snapshot.state().reserve_account().clone(),
+        );
+        let mut context = fixture.verification_context();
+        context.orchard_state = Some(&wrong_scope);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::PublicBalanceScopeMismatch
         ));
 
         let mut stale_anchor = fixture.envelope.clone();
@@ -5577,6 +5588,32 @@ mod tests {
             ),
             Err(PrivacyVerificationErrorV1::IvmPrivateNoteState(detail))
                 if detail.code == PrivacyIvmPrivateNoteStateFailureCodeV1::AssetMismatch
+        ));
+
+        let wrong_scope =
+            PrivacyProofManagedPoolSnapshotV1::canonical_private_note_bootstrap_for_test(
+                PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
+                    PrivacyIvmPrivateNotePoolBootstrapV1 {
+                        pool_id: fixture.statement.pool_id,
+                        asset_definition_id: fixture.statement.asset_definition_id.clone(),
+                        public_balance_scope: AssetBalanceScope::Dataspace(
+                            iroha_data_model::nexus::DataSpaceId::new(7),
+                        ),
+                        reserve_account: fixture.reserve_account.clone(),
+                        program_id: fixture.statement.program_id,
+                        initial_note_commitments: vec![fixture.input_commitment],
+                    },
+                ),
+            );
+        assert!(matches!(
+            prepare_ivm_private_note_transition_v1(
+                &fixture.statement,
+                namespace,
+                Some(&wrong_scope),
+            ),
+            Err(PrivacyVerificationErrorV1::IvmPrivateNoteState(detail))
+                if detail.code
+                    == PrivacyIvmPrivateNoteStateFailureCodeV1::PublicBalanceScopeMismatch
         ));
 
         let mut invalid_key = fixture.statement.clone();

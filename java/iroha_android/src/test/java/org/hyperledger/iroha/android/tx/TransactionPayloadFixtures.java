@@ -435,13 +435,13 @@ final class TransactionPayloadFixtures {
 
     private static JsonValue jsonValue(final Object value) {
       if (value == null) {
-        return JsonValue.raw("null");
+        return JsonValue.nullValue();
       }
       if (value instanceof String) {
         return JsonValue.string((String) value);
       }
       if (value instanceof Number) {
-        return JsonValue.raw(value.toString());
+        return JsonValue.parse(value.toString());
       }
       if (value instanceof Boolean) {
         return JsonValue.bool((Boolean) value);

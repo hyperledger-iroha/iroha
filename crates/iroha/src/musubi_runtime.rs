@@ -4470,7 +4470,7 @@ fn remote_transport_error(
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -4496,6 +4496,20 @@ mod tests {
     };
     use norito::codec::{Decode as _, Encode as _};
     use sorafs_car::{CarVerifier, CarWriter, FileEntry, compute_por_root};
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_filesystem_owner_probe_reports_target_filesystem_owner() {
+        let root = tempfile::tempdir().expect("publication ownership probe root");
+        let expected_owner = std::fs::metadata(root.path())
+            .expect("publication ownership probe root metadata")
+            .uid();
+
+        let actual_owner = publication_filesystem_owner_probe(root.path())
+            .expect("probe publication filesystem owner");
+
+        assert_eq!(actual_owner, expected_owner);
+    }
 
     #[derive(Clone)]
     struct TestPublicationClock {
@@ -5818,6 +5832,7 @@ mod tests {
         let account = AccountId::new(key_pair.public_key().clone());
         let client = Client {
             chain: ChainId::from("musubi-runtime-test"),
+            network_id: crate::client::test_network_id(),
             torii_url: Url::parse("https://torii.example/").expect("Torii URL"),
             key_pair: key_pair.clone(),
             transaction_ttl: Some(Duration::from_secs(10)),

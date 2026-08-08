@@ -525,11 +525,7 @@
             .steps
             .push_back(Ok(RuntimeStep::Advanced(vec![
                 AdapterEffect::Broadcast(message.clone()),
-                AdapterEffect::ReportEquivocation {
-                    offender: fixture.context.roster[1].validator.clone(),
-                    round: fixture.manifest.round,
-                    kind: EquivocationKind::Vote,
-                },
+                equivocation(&fixture, 1),
                 AdapterEffect::ReportInvalidCertifiedBody {
                     subject: fixture.manifest.subject,
                     certificate: fixture.qc(wire::GlobalPhase::Prepare),
@@ -658,6 +654,17 @@
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote))
             };
         let canonical_share = signed_vote(fixture.subject, fixture.canonical_commitment, 3);
+        let wire::ConsensusMessageV2Payload::Vote(expected_first) = canonical_share.payload.clone()
+        else {
+            unreachable!("phase-vote fixture")
+        };
+        let conflicting_share =
+            signed_vote(conflicting_subject, conflicting_vote_commitment, 3);
+        let wire::ConsensusMessageV2Payload::Vote(expected_second) =
+            conflicting_share.payload.clone()
+        else {
+            unreachable!("phase-vote fixture")
+        };
         fixture
             .executor
             .enqueue_network(canonical_share.clone())
@@ -668,11 +675,7 @@
             .expect("an exact duplicate coalesces without another reducer owner");
         fixture
             .executor
-            .enqueue_network(signed_vote(
-                conflicting_subject,
-                conflicting_vote_commitment,
-                3,
-            ))
+            .enqueue_network(conflicting_share)
             .expect("authenticate conflicting signed evidence for reducer reporting");
         for _ in 0..16 {
             if matches!(
@@ -686,8 +689,13 @@
             }
         }
         assert_eq!(services.equivocations.len(), 1);
-        assert_eq!(services.equivocations[0].1, fixture.round);
-        assert_eq!(services.equivocations[0].2, EquivocationKind::Vote);
+        let wire::SumeragiV2Equivocation::PhaseVote { first, second } =
+            &services.equivocations[0]
+        else {
+            panic!("expected exact phase-vote equivocation evidence")
+        };
+        assert_eq!(first, &expected_first);
+        assert_eq!(second, &expected_second);
         assert!(
             fixture
                 .executor

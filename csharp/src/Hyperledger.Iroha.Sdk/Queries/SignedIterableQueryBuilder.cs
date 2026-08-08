@@ -10,6 +10,7 @@ public sealed class SignedIterableQueryBuilder
     private const byte SignedQueryVersion = 1;
     private const ulong MaxFetchSize = 10_000;
 
+    private readonly byte[] networkIdBytes;
     private RequestMode? requestMode;
     private ManagedIterableQueryKind? iterableQueryKind;
     private string? accountId;
@@ -23,12 +24,16 @@ public sealed class SignedIterableQueryBuilder
     private string? sortByMetadataKey;
     private bool descendingSort;
 
-    public SignedIterableQueryBuilder(string authorityAccountId)
+    public SignedIterableQueryBuilder(string authorityAccountId, string networkId)
     {
         AuthorityAccountId = NormalizeAccountId(authorityAccountId, nameof(authorityAccountId));
+        networkIdBytes = SignedQueryRequestContext.DecodeNetworkId(networkId, nameof(networkId));
+        NetworkId = networkId;
     }
 
     public string AuthorityAccountId { get; }
+
+    public string NetworkId { get; }
 
     public SignedIterableQueryBuilder FindDomains()
     {
@@ -254,6 +259,20 @@ public sealed class SignedIterableQueryBuilder
 
     public SignedQueryEnvelope BuildSigned(ReadOnlySpan<byte> privateKeySeed)
     {
+        var (creationTimeMilliseconds, nonce) = SignedQueryRequestContext.CreateFresh();
+        return BuildSigned(
+            privateKeySeed,
+            creationTimeMilliseconds,
+            SignedQueryRequestContext.DefaultTimeToLiveMilliseconds,
+            nonce);
+    }
+
+    public SignedQueryEnvelope BuildSigned(
+        ReadOnlySpan<byte> privateKeySeed,
+        ulong creationTimeMilliseconds,
+        ulong timeToLiveMilliseconds,
+        ReadOnlySpan<byte> nonce)
+    {
         if (!requestMode.HasValue)
         {
             throw new InvalidOperationException("Iterable queries must select a start or continue request before signing.");
@@ -262,7 +281,11 @@ public sealed class SignedIterableQueryBuilder
         var context = new TransactionEncodingContext(AuthorityAccountId);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
-        var payloadBytes = EncodeQueryRequestWithAuthority(context);
+        var payloadBytes = EncodeQueryRequestWithAuthority(
+            context,
+            creationTimeMilliseconds,
+            timeToLiveMilliseconds,
+            nonce);
         var payloadHash = IrohaHash.Hash(payloadBytes);
         var signatureBytes = Ed25519Signer.Sign(payloadHash, privateKeySeed);
 
@@ -278,12 +301,20 @@ public sealed class SignedIterableQueryBuilder
         return new SignedQueryEnvelope(versionedNoritoBytes, signedQueryBytes, payloadBytes, signatureBytes);
     }
 
-    private byte[] EncodeQueryRequestWithAuthority(TransactionEncodingContext context)
+    private byte[] EncodeQueryRequestWithAuthority(
+        TransactionEncodingContext context,
+        ulong creationTimeMilliseconds,
+        ulong timeToLiveMilliseconds,
+        ReadOnlySpan<byte> nonce)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeAccountId(AuthorityAccountId));
-        writer.WriteField(EncodeQueryRequest(context));
-        return writer.ToArray();
+        return SignedQueryRequestContext.EncodePayload(
+            context,
+            networkIdBytes,
+            AuthorityAccountId,
+            creationTimeMilliseconds,
+            timeToLiveMilliseconds,
+            nonce,
+            EncodeQueryRequest(context));
     }
 
     private byte[] EncodeQueryRequest(TransactionEncodingContext context)

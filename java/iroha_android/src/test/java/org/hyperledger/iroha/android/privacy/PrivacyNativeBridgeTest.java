@@ -66,7 +66,7 @@ public final class PrivacyNativeBridgeTest {
   }
 
   private static void exactClosedRegistryIsStable() {
-    assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 21;
+    assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 22;
     assert PrivacyNativeBridge.protocolsV1().size() == 12;
     for (int index = 0; index < EXPECTED.size(); index++) {
       final String label = EXPECTED.get(index);
@@ -239,7 +239,7 @@ public final class PrivacyNativeBridgeTest {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
     if ("1".equals(System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE")) && !available) {
       throw new AssertionError(
-          "ABI-21 connect_norito_bridge with compiled-profile catalog JNI exports is required");
+          "ABI-22 connect_norito_bridge with compiled-profile catalog JNI exports is required");
     }
     if (!available) {
       return;
@@ -296,7 +296,7 @@ public final class PrivacyNativeBridgeTest {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
     if ("1".equals(System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE")) && !available) {
       throw new AssertionError(
-          "ABI-21 connect_norito_bridge with exact-12 fixture JNI exports is required");
+          "ABI-22 connect_norito_bridge with exact-12 fixture JNI exports is required");
     }
     if (!available) {
       return;

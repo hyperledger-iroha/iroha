@@ -1463,6 +1463,7 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
 
     let _ = Torii::new_with_handle(
         ChainId::from("fused-privacy-preflight-test"),
+        signed_query_test_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

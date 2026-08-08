@@ -63,6 +63,9 @@ struct Args {
     torii_url: String,
     #[arg(long)]
     chain_id: String,
+    /// Exact genesis consensus-header hash of the target network.
+    #[arg(long)]
+    network_id: NetworkId,
     #[arg(long)]
     authority: String,
     /// Owner-held mode-0600 regular file containing one exact private-key
@@ -148,6 +151,7 @@ fn default_rollout_phase() -> SorafsRolloutPhase {
 fn make_client(
     torii_url: &str,
     chain_id: &str,
+    network_id: NetworkId,
     authority: AccountId,
     chain_discriminant: u16,
     key_pair: KeyPair,
@@ -159,6 +163,7 @@ fn make_client(
         chain: chain_id
             .parse::<ChainId>()
             .wrap_err("--chain-id must be canonical")?,
+        network_id,
         account: authority,
         account_chain_discriminant: chain_discriminant,
         key_pair,
@@ -1421,6 +1426,7 @@ fn main() -> Result<()> {
     let client = make_client(
         &args.torii_url,
         &args.chain_id,
+        args.network_id,
         authority.clone(),
         args.chain_discriminant,
         key_pair.clone(),

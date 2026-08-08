@@ -58,18 +58,18 @@ const ZK_AMS_MEMBERSHIP_FIXED_PROOF_SCALARS_V1: usize = 5;
 /// every function which accepts a secret blinding by value wraps and clears
 /// its own stack instance.  Owned witness vectors are cleared independently by
 /// the generalized-Bulletproof RAII containers.
-struct ZeroizingT256ScalarCopyV1(Scalar);
+pub(super) struct ZeroizingT256ScalarCopyV1(Scalar);
 
 impl ZeroizingT256ScalarCopyV1 {
-    fn new(value: Scalar) -> Self {
+    pub(super) fn new(value: Scalar) -> Self {
         Self(value)
     }
 
-    fn get(&self) -> Scalar {
+    pub(super) fn get(&self) -> Scalar {
         self.0
     }
 
-    fn as_ref(&self) -> &Scalar {
+    pub(super) fn as_ref(&self) -> &Scalar {
         &self.0
     }
 }
@@ -80,24 +80,56 @@ impl Drop for ZeroizingT256ScalarCopyV1 {
     }
 }
 
-/// Pre-move owner for a membership-witness scalar vector.
+/// Audited RAII owner for a vector of secret T256 scalars.
 ///
-/// The generalized proof types take raw vectors at their public construction
-/// boundary. This guard covers every allocation and validation path before
-/// that transfer, including unwind while a later vector is being built.
-struct ZeroizingT256ScalarVecV1(Vec<Scalar>);
+/// This is crate-private so other native T256 protocols reuse the same
+/// clearing boundary instead of growing protocol-local best-effort erasers.
+pub(super) struct ZeroizingT256ScalarVecV1(Vec<Scalar>);
 
 impl ZeroizingT256ScalarVecV1 {
-    fn with_capacity(capacity: usize) -> Self {
+    #[cfg(test)]
+    pub(super) fn new(values: Vec<Scalar>) -> Self {
+        Self(values)
+    }
+
+    pub(super) fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity(capacity))
     }
 
-    fn push(&mut self, value: Scalar) {
+    pub(super) fn push(&mut self, value: Scalar) {
         self.0.push(value);
     }
 
-    fn take(&mut self) -> Vec<Scalar> {
+    pub(super) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(super) fn as_slice(&self) -> &[Scalar] {
+        &self.0
+    }
+
+    pub(super) fn as_mut_slice(&mut self) -> &mut [Scalar] {
+        &mut self.0
+    }
+
+    /// Clear the removed suffix before reducing the logical vector length.
+    pub(super) fn clear_and_truncate(&mut self, len: usize) {
+        if len < self.0.len() {
+            for scalar in &mut self.0[len..] {
+                scalar.clear_secret();
+            }
+            self.0.truncate(len);
+        }
+    }
+
+    pub(super) fn take(&mut self) -> Vec<Scalar> {
         core::mem::take(&mut self.0)
+    }
+}
+
+impl core::fmt::Debug for ZeroizingT256ScalarVecV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZeroizingT256ScalarVecV1([REDACTED])")
     }
 }
 
@@ -106,7 +138,23 @@ impl Drop for ZeroizingT256ScalarVecV1 {
         for scalar in &mut self.0 {
             scalar.clear_secret();
         }
+        #[cfg(test)]
+        if self.0.iter().all(|scalar| scalar.is_zero()) {
+            ZEROIZING_T256_SCALAR_VEC_DROPS_V1.with(|drops| {
+                drops.set(drops.get().saturating_add(1));
+            });
+        }
     }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static ZEROIZING_T256_SCALAR_VEC_DROPS_V1: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn zeroizing_t256_scalar_vec_drop_count_v1() -> usize {
+    ZEROIZING_T256_SCALAR_VEC_DROPS_V1.with(core::cell::Cell::get)
 }
 
 /// Exact small-coefficient set certified by one membership proof.

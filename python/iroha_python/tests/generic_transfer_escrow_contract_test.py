@@ -172,10 +172,10 @@ def test_signed_role_scoped_escrow_queries_use_native_query_payloads(
 ) -> None:
     crypto = types.ModuleType(f"{PURE_PACKAGE}.crypto")
     crypto.build_find_asset_escrows_by_seller_query = (
-        lambda authority, private_key, seller: b"seller-query"
+        lambda authority, private_key, genesis_hash, seller: b"seller-query"
     )
     crypto.build_find_asset_escrows_by_buyer_query = (
-        lambda authority, private_key, buyer: b"buyer-query"
+        lambda authority, private_key, genesis_hash, buyer: b"buyer-query"
     )
     monkeypatch.setitem(sys.modules, f"{PURE_PACKAGE}.crypto", crypto)
     records = [
@@ -205,12 +205,14 @@ def test_signed_role_scoped_escrow_queries_use_native_query_payloads(
     seller_records = client.list_asset_escrows_by_seller(
         seller="seller@payments",
         authority="authority@payments",
+        canonical_genesis_hash=b"\x77" * 32,
         private_key_hex="11" * 32,
         status="Locked",
     )
     buyer_records = client.list_asset_escrows_by_buyer(
         buyer="buyer@payments",
         authority="authority@payments",
+        canonical_genesis_hash=b"\x77" * 32,
         private_key=b"\x11" * 32,
         escrow_id="escrow-released",
     )
@@ -232,13 +234,13 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
     result_hash = "33" * 32
     crypto = types.ModuleType(f"{PURE_PACKAGE}.crypto")
     crypto.build_find_committed_transaction_query = (
-        lambda authority, private_key, requested_hash: b"transaction-query"
+        lambda authority, private_key, genesis_hash, requested_hash: b"transaction-query"
     )
     crypto.committed_transaction_carrier_block_hash = (
         lambda requested_hash, response: block_hash
     )
     crypto.build_find_block_by_hash_query = (
-        lambda authority, private_key, requested_hash: b"block-query"
+        lambda authority, private_key, genesis_hash, requested_hash: b"block-query"
     )
     crypto.verify_committed_transaction_inclusion = (
         lambda requested_hash, transaction_response, block_response: {
@@ -275,6 +277,7 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
     verified = client.get_verified_committed_transaction(
         transaction_hash=transaction_hash,
         authority="authority@payments",
+        canonical_genesis_hash=b"\x77" * 32,
         private_key_hex="44" * 32,
     )
 

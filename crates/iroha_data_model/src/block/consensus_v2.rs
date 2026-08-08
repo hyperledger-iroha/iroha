@@ -8,7 +8,7 @@
 use core::fmt;
 use std::{collections::BTreeSet, vec::Vec};
 
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
 use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
@@ -18,7 +18,7 @@ use crate::{
     ChainId,
     account::AccountId,
     block::consensus::LaneBlockCommitment,
-    nexus::{DataSpaceId, LaneId, PublicLaneValidatorRecord},
+    nexus::{DataSpaceId, LaneFinalityStatement, LaneId, PublicLaneValidatorRecord},
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
@@ -92,6 +92,13 @@ pub const NATIVE_AMX_APPLICATION_MANIFEST_VERSION: u16 = 1;
 /// representable by the wire-level `u32` field.
 #[allow(clippy::cast_possible_truncation)]
 pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: u32 =
+    crate::nexus::MAX_ACTIVE_EXECUTION_LANES as u32;
+/// Maximum lane-finality statements committed by one global block.
+///
+/// A canonical execution emits at most one statement per active lane route,
+/// and the active-lane protocol bound is fixed at 1,024.
+#[allow(clippy::cast_possible_truncation)]
+pub const MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK: u32 =
     crate::nexus::MAX_ACTIVE_EXECUTION_LANES as u32;
 /// Maximum ordered source/result members in one participant application leaf.
 pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_MEMBERS: usize = 4_096;
@@ -953,6 +960,14 @@ pub struct ExecutionCommitment {
     pub native_amx_application_manifest_root: Hash,
     /// Number of leaves committed by `native_amx_application_manifest_root`.
     pub native_amx_application_manifest_count: u32,
+    /// Exact root and leaf count of canonical post-execution lane effects.
+    ///
+    /// Absence is canonical only when the result-bearing block contains no
+    /// lane-finality statements. A present commitment is derived from the
+    /// executed block by validators; it is never supplied by relay callers.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lane_finality_manifest: Option<MerkleTreeCommitment<LaneFinalityStatement>>,
     /// Hash of the canonical result-bearing block wire produced by deterministic execution.
     pub executed_block_wire_hash: Hash,
 }
@@ -975,6 +990,7 @@ impl ExecutionCommitment {
             native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
             native_amx_application_manifest_count: 0,
+            lane_finality_manifest: None,
             executed_block_wire_hash,
         }
     }
@@ -1028,6 +1044,42 @@ impl ExecutionCommitment {
         native_amx_application_manifest_count: u32,
         executed_block_wire_hash: Hash,
     ) -> Result<Self, ValidationError> {
+        Self::new_with_manifests(
+            parent_state_root,
+            post_state_root,
+            ordinary_writes_root,
+            topup_anchor_root,
+            topup_anchor_count,
+            native_amx_application_manifest_version,
+            native_amx_application_manifest_root,
+            native_amx_application_manifest_count,
+            None,
+            executed_block_wire_hash,
+        )
+    }
+
+    /// Construct a commitment with explicit Native AMX and lane-finality manifests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the state-transition projection or either bounded
+    /// manifest commitment is non-canonical.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor mirrors the canonical execution-commitment wire fields"
+    )]
+    pub fn new_with_manifests(
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        ordinary_writes_root: Hash,
+        topup_anchor_root: Option<Hash>,
+        topup_anchor_count: u32,
+        native_amx_application_manifest_version: u16,
+        native_amx_application_manifest_root: Hash,
+        native_amx_application_manifest_count: u32,
+        lane_finality_manifest: Option<MerkleTreeCommitment<LaneFinalityStatement>>,
+        executed_block_wire_hash: Hash,
+    ) -> Result<Self, ValidationError> {
         let commitment = Self {
             parent_state_root,
             post_state_root,
@@ -1037,6 +1089,7 @@ impl ExecutionCommitment {
             native_amx_application_manifest_version,
             native_amx_application_manifest_root,
             native_amx_application_manifest_count,
+            lane_finality_manifest,
             executed_block_wire_hash,
         };
         commitment.validate()?;
@@ -1071,16 +1124,22 @@ impl ExecutionCommitment {
         }
         let empty_root = native_amx_application_manifest_empty_root();
         match self.native_amx_application_manifest_count {
-            0 if self.native_amx_application_manifest_root == empty_root => Ok(()),
-            0 => Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment),
+            0 if self.native_amx_application_manifest_root == empty_root => {}
+            0 => return Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment),
             count if count > MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES => {
-                Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves)
+                return Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves);
             }
             _ if self.native_amx_application_manifest_root == empty_root => {
-                Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment)
+                return Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment);
             }
-            _ => Ok(()),
+            _ => {}
         }
+        if self.lane_finality_manifest.is_some_and(|commitment| {
+            commitment.leaf_count().get() > u64::from(MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK)
+        }) {
+            return Err(ValidationError::TooManyLaneFinalityStatements);
+        }
+        Ok(())
     }
 
     /// Derive the canonical combined post-state root for a non-empty top-up tree.
@@ -3842,6 +3901,8 @@ pub enum ValidationError {
     InvalidNativeAmxApplicationManifestCommitment,
     /// A Native AMX application manifest exceeds the route-leaf bound.
     TooManyNativeAmxApplicationManifestLeaves,
+    /// A lane-finality manifest exceeds the active-lane protocol bound.
+    TooManyLaneFinalityStatements,
     /// A Native AMX application leaf carries an invalid route or block identity.
     InvalidNativeAmxApplicationManifestLeaf,
     /// A Native AMX application leaf carries malformed ordered membership.
@@ -4016,6 +4077,9 @@ impl fmt::Display for ValidationError {
             }
             Self::TooManyNativeAmxApplicationManifestLeaves => {
                 f.write_str("Native AMX application manifest exceeds the route-leaf limit")
+            }
+            Self::TooManyLaneFinalityStatements => {
+                f.write_str("lane-finality manifest exceeds the active-lane limit")
             }
             Self::InvalidNativeAmxApplicationManifestLeaf => {
                 f.write_str("Native AMX application manifest leaf identity is malformed")
@@ -5033,6 +5097,7 @@ mod tests {
                 native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
                 native_amx_application_manifest_count: 0,
+                lane_finality_manifest: None,
                 executed_block_wire_hash: Hash::new(b"executed block wire"),
             },
             signers: vec![0, 1, 2],

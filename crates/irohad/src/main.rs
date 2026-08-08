@@ -9021,7 +9021,7 @@ impl Iroha {
     /// publication, acknowledgement, and witness adapters must be supplied by
     /// an injecting launcher; enabling the dependent path without one fails
     /// closed. A private Musubi publication runner is likewise available only
-    /// through explicit deployment injection and joins this node's supervisor.
+    /// through an explicitly injected late-bound factory and joins this node's supervisor.
     /// The reputation queue submitter is a separately injected deployment
     /// boundary. The Torii proxy bridge signer remains a separate native node
     /// role. Any configured signed Governance DAG producer requires a sealed
@@ -10987,6 +10987,7 @@ impl Iroha {
                 provider_ingest_config,
                 sorafs_provider_ingest_runtime::ProviderIngestRuntimeStartArgsV1::new(
                     config.common.chain.clone(),
+                    *config.genesis.expected_hash.as_ref(),
                     Arc::clone(&state),
                     Arc::clone(&queue),
                     sorafs_node.clone(),
@@ -11565,6 +11566,7 @@ impl Iroha {
         }
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
+            NetworkId::from_genesis_hash(config.genesis.expected_hash),
             kiso.clone(),
             config.torii,
             queue,
@@ -14849,37 +14851,38 @@ pub fn run_with_runtime_provider_registry(
     run_main(build_line, Some(registry), None)
 }
 
-/// Run the standard CLI launcher with a deployment-owned private Musubi publication service.
+/// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
-/// The caller must assemble the complete private HTTPS runner, including its durable clock and
-/// journal, receipt signer, and admitted SoraFS backends, before invoking this function. The
-/// launcher transfers that opaque deployment into the daemon supervisor without requiring an
-/// unrelated runtime-provider registry. It never exposes the private routes through Torii or
-/// reads service credentials from argv or node configuration. An unexpected private-runner exit
-/// is fatal to the same supervisor that owns the node.
+/// The caller supplies a one-shot factory which receives exact daemon-owned finalized-state,
+/// transaction-queue, and SoraFS handles only after trusted startup replay. The factory must
+/// assemble the complete private HTTPS runner, including its durable clock and journal, receipt
+/// signer, and admitted SoraFS backends. The launcher never exposes the private routes through
+/// Torii or reads service credentials from argv or node configuration. An unexpected
+/// private-runner exit is fatal to the same supervisor that owns the node.
 ///
 /// # Errors
 ///
 /// Returns a launcher error if configuration, subsystem startup, or supervised execution fails.
 pub fn run_with_musubi_publication(
     default_build_line: BuildLine,
-    deployment: musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+    factory: Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
 ) -> ReportResult<(), MainError> {
     let build_line = resolve_build_line_from_env(
         env::var(BUILD_LINE_ENV).ok(),
         default_build_line.daemon_bin(),
     );
-    run_main(build_line, None, Some(deployment))
+    run_main(build_line, None, Some(factory))
 }
 
 /// Run the standard CLI launcher with deployment-owned runtime providers and a private Musubi
-/// publication service.
+/// publication factory.
 ///
-/// The caller must assemble the complete private HTTPS runner, including its durable clock and
-/// journal, receipt signer, and admitted SoraFS backends, before invoking this function. The
-/// launcher only transfers that opaque deployment into the daemon supervisor; it never exposes
-/// the private routes through Torii or reads service credentials from argv or node configuration.
-/// An unexpected private-runner exit is fatal to the same supervisor that owns the node.
+/// The one-shot factory receives exact daemon-owned finalized-state, transaction-queue, and
+/// SoraFS handles only after trusted startup replay. It must assemble the complete private HTTPS
+/// runner and retain every credential inside deployment-owned adapters. The launcher never
+/// exposes the private routes through Torii or reads service credentials from argv or node
+/// configuration. An unexpected private-runner exit is fatal to the same supervisor that owns
+/// the node.
 ///
 /// # Errors
 ///
@@ -14888,13 +14891,13 @@ pub fn run_with_musubi_publication(
 pub fn run_with_runtime_provider_registry_and_musubi_publication(
     default_build_line: BuildLine,
     registry: &dyn IrohaRuntimeProviderRegistryV1,
-    deployment: musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+    factory: Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
 ) -> ReportResult<(), MainError> {
     let build_line = resolve_build_line_from_env(
         env::var(BUILD_LINE_ENV).ok(),
         default_build_line.daemon_bin(),
     );
-    run_main(build_line, Some(registry), Some(deployment))
+    run_main(build_line, Some(registry), Some(factory))
 }
 
 fn parse_fastpq_execution_mode(value: &str) -> Result<FastpqExecutionMode, String> {
@@ -15138,8 +15141,8 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
 fn run_main(
     build_line: BuildLine,
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
-    musubi_publication_deployment: Option<
-        musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+    musubi_publication_factory: Option<
+        Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
     >,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
@@ -15296,7 +15299,7 @@ fn run_main(
         config,
         genesis,
         runtime_deps,
-        musubi_publication_deployment,
+        musubi_publication_factory,
     ));
     rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
     result
@@ -16948,8 +16951,8 @@ async fn run_node(
     config: Config,
     genesis: Option<GenesisBlock>,
     runtime_deps: IrohaRuntimeDeps,
-    musubi_publication_deployment: Option<
-        musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+    musubi_publication_factory: Option<
+        Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
     >,
 ) -> ReportResult<(), MainError> {
     let logger = iroha_logger::init_global(config.logger.clone()).map_err(|err| {
@@ -17012,7 +17015,7 @@ async fn run_node(
         logger,
         shutdown_on_panic,
         runtime_deps,
-        musubi_publication_deployment,
+        musubi_publication_factory,
     );
     let (_iroha, supervisor_fut) = Box::pin(start)
         .await
@@ -17746,15 +17749,15 @@ mod tests {
         );
         assert!(
             run_main_source.contains(
-                "rt.block_on(run_node(config,genesis,runtime_deps,musubi_publication_deployment))"
+                "rt.block_on(run_node(config,genesis,runtime_deps,musubi_publication_factory))"
             ),
-            "standard CLI startup must forward the resolved dependency set and private publication deployment"
+            "standard CLI startup must forward the resolved dependency set and private publication factory"
         );
         assert!(
             run_node_source.contains(
-                "Iroha::start_with_runtime_deps(config,genesis,logger,shutdown_on_panic,runtime_deps,musubi_publication_deployment)"
+                "Iroha::start_with_runtime_deps(config,genesis,logger,shutdown_on_panic,runtime_deps,musubi_publication_factory)"
             ),
-            "daemon startup must consume the resolved dependency set and private publication deployment"
+            "daemon startup must consume the resolved dependency set and private publication factory"
         );
         assert!(
             !run_main_source
@@ -17780,7 +17783,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_musubi_private_deployment_is_threaded_and_supervised_fail_closed() {
+    fn explicit_musubi_private_factory_is_late_bound_and_supervised_fail_closed() {
         let compact_source: String = include_str!("main.rs")
             .chars()
             .filter(|character| !character.is_whitespace())
@@ -17795,11 +17798,11 @@ mod tests {
             "the existing custom registry launcher must preserve fail-closed publication defaults"
         );
         assert!(
-            compact_source.contains("run_main(build_line,None,Some(deployment))"),
+            compact_source.contains("run_main(build_line,None,Some(factory))"),
             "the standalone publication launcher must not require an unrelated provider registry"
         );
         assert!(
-            compact_source.contains("run_main(build_line,Some(registry),Some(deployment))"),
+            compact_source.contains("run_main(build_line,Some(registry),Some(factory))"),
             "the combined custom launcher must inject both deployment-owned dependencies"
         );
 
@@ -17810,14 +17813,25 @@ mod tests {
             .split_once("fnvalidate_membership_snapshot_against_live_peers(")
             .expect("start_with_runtime_deps source boundary")
             .0;
+        let sorafs_node_ready = startup_source
+            .find("sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(")
+            .expect("SoraFS node construction");
+        let publication_context = startup_source
+            .find(
+                "musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(config.common.chain.clone(),*config.genesis.expected_hash.as_ref(),Arc::clone(&state),Arc::clone(&queue),sorafs_node.clone())",
+            )
+            .expect("private publication context construction");
+        let torii_runtime_deps = startup_source
+            .find("letruntime_deps=iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)")
+            .expect("Torii runtime dependency construction");
         let signal_setup = startup_source
             .find("supervisor.setup_shutdown_on_os_signals()")
             .expect("OS signal setup");
         let publication_start = startup_source
             .find(
-                "musubi_publication_service::start_injected_musubi_publication_private_service_v1(musubi_publication_deployment,supervisor.shutdown_signal())",
+                "musubi_publication_service::build_and_start_injected_musubi_publication_private_service_v1(musubi_publication_factory,musubi_publication_context,supervisor.shutdown_signal())",
             )
-            .expect("injected publication service startup");
+            .expect("late-bound publication service startup");
         let publication_monitor = startup_source
             .find("ifletSome(child)=publication_child{supervisor.monitor(child);}")
             .expect("publication child supervision");
@@ -17825,10 +17839,13 @@ mod tests {
             .find("supervisor.shutdown_on_external_signal(shutdown_signal)")
             .expect("external shutdown signal hookup");
         assert!(
-            signal_setup < publication_start
+            sorafs_node_ready < publication_context
+                && publication_context < torii_runtime_deps
+                && torii_runtime_deps < signal_setup
+                && signal_setup < publication_start
                 && publication_start < publication_monitor
                 && publication_monitor < external_signal,
-            "the private runner must start only after fallible signal setup and join the node supervisor"
+            "the private factory must receive ready daemon handles after replay, start only after fallible signal setup, and join the node supervisor"
         );
     }
 

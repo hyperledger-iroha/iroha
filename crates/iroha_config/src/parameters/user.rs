@@ -1239,6 +1239,7 @@ impl Root {
         zk.reorg_depth_bound = confidential.reorg_depth_bound;
         zk.policy_transition_delay_blocks = confidential.policy_transition_delay_blocks;
         zk.policy_transition_window_blocks = confidential.policy_transition_window_blocks;
+        zk.policy_transition_max_per_height = confidential.policy_transition_max_per_height;
         zk.tree_roots_history_len = confidential.tree_roots_history_len;
         zk.tree_frontier_checkpoint_interval = confidential.tree_frontier_checkpoint_interval;
         zk.registry_max_vk_entries = confidential.registry_max_vk_entries;
@@ -4020,6 +4021,8 @@ impl Zk {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
@@ -8107,6 +8110,9 @@ pub struct Confidential {
     /// Grace window (in blocks) around policy activation for conversions.
     #[config(default = "defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS")]
     pub policy_transition_window_blocks: u64,
+    /// Maximum confidential-policy transitions that may share one effective height.
+    #[config(default = "defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT")]
+    pub policy_transition_max_per_height: NonZeroU32,
     /// Non-zero commitment tree root history length to retain.
     #[config(default = "defaults::confidential::TREE_ROOTS_HISTORY_LEN")]
     pub tree_roots_history_len: NonZeroUsize,
@@ -8347,6 +8353,8 @@ impl Default for Confidential {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
@@ -8378,6 +8386,7 @@ impl Confidential {
             reorg_depth_bound: self.reorg_depth_bound,
             policy_transition_delay_blocks: self.policy_transition_delay_blocks,
             policy_transition_window_blocks: self.policy_transition_window_blocks,
+            policy_transition_max_per_height: self.policy_transition_max_per_height,
             tree_roots_history_len: self.tree_roots_history_len,
             tree_frontier_checkpoint_interval: self.tree_frontier_checkpoint_interval,
             registry_max_vk_entries: self.registry_max_vk_entries,
@@ -14925,6 +14934,38 @@ impl Torii {
             &self.transport.norito_rpc.mtls_trusted_proxy_cidrs,
             false,
         );
+        let http_transport = &self.transport.http;
+        if http_transport.max_connections_per_ip > http_transport.max_connections {
+            emit_torii_config_error(
+                emitter,
+                "torii.transport.http.max_connections_per_ip must not exceed max_connections",
+            );
+        }
+        if http_transport.header_read_timeout_ms.get().is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.transport.http.header_read_timeout_ms must be greater than zero",
+            );
+        }
+        if http_transport.write_timeout_ms.get().is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.transport.http.write_timeout_ms must be greater than zero",
+            );
+        }
+        let max_header_bytes = http_transport.max_header_bytes.get();
+        if !(8 * 1024..=1024 * 1024).contains(&max_header_bytes) {
+            emit_torii_config_error(
+                emitter,
+                "torii.transport.http.max_header_bytes must be between 8192 and 1048576",
+            );
+        }
+        if http_transport.max_headers.get() > 1024 {
+            emit_torii_config_error(
+                emitter,
+                "torii.transport.http.max_headers must not exceed 1024",
+            );
+        }
         validate_explicit_trust_cidrs(
             emitter,
             "torii.operator_auth.mtls_trusted_proxy_cidrs",
@@ -15717,9 +15758,56 @@ pub struct ToriiTransport {
     /// used to derive the canonical remote IP.
     #[config(default = "defaults::torii::transport::trusted_proxy_cidrs()")]
     pub trusted_proxy_cidrs: Vec<String>,
+    /// HTTP/1 listener, parser, and socket limits.
+    #[config(nested)]
+    pub http: ToriiHttpTransport,
     /// Norito-RPC transport rollout settings.
     #[config(nested)]
     pub norito_rpc: ToriiNoritoRpcTransport,
+}
+
+/// HTTP/1 transport limits applied before request middleware.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct ToriiHttpTransport {
+    /// Maximum accepted TCP connections retained by Torii.
+    #[config(default = "defaults::torii::transport::http::MAX_CONNECTIONS")]
+    pub max_connections: NonZeroUsize,
+    /// Maximum accepted TCP connections retained for one source IP.
+    #[config(default = "defaults::torii::transport::http::MAX_CONNECTIONS_PER_IP")]
+    pub max_connections_per_ip: NonZeroUsize,
+    /// Absolute deadline for reading one HTTP/1 request head.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::transport::http::HEADER_READ_TIMEOUT_MS))"
+    )]
+    pub header_read_timeout_ms: DurationMs,
+    /// Maximum duration without socket write progress.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::transport::http::WRITE_TIMEOUT_MS))"
+    )]
+    pub write_timeout_ms: DurationMs,
+    /// Maximum number of HTTP/1 headers accepted in one request.
+    #[config(default = "defaults::torii::transport::http::MAX_HEADERS")]
+    pub max_headers: NonZeroUsize,
+    /// Maximum HTTP/1 parser buffer, including the request head.
+    #[config(default = "defaults::torii::transport::http::MAX_HEADER_BYTES")]
+    pub max_header_bytes: Bytes<u64>,
+}
+
+impl Default for ToriiHttpTransport {
+    fn default() -> Self {
+        Self {
+            max_connections: defaults::torii::transport::http::MAX_CONNECTIONS,
+            max_connections_per_ip: defaults::torii::transport::http::MAX_CONNECTIONS_PER_IP,
+            header_read_timeout_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::torii::transport::http::HEADER_READ_TIMEOUT_MS,
+            )),
+            write_timeout_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::torii::transport::http::WRITE_TIMEOUT_MS,
+            )),
+            max_headers: defaults::torii::transport::http::MAX_HEADERS,
+            max_header_bytes: defaults::torii::transport::http::MAX_HEADER_BYTES,
+        }
+    }
 }
 
 /// Norito-RPC transport configuration parameters.
@@ -32412,6 +32500,72 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<super::Root>()
             .expect("load minimal user config")
+    }
+
+    fn torii_http_table_mut(table: &mut Table) -> &mut Table {
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .entry("transport")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("torii.transport table")
+            .entry("http")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("torii.transport.http table")
+    }
+
+    fn assert_torii_http_config_rejected(values: &[(&str, i64)], expected: &str) {
+        let mut table = base_table();
+        let http = torii_http_table_mut(&mut table);
+        for (field, value) in values {
+            http.insert((*field).to_owned(), Value::Integer(*value));
+        }
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("invalid Torii HTTP transport limits must fail closed");
+        let report = format!("{error:?}");
+        assert!(report.contains(expected), "{report}");
+    }
+
+    #[test]
+    fn torii_http_per_ip_connection_limit_must_not_exceed_global_limit() {
+        assert_torii_http_config_rejected(
+            &[("max_connections", 16), ("max_connections_per_ip", 17)],
+            "max_connections_per_ip must not exceed max_connections",
+        );
+    }
+
+    #[test]
+    fn torii_http_timeouts_must_be_nonzero() {
+        for (field, expected) in [
+            (
+                "header_read_timeout_ms",
+                "header_read_timeout_ms must be greater than zero",
+            ),
+            (
+                "write_timeout_ms",
+                "write_timeout_ms must be greater than zero",
+            ),
+        ] {
+            assert_torii_http_config_rejected(&[(field, 0)], expected);
+        }
+    }
+
+    #[test]
+    fn torii_http_parser_limits_are_bounded() {
+        for max_header_bytes in [8 * 1024 - 1, 1024 * 1024 + 1] {
+            assert_torii_http_config_rejected(
+                &[("max_header_bytes", max_header_bytes)],
+                "max_header_bytes must be between 8192 and 1048576",
+            );
+        }
+        assert_torii_http_config_rejected(
+            &[("max_headers", 1025)],
+            "max_headers must not exceed 1024",
+        );
     }
 
     #[test]

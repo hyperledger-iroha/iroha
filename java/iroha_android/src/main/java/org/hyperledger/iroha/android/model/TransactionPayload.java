@@ -240,7 +240,7 @@ public final class TransactionPayload {
         if (value instanceof Float && !Float.isFinite((Float) value)) {
           throw new IllegalArgumentException("metadata number must be finite");
         }
-        return JsonValue.raw(value.toString());
+        return JsonValue.parse(value.toString());
       }
       throw new IllegalArgumentException("Unsupported metadata value type: " + value);
     }

@@ -98,7 +98,7 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::*,
     proof::VerifyingKeyId,
-    query::{QueryRequestWithAuthority, QueryResponse, SignedQuery},
+    query::{QueryRequestWithAuthority, QueryResponse, SignedQuery, SignedQueryValidationError},
     repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     smart_contract::manifest,
     transaction::{
@@ -172,6 +172,7 @@ pub mod debug_match_flag {
     }
 }
 
+use crate::bounded_replay_cache::{InsertError as ReplayInsertError, ReplayCache};
 use crate::sorafs::{
     PorCoordinatorError, PorStatusExportPageV1, PorStatusFilter, PorStatusPageV1, QuotaExceeded,
     SorafsAction, SorafsQuotaEnforcer,
@@ -5065,37 +5066,182 @@ pub struct QueryOptions {
 }
 
 /// Verify a signed query and return the authenticated request payload.
+#[derive(Debug)]
+pub struct SignedQueryAdmission {
+    network_id: NetworkId,
+    max_clock_skew: Duration,
+    max_time_to_live: Duration,
+    replay_cache: ReplayCache,
+}
+
+/// Invalid relationship between signed-query freshness and replay retention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "signed-query replay retention must exceed twice the maximum clock skew and leave a nonzero request TTL"
+)]
+pub struct SignedQueryAdmissionConfigError;
+
+impl SignedQueryAdmission {
+    /// Construct exact-lineage signed-query admission with bounded one-shot replay protection.
+    ///
+    /// The maximum accepted request TTL is derived rather than configured independently:
+    /// `replay_retention - 2 * max_clock_skew`. This guarantees every consumed nonce remains
+    /// protected throughout the complete interval in which its signed request can be accepted.
+    pub fn new(
+        network_id: NetworkId,
+        max_clock_skew: Duration,
+        replay_retention: Duration,
+        replay_capacity: NonZeroUsize,
+    ) -> core::result::Result<Self, SignedQueryAdmissionConfigError> {
+        let complete_skew_window = max_clock_skew
+            .checked_mul(2)
+            .ok_or(SignedQueryAdmissionConfigError)?;
+        let max_time_to_live = replay_retention
+            .checked_sub(complete_skew_window)
+            .filter(|ttl| !ttl.is_zero())
+            .ok_or(SignedQueryAdmissionConfigError)?;
+        Ok(Self {
+            network_id,
+            max_clock_skew,
+            max_time_to_live,
+            replay_cache: ReplayCache::new(replay_retention, replay_capacity),
+        })
+    }
+
+    /// Return the exact genesis-lineage identity accepted by this boundary.
+    #[must_use]
+    pub const fn network_id(&self) -> NetworkId {
+        self.network_id
+    }
+
+    /// Return the largest signature-bound query lifetime accepted by this boundary.
+    #[must_use]
+    pub const fn max_time_to_live(&self) -> Duration {
+        self.max_time_to_live
+    }
+}
+
+fn signed_query_now_unix_ms() -> Result<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| {
+            Error::from(ValidationFail::NotPermitted(
+                "node clock precedes Unix epoch".to_owned(),
+            ))
+        })?
+        .as_millis()
+        .try_into()
+        .map_err(|_| {
+            Error::from(ValidationFail::NotPermitted(
+                "node clock exceeds signed-query timestamp range".to_owned(),
+            ))
+        })
+}
+
+fn validate_signed_query_context_at(
+    payload: &QueryRequestWithAuthority,
+    admission: &SignedQueryAdmission,
+    now_ms: u64,
+) -> Result<()> {
+    if payload.network_id != admission.network_id {
+        return Err(Error::from(ValidationFail::NotPermitted(
+            "signed query targets a different network genesis".to_owned(),
+        )));
+    }
+
+    let max_clock_skew_ms = u64::try_from(admission.max_clock_skew.as_millis()).unwrap_or(u64::MAX);
+    if payload.creation_time_ms > now_ms.saturating_add(max_clock_skew_ms) {
+        return Err(Error::from(ValidationFail::NotPermitted(
+            "signed query creation time exceeds the allowed future clock skew".to_owned(),
+        )));
+    }
+
+    let request_ttl = Duration::from_millis(payload.time_to_live_ms.get());
+    if request_ttl > admission.max_time_to_live {
+        return Err(Error::from(ValidationFail::NotPermitted(format!(
+            "signed query time-to-live {} ms exceeds the replay-retention bound {} ms",
+            payload.time_to_live_ms,
+            admission.max_time_to_live.as_millis()
+        ))));
+    }
+    let expires_at_ms = payload
+        .creation_time_ms
+        .checked_add(payload.time_to_live_ms.get())
+        .ok_or_else(|| {
+            Error::from(ValidationFail::NotPermitted(
+                "signed query creation time plus time-to-live overflows".to_owned(),
+            ))
+        })?;
+    if now_ms >= expires_at_ms {
+        return Err(Error::from(ValidationFail::QueryFailed(
+            QueryExecutionFail::Expired,
+        )));
+    }
+    if payload.nonce == [0_u8; 32] {
+        return Err(Error::from(ValidationFail::NotPermitted(
+            "signed query nonce must not be all-zero".to_owned(),
+        )));
+    }
+    Ok(())
+}
+
+fn consume_signed_query_nonce(
+    payload: &QueryRequestWithAuthority,
+    admission: &SignedQueryAdmission,
+) -> Result<()> {
+    let replay_key = format!(
+        "{}:{}:{}",
+        payload.network_id,
+        payload.authority,
+        hex::encode(payload.nonce)
+    );
+    match admission.replay_cache.check_and_insert(replay_key) {
+        Ok(()) => Ok(()),
+        Err(ReplayInsertError::Replay) => Err(Error::from(ValidationFail::NotPermitted(
+            "signed query nonce already used".to_owned(),
+        ))),
+        Err(ReplayInsertError::Capacity | ReplayInsertError::LifetimeOverflow) => Err(Error::from(
+            ValidationFail::QueryFailed(QueryExecutionFail::CapacityLimit),
+        )),
+    }
+}
+
+/// Verify and consume one exact-lineage, fresh signed query request.
+///
+/// Network and time bounds are checked before signature work. The nonce is consumed only after a
+/// valid single-key signature, and before account authorization or query execution.
 pub fn verify_signed_query_request(
     query: SignedQuery,
+    admission: &SignedQueryAdmission,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
-    let iroha_data_model::query::QuerySignature(sig) = &query.signature;
-    let signatory = query.payload.authority.try_signatory().ok_or_else(|| {
-        Error::from(ValidationFail::NotPermitted(
-            "signed query authority must use a single-key controller".to_string(),
-        ))
+    let now_ms = signed_query_now_unix_ms()?;
+    verify_signed_query_request_at(query, admission, now_ms)
+}
+
+fn verify_signed_query_request_at(
+    query: SignedQuery,
+    admission: &SignedQueryAdmission,
+    now_ms: u64,
+) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
+    validate_signed_query_context_at(&query.payload, admission, now_ms)?;
+    query.verify_signature().map_err(|error| {
+        let reason = match error {
+            SignedQueryValidationError::AuthorityNotSingleKey => {
+                "signed query authority must use a single-key controller".to_owned()
+            }
+            SignedQueryValidationError::InvalidSignatureMaterial => {
+                "query signature material failed admission".to_owned()
+            }
+            SignedQueryValidationError::InvalidSignature => {
+                "query signature failed verification".to_owned()
+            }
+            SignedQueryValidationError::InvalidRequest(reason) => {
+                format!("signed query request is invalid: {reason}")
+            }
+        };
+        Error::from(ValidationFail::NotPermitted(reason))
     })?;
-    match signatory.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(sig.payload()).map_err(|err| {
-                Error::from(ValidationFail::NotPermitted(format!(
-                    "query signature material failed admission: {err}"
-                )))
-            })?;
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(sig.payload()).map_err(|err| {
-                Error::from(ValidationFail::NotPermitted(format!(
-                    "query signature material failed admission: {err}"
-                )))
-            })?;
-        }
-        _ => {}
-    }
-    sig.verify(signatory, &query.payload).map_err(|_| {
-        Error::from(ValidationFail::NotPermitted(
-            "query signature failed verification".to_string(),
-        ))
-    })?;
+    consume_signed_query_nonce(&query.payload, admission)?;
     Ok(query.payload)
 }
 
@@ -5104,16 +5250,65 @@ mod signed_query_verification_tests {
     use iroha_crypto::SignatureOf;
     use iroha_data_model::{
         account::{AccountId, MultisigMember, MultisigPolicy},
-        query::{QueryRequest, QuerySignature, SingularQueryBox, runtime::prelude::FindAbiVersion},
+        block::BlockHeader,
+        query::{
+            QueryRequest, QuerySignature, SingularQueryBox,
+            executor::prelude::FindExecutorDataModel, runtime::prelude::FindAbiVersion,
+        },
     };
 
     use super::*;
 
-    fn signed_find_abi_version(key_pair: &KeyPair) -> SignedQuery {
+    const NOW_MS: u64 = 1_000_000;
+
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+
+    fn admission_for(network_id: NetworkId) -> SignedQueryAdmission {
+        admission_with_capacity(network_id, NonZeroUsize::new(16).expect("nonzero capacity"))
+    }
+
+    fn admission_with_capacity(
+        network_id: NetworkId,
+        replay_capacity: NonZeroUsize,
+    ) -> SignedQueryAdmission {
+        SignedQueryAdmission::new(
+            network_id,
+            Duration::from_secs(1),
+            Duration::from_secs(12),
+            replay_capacity,
+        )
+        .expect("valid signed-query admission fixture")
+    }
+
+    fn signed_find_abi_version(
+        key_pair: &KeyPair,
+        network_id: NetworkId,
+        creation_time_ms: u64,
+        time_to_live_ms: u64,
+        nonce_seed: u8,
+    ) -> SignedQuery {
         let authority = AccountId::new(key_pair.public_key().clone());
         QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
-            .with_authority(authority)
+            .with_authority(
+                network_id,
+                authority,
+                creation_time_ms,
+                NonZeroU64::new(time_to_live_ms).expect("nonzero query TTL fixture"),
+                [nonce_seed; 32],
+            )
             .sign(key_pair)
+    }
+
+    fn fresh_signed_find_abi_version(
+        key_pair: &KeyPair,
+        network_id: NetworkId,
+        nonce_seed: u8,
+    ) -> SignedQuery {
+        signed_find_abi_version(key_pair, network_id, NOW_MS, 10_000, nonce_seed)
     }
 
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
@@ -5144,11 +5339,12 @@ mod signed_query_verification_tests {
             "derive signed query fixture key",
         );
         let authority = AccountId::new(key_pair.public_key().clone());
-        let signed = QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
-            .with_authority(authority.clone())
-            .sign(&key_pair);
+        let network_id = network_id(0x31);
+        let admission = admission_for(network_id);
+        let signed = fresh_signed_find_abi_version(&key_pair, network_id, 1);
 
-        let verified = verify_signed_query_request(signed).expect("signed query should verify");
+        let verified = verify_signed_query_request_at(signed, &admission, NOW_MS)
+            .expect("signed query should verify");
         let (verified_authority, verified_request) = verified.into_parts();
 
         assert_eq!(verified_authority, authority);
@@ -5170,10 +5366,12 @@ mod signed_query_verification_tests {
             Algorithm::Ed25519,
             "derive signed query other authority fixture key",
         );
-        let mut signed = signed_find_abi_version(&signer);
+        let network_id = network_id(0x32);
+        let admission = admission_for(network_id);
+        let mut signed = fresh_signed_find_abi_version(&signer, network_id, 2);
         signed.payload.authority = AccountId::new(other.public_key().clone());
 
-        assert!(verify_signed_query_request(signed).is_err());
+        assert!(verify_signed_query_request_at(signed, &admission, NOW_MS).is_err());
     }
 
     #[test]
@@ -5186,17 +5384,23 @@ mod signed_query_verification_tests {
         let member =
             MultisigMember::new(signer.public_key().clone(), 1).expect("valid multisig member");
         let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
-        let mut malformed = signed_find_abi_version(&signer);
+        let network_id = network_id(0x33);
+        let admission = admission_for(network_id);
+        let mut malformed = fresh_signed_find_abi_version(&signer, network_id, 3);
         malformed.payload.authority = AccountId::new_multisig(policy);
 
-        let response = match verify_signed_query_request(malformed) {
+        let response = match verify_signed_query_request_at(malformed, &admission, NOW_MS) {
             Ok(_) => panic!("directly signed multisig query authority must be rejected"),
             Err(error) => error.into_response(),
         };
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
-        verify_signed_query_request(signed_find_abi_version(&signer))
-            .expect("a valid follow-up query must still verify");
+        verify_signed_query_request_at(
+            fresh_signed_find_abi_version(&signer, network_id, 3),
+            &admission,
+            NOW_MS,
+        )
+        .expect("a valid follow-up query must still verify");
     }
 
     #[test]
@@ -5206,17 +5410,19 @@ mod signed_query_verification_tests {
             Algorithm::Ed25519,
             "derive signed query malformed signature fixture key",
         );
+        let network_id = network_id(0x34);
+        let admission = admission_for(network_id);
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
             ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
         ] {
-            let mut invalid_signed = signed_find_abi_version(&signer);
+            let mut invalid_signed = fresh_signed_find_abi_version(&signer, network_id, 4);
             invalid_signed.signature = QuerySignature(signature_of_with_malformed_ed25519_r(
                 &invalid_signed.signature.0,
                 &replacement_r,
             ));
 
-            let err = match verify_signed_query_request(invalid_signed) {
+            let err = match verify_signed_query_request_at(invalid_signed, &admission, NOW_MS) {
                 Ok(_) => panic!("malformed signed query signature R must fail admission"),
                 Err(err) => err,
             };
@@ -5235,11 +5441,17 @@ mod signed_query_verification_tests {
             Algorithm::MlDsa,
             "derive signed query malformed ML-DSA signature fixture key",
         );
-        verify_signed_query_request(signed_find_abi_version(&signer))
-            .expect("valid ML-DSA signed query should verify before mutation");
+        let network_id = network_id(0x35);
+        let admission = admission_for(network_id);
+        verify_signed_query_request_at(
+            fresh_signed_find_abi_version(&signer, network_id, 5),
+            &admission,
+            NOW_MS,
+        )
+        .expect("valid ML-DSA signed query should verify before mutation");
 
         for label in ["truncated", "extended"] {
-            let mut invalid_signed = signed_find_abi_version(&signer);
+            let mut invalid_signed = fresh_signed_find_abi_version(&signer, network_id, 6);
             let mut malformed_payload = invalid_signed.signature.0.payload().to_vec();
             match label {
                 "truncated" => {
@@ -5252,7 +5464,7 @@ mod signed_query_verification_tests {
                 Signature::from_bytes(&malformed_payload),
             ));
 
-            let err = match verify_signed_query_request(invalid_signed) {
+            let err = match verify_signed_query_request_at(invalid_signed, &admission, NOW_MS) {
                 Ok(_) => {
                     panic!("malformed signed query ML-DSA signature length must fail admission")
                 }
@@ -5264,6 +5476,202 @@ mod signed_query_verification_tests {
                 "{label} signed query ML-DSA signature length produced unexpected admission error: {message}"
             );
         }
+    }
+
+    #[test]
+    fn signed_query_cannot_cross_genesis_lineages() {
+        let signer = checked_routing_fixture_keypair(
+            0xe9,
+            Algorithm::Ed25519,
+            "derive cross-network signed-query fixture key",
+        );
+        let source_network = network_id(0x41);
+        let other_network = network_id(0x42);
+        let error = match verify_signed_query_request_at(
+            fresh_signed_find_abi_version(&signer, source_network, 7),
+            &admission_for(other_network),
+            NOW_MS,
+        ) {
+            Ok(_) => panic!("a signed query must not cross genesis lineages"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:?}").contains("different network genesis"));
+
+        verify_signed_query_request_at(
+            fresh_signed_find_abi_version(&signer, source_network, 7),
+            &admission_for(source_network),
+            NOW_MS,
+        )
+        .expect("wrong-network rejection must not invalidate the original request");
+    }
+
+    #[test]
+    fn signed_query_rejects_expired_and_excessively_future_timestamps() {
+        let signer = checked_routing_fixture_keypair(
+            0xea,
+            Algorithm::Ed25519,
+            "derive signed-query freshness fixture key",
+        );
+        let network_id = network_id(0x43);
+        let admission = admission_for(network_id);
+
+        let expired = signed_find_abi_version(&signer, network_id, NOW_MS - 10_000, 10_000, 8);
+        let error = match verify_signed_query_request_at(expired, &admission, NOW_MS) {
+            Ok(_) => panic!("expiry is exclusive at creation time plus TTL"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Expired))
+        ));
+
+        let future = signed_find_abi_version(&signer, network_id, NOW_MS + 1_001, 10_000, 9);
+        let error = match verify_signed_query_request_at(future, &admission, NOW_MS) {
+            Ok(_) => panic!("creation time beyond clock skew must fail"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:?}").contains("future clock skew"));
+    }
+
+    #[test]
+    fn signed_query_rejects_zero_nonce_and_ttl_beyond_replay_retention() {
+        let signer = checked_routing_fixture_keypair(
+            0xee,
+            Algorithm::Ed25519,
+            "derive signed-query context-bound fixture key",
+        );
+        let network_id = network_id(0x49);
+        let admission = admission_for(network_id);
+
+        let zero_nonce = signed_find_abi_version(&signer, network_id, NOW_MS, 10_000, 0);
+        let error = match verify_signed_query_request_at(zero_nonce, &admission, NOW_MS) {
+            Ok(_) => panic!("the all-zero nonce sentinel must fail closed"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:?}").contains("nonce must not be all-zero"));
+
+        let excessive_ttl = signed_find_abi_version(&signer, network_id, NOW_MS, 10_001, 14);
+        let error = match verify_signed_query_request_at(excessive_ttl, &admission, NOW_MS) {
+            Ok(_) => panic!("request lifetime must fit entirely inside replay retention"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:?}").contains("replay-retention bound"));
+    }
+
+    #[test]
+    fn every_signed_context_field_is_integrity_protected() {
+        let signer = checked_routing_fixture_keypair(
+            0xeb,
+            Algorithm::Ed25519,
+            "derive signed-query tamper fixture key",
+        );
+        let source_network = network_id(0x44);
+        let admission = admission_for(source_network);
+        let mut mutations = Vec::new();
+
+        let mut changed_network = fresh_signed_find_abi_version(&signer, source_network, 10);
+        changed_network.payload.network_id = network_id(0x45);
+        mutations.push(("network_id", changed_network));
+
+        let mut changed_creation_time = fresh_signed_find_abi_version(&signer, source_network, 10);
+        changed_creation_time.payload.creation_time_ms += 1;
+        mutations.push(("creation_time_ms", changed_creation_time));
+
+        let mut changed_ttl = fresh_signed_find_abi_version(&signer, source_network, 10);
+        changed_ttl.payload.time_to_live_ms = NonZeroU64::new(9_999).expect("nonzero TTL");
+        mutations.push(("time_to_live_ms", changed_ttl));
+
+        let mut changed_nonce = fresh_signed_find_abi_version(&signer, source_network, 10);
+        changed_nonce.payload.nonce = [0x46; 32];
+        mutations.push(("nonce", changed_nonce));
+
+        let mut changed_request = fresh_signed_find_abi_version(&signer, source_network, 10);
+        changed_request.payload.request = QueryRequest::Singular(
+            SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),
+        );
+        mutations.push(("request", changed_request));
+
+        for (field, mutation) in mutations {
+            let _error = match verify_signed_query_request_at(mutation, &admission, NOW_MS) {
+                Ok(_) => panic!("tampering with {field} must be rejected"),
+                Err(error) => error,
+            };
+        }
+
+        verify_signed_query_request_at(
+            fresh_signed_find_abi_version(&signer, source_network, 10),
+            &admission,
+            NOW_MS,
+        )
+        .expect("tampered requests must not consume the authentic nonce");
+    }
+
+    #[test]
+    fn signed_query_nonce_is_consumed_exactly_once() {
+        let signer = checked_routing_fixture_keypair(
+            0xec,
+            Algorithm::Ed25519,
+            "derive signed-query replay fixture key",
+        );
+        let network_id = network_id(0x47);
+        let admission = admission_for(network_id);
+        verify_signed_query_request_at(
+            fresh_signed_find_abi_version(&signer, network_id, 11),
+            &admission,
+            NOW_MS,
+        )
+        .expect("first use must pass");
+        let error = match verify_signed_query_request_at(
+            fresh_signed_find_abi_version(&signer, network_id, 11),
+            &admission,
+            NOW_MS,
+        ) {
+            Ok(_) => panic!("second use of the same signed nonce must fail"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:?}").contains("nonce already used"));
+    }
+
+    #[test]
+    fn signed_query_replay_cache_saturation_fails_closed_without_eviction() {
+        let signer = checked_routing_fixture_keypair(
+            0xed,
+            Algorithm::Ed25519,
+            "derive signed-query capacity fixture key",
+        );
+        let network_id = network_id(0x48);
+        let admission = admission_with_capacity(
+            network_id,
+            NonZeroUsize::new(1).expect("nonzero replay capacity"),
+        );
+        let second = fresh_signed_find_abi_version(&signer, network_id, 13);
+
+        verify_signed_query_request_at(
+            fresh_signed_find_abi_version(&signer, network_id, 12),
+            &admission,
+            NOW_MS,
+        )
+        .expect("first nonce must fit");
+        let error = match verify_signed_query_request_at(second, &admission, NOW_MS) {
+            Ok(_) => panic!("a full live replay cache must fail closed"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(
+                QueryExecutionFail::CapacityLimit
+            ))
+        ));
+
+        let error = match verify_signed_query_request_at(
+            fresh_signed_find_abi_version(&signer, network_id, 12),
+            &admission,
+            NOW_MS,
+        ) {
+            Ok(_) => panic!("capacity rejection must not evict the live replay record"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:?}").contains("nonce already used"));
     }
 }
 
@@ -6116,9 +6524,11 @@ mod proof_query_envelope_tests {
             "derive proof query envelope fixture signer",
         );
         let authority = AccountId::new(key_pair.public_key().clone());
-        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(authority)
-            .sign(&key_pair);
+        let signed = crate::authorize_query_for_test(
+            QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters)),
+            authority,
+        )
+        .sign(&key_pair);
         let dto = ProofFindByIdQueryDto {
             signed_query_b64: base64::engine::general_purpose::STANDARD
                 .encode(signed.encode_versioned()),
@@ -13516,6 +13926,7 @@ mod lane_admission_latency_tests {
 pub async fn handle_queries_with_opts(
     live_query_store: LiveQueryStoreHandle,
     state: Arc<CoreState>,
+    signed_query_admission: Arc<SignedQueryAdmission>,
     query: SignedQuery,
     tel: MaybeTelemetry,
     crate::NoritoQuery(opts): crate::NoritoQuery<QueryOptions>,
@@ -13523,7 +13934,7 @@ pub async fn handle_queries_with_opts(
 ) -> Result<Response> {
     #[cfg(feature = "telemetry")]
     let verify_started = std::time::Instant::now();
-    let query = match verify_signed_query_request(query) {
+    let query = match verify_signed_query_request(query, signed_query_admission.as_ref()) {
         Ok(query) => {
             #[cfg(feature = "telemetry")]
             observe_route_stage_latency(&tel, "query", "verify", "ok", verify_started.elapsed());
@@ -45382,13 +45793,14 @@ mod query_endpoint_tests {
             payload,
         ));
         let iter = QueryWithParams::new(&qbox, QueryParams::default());
-        let payload = QueryRequest::Start(iter).with_authority(alice_id.clone());
+        let payload = crate::authorize_query_for_test(QueryRequest::Start(iter), alice_id.clone());
         let signed = payload.sign(&alice_keypair);
 
         // Execute via handler
         let response = handle_queries_with_opts(
             LiveQueryStore::start_test(),
             state.clone(),
+            crate::signed_query_test_admission(),
             signed,
             MaybeTelemetry::for_tests(),
             crate::NoritoQuery(QueryOptions::default()),
@@ -45458,12 +45870,13 @@ mod query_endpoint_tests {
             },
         );
 
-        let payload = QueryRequest::Start(iter).with_authority(alice_id.clone());
+        let payload = crate::authorize_query_for_test(QueryRequest::Start(iter), alice_id.clone());
         let signed = payload.sign(&alice_keypair);
 
         let err = handle_queries_with_opts(
             LiveQueryStore::start_test(),
             state.clone(),
+            crate::signed_query_test_admission(),
             signed,
             MaybeTelemetry::for_tests(),
             crate::NoritoQuery(QueryOptions::default()),
@@ -45504,13 +45917,16 @@ mod query_endpoint_tests {
             LiveQueryStore::start_test(),
         ));
 
-        let payload = QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
-            .with_authority(authority);
+        let payload = crate::authorize_query_for_test(
+            QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion)),
+            authority,
+        );
         let signed = payload.sign(&signer_key);
 
         let err = handle_queries_with_opts(
             LiveQueryStore::start_test(),
             state,
+            crate::signed_query_test_admission(),
             signed,
             MaybeTelemetry::for_tests(),
             crate::NoritoQuery(QueryOptions::default()),
@@ -49555,12 +49971,14 @@ mod cursor_mode_tests {
         signer: &iroha_crypto::KeyPair,
     ) -> iroha_data_model::query::SignedQuery {
         use iroha_data_model::query::QueryRequest;
-        let req = QueryRequest::Singular(
-            iroha_data_model::query::prelude::SingularQueryBox::FindAbiVersion(
-                iroha_data_model::query::runtime::prelude::FindAbiVersion,
+        let req = crate::authorize_query_for_test(
+            QueryRequest::Singular(
+                iroha_data_model::query::prelude::SingularQueryBox::FindAbiVersion(
+                    iroha_data_model::query::runtime::prelude::FindAbiVersion,
+                ),
             ),
-        )
-        .with_authority(authority.clone());
+            authority.clone(),
+        );
         req.sign(signer)
     }
 
@@ -49594,6 +50012,7 @@ mod cursor_mode_tests {
         let res = handle_queries_with_opts(
             live,
             state,
+            crate::signed_query_test_admission(),
             signed,
             tel,
             crate::NoritoQuery(opts),
@@ -49632,6 +50051,7 @@ mod cursor_mode_tests {
         let res = handle_queries_with_opts(
             live,
             state,
+            crate::signed_query_test_admission(),
             signed,
             tel,
             crate::NoritoQuery(opts),
@@ -49652,9 +50072,11 @@ mod cursor_mode_tests {
         let state = Arc::new(s);
 
         let cursor = seed_stored_cursor(&state, &authority, 250);
-        let signed = iroha_data_model::query::QueryRequest::Continue(cursor)
-            .with_authority(authority)
-            .sign(&kp);
+        let signed = crate::authorize_query_for_test(
+            iroha_data_model::query::QueryRequest::Continue(cursor),
+            authority,
+        )
+        .sign(&kp);
 
         let opts = QueryOptions {
             cursor_mode: Some("stored".to_string()),
@@ -49669,6 +50091,7 @@ mod cursor_mode_tests {
         let res = handle_queries_with_opts(
             live,
             state,
+            crate::signed_query_test_admission(),
             signed,
             tel,
             crate::NoritoQuery(opts),
@@ -49700,6 +50123,7 @@ mod cursor_mode_tests {
         let res = handle_queries_with_opts(
             live,
             state,
+            crate::signed_query_test_admission(),
             signed,
             tel,
             crate::NoritoQuery(opts),
@@ -51266,16 +51690,32 @@ mod hot_path_load_profile_tests {
 
     fn signed_find_abi_version(key_pair: &KeyPair) -> SignedQuery {
         let authority = AccountId::new(key_pair.public_key().clone());
-        QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
-            .with_authority(authority)
-            .sign(key_pair)
+        crate::authorize_query_for_test(
+            QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion)),
+            authority,
+        )
+        .sign(key_pair)
     }
 
     fn signed_find_parameters(key_pair: &KeyPair) -> SignedQuery {
         let authority = AccountId::new(key_pair.public_key().clone());
-        QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-            .with_authority(authority)
-            .sign(key_pair)
+        crate::authorize_query_for_test(
+            QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters)),
+            authority,
+        )
+        .sign(key_pair)
+    }
+
+    fn hot_profile_admission() -> Arc<SignedQueryAdmission> {
+        Arc::new(
+            SignedQueryAdmission::new(
+                crate::signed_query_test_network_id(),
+                Duration::from_secs(1),
+                Duration::from_secs(120),
+                NonZeroUsize::new(16_384).expect("nonzero hot-profile replay capacity"),
+            )
+            .expect("valid hot-profile signed-query admission"),
+        )
     }
 
     fn print_hot_profile(
@@ -51303,9 +51743,11 @@ mod hot_path_load_profile_tests {
             iroha_crypto::Algorithm::Ed25519,
             "derive hot-path query profile fixture key",
         );
+        let verify_admission = hot_profile_admission();
         for _ in 0..VERIFY_WARMUP_SAMPLES {
             let signed_query = signed_find_abi_version(&key_pair);
-            let verified = verify_signed_query_request(signed_query).expect("query verifies");
+            let verified = verify_signed_query_request(signed_query, verify_admission.as_ref())
+                .expect("query verifies");
             std::hint::black_box(verified);
         }
         let signed_queries = (0..VERIFY_SAMPLES)
@@ -51315,7 +51757,8 @@ mod hot_path_load_profile_tests {
         let wall_start = Instant::now();
         for signed_query in signed_queries {
             let start = Instant::now();
-            let verified = verify_signed_query_request(signed_query).expect("query verifies");
+            let verified = verify_signed_query_request(signed_query, verify_admission.as_ref())
+                .expect("query verifies");
             std::hint::black_box(verified);
             verify_samples.push(start.elapsed());
         }
@@ -51334,10 +51777,12 @@ mod hot_path_load_profile_tests {
             query_store.clone(),
         ));
         let query_telemetry = direct_metrics_telemetry();
+        let query_admission = hot_profile_admission();
         for _ in 0..QUERY_WARMUP_SAMPLES {
             let response = handle_queries_with_opts(
                 query_store.clone(),
                 Arc::clone(&query_state),
+                Arc::clone(&query_admission),
                 signed_find_abi_version(&key_pair),
                 query_telemetry.clone(),
                 crate::NoritoQuery(QueryOptions::default()),
@@ -51357,6 +51802,7 @@ mod hot_path_load_profile_tests {
             let response = handle_queries_with_opts(
                 query_store.clone(),
                 Arc::clone(&query_state),
+                Arc::clone(&query_admission),
                 signed_query,
                 query_telemetry.clone(),
                 crate::NoritoQuery(QueryOptions::default()),
@@ -51379,6 +51825,7 @@ mod hot_path_load_profile_tests {
             let response = handle_queries_with_opts(
                 query_store.clone(),
                 Arc::clone(&query_state),
+                Arc::clone(&query_admission),
                 signed_find_parameters(&key_pair),
                 query_telemetry.clone(),
                 crate::NoritoQuery(QueryOptions::default()),
@@ -51398,6 +51845,7 @@ mod hot_path_load_profile_tests {
             let response = handle_queries_with_opts(
                 query_store.clone(),
                 Arc::clone(&query_state),
+                Arc::clone(&query_admission),
                 signed_query,
                 query_telemetry.clone(),
                 crate::NoritoQuery(QueryOptions::default()),

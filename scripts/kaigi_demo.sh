@@ -69,22 +69,6 @@ with src.open('r', encoding='utf-8') as f:
 ivm_dir = data.get('ivm_dir')
 if isinstance(ivm_dir, list):
     data['ivm_dir'] = ivm_dir[0] if ivm_dir else "."
-policy = {
-    "mode": "TransparentOnly",
-    "vk_set_hash": None,
-    "poseidon_params_id": None,
-    "pedersen_params_id": None,
-    "pending_transition": None,
-}
-for tx in data.get("transactions", []):
-    for ins in tx.get("instructions", []):
-        reg = ins.get("Register")
-        if not reg:
-            continue
-        asset_def = reg.get("AssetDefinition")
-        if asset_def is None:
-            continue
-        asset_def.setdefault("confidential_policy", policy.copy())
 with dst.open('w', encoding='utf-8') as f:
     json.dump(data, f, indent=2)
     f.write('\n')

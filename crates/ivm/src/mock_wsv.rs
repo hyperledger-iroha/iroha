@@ -239,10 +239,10 @@ impl AxtPolicy for SpaceDirectoryAxtPolicy {
         if usage.handle.manifest_view_root.as_slice() != policy.manifest_root.as_slice() {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.handle_era < policy.min_handle_era {
+        if usage.handle.handle_era != policy.min_handle_era {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.sub_nonce < policy.min_sub_nonce {
+        if usage.handle.sub_nonce != policy.min_sub_nonce {
             return Err(VMError::PermissionDenied);
         }
         Ok(())
@@ -397,8 +397,6 @@ pub struct MockWorldStateView {
 }
 
 pub struct ZkPolicyConfig {
-    pub mode: ZkAssetMode,
-    pub allow_unshield: bool,
     pub vk_unshield: Option<VerifyingKeyId>,
 }
 
@@ -633,14 +631,10 @@ impl MockWorldStateView {
             .as_ref()
             .map(|id| self.binding_from_registry(id));
         let st = self.zk_assets.entry(asset.clone()).or_default();
-        st.mode = policy.mode;
-        st.allow_unshield = policy.allow_unshield;
         st.vk_unshield = vk_unshield_binding;
         // Emit a policy-updated event
         self.zk_events.push(ZkEvent::ZkPolicyUpdated {
             asset: asset.clone(),
-            mode: policy.mode,
-            allow_unshield: policy.allow_unshield,
         });
         true
     }
@@ -1610,16 +1604,6 @@ use iroha_data_model::isi::{InstructionBox as DMInstructionBox, zk as DMZk};
 // ZK shielded ledger structures
 // -----------------------------
 
-/// Shielded asset mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ZkAssetMode {
-    /// Public balances plus the proof-bound confidential ledger.
-    #[default]
-    Hybrid,
-}
-
-// Default is derived (Hybrid)
-
 /// Verifying-key binding enforced for a ZK asset operation.
 #[derive(Clone, Debug)]
 pub struct ZkAssetVerifierBinding {
@@ -1630,8 +1614,6 @@ pub struct ZkAssetVerifierBinding {
 /// Policy and state for a shielded asset.
 #[derive(Clone, Debug, Default)]
 pub struct ZkAssetState {
-    pub mode: ZkAssetMode,
-    pub allow_unshield: bool,
     pub commitments: Vec<[u8; 32]>,
     pub root_history: Vec<HashOf<iroha_crypto::MerkleTree<[u8; 32]>>>,
     pub nullifiers: HashSet<[u8; 32]>,
@@ -1665,11 +1647,7 @@ fn test_account_id(signatory: &str, domain: &str) -> AccountId {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZkEvent {
     /// ZK policy was updated for an asset.
-    ZkPolicyUpdated {
-        asset: AssetDefinitionId,
-        mode: ZkAssetMode,
-        allow_unshield: bool,
-    },
+    ZkPolicyUpdated { asset: AssetDefinitionId },
     /// New commitment was appended and root updated.
     CommitmentAdded {
         asset: AssetDefinitionId,

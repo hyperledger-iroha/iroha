@@ -180,6 +180,7 @@ OPERATION_FLAGS: dict[str, set[str]] = {
     },
     "capture-four-peer": {
         "--reset-bundle", "--validator-binary", "--supervisor",
+        "--privacy-protocol-receipt",
         "--artifact-handoff-sha256", "--source-commit", "--cargo-lock-sha256",
         "--dpn-validator-release-commit",
         "--workspace-source-manifest-sha256", "--restart-generation",
@@ -190,6 +191,7 @@ OPERATION_FLAGS: dict[str, set[str]] = {
         "--dpn-validator-release-commit",
         "--workspace-source-manifest-sha256", "--source-date-epoch",
         "--linux-archive", "--linux-authority-dir", "--macos-receipt",
+        "--privacy-protocol-receipt",
         "--expected-receipt-id", "--controller-manifest", "--controller-digest",
         "--trusted-signing-fingerprint", "--release-manifest-verifier",
         "--trusted-release-manifest-verifier-sha256", "--external-signer",
@@ -246,7 +248,7 @@ INPUT_PATH_FLAGS = {
     "--privacy-release-dir", "--genesis-external-signer",
     "--onboarding-token-hash-tool", "--reset-bundle", "--validator-binary",
     "--supervisor", "--linux-archive", "--linux-authority-dir",
-    "--macos-receipt", "--bundle", "--binary", "--admission-archive",
+    "--macos-receipt", "--privacy-protocol-receipt", "--bundle", "--binary", "--admission-archive",
     "--admission-authority-dir", "--replay-ledger", "--source-identity",
     "--candidate-root",
 }
@@ -2385,14 +2387,21 @@ def _remove_controller_owned_tree(path: Path, parent: Path) -> None:
 
 def _capture_helper_args(
     operation_args: Sequence[str], receipt: Path, runtime_root: Path
-) -> tuple[list[str], Path, Path]:
+) -> tuple[list[str], Path, Path, Path]:
     _subcommand, option_values = _operation_option_values(
         "capture-four-peer", operation_args
     )
     final_values = option_values.get("--output", [])
     source_values = option_values.get("--source-identity", [])
-    if len(final_values) != 1 or len(source_values) != 1:
-        _fail("capture composite lacks one final output or source identity")
+    privacy_values = option_values.get("--privacy-protocol-receipt", [])
+    if (
+        len(final_values) != 1
+        or len(source_values) != 1
+        or len(privacy_values) != 1
+    ):
+        _fail(
+            "capture composite lacks one final output, source identity, or privacy receipt"
+        )
     transformed: list[str] = []
     values = list(operation_args)
     index = 0
@@ -2404,11 +2413,16 @@ def _capture_helper_args(
             continue
         value = values[index]
         index += 1
-        if flag == "--source-identity":
+        if flag in {"--source-identity", "--privacy-protocol-receipt"}:
             continue
         transformed.extend((flag, str(receipt) if flag == "--output" else value))
     transformed.extend(("--runtime-root", str(runtime_root)))
-    return transformed, Path(final_values[0]), Path(source_values[0])
+    return (
+        transformed,
+        Path(final_values[0]),
+        Path(source_values[0]),
+        Path(privacy_values[0]),
+    )
 
 
 def _dispatch_capture_composite(
@@ -2434,7 +2448,12 @@ def _dispatch_capture_composite(
     final_output: Path | None = None
     completed = False
     try:
-        helper_args, final_output, source_identity = _capture_helper_args(
+        (
+            helper_args,
+            final_output,
+            source_identity,
+            privacy_protocol_receipt,
+        ) = _capture_helper_args(
             operation_args, receipt, harness_root
         )
         if final_output is None:  # defense in depth for static path narrowing
@@ -2452,6 +2471,8 @@ def _dispatch_capture_composite(
             [
                 "--receipt",
                 str(receipt),
+                "--privacy-protocol-receipt",
+                str(privacy_protocol_receipt),
                 "--source-identity",
                 str(source_identity),
                 "--output",

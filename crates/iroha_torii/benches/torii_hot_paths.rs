@@ -4,13 +4,13 @@
 use std::{
     borrow::Cow,
     net::SocketAddr,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     str::FromStr,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -32,7 +32,7 @@ use iroha_core::{
     telemetry::{StateTelemetry, Telemetry},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     SignedQuery,
     account::rekey::{AccountAlias, AccountAliasDomain},
@@ -50,7 +50,7 @@ use iroha_primitives::const_vec::ConstVec;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
     BenchRateLimiter, ContractActivityGetParamsForBench, MaybeTelemetry, NoritoJson, NoritoQuery,
-    QueryOptions, ResponseFormat, accept_transaction_for_ingress_for_bench,
+    QueryOptions, ResponseFormat, SignedQueryAdmission, accept_transaction_for_ingress_for_bench,
     filter::{
         AggregateFn, AggregateMetric, AggregateSpec, FieldPath, FilterExpr, Order, Pagination,
         QueryEnvelope, Selector, SortKey,
@@ -71,11 +71,53 @@ fn direct_metrics_telemetry() -> MaybeTelemetry {
     MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator)
 }
 
+fn benchmark_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0xA5; Hash::LENGTH]),
+    ))
+}
+
+fn benchmark_signed_query_admission() -> Arc<SignedQueryAdmission> {
+    Arc::new(
+        SignedQueryAdmission::new(
+            benchmark_network_id(),
+            Duration::from_secs(1),
+            Duration::from_secs(12),
+            NonZeroUsize::new(1_048_576).expect("nonzero benchmark replay capacity"),
+        )
+        .expect("valid benchmark signed-query admission"),
+    )
+}
+
+fn authorize_benchmark_query(
+    request: QueryRequest,
+    authority: AccountId,
+) -> iroha_data_model::query::QueryRequestWithAuthority {
+    static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
+    let creation_time_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("benchmark clock follows Unix epoch")
+        .as_millis()
+        .try_into()
+        .expect("benchmark query creation time fits u64");
+    let mut nonce = [0_u8; 32];
+    nonce[24..].copy_from_slice(&NEXT_NONCE.fetch_add(1, Ordering::Relaxed).to_be_bytes());
+    request.with_authority(
+        benchmark_network_id(),
+        authority,
+        creation_time_ms,
+        NonZeroU64::new(10_000).expect("nonzero benchmark query TTL"),
+        nonce,
+    )
+}
+
 fn signed_find_parameters(key_pair: &KeyPair) -> SignedQuery {
     let authority = AccountId::new(key_pair.public_key().clone());
-    QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
-        .with_authority(authority)
-        .sign(key_pair)
+    authorize_benchmark_query(
+        QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters)),
+        authority,
+    )
+    .sign(key_pair)
 }
 
 fn deterministic_key_pair_with_algorithm(label: &str, algorithm: Algorithm) -> KeyPair {
@@ -348,9 +390,7 @@ fn signed_find_domains_query(
             ..QueryParams::default()
         },
     );
-    QueryRequest::Start(iter)
-        .with_authority(authority.clone())
-        .sign(key_pair)
+    authorize_benchmark_query(QueryRequest::Start(iter), authority.clone()).sign(key_pair)
 }
 
 #[derive(Clone)]
@@ -508,12 +548,14 @@ fn signed_query_router(fixture: &QueryLoadFixture) -> Router {
     let query_store = fixture.query_store.clone();
     let state = Arc::clone(&fixture.state);
     let telemetry = direct_metrics_telemetry();
+    let signed_query_admission = benchmark_signed_query_admission();
     Router::new().route(
         "/query",
         post(move |body: Bytes| {
             let query_store = query_store.clone();
             let state = Arc::clone(&state);
             let telemetry = telemetry.clone();
+            let signed_query_admission = Arc::clone(&signed_query_admission);
             async move {
                 let Ok(query) = SignedQuery::decode_all_versioned(body.as_ref()) else {
                     return (
@@ -525,6 +567,7 @@ fn signed_query_router(fixture: &QueryLoadFixture) -> Router {
                 match handle_queries_with_opts(
                     query_store,
                     state,
+                    signed_query_admission,
                     query,
                     telemetry,
                     NoritoQuery(QueryOptions {
@@ -896,8 +939,7 @@ async fn run_signed_http_operation(
     let body = send_http_request(router.clone(), &start_template).await;
     let mut cursor = response_body_cursor(&body).expect("first batch exposes stored cursor");
     for _ in 0..continuation_depth {
-        let signed = QueryRequest::Continue(cursor)
-            .with_authority(authority.clone())
+        let signed = authorize_benchmark_query(QueryRequest::Continue(cursor), authority.clone())
             .sign(key_pair.as_ref());
         let template = HttpRequestTemplate::norito("/query", signed.encode_versioned());
         let body = send_http_request(router.clone(), &template).await;
@@ -986,8 +1028,7 @@ async fn run_signed_socket_operation(
     let body = send_socket_request(&client, &base_url, &start_template).await;
     let mut cursor = response_body_cursor(&body).expect("first batch exposes stored cursor");
     for _ in 0..continuation_depth {
-        let signed = QueryRequest::Continue(cursor)
-            .with_authority(authority.clone())
+        let signed = authorize_benchmark_query(QueryRequest::Continue(cursor), authority.clone())
             .sign(key_pair.as_ref());
         let template = HttpRequestTemplate::norito("/query", signed.encode_versioned());
         let body = send_socket_request(&client, &base_url, &template).await;
@@ -1070,12 +1111,14 @@ async fn run_signed_socket_profile(
 
 fn bench_signed_query_verify(c: &mut Criterion) {
     let key_pair = deterministic_key_pair("signed-query-verify");
+    let admission = benchmark_signed_query_admission();
     c.bench_function("torii_signed_query_verify_find_parameters", |b| {
         b.iter_batched(
             || signed_find_parameters(&key_pair),
             |signed_query| {
                 let verified =
-                    verify_signed_query_request_for_bench(signed_query).expect("query verifies");
+                    verify_signed_query_request_for_bench(signed_query, admission.as_ref())
+                        .expect("query verifies");
                 std::hint::black_box(verified);
             },
             BatchSize::SmallInput,
@@ -1093,6 +1136,7 @@ fn bench_query_find_parameters(c: &mut Criterion) {
         query_store.clone(),
     ));
     let telemetry = direct_metrics_telemetry();
+    let admission = benchmark_signed_query_admission();
 
     c.bench_function("torii_query_find_parameters_norito", |b| {
         b.iter_batched(
@@ -1102,6 +1146,7 @@ fn bench_query_find_parameters(c: &mut Criterion) {
                     .block_on(handle_queries_with_opts(
                         query_store.clone(),
                         Arc::clone(&query_state),
+                        Arc::clone(&admission),
                         signed_query,
                         telemetry.clone(),
                         NoritoQuery(QueryOptions::default()),

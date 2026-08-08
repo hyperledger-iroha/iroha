@@ -37,6 +37,7 @@ async fn domains_endpoints_exist() {
     let _ = peers_tx;
     let torii = Torii::new_with_handle(
         iroha_data_model::ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

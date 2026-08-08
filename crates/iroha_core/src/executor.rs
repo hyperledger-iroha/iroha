@@ -5864,7 +5864,7 @@ impl Executor {
                 crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
                     state_transaction,
                     replay.completed_axt,
-                );
+                )?;
                 for (path, value) in replay.durable_state_overlay {
                     let authorization = replay
                         .durable_state_authorizations
@@ -8991,6 +8991,16 @@ fn initial_permission_capability_root_authority(
                 &token.asset_definition,
             )?
         }
+        "CanManageAssetDefinitionConfidentialPolicy" => {
+            let token = decode!(
+                executor_permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy
+            );
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
         "CanMintAssetWithDefinition" => {
             let token = decode!(executor_permission::asset::CanMintAssetWithDefinition);
             authority_owns_asset_definition(
@@ -10896,6 +10906,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanModifyDomainMetadata",
     "CanUnregisterAssetDefinition",
     "CanModifyAssetDefinitionMetadata",
+    "CanManageAssetDefinitionConfidentialPolicy",
     "CanRegisterAccount",
     "CanUnregisterAccount",
     "CanModifyAccountMetadata",
@@ -13564,6 +13575,14 @@ mod tests {
             (
                 "CanModifyAssetDefinitionMetadata",
                 executor_permission::asset_definition::CanModifyAssetDefinitionMetadata {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanManageAssetDefinitionConfidentialPolicy",
+                executor_permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy {
                     asset_definition: asset_definition.clone(),
                 }
                 .into(),

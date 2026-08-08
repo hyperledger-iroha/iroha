@@ -1301,9 +1301,7 @@ pub mod isi {
     fn coherent_execution_dataspace(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Option<DataSpaceId>, Error> {
-        if state_transaction.current_dataspace_id
-            != state_transaction.world.current_dataspace_id
-        {
+        if state_transaction.current_dataspace_id != state_transaction.world.current_dataspace_id {
             return Err(InstructionExecutionError::InvariantViolation(
                 "transaction and world execution dataspaces are inconsistent".into(),
             ));
@@ -1329,20 +1327,22 @@ pub mod isi {
         let execution_dataspace = coherent_execution_dataspace(state_transaction)?;
         match (definition.balance_scope_policy(), scope) {
             (AssetBalancePolicy::Global, AssetBalanceScope::Global) => {
-                ensure_global_asset_write_on_authoritative_route(
-                    state_transaction,
-                    definition_id,
-                    operation,
-                )?;
+                if let Some(route) = execution_dataspace
+                    && route != DataSpaceId::UNIVERSAL
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "global public balance scope {operation} must execute on the universal coordinator; current route is {}",
+                            route.as_u64(),
+                        )
+                        .into(),
+                    ));
+                }
             }
-            (
-                AssetBalancePolicy::DataspaceRestricted,
-                AssetBalanceScope::Dataspace(dataspace),
-            ) => {
+            (AssetBalancePolicy::DataspaceRestricted, AssetBalanceScope::Dataspace(dataspace)) => {
                 if dataspace == DataSpaceId::UNIVERSAL {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "the universal coordinator is not a restricted public balance scope"
-                            .into(),
+                        "the universal coordinator is not a restricted public balance scope".into(),
                     ));
                 }
                 if let Some(route) = execution_dataspace
@@ -3765,11 +3765,13 @@ pub mod isi {
                 )
                 .into());
             }
-            ensure_global_asset_write_on_authoritative_route(
-                state_transaction,
-                event_source_id.definition(),
-                "transfer",
-            )?;
+            if scope_policy == NumericAssetTransferScopePolicy::Ambient {
+                ensure_global_asset_write_on_authoritative_route(
+                    state_transaction,
+                    event_source_id.definition(),
+                    "transfer",
+                )?;
+            }
             if authority_policy == NumericAssetTransferAuthorityPolicy::UserSource {
                 let resolved_source_id = state_transaction
                     .world
@@ -4553,13 +4555,13 @@ pub mod isi {
         source_policy: NumericAssetTransferSourcePolicy,
         scope_policy: NumericAssetTransferScopePolicy,
     ) -> Result<(AssetId, AssetId), Error> {
-        ensure_global_asset_write_on_authoritative_route(
-            state_transaction,
-            source_id.definition(),
-            "transfer",
-        )?;
         let (source_id, destination_id) = match scope_policy {
             NumericAssetTransferScopePolicy::Ambient => {
+                ensure_global_asset_write_on_authoritative_route(
+                    state_transaction,
+                    source_id.definition(),
+                    "transfer",
+                )?;
                 let source_dataspace =
                     transfer_source_dataspace_hint(state_transaction, source_id)?;
                 let source_id = state_transaction
@@ -6871,6 +6873,7 @@ pub mod query {
             Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
             ManifestEffect, ManifestEntry,
         };
+        use iroha_data_model::privacy::PrivacyStatementDigestV1;
         use iroha_data_model::query::json::{EqualsCondition, PredicateJson};
         use iroha_primitives::{json::Json, numeric::Numeric};
         use iroha_test_samples::{ALICE_ID, BOB_ID};
@@ -9676,10 +9679,31 @@ pub mod query {
                 "test",
             )
             .expect("global definition accepts only the global balance scope");
+            assert!(
+                isi::validate_committed_public_balance_scope(
+                    &stx,
+                    &global_definition_id,
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+                    "test",
+                )
+                .is_err(),
+                "global definitions must reject dataspace balance scopes",
+            );
 
             let private_dataspace = DataSpaceId::new(7);
             stx.current_dataspace_id = Some(private_dataspace);
             stx.world.current_dataspace_id = Some(private_dataspace);
+            let error = isi::validate_committed_public_balance_scope(
+                &stx,
+                &global_definition_id,
+                iroha_data_model::asset::AssetBalanceScope::Global,
+                "test",
+            )
+            .expect_err("a non-universal route cannot apply a global-scope privacy proof");
+            assert!(
+                error.to_string().contains("universal coordinator"),
+                "unexpected global-route error: {error}",
+            );
             isi::validate_committed_public_balance_scope(
                 &stx,
                 &restricted_definition_id,
@@ -9687,6 +9711,41 @@ pub mod query {
                 "test",
             )
             .expect("restricted definition accepts its exact execution scope");
+            assert!(
+                isi::validate_committed_public_balance_scope(
+                    &stx,
+                    &restricted_definition_id,
+                    iroha_data_model::asset::AssetBalanceScope::Global,
+                    "test",
+                )
+                .is_err(),
+                "restricted definitions must reject the global balance scope",
+            );
+            assert!(
+                isi::validate_committed_public_balance_scope(
+                    &stx,
+                    &restricted_definition_id,
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(8)),
+                    "test",
+                )
+                .is_err(),
+                "a non-universal route must match the committed balance scope",
+            );
+
+            stx.world.current_dataspace_id = Some(DataSpaceId::new(8));
+            let error = isi::validate_committed_public_balance_scope(
+                &stx,
+                &restricted_definition_id,
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(private_dataspace),
+                "test",
+            )
+            .expect_err("split transaction/world routing context must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("execution dataspaces are inconsistent"),
+                "unexpected split-route error: {error}",
+            );
         }
 
         #[test]
@@ -9777,6 +9836,102 @@ pub mod query {
                 "test",
             )
             .expect("a proof-committed scope must not consult mutable account bindings");
+        }
+
+        #[test]
+        fn verified_privacy_bridge_moves_only_the_committed_bilateral_partition() {
+            let domain_id =
+                DomainId::try_new("privacy_scope_transfer", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice = build_account_in_domain(&ALICE_ID, &domain_id);
+            let bob = build_account_in_domain(&BOB_ID, &domain_id);
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "private_coin".parse().expect("asset name"),
+            );
+            let definition = AssetDefinition::numeric(
+                definition_id.clone(),
+                "private coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&ALICE_ID);
+            let state = State::new(
+                World::with([domain], [alice, bob], [definition]),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            seed_test_call_hash(&mut stx, 0x51);
+
+            let scope_7 =
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7));
+            let scope_8 =
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(8));
+            let alice_7 = AssetId::with_scope(definition_id.clone(), ALICE_ID.clone(), scope_7);
+            let bob_7 = AssetId::with_scope(definition_id.clone(), BOB_ID.clone(), scope_7);
+            let alice_8 = AssetId::with_scope(definition_id.clone(), ALICE_ID.clone(), scope_8);
+            let bob_8 = AssetId::with_scope(definition_id.clone(), BOB_ID.clone(), scope_8);
+            isi::seed_numeric_asset_balance_exact_for_test(
+                &mut stx.world,
+                &alice_7,
+                &Quantity::from(100_u32),
+            )
+            .expect("seed scope 7");
+            isi::seed_numeric_asset_balance_exact_for_test(
+                &mut stx.world,
+                &alice_8,
+                &Quantity::from(50_u32),
+            )
+            .expect("seed scope 8");
+
+            isi::execute_verified_privacy_public_balance_transfer(
+                &mut stx,
+                &ALICE_ID,
+                PrivacyStatementDigestV1::new([0x52; 32]),
+                &definition_id,
+                scope_7,
+                &ALICE_ID,
+                &BOB_ID,
+                Quantity::from(10_u32),
+            )
+            .expect("verified bridge moves its exact scope");
+            assert_eq!(
+                asset_balance_or_zero(&stx, &alice_7),
+                Quantity::from(90_u32)
+            );
+            assert_eq!(asset_balance_or_zero(&stx, &bob_7), Quantity::from(10_u32));
+            assert_eq!(
+                asset_balance_or_zero(&stx, &alice_8),
+                Quantity::from(50_u32)
+            );
+            assert_eq!(asset_balance_or_zero(&stx, &bob_8), Quantity::zero());
+
+            stx.current_dataspace_id = Some(DataSpaceId::new(7));
+            stx.world.current_dataspace_id = Some(DataSpaceId::new(7));
+            let before_8 = asset_balance_or_zero(&stx, &alice_8);
+            let error = isi::execute_verified_privacy_public_balance_transfer(
+                &mut stx,
+                &ALICE_ID,
+                PrivacyStatementDigestV1::new([0x53; 32]),
+                &definition_id,
+                scope_8,
+                &ALICE_ID,
+                &BOB_ID,
+                Quantity::from(1_u32),
+            )
+            .expect_err("a route cannot redirect a proof committed to another partition");
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not match execution dataspace")
+            );
+            assert_eq!(asset_balance_or_zero(&stx, &alice_8), before_8);
+            assert_eq!(asset_balance_or_zero(&stx, &bob_8), Quantity::zero());
         }
 
         #[test]

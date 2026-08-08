@@ -21,6 +21,7 @@ from iroha_python import (
 )
 
 _ORDER_ID = "ab" * 32
+_MUSUBI_ARCHIVE_ID = "cd" * 32
 _PROVIDER_ID = "10" * 32
 _PROVIDER_OWNER = (
     "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
@@ -101,9 +102,20 @@ def test_replication_instruction_payloads_use_exact_rust_fields() -> None:
             "order_payload": base64.b64encode(_FIXTURE).decode("ascii"),
             "issued_epoch": 20,
             "deadline_epoch": 28,
+            "musubi_archive": None,
         }
     }
     assert IssueReplicationOrderInstruction.from_payload(issue.to_payload()) == issue
+
+    bound = IssueReplicationOrderInstruction(
+        _ORDER_ID,
+        base64.b64encode(_FIXTURE).decode("ascii"),
+        20,
+        28,
+        _MUSUBI_ARCHIVE_ID,
+    )
+    assert bound.to_payload()["IssueReplicationOrder"]["musubi_archive"] == _MUSUBI_ARCHIVE_ID
+    assert IssueReplicationOrderInstruction.from_payload(bound.to_payload()) == bound
 
     complete = _completion()
     assert complete.to_payload() == {
@@ -211,6 +223,25 @@ def test_replication_instruction_decoders_are_schema_closed() -> None:
             20,
             20,
         )
+    with pytest.raises(ValueError, match="zero identifier"):
+        IssueReplicationOrderInstruction(
+            _ORDER_ID,
+            base64.b64encode(_FIXTURE).decode("ascii"),
+            20,
+            28,
+            "00" * 32,
+        )
+    with pytest.raises(ValueError, match="must contain exactly"):
+        IssueReplicationOrderInstruction.from_payload(
+            {
+                "IssueReplicationOrder": {
+                    "order_id": _ORDER_ID,
+                    "order_payload": base64.b64encode(_FIXTURE).decode("ascii"),
+                    "issued_epoch": 20,
+                    "deadline_epoch": 28,
+                }
+            }
+        )
 
 
 def test_issue_rejects_invalid_embedded_replication_order_policy() -> None:
@@ -252,10 +283,18 @@ def test_replication_payloads_convert_to_native_instructions() -> None:
         20,
         28,
     )
+    bound_issue = IssueReplicationOrderInstruction(
+        _ORDER_ID,
+        base64.b64encode(_FIXTURE).decode("ascii"),
+        20,
+        28,
+        _MUSUBI_ARCHIVE_ID,
+    )
     complete = _completion()
     expire = ExpireReplicationOrderInstruction(_ORDER_ID, 29)
     encoded = (
         issue.to_instruction().to_json(),
+        bound_issue.to_instruction().to_json(),
         complete.to_instruction().to_json(),
         expire.to_instruction().to_json(),
     )
@@ -276,5 +315,5 @@ def test_replication_payloads_convert_to_native_instructions() -> None:
             3,
             ProviderIngestFinalizedAnchorV1(41, _BLOCK_HASH),
         ).to_json()
-        == encoded[1]
+        == encoded[2]
     )

@@ -2902,14 +2902,14 @@ mod tests {
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("shielded-open");
-        let asset_definition_entry = AssetDefinition::numeric(
+        let mut asset_definition_entry = AssetDefinition::numeric(
             asset_definition.clone(),
             "XOR".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
-        .confidential_policy(AssetConfidentialPolicy::shielded_only())
         .build(&seller);
+        asset_definition_entry.set_confidential_policy(AssetConfidentialPolicy::shielded_only());
         let state = state_with_parties_and_definition(
             &seller,
             &buyer,

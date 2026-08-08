@@ -32,7 +32,7 @@ use iroha_data_model::{
         asset_alias::SetAssetDefinitionAlias,
         offline::ActivateKagemushaRecursiveReleaseV4,
         verifying_keys::{self, RegisterVerifyingKey},
-        zk::{RegisterZkAsset, ZkAssetMode},
+        zk::RegisterZkAsset,
     },
     offline::{
         KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1, KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND,
@@ -1054,9 +1054,6 @@ pub(super) fn prepare_testnet_bootstrap_v4<T: std::io::Write>(
     instructions.push(
         RegisterZkAsset::new(
             asset_definition_id.clone(),
-            ZkAssetMode::Hybrid,
-            true,
-            true,
             Some(unshield_id),
             Some(topup_id),
         )

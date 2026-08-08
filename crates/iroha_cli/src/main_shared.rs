@@ -49,7 +49,7 @@ use iroha::{
     data_model::{prelude::*, transaction::IvmBytecode},
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_torii_shared::{ErrorEnvelope, FeeQuoteResponse};
 use std::num::NonZeroU64;
 use thiserror::Error;
@@ -1538,6 +1538,12 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
 
 fn try_fallback_config() -> Result<Config> {
     let chain = ChainId::from("offline-cli");
+    // Offline-only commands still share the complete client configuration type.
+    // Use an explicit sentinel that cannot authenticate a request to a deployed
+    // network; commands allowed to use this fallback never perform network I/O.
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"iroha:offline-cli:no-network:v1"),
+    ));
     let seed = b"iroha-cli-offline-fallback-ed25519-v1".to_vec();
     let key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .wrap_err("failed to derive offline fallback Ed25519 key pair")?;
@@ -1554,6 +1560,7 @@ fn try_fallback_config() -> Result<Config> {
     );
     Ok(Config {
         chain,
+        network_id,
         account,
         account_chain_discriminant: defaults::common::chain_discriminant(),
         key_pair,
@@ -1588,6 +1595,7 @@ static WORKSPACE_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
 fn config_to_json(config: &Config) -> Result<norito::json::Value> {
     json_utils::json_object(vec![
         ("chain", json_utils::json_value(&config.chain)?),
+        ("network_id", json_utils::json_value(&config.network_id)?),
         ("account", json_utils::json_value(&config.account)?),
         (
             "account_chain_discriminant",
@@ -2691,39 +2699,13 @@ mod asset {
     }
 
     mod definition {
-        use std::str::FromStr;
-
-        use clap::ValueEnum;
         use iroha::{
-            crypto::Hash,
-            data_model::asset::{
-                AssetDefinition, AssetDefinitionAlias, AssetDefinitionId,
-                definition::{AssetConfidentialPolicy, ConfidentialPolicyMode},
-            },
+            data_model::asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
             data_model::sorafs_uri::SorafsUri,
         };
         use iroha_primitives::numeric::MAX_DECIMAL_SCALE;
 
         use super::*;
-
-        #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum ConfidentialPolicyModeArg {
-            TransparentOnly,
-            ShieldedOnly,
-            Convertible,
-        }
-
-        impl From<ConfidentialPolicyModeArg> for ConfidentialPolicyMode {
-            fn from(value: ConfidentialPolicyModeArg) -> Self {
-                match value {
-                    ConfidentialPolicyModeArg::TransparentOnly => {
-                        ConfidentialPolicyMode::TransparentOnly
-                    }
-                    ConfidentialPolicyModeArg::ShieldedOnly => ConfidentialPolicyMode::ShieldedOnly,
-                    ConfidentialPolicyModeArg::Convertible => ConfidentialPolicyMode::Convertible,
-                }
-            }
-        }
 
         fn numeric_spec_from_scale(scale: Option<u32>) -> Result<NumericSpec> {
             scale.map_or_else(
@@ -2777,12 +2759,15 @@ mod asset {
                         context.print_data(&entry)
                     }
                     Register(args) => {
-                        let policy = confidential_policy_from_args(&args)
-                            .wrap_err("invalid confidential policy arguments")?;
                         let alias = register_alias_from_args(&args)?;
                         let spec = numeric_spec_from_scale(args.scale)?;
-                        let mut entry =
-                            AssetDefinition::new(args.id, args.name, spec, iroha_data_model::asset::AssetBalancePolicy::Global, None);
+                        let mut entry = AssetDefinition::new(
+                            args.id,
+                            args.name,
+                            spec,
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        );
                         if let Some(description) = args.description {
                             entry = entry.with_description(Some(description));
                         }
@@ -2795,7 +2780,6 @@ mod asset {
                         if args.mint_once {
                             entry = entry.mintable_once();
                         }
-                        entry = entry.confidential_policy(policy);
                         let instruction = iroha::data_model::isi::Register::asset_definition(entry);
                         context
                             .finish([instruction])
@@ -2860,22 +2844,6 @@ mod asset {
             /// Numeric scale of the asset. No value means unconstrained.
             #[arg(short, long)]
             pub scale: Option<u32>,
-            /// Confidential policy mode for this asset definition.
-            #[arg(
-                long,
-                value_enum,
-                default_value_t = ConfidentialPolicyModeArg::TransparentOnly
-            )]
-            pub confidential_mode: ConfidentialPolicyModeArg,
-            /// Hex-encoded hash summarising the expected verifying key set.
-            #[arg(long)]
-            pub confidential_vk_set_hash: Option<String>,
-            /// Poseidon parameter set identifier expected for confidential proofs.
-            #[arg(long)]
-            pub confidential_poseidon_params: Option<u32>,
-            /// Pedersen parameter set identifier expected for confidential commitments.
-            #[arg(long)]
-            pub confidential_pedersen_params: Option<u32>,
         }
 
         #[derive(clap::Args, Debug)]
@@ -2990,28 +2958,6 @@ mod asset {
             Ok(builder)
         }
 
-        fn confidential_policy_from_args(args: &Register) -> Result<AssetConfidentialPolicy> {
-            let mode = ConfidentialPolicyMode::from(args.confidential_mode);
-            let vk_set_hash = args
-                .confidential_vk_set_hash
-                .as_deref()
-                .map(parse_vk_set_hash)
-                .transpose()?;
-            Ok(AssetConfidentialPolicy {
-                mode,
-                vk_set_hash,
-                poseidon_params_id: args.confidential_poseidon_params,
-                pedersen_params_id: args.confidential_pedersen_params,
-                pending_transition: None,
-            })
-        }
-
-        fn parse_vk_set_hash(input: &str) -> Result<Hash> {
-            let trimmed = input.trim();
-            Hash::from_str(trimmed)
-                .wrap_err_with(|| format!("invalid hash literal `{trimmed}` for vk-set hash"))
-        }
-
         fn register_alias_from_args(args: &Register) -> Result<Option<AssetDefinitionAlias>> {
             match (&args.alias, &args.alias_domain, &args.alias_dataspace) {
                 (Some(alias), None, None) => Ok(Some(alias.clone())),
@@ -3064,7 +3010,6 @@ mod asset {
         #[cfg(test)]
         mod tests {
             use super::*;
-            use iroha::data_model::asset::definition::ConfidentialPolicyMode;
 
             fn base_register_args() -> Register {
                 Register {
@@ -3080,10 +3025,6 @@ mod asset {
                     logo: None,
                     mint_once: false,
                     scale: None,
-                    confidential_mode: ConfidentialPolicyModeArg::TransparentOnly,
-                    confidential_vk_set_hash: None,
-                    confidential_poseidon_params: None,
-                    confidential_pedersen_params: None,
                 }
             }
 
@@ -3115,43 +3056,6 @@ mod asset {
                         .to_string()
                         .contains(&format!("between 0 and {MAX_DECIMAL_SCALE}")),
                     "{error:?}"
-                );
-            }
-
-            #[test]
-            fn confidential_policy_defaults_to_transparent() {
-                let args = base_register_args();
-                let policy = confidential_policy_from_args(&args).expect("policy should build");
-                assert_eq!(policy.mode, ConfidentialPolicyMode::TransparentOnly);
-                assert!(policy.vk_set_hash.is_none());
-                assert!(policy.poseidon_params_id.is_none());
-                assert!(policy.pedersen_params_id.is_none());
-            }
-
-            #[test]
-            fn confidential_policy_parses_hash_and_params() {
-                let mut args = base_register_args();
-                args.confidential_mode = ConfidentialPolicyModeArg::ShieldedOnly;
-                let hash = Hash::new(b"vk-digest");
-                args.confidential_vk_set_hash = Some(hash.to_string());
-                args.confidential_poseidon_params = Some(7);
-                args.confidential_pedersen_params = Some(9);
-
-                let policy = confidential_policy_from_args(&args).expect("policy should build");
-                assert_eq!(policy.mode, ConfidentialPolicyMode::ShieldedOnly);
-                assert_eq!(policy.vk_set_hash, Some(hash));
-                assert_eq!(policy.poseidon_params_id, Some(7));
-                assert_eq!(policy.pedersen_params_id, Some(9));
-            }
-
-            #[test]
-            fn confidential_policy_rejects_invalid_hash() {
-                let mut args = base_register_args();
-                args.confidential_vk_set_hash = Some("not-a-hash".to_string());
-                let err = confidential_policy_from_args(&args).expect_err("must fail");
-                assert!(
-                    err.to_string().contains("invalid hash literal"),
-                    "unexpected error: {err}"
                 );
             }
 
@@ -4942,14 +4846,10 @@ mod query {
             std::io::stdin().read_to_string(&mut buf)?;
             let envelope: QueryEnvelopeJson =
                 norito::json::from_str(&buf).wrap_err("decode query envelope")?;
-            let with_auth = envelope
-                .into_signed_request(client.account.clone())
+            let request = envelope
+                .into_request()
                 .map_err(|err| eyre!(format!("invalid query JSON: {err}")))?;
-            let signed = with_auth
-                .try_sign(&client.key_pair)
-                .wrap_err("sign query request")?;
-            let payload = norito::codec::Encode::encode(&signed);
-            let resp = client.execute_signed_query_raw(&payload)?;
+            let resp = client.execute_query_request(request)?;
             match resp {
                 iroha::data_model::query::QueryResponse::Singular(out) => context.print_data(&out),
                 iroha::data_model::query::QueryResponse::Iterable(out) => context.print_data(&out),
@@ -4966,7 +4866,7 @@ mod query {
 
     impl Run for ContinueArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            use iroha::data_model::query::{QueryRequest, QueryRequestWithAuthority};
+            use iroha::data_model::query::QueryRequest;
             let client = context.client_from_config();
             let bytes = decode_base64_or_hex(
                 &self.cursor,
@@ -4975,16 +4875,8 @@ mod query {
             )?;
             let cursor: iroha::data_model::query::parameters::ForwardCursor =
                 norito::decode_from_bytes(&bytes).wrap_err("decode ForwardCursor")?;
-            let req = QueryRequest::Continue(cursor);
-            let with_auth = QueryRequestWithAuthority {
-                authority: client.account.clone(),
-                request: req,
-            };
-            let signed = with_auth
-                .try_sign(&client.key_pair)
-                .wrap_err("sign query continuation request")?;
-            let payload = norito::codec::Encode::encode(&signed);
-            let resp = client.execute_signed_query_raw(&payload)?;
+            let request = QueryRequest::Continue(cursor);
+            let resp = client.execute_query_request(request)?;
             match resp {
                 iroha::data_model::query::QueryResponse::Singular(out) => context.print_data(&out),
                 iroha::data_model::query::QueryResponse::Iterable(out) => context.print_data(&out),
@@ -10162,6 +10054,10 @@ transaction_status_timeout = "77s"
             let key_pair = fixture_key_pair(0xA5);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+                network_id:
+                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                        .parse()
+                        .expect("network id"),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),
@@ -13936,7 +13832,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "rose".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "rose".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
             {
@@ -13945,7 +13847,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "tulip".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "tulip".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "tulip".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
         ];
@@ -13994,7 +13902,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "rose".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "rose".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
             {
@@ -14003,7 +13917,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "tulip".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "tulip".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "tulip".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
             {
@@ -14012,7 +13932,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "peony".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "peony".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "peony".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
         ];

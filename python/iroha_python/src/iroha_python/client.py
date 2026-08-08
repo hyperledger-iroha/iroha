@@ -13518,6 +13518,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         transaction_hash: str,
         authority: str,
+        canonical_genesis_hash: bytes,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
     ) -> VerifiedCommittedTransaction:
@@ -13545,6 +13546,7 @@ class ToriiClient(_BaseToriiClient):
         transaction_request = build_find_committed_transaction_query(
             canonical_authority,
             signing_key,
+            canonical_genesis_hash,
             normalized_hash,
         )
         transaction_response = self._request(
@@ -13569,6 +13571,7 @@ class ToriiClient(_BaseToriiClient):
         block_request = build_find_block_by_hash_query(
             canonical_authority,
             signing_key,
+            canonical_genesis_hash,
             block_hash,
         )
         block_response = self._request(
@@ -13602,6 +13605,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         escrow_id: str,
         authority: str,
+        canonical_genesis_hash: bytes,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
     ) -> Mapping[str, Any]:
@@ -13615,6 +13619,7 @@ class ToriiClient(_BaseToriiClient):
                 private_key=private_key,
                 private_key_hex=private_key_hex,
             ),
+            canonical_genesis_hash,
             _require_exact_non_empty_string(escrow_id, "escrow_id"),
         )
         response = self._request(
@@ -13693,6 +13698,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         account_id: str,
         authority: str,
+        canonical_genesis_hash: bytes,
         private_key: Optional[bytes],
         private_key_hex: Optional[str],
         party: str,
@@ -13720,12 +13726,14 @@ class ToriiClient(_BaseToriiClient):
             request = build_find_asset_escrows_by_seller_query(
                 canonical_authority,
                 signing_key,
+                canonical_genesis_hash,
                 canonical_account,
             )
         elif party == "buyer":
             request = build_find_asset_escrows_by_buyer_query(
                 canonical_authority,
                 signing_key,
+                canonical_genesis_hash,
                 canonical_account,
             )
         else:  # pragma: no cover - private invariant
@@ -13766,6 +13774,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         seller: str,
         authority: str,
+        canonical_genesis_hash: bytes,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         status: Optional[str] = None,
@@ -13776,6 +13785,7 @@ class ToriiClient(_BaseToriiClient):
         return self._list_asset_escrows_by_party(
             account_id=seller,
             authority=authority,
+            canonical_genesis_hash=canonical_genesis_hash,
             private_key=private_key,
             private_key_hex=private_key_hex,
             party="seller",
@@ -13788,6 +13798,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         buyer: str,
         authority: str,
+        canonical_genesis_hash: bytes,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         status: Optional[str] = None,
@@ -13798,6 +13809,7 @@ class ToriiClient(_BaseToriiClient):
         return self._list_asset_escrows_by_party(
             account_id=buyer,
             authority=authority,
+            canonical_genesis_hash=canonical_genesis_hash,
             private_key=private_key,
             private_key_hex=private_key_hex,
             party="buyer",
@@ -18117,7 +18129,6 @@ class ToriiClient(_BaseToriiClient):
         alias: Optional[str] = None,
         scale: Optional[Union[int, str]] = None,
         mintable: Optional[str] = "Infinitely",
-        confidential_policy: Optional[str] = None,
         asset_metadata: Optional[Mapping[str, Any]] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
@@ -18141,7 +18152,6 @@ class ToriiClient(_BaseToriiClient):
             scale=scale,
             mintable=mintable,
             balance_scope_policy=balance_scope_policy,
-            confidential_policy=confidential_policy,
             metadata=asset_metadata,
         )
         return self._submit_transaction_draft_result(
@@ -18805,6 +18815,7 @@ class ToriiClient(_BaseToriiClient):
         escrow_id: str,
         amount: QuantityLike,
         expected_remaining_amount: Optional[QuantityLike] = None,
+        canonical_genesis_hash: Optional[bytes] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
@@ -18818,9 +18829,14 @@ class ToriiClient(_BaseToriiClient):
         """
 
         if expected_remaining_amount is None:
+            if canonical_genesis_hash is None:
+                raise ValueError(
+                    "canonical_genesis_hash is required when the SDK reads the current escrow"
+                )
             escrow = self.get_asset_escrow(
                 escrow_id=escrow_id,
                 authority=authority,
+                canonical_genesis_hash=canonical_genesis_hash,
                 private_key=private_key,
                 private_key_hex=private_key_hex,
             )
@@ -18983,10 +18999,6 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
-        mode: str = "Hybrid",
-        allow_shield: bool = True,
-        allow_unshield: bool = True,
-        vk_transfer: Optional[Union[str, Mapping[str, Any]]] = None,
         vk_unshield: Optional[Union[str, Mapping[str, Any]]] = None,
         vk_shield: Optional[Union[str, Mapping[str, Any]]] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
@@ -19004,10 +19016,6 @@ class ToriiClient(_BaseToriiClient):
         )
         draft.register_zk_asset(
             asset_definition_id,
-            mode=mode,
-            allow_shield=allow_shield,
-            allow_unshield=allow_unshield,
-            vk_transfer=vk_transfer,
             vk_unshield=vk_unshield,
             vk_shield=vk_shield,
         )

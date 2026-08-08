@@ -671,7 +671,7 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 )
 ```
 
-Preparation fails closed unless ABI-21 native inspection proves the versioned
+Preparation fails closed unless ABI-22 native inspection proves the versioned
 scaffold has the exact authority, chain, definition, source scope, amount,
 destination, memo, typed fee payer, creation time, TTL, and no extra metadata.
 The prepare route obtains the canonical fee quote and replaces only the charge
@@ -1087,7 +1087,7 @@ deprecated, ignores its selector, and returns the same `ToriiOfflineStatus`.
 
 `ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
 settlement readiness. Swift accepts only `mandatory: false`,
-`cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `21`, the exact maximum
+`cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `22`, the exact maximum
 hop bound, `ready: true`, and empty `assets` and `blockers`. Assets and
 dataspaces require no offline enrollment or backend enablement.
 
@@ -1100,7 +1100,7 @@ operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
 operation ID.
 
-Local artifact validation requires exact bridge ABI 21 and manifest
+Local artifact validation requires exact bridge ABI 22 and manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
 manifest's eight streamed artifacts are content-addressed and installed
 atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
@@ -1155,7 +1155,7 @@ contains no governance or readiness state; fetch a fresh committed
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
-accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 21
+accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 22
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
 the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
@@ -1868,7 +1868,8 @@ let issue = try SorafsReplicationInstructionBuilders.issueReplicationOrder(
     orderId: orderId,
     orderPayload: replicationOrderBytes,
     issuedEpoch: 20,
-    deadlineEpoch: 28
+    deadlineEpoch: 28,
+    musubiArchiveId: archiveId
 )
 let complete = try SorafsReplicationInstructionBuilders.completeReplicationOrder(
     orderId: orderId,
@@ -1897,8 +1898,10 @@ let expire = try SorafsReplicationInstructionBuilders.expireReplicationOrder(
 
 IDs must be non-zero lowercase 64-hex strings. Issue validates canonical,
 bounded `ReplicationOrderV1` framing, the embedded order ID, target/provider
-assignment policy, and deadline ordering. Completion requires the exact
-six-field hard cut: `order_id`, `provider_id`, `completion_epoch`,
+assignment policy, and deadline ordering. Its schema-closed JSON always carries
+the fifth `musubi_archive` field as a canonical archive ID or `null`; the
+four-field pre-binding shape is rejected. Completion requires the exact six-field
+hard cut: `order_id`, `provider_id`, `completion_epoch`,
 `expected_authority`, `expected_assignment_revision`, and `finalized_anchor`.
 The authority retains the provider owner and four-part signer-policy chain;
 missing, retired three-field, alias, or unknown shapes are rejected.

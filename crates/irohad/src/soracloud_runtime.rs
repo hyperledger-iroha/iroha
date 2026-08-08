@@ -21041,6 +21041,7 @@ mod tests {
                         order_id: fixture.order_id,
                         manifest_digest: fixture.manifest_digest,
                         manifest_root_cid: fixture.manifest_root_cid.clone(),
+                        musubi_archive: None,
                         issued_by: (*ALICE_ID).clone(),
                         issued_epoch: fixture.issued_epoch,
                         deadline_epoch: fixture.issued_epoch + 600,

@@ -2747,7 +2747,6 @@ mod measured_bytes_impls {
         },
         ipfs::IpfsPath,
         isi::governance::CouncilDerivationKind,
-        isi::zk::ZkAssetMode,
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -2882,7 +2881,6 @@ mod measured_bytes_impls {
         PrivacyRootHeadRecordV1,
         PrivacyRootProvenanceV1,
         PrivacyStateItemRecordV1,
-        ZkAssetMode,
     );
 
     impl<T: MeasuredBytes, const N: usize> MeasuredBytes for [T; N] {
@@ -3850,9 +3848,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.tree_profile.measured_bytes_extra());
             total = total.saturating_add(self.tree_frontier.measured_bytes_extra());
             total = total.saturating_add(self.persisted_root.measured_bytes_extra());
-            total = total.saturating_add(self.mode.measured_bytes_extra());
-            total = total.saturating_add(self.allow_shield.measured_bytes_extra());
-            total = total.saturating_add(self.allow_unshield.measured_bytes_extra());
             total = total.saturating_add(self.commitments.measured_bytes_extra());
             total = total.saturating_add(self.root_history.measured_bytes_extra());
             total = total.saturating_add(self.nullifiers.measured_bytes_extra());

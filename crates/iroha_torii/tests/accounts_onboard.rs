@@ -259,6 +259,7 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
         {
             Torii::new(
                 chain_id.clone(),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),
@@ -276,6 +277,7 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
         {
             Torii::new(
                 chain_id.clone(),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),

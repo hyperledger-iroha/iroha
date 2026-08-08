@@ -90,6 +90,59 @@ fn tx_stdin_builder_wraps_replication_order_summaries() {
     assert_eq!(order.issued_epoch, 580);
     assert_eq!(order.deadline_epoch, 2_580);
     assert_eq!(order.order_id.as_bytes(), &[0x55; 32]);
+    assert_eq!(order.musubi_archive, None);
+}
+
+#[test]
+fn tx_stdin_builder_binds_replication_order_to_musubi_archive() {
+    let temp = tempdir().expect("tempdir");
+    let summary_path = temp.path().join("order_summary.json");
+    let order_b64 =
+        BASE64_STD.encode(to_bytes(&sample_replication_order()).expect("serialize order"));
+    fs::write(
+        &summary_path,
+        format!("{{\n  \"replication_order_b64\": \"{order_b64}\"\n}}\n"),
+    )
+    .expect("write order summary");
+
+    let payload = run_builder([
+        "replication-order".to_owned(),
+        format!("--summary={}", summary_path.display()),
+        "--issued-epoch=580".to_owned(),
+        "--deadline-epoch=2580".to_owned(),
+        format!("--musubi-archive-id-hex={}", "a5".repeat(32)),
+    ]);
+    let instruction = decode_single_instruction(payload);
+    let order = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::sorafs::IssueReplicationOrder>()
+        .expect("issue replication order");
+    assert_eq!(
+        order.musubi_archive,
+        Some(iroha_data_model::musubi::ArchiveId::new([0xa5; 32]))
+    );
+}
+
+#[test]
+fn tx_stdin_builder_rejects_noncanonical_musubi_archive_id_hex() {
+    for value in [
+        "a5".repeat(31),
+        format!("0x{}", "a5".repeat(32)),
+        "A5".repeat(32),
+        "00".repeat(32),
+    ] {
+        let stderr = run_builder_failure([
+            "replication-order".to_owned(),
+            "--summary=unused.json".to_owned(),
+            "--issued-epoch=580".to_owned(),
+            "--deadline-epoch=2580".to_owned(),
+            format!("--musubi-archive-id-hex={value}"),
+        ]);
+        assert!(
+            stderr.contains("musubi_archive_id_hex"),
+            "stderr should name rejected Musubi archive id {value}, got: {stderr}"
+        );
+    }
 }
 
 #[test]

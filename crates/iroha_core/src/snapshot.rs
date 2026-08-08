@@ -3955,6 +3955,7 @@ mod tests {
         smart_contract::{ContractAddress, ContractAlias},
         transaction::TransactionBuilder,
     };
+    use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
@@ -5380,6 +5381,39 @@ mod tests {
 
         validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
             .expect("writer-generated snapshot must survive restart initialization exactly");
+    }
+
+    #[test]
+    async fn canonicalized_account_metadata_survives_the_snapshot_restart_boundary() {
+        let state = state_factory();
+        let owner = state
+            .world
+            .accounts
+            .view()
+            .iter()
+            .next()
+            .map(|(account_id, _)| account_id.clone())
+            .expect("snapshot fixture account");
+        let key = "snapshot_probe".parse().expect("metadata key");
+        let value = Json::from_raw_json("1 ".to_owned())
+            .expect("valid alternate JSON spelling must canonicalize at construction");
+        assert_eq!(value.get(), "1");
+
+        let mut accounts = state.world.accounts.block();
+        accounts
+            .get_mut(&owner)
+            .expect("snapshot fixture account remains registered")
+            .insert(key, value);
+        accounts.commit();
+
+        let snapshot_bytes = exact_snapshot_payload_bytes(&state);
+        validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
+            .expect("canonical ledger Json must round-trip through restart reconstruction");
+        let snapshot_text = core::str::from_utf8(&snapshot_bytes).expect("snapshot is UTF-8 JSON");
+        assert!(
+            snapshot_text.contains(r#""snapshot_probe":1"#),
+            "snapshot must contain only the canonical metadata spelling"
+        );
     }
 
     #[test]

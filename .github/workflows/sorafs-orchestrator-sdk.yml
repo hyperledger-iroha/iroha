@@ -37,8 +37,8 @@ on:
       - "fixtures/sorafs_orchestrator/multi_peer_parity_v1/**"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
-      - "scripts/check_native_sdk_abi21_artifact.py"
-      - "scripts/tests/check_native_sdk_abi21_artifact_test.py"
+      - "scripts/check_native_sdk_abi22_artifact.py"
+      - "scripts/tests/check_native_sdk_abi22_artifact_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -117,11 +117,11 @@ jobs:
           echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
-      - name: Build exact ABI-21 NoritoBridge XCFramework
+      - name: Build exact ABI-22 NoritoBridge XCFramework
         run: scripts/build_norito_xcframework.sh
       - name: Authenticate Apple native artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
-      - name: Run exact Python 3.12 ABI-21 native reference parity
+      - name: Run exact Python 3.12 ABI-22 native reference parity
         env:
           SORAFS_PYTHON_SDK_PYTHON_BIN: python3
         run: bash ci/check_sorafs_python_native_sdk.sh

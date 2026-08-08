@@ -1854,6 +1854,9 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "post-restart exact stale-policy carrier subject",
         )
         .await?;
+        println!(
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart:passed"
+        );
         Ok(())
     }
     .await;

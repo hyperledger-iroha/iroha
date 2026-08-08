@@ -200,6 +200,7 @@ impl BlockBuilder {
             transaction_results: self.results,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            lane_finality_statements: Vec::new(),
             trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };

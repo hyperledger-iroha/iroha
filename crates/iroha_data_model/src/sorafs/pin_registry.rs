@@ -7,7 +7,7 @@ use norito::codec::{Decode, Encode};
 use super::capacity::ProviderId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata};
+use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata, musubi::ArchiveId};
 
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
@@ -849,6 +849,8 @@ pub struct ReplicationOrderRecord {
     pub manifest_digest: ManifestDigest,
     /// Content root CID bound into the canonical replication payload.
     pub manifest_root_cid: ManifestRootCid,
+    /// Immutable Musubi archive purpose, absent for generic SoraFS orders.
+    pub musubi_archive: Option<ArchiveId>,
     /// Account that issued the order.
     pub issued_by: AccountId,
     /// Epoch (inclusive) when the order was issued.
@@ -1138,6 +1140,7 @@ mod tests {
                 sorafs_manifest::canonical_manifest_root_cid([0x56; 32]),
             )
             .expect("canonical root CID"),
+            musubi_archive: None,
             issued_by: AccountId::new(
                 "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                     .parse()

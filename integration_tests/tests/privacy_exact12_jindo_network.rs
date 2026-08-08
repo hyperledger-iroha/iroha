@@ -779,6 +779,9 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
             canonical_genesis_hash(&bounded_client(restart_peer.client()))? == genesis_hash,
             "restarted peer derived a different canonical genesis hash"
         );
+        println!(
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_jindo_network::canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart:passed"
+        );
         Ok(())
     }
     .await;

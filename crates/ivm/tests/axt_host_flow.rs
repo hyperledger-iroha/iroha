@@ -153,6 +153,7 @@ fn build_handle(
         manifest_view_root: vec![1; 32],
         expiry_slot: 99,
         max_clock_skew_ms: Some(0),
+        issuer_signature: Some(iroha_crypto::Signature::from_bytes(&[1_u8; 64])),
     }
 }
 
@@ -775,6 +776,7 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
         manifest_view_root: vec![1; 32],
         expiry_slot: 99,
         max_clock_skew_ms: Some(0),
+        issuer_signature: Some(iroha_crypto::Signature::from_bytes(&[1_u8; 64])),
     };
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
     let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &handle_bytes);

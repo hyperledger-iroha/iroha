@@ -789,9 +789,7 @@ impl PrivacyOrchardPoolBootstrapV1 {
             self.public_balance_scope,
             AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL)
         ) {
-            return Err(
-                PrivacyOrchardPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope,
-            );
+            return Err(PrivacyOrchardPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope);
         }
         self.namespace()
             .validate()
@@ -1290,9 +1288,7 @@ impl PrivacyProofManagedPoolBootstrapV1 {
     #[must_use]
     pub const fn public_balance_scope(&self) -> Option<AssetBalanceScope> {
         match self {
-            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => {
-                Some(bootstrap.public_balance_scope)
-            }
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => Some(bootstrap.public_balance_scope),
             Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
         }
     }
@@ -3761,10 +3757,12 @@ impl PrivacyCompiledProfileCatalogV1 {
             });
         }
         if self.protocols.len() != PrivacyProtocolIdV1::COUNT {
-            return Err(PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolCount {
-                expected: PrivacyProtocolIdV1::COUNT,
-                actual: self.protocols.len(),
-            });
+            return Err(
+                PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolCount {
+                    expected: PrivacyProtocolIdV1::COUNT,
+                    actual: self.protocols.len(),
+                },
+            );
         }
         for (index, (row, expected)) in self
             .protocols
@@ -3773,11 +3771,13 @@ impl PrivacyCompiledProfileCatalogV1 {
             .enumerate()
         {
             if row.protocol_id != expected {
-                return Err(PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolOrder {
-                    index,
-                    expected,
-                    actual: row.protocol_id,
-                });
+                return Err(
+                    PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolOrder {
+                        index,
+                        expected,
+                        actual: row.protocol_id,
+                    },
+                );
             }
             row.validate().map_err(|source| {
                 PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolRow {
@@ -4239,7 +4239,7 @@ impl PrivacyCapabilitySnapshotV1 {
 }
 
 /// Exact native bridge ABI required by the first-release privacy SDK surface.
-pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;
+pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;
 /// Maximum accepted size of one canonical local compiled-profile catalog archive.
 pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024;
 /// Maximum elements accepted in one catalog sequence.

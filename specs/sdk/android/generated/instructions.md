@@ -1656,7 +1656,7 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::zk::RegisterZkAsset`
 
-> Schema summary: struct fields: asset: AssetDefinitionId, mode: ZkAssetMode, allow_shield: bool, allow_unshield: bool, vk_transfer: Option<VerifyingKeyId>, vk_unshield: Option<VerifyingKeyId>, vk_shield: Option<VerifyingKeyId>.
+> Schema summary: struct fields: asset: AssetDefinitionId, vk_unshield: Option<VerifyingKeyId>, vk_shield: Option<VerifyingKeyId>.
 
 - Rust type: `iroha_data_model::isi::zk::RegisterZkAsset`
 - Schema hash: `5fc0b16cf5cb3dd02292dc01fdcb8179`
@@ -1666,10 +1666,6 @@ Alias binding payload approved alongside a manifest.
 | Field | Type |
 |-------|------|
 | `asset` | `AssetDefinitionId` |
-| `mode` | `ZkAssetMode` |
-| `allow_shield` | `bool` |
-| `allow_unshield` | `bool` |
-| `vk_transfer` | `Option<VerifyingKeyId>` |
 | `vk_unshield` | `Option<VerifyingKeyId>` |
 | `vk_shield` | `Option<VerifyingKeyId>` |
 

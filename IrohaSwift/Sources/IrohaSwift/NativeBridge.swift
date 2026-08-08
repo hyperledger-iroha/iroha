@@ -123,7 +123,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 21
+        return 22
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -841,9 +841,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt8,
         UnsafePointer<CChar>?, UInt,
-        UInt8,
-        UInt8,
-        UInt8,
         UnsafePointer<CChar>?, UInt,
         UInt8,
         UnsafePointer<CChar>?, UInt,
@@ -862,9 +859,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt8,
         UnsafePointer<CChar>?, UInt,
-        UInt8,
-        UInt8,
-        UInt8,
         UnsafePointer<CChar>?, UInt,
         UInt8,
         UnsafePointer<CChar>?, UInt,
@@ -3388,7 +3382,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 21 exposes the complete selector-free V4 Kagemusha surface.
+    /// Whether ABI 22 exposes the complete selector-free V4 Kagemusha surface.
     public var isKagemushaRecursiveSpendBridgeAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
@@ -4283,9 +4277,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
         assetDefinitionId: String,
-        modeCode: UInt8,
-        allowShield: Bool,
-        allowUnshield: Bool,
         unshieldVerifyingKey: String?,
         shieldVerifyingKey: String?,
         feePaymentJSON: Data,
@@ -4299,8 +4290,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
-        let allowShieldFlag: UInt8 = allowShield ? 1 : 0
-        let allowUnshieldFlag: UInt8 = allowUnshield ? 1 : 0
         let useAlg = algorithm != .ed25519 && encodeRegisterZkAssetWithAlgFn != nil
         guard useAlg || encodeRegisterZkAssetFn != nil else { return nil }
 
@@ -4333,9 +4322,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     ttlValue,
                                                     ttlFlag,
                                                     assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    modeCode,
-                                                    allowShieldFlag,
-                                                    allowUnshieldFlag,
                                                     unshieldPtr, unshieldLen,
                                                     unshieldFlag,
                                                     shieldPtr, shieldLen,
@@ -4356,9 +4342,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     ttlValue,
                                                     ttlFlag,
                                                     assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    modeCode,
-                                                    allowShieldFlag,
-                                                    allowUnshieldFlag,
                                                     unshieldPtr, unshieldLen,
                                                     unshieldFlag,
                                                     shieldPtr, shieldLen,

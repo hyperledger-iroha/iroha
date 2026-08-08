@@ -17,7 +17,8 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
         string orderId,
         ReadOnlySpan<byte> orderPayload,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
     {
         OrderId = ReplicationOrderInstructionValidation.RequireIdentifier(
             orderId,
@@ -36,20 +37,27 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
             nameof(orderPayload));
         IssuedEpoch = issuedEpoch;
         DeadlineEpoch = deadlineEpoch;
+        MusubiArchiveId = musubiArchiveId is null
+            ? null
+            : ReplicationOrderInstructionValidation.RequireIdentifier(
+                musubiArchiveId,
+                nameof(musubiArchiveId));
     }
 
     public IssueReplicationOrderInstruction(
         string orderId,
         string orderPayloadBase64,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
         : this(
             orderId,
             ReplicationOrderInstructionValidation.DecodeCanonicalBase64(
                 orderPayloadBase64,
                 nameof(orderPayloadBase64)),
             issuedEpoch,
-            deadlineEpoch)
+            deadlineEpoch,
+            musubiArchiveId)
     {
     }
 
@@ -63,6 +71,9 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
     public ulong IssuedEpoch { get; }
 
     public ulong DeadlineEpoch { get; }
+
+    /// <summary>Optional immutable Musubi archive purpose bound to this order.</summary>
+    public string? MusubiArchiveId { get; }
 
     internal override string WireId => TypeName;
 
@@ -81,6 +92,9 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
         writer.WriteField(payloadVector.ToArray());
         writer.WriteField(context.EncodeUInt64(IssuedEpoch));
         writer.WriteField(context.EncodeUInt64(DeadlineEpoch));
+        writer.WriteField(
+            ReplicationOrderInstructionValidation.EncodeOptionalIdentifierNewtype(
+                MusubiArchiveId));
         return writer.ToArray();
     }
 }
@@ -382,6 +396,20 @@ internal static class ReplicationOrderInstructionValidation
             array.WriteField(new[] { item });
         }
         writer.WriteField(array.ToArray());
+        return writer.ToArray();
+    }
+
+    internal static byte[] EncodeOptionalIdentifierNewtype(string? value)
+    {
+        var writer = new OfflineNoritoWriter();
+        if (value is null)
+        {
+            writer.WriteByte(0);
+            return writer.ToArray();
+        }
+
+        writer.WriteByte(1);
+        writer.WriteField(EncodeIdentifierNewtype(value));
         return writer.ToArray();
     }
 

@@ -870,6 +870,41 @@ pub struct StarkFriVerifyingKeyV1 {
     pub hash_fn: u8,
 }
 
+/// Maximum canonical encoding accepted for a STARK/FRI V1 verifying key.
+///
+/// The payload contains one bounded circuit identifier and a fixed set of
+/// scalar parameters, so 4 KiB leaves ample format headroom without allowing
+/// registry input to inherit a caller-sized decode budget.
+pub const STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES: usize = 4 * 1024;
+const STARK_FRI_VERIFYING_KEY_V1_MAX_NESTING_DEPTH: usize = 8;
+
+/// Decode one exact canonical STARK/FRI V1 verifying-key payload under a
+/// schema-specific resource budget.
+///
+/// # Errors
+///
+/// Returns an error when the frame exceeds the V1 byte bound, advertises an
+/// oversized field or allocation, is not canonical Norito, or does not decode
+/// to [`StarkFriVerifyingKeyV1`].
+pub fn decode_stark_fri_verifying_key_v1(bytes: &[u8]) -> Result<StarkFriVerifyingKeyV1, String> {
+    if bytes.len() > STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES {
+        return Err(format!(
+            "STARK/FRI verifier key exceeds the {}-byte limit",
+            STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES
+        ));
+    }
+    let circuit_id_limit = MAX_TRANSCRIPT_LABEL_LEN;
+    let limits = norito::DecodeLimits::new(
+        circuit_id_limit,
+        STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES,
+        circuit_id_limit.saturating_add(16),
+        STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES.saturating_mul(2),
+        STARK_FRI_VERIFYING_KEY_V1_MAX_NESTING_DEPTH,
+    );
+    norito::decode_canonical_with_limits(bytes, limits)
+        .map_err(|err| format!("invalid canonical STARK/FRI verifier key: {err}"))
+}
+
 /// Validate that a STARK/FRI verifier-key payload uses ledger-grade verifier parameters.
 ///
 /// This is a control-plane floor for proof-system admission. It rejects historical
@@ -941,6 +976,78 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod verifying_key_decode_tests {
+    use super::*;
+
+    fn canonical_payload() -> StarkFriVerifyingKeyV1 {
+        StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: "stark/fri/sha256-goldilocks:bounded-vk-test".to_owned(),
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        }
+    }
+
+    #[test]
+    fn bounded_verifying_key_decode_accepts_canonical_payload() {
+        let payload = canonical_payload();
+        let bytes = norito::encode_canonical(&payload).expect("encode canonical STARK key");
+        let decoded = decode_stark_fri_verifying_key_v1(&bytes)
+            .expect("bounded decoder must accept canonical STARK key");
+        assert_eq!(decoded.circuit_id, payload.circuit_id);
+        assert_eq!(decoded.queries, payload.queries);
+        assert_eq!(decoded.hash_fn, payload.hash_fn);
+    }
+
+    #[test]
+    fn bounded_verifying_key_decode_rejects_alternate_layout() {
+        let payload = canonical_payload();
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&payload).expect("encode alternate-layout STARK key")
+        };
+        norito::decode_from_bytes::<StarkFriVerifyingKeyV1>(&alternate)
+            .expect("ordinary decoder accepts the advertised alternate layout");
+        assert!(
+            decode_stark_fri_verifying_key_v1(&alternate).is_err(),
+            "registry decoder must accept only the canonical layout"
+        );
+    }
+
+    #[test]
+    fn bounded_verifying_key_decode_rejects_huge_declared_inner_length() {
+        let payload = canonical_payload();
+        let mut bytes = norito::encode_canonical(&payload).expect("encode canonical STARK key");
+        let circuit = payload.circuit_id.as_bytes();
+        let circuit_offset = bytes
+            .windows(circuit.len())
+            .position(|window| window == circuit)
+            .expect("encoded circuit id");
+        assert!(circuit_offset > 0, "circuit id must carry a length prefix");
+        bytes[circuit_offset - 1] = u8::MAX;
+
+        assert!(
+            decode_stark_fri_verifying_key_v1(&bytes).is_err(),
+            "a tiny frame must not allocate from an attacker-declared inner length"
+        );
+    }
+
+    #[test]
+    fn bounded_verifying_key_decode_rejects_oversized_frame() {
+        let bytes = vec![0_u8; STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES + 1];
+        let error = decode_stark_fri_verifying_key_v1(&bytes)
+            .expect_err("oversized verifier-key frame must fail before decoding");
+        assert!(error.contains("exceeds"), "unexpected error: {error}");
+    }
 }
 
 /// Commitments for multiple layers and optional composition root.

@@ -76,6 +76,7 @@ async fn account_query_subrouter_exposes_endpoints() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -93,6 +94,7 @@ async fn account_query_subrouter_exposes_endpoints() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,

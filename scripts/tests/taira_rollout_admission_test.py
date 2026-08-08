@@ -39,6 +39,7 @@ SOURCE_DATE_EPOCH = 1_700_000_000
 
 
 ReceiptMutation = Callable[[dict[str, object]], None]
+PrivacyReceiptMutation = Callable[[dict[str, object]], None]
 ManifestMutation = Callable[[dict[str, object]], None]
 
 
@@ -279,6 +280,58 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
     return {**body, "receipt_id": receipt_id}
 
 
+def _privacy_protocol_receipt(
+    now_unix: int,
+    linux_archive_sha256: str,
+    validator_binary_sha256: str,
+    mutation: PrivacyReceiptMutation | None,
+) -> dict[str, object]:
+    case_digests = {
+        row[1]: hashlib.sha256(f"real-four-peer:{row[1]}".encode()).hexdigest()
+        for row in admission.PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1
+    }
+    body: dict[str, object] = {
+        "candidate": {
+            "exact12_matrix_sha256": hashlib.sha256(EXACT12.read_bytes()).hexdigest(),
+            "linux_release_archive_sha256": linux_archive_sha256,
+            "source": SOURCE.as_dict(),
+            "validator_binary_sha256": validator_binary_sha256,
+        },
+        "expires_at_unix": now_unix + 3_600,
+        "issued_at_unix": now_unix - 30,
+        "outcomes": [
+            {
+                "case": case,
+                "case_output_sha256": case_digests[case],
+                "closed_reason": closed_reason,
+                "index": index,
+                "production_outcome": production_outcome,
+                "profile": profile,
+                "protocol": protocol,
+                "security_boundary": security_boundary,
+                "validator_binary_sha256": validator_binary_sha256,
+            }
+            for index, (
+                protocol,
+                case,
+                profile,
+                production_outcome,
+                closed_reason,
+                security_boundary,
+            ) in enumerate(admission.PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1)
+        ],
+        "platform": {"arch": "arm64", "os": "macos", "peer_count": 4},
+        "schema": admission.PRIVACY_PROTOCOL_RECEIPT_SCHEMA,
+        "schema_version": admission.PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION,
+    }
+    if mutation is not None:
+        mutation(body)
+    return {
+        **body,
+        "receipt_id": admission.compute_privacy_protocol_receipt_id(body),
+    }
+
+
 def _tar_bytes(
     destination: Path,
     files: dict[str, bytes],
@@ -318,6 +371,7 @@ def _build_candidate(
     tmp_path: Path,
     *,
     receipt_mutation: ReceiptMutation | None = None,
+    privacy_receipt_mutation: PrivacyReceiptMutation | None = None,
     admission_mutation: ManifestMutation | None = None,
     nested_authority_mutation: ManifestMutation | None = None,
     nested_manifest_mutation: ManifestMutation | None = None,
@@ -401,6 +455,14 @@ def _build_candidate(
         receipt["receipt_id"] = receipt_id_override
     receipt_payload = contract.canonical_json_bytes(receipt)
     receipt_id = str(receipt["receipt_id"])
+    privacy_receipt = _privacy_protocol_receipt(
+        now_unix,
+        hashlib.sha256(linux_archive.read_bytes()).hexdigest(),
+        str(receipt["validator_binary_sha256"]),
+        privacy_receipt_mutation,
+    )
+    privacy_receipt_payload = contract.canonical_json_bytes(privacy_receipt)
+    privacy_receipt_id = str(privacy_receipt["receipt_id"])
     macos_controller_rows = []
     for relative in admission.MACOS_CONTROLLER_FILES:
         reviewed_payload = f"reviewed controller: {relative}\n".encode("ascii")
@@ -437,6 +499,7 @@ def _build_candidate(
         "linux/authority/release_manifest.json.sig": nested_signature,
         f"linux/{linux_archive.name}": linux_archive.read_bytes(),
         admission.MACOS_RECEIPT_PATH: receipt_payload,
+        admission.PRIVACY_PROTOCOL_RECEIPT_PATH: privacy_receipt_payload,
         admission.CONTROLLER_MANIFEST_PATH: macos_controller_manifest,
     }
     if add_extra_file:
@@ -468,6 +531,8 @@ def _build_candidate(
         "macos_arm64": {
             "arch": "arm64",
             "os": "macos",
+            "privacy_protocol_receipt_id": privacy_receipt_id,
+            "privacy_protocol_receipt_path": admission.PRIVACY_PROTOCOL_RECEIPT_PATH,
             "receipt_id": receipt_id,
             "receipt_path": admission.MACOS_RECEIPT_PATH,
         },
@@ -546,10 +611,13 @@ def _verify(candidate: Candidate) -> dict[str, object]:
     )
 
 
-def _assembler_inputs(base: Candidate, root: Path) -> tuple[Path, Path, Path, Path]:
+def _assembler_inputs(
+    base: Candidate, root: Path
+) -> tuple[Path, Path, Path, Path, Path]:
     linux_authority_dir = root / "linux-authority"
     linux_authority_dir.mkdir(parents=True, mode=0o700)
     receipt_path = root / "macos-receipt.json"
+    privacy_receipt_path = root / "privacy-protocol-receipt.json"
     controller_manifest = root / "authority-controller-v1.json"
     with tarfile.open(base.archive, mode="r:gz") as archive:
         prefix = base.archive.name.removesuffix(".tar.gz")
@@ -577,12 +645,23 @@ def _assembler_inputs(base: Candidate, root: Path) -> tuple[Path, Path, Path, Pa
         )
         assert receipt_member is not None
         receipt_path.write_bytes(receipt_member.read())
+        privacy_receipt_member = archive.extractfile(
+            members[f"{prefix}/{admission.PRIVACY_PROTOCOL_RECEIPT_PATH}"]
+        )
+        assert privacy_receipt_member is not None
+        privacy_receipt_path.write_bytes(privacy_receipt_member.read())
         controller_member = archive.extractfile(
             members[f"{prefix}/{admission.CONTROLLER_MANIFEST_PATH}"]
         )
         assert controller_member is not None
         controller_manifest.write_bytes(controller_member.read())
-    return linux_archive, linux_authority_dir, receipt_path, controller_manifest
+    return (
+        linux_archive,
+        linux_authority_dir,
+        receipt_path,
+        privacy_receipt_path,
+        controller_manifest,
+    )
 
 
 def test_valid_dual_target_archive_is_verified_without_deployment(
@@ -603,6 +682,107 @@ def test_valid_dual_target_archive_is_verified_without_deployment(
     assert set(result["validator_config_sha256"]) == {
         f"taira-validator-{number}" for number in range(1, 5)
     }
+
+
+@pytest.mark.parametrize(
+    "mutation, message",
+    (
+        (lambda value: value["outcomes"].pop(), "exactly twelve"),
+        (
+            lambda value: value["outcomes"].append(dict(value["outcomes"][0])),
+            "exactly twelve",
+        ),
+        (
+            lambda value: value["outcomes"].__setitem__(
+                slice(0, 2), [value["outcomes"][1], value["outcomes"][0]]
+            ),
+            "registry order|noncanonical",
+        ),
+        (
+            lambda value: value["outcomes"][0].__setitem__(
+                "production_outcome",
+                value["outcomes"][3]["production_outcome"],
+            ),
+            "noncanonical production_outcome",
+        ),
+        (
+            lambda value: value["candidate"].__setitem__(
+                "linux_release_archive_sha256", "9" * 64
+            ),
+            "different Linux release archive",
+        ),
+        (
+            lambda value: value["candidate"]["source"].__setitem__(
+                "commit", "e" * 40
+            ),
+            "source identity differs",
+        ),
+        (
+            lambda value: value["outcomes"][0].__setitem__(
+                "validator_binary_sha256", "9" * 64
+            ),
+            "different validator",
+        ),
+        (
+            lambda value: value["outcomes"][1].__setitem__(
+                "case_output_sha256", "9" * 64
+            ),
+            "conflicting output digests",
+        ),
+        (
+            lambda value: value.__setitem__("expires_at_unix", 1),
+            "expiry must follow|stale",
+        ),
+    ),
+    ids=(
+        "missing-row",
+        "unknown-extra-row",
+        "outcome-swap",
+        "availability-outcome-substitution",
+        "stale-candidate-archive",
+        "stale-candidate-source",
+        "per-case-candidate-substitution",
+        "shared-case-digest-substitution",
+        "stale-receipt",
+    ),
+)
+def test_privacy_protocol_receipt_rejects_hostile_exact12_mutations(
+    tmp_path: Path,
+    mutation: PrivacyReceiptMutation,
+    message: str,
+) -> None:
+    candidate = _build_candidate(
+        tmp_path,
+        privacy_receipt_mutation=mutation,
+    )
+
+    with pytest.raises(admission.TairaRolloutAdmissionError, match=message):
+        _verify(candidate)
+
+
+def test_fail_closed_protocol_receipt_cannot_replace_native_release_authority(
+    tmp_path: Path,
+) -> None:
+    def remove_exact12_native_evidence(authority: dict[str, object]) -> None:
+        rows = authority["native_release_evidence"]
+        assert isinstance(rows, list)
+        authority["native_release_evidence"] = [
+            row
+            for row in rows
+            if not (
+                isinstance(row, dict)
+                and row.get("path")
+                == linux_authority.EVIDENCE_PATHS["exact12_matrix"]
+            )
+        ]
+
+    candidate = _build_candidate(
+        tmp_path,
+        nested_authority_mutation=remove_exact12_native_evidence,
+    )
+
+    with pytest.raises(admission.TairaRolloutAdmissionError):
+        _verify(candidate)
 
 
 def test_admission_controller_closure_matches_the_root_sealer() -> None:
@@ -667,7 +847,13 @@ def test_candidate_builder_reconstructs_the_same_admitted_archive_deterministica
     base = _build_candidate(base_root)
     input_root = tmp_path / "assembler-inputs"
     input_root.mkdir()
-    linux_archive, linux_authority_dir, receipt, controller_manifest = (
+    (
+        linux_archive,
+        linux_authority_dir,
+        receipt,
+        privacy_receipt,
+        controller_manifest,
+    ) = (
         _assembler_inputs(base, input_root)
     )
     controller_digest = hashlib.sha256(
@@ -694,6 +880,7 @@ def test_candidate_builder_reconstructs_the_same_admitted_archive_deterministica
         "linux_archive": linux_archive,
         "linux_authority_dir": linux_authority_dir,
         "macos_receipt": receipt,
+        "privacy_protocol_receipt": privacy_receipt,
         "now_unix": base.now_unix,
         "release_manifest_verifier": base.verifier,
         "signing_public_key": public_key,

@@ -16,6 +16,7 @@ from ._quantity import (
 )
 from ._quantity import _normalize_u128_quantity as _normalize_u128_quantity
 from .crypto import (
+    _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
     ContractCall,
     Ed25519KeyPair,
     Instruction,
@@ -30,7 +31,6 @@ from .crypto import (
     SignedTransactionEnvelope,
     TransactionBuilder,
     TransactionExecutableEntry,
-    _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
     _normalize_lane_privacy_attachment,
     build_signed_transaction,
 )
@@ -55,6 +55,7 @@ __all__ = [
 MetadataLike = Optional[Mapping[str, Any]]
 FixedBytesLike = Union[str, bytes, bytearray, memoryview]
 VerifyingKeyLike = Union[str, Mapping[str, Any]]
+_U64_MAX = (1 << 64) - 1
 _U128_MAX = (1 << 128) - 1
 ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512
 
@@ -158,6 +159,28 @@ def _require_canonical_positive_u128_literal(quantity: Any, context: str) -> str
     if int(quantity, 10) > _U128_MAX:
         raise ValueError(message)
     return quantity
+
+
+def _require_canonical_public_balance_scope(value: Any) -> str:
+    message = "public_balance_scope must be exactly 'global' or 'dataspace:<canonical positive u64>'"
+    if type(value) is not str:
+        raise TypeError(message)
+    if value == "global":
+        return value
+    prefix = "dataspace:"
+    if not value.startswith(prefix):
+        raise ValueError(message)
+    raw = value[len(prefix) :]
+    if (
+        not raw
+        or len(raw) > 20
+        or not raw.isascii()
+        or not raw.isdigit()
+        or raw.startswith("0")
+        or int(raw, 10) > _U64_MAX
+    ):
+        raise ValueError(message)
+    return value
 
 
 @dataclass(frozen=True)
@@ -550,7 +573,6 @@ class TransactionDraft:
         alias: Optional[str] = None,
         scale: Optional[Union[int, str]] = None,
         mintable: Optional[str] = None,
-        confidential_policy: Optional[str] = None,
         metadata: MetadataLike = None,
     ) -> TransactionDraft:
         """Append an asset definition owned by this transaction's authority."""
@@ -598,7 +620,6 @@ class TransactionDraft:
                 scale=normalized_scale,
                 mintable=mintable,
                 balance_scope_policy=balance_scope_policy,
-                confidential_policy=confidential_policy,
                 metadata=metadata_payload,
             )
         )
@@ -608,15 +629,15 @@ class TransactionDraft:
         self,
         asset_definition_id: str,
         *,
-        mode: str = "Hybrid",
-        allow_shield: bool = True,
-        allow_unshield: bool = True,
-        vk_transfer: Optional[VerifyingKeyLike] = None,
         vk_unshield: Optional[VerifyingKeyLike] = None,
         vk_shield: Optional[VerifyingKeyLike] = None,
     ) -> TransactionDraft:
         """Append a `RegisterZkAsset` instruction."""
 
+        if vk_shield is not None and vk_unshield is None:
+            raise ValueError(
+                "vk_shield requires vk_unshield so shielded funds remain redeemable"
+            )
         definition = _require_non_empty_string(
             asset_definition_id,
             "asset_definition_id",
@@ -624,10 +645,6 @@ class TransactionDraft:
         self.add_instruction(
             Instruction.register_zk_asset(
                 definition,
-                mode=mode,
-                allow_shield=bool(allow_shield),
-                allow_unshield=bool(allow_unshield),
-                vk_transfer=vk_transfer,
                 vk_unshield=vk_unshield,
                 vk_shield=vk_shield,
             )
@@ -1381,6 +1398,7 @@ class TransactionDraft:
         source_account_id: str,
         destination_account_id: str,
         amount: str,
+        public_balance_scope: str,
         identity_root: bytes,
         identity_blinding: bytes,
         replay_secret: bytes,
@@ -1388,6 +1406,8 @@ class TransactionDraft:
         """Build and sign one native, intent-bound ZK-ACE transfer action.
 
         The exact governed policy is supplied as a canonical typed archive.
+        ``public_balance_scope`` must name the exact transparent reserve bucket
+        as ``global`` or ``dataspace:<canonical positive u64>``.
         Identity and replay witness material is consumed only by the native
         prover and is not returned by the result object.
         """
@@ -1413,6 +1433,7 @@ class TransactionDraft:
             identity_root,
             identity_blinding,
             replay_secret,
+            public_balance_scope=_require_canonical_public_balance_scope(public_balance_scope),
         )
 
     def sign_privacy_anonymous_pgc_payment_action_v1(

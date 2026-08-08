@@ -221,7 +221,7 @@ public static class PrivacyNative
     public const int PrivacyCompiledProfileCatalogArchiveMaxBytes = 256 * 1024;
     public const int PrivacyExact12FixtureBundleMaxBytes =
         PrivacyExact12FixtureCodecV1.MaxArchiveBytes;
-    public const uint RequiredBridgeAbiVersion = 21;
+    public const uint RequiredBridgeAbiVersion = 22;
     // Do not inherit the comparatively small worker stacks used by foreign managed runtimes.
     private const int NativeWorkerStackBytes = 16 * 1024 * 1024;
     private const string LibraryName = "connect_norito_bridge";

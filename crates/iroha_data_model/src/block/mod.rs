@@ -341,6 +341,38 @@ impl SignedBlock {
         axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
         axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
     ) -> Result<(), SetTransactionResultsError> {
+        self.set_transaction_results_with_transcripts_and_lane_finality(
+            time_triggers,
+            hashes,
+            results,
+            fastpq_transcripts,
+            axt_envelopes,
+            Vec::new(),
+            axt_policy_snapshot,
+        )
+    }
+
+    /// Atomically attach transaction results and canonical lane-finality statements.
+    ///
+    /// Lane statements are supplied before the result-bearing block is built;
+    /// callers never mutate `BlockResult` after the executed wire identity has
+    /// been derived.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same canonical entrypoint, result, and policy errors as
+    /// [`Self::set_transaction_results_with_transcripts`].
+    #[cfg(feature = "transparent_api")]
+    pub fn set_transaction_results_with_transcripts_and_lane_finality(
+        &mut self,
+        time_triggers: Vec<TimeTriggerEntrypoint>,
+        hashes: &[HashOf<TransactionEntrypoint>],
+        results: Vec<TransactionResultInner>,
+        fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
+        axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+        lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
+        axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
+    ) -> Result<(), SetTransactionResultsError> {
         axt_policy_snapshot
             .validate()
             .map_err(SetTransactionResultsError::InvalidAxtPolicySnapshot)?;
@@ -426,6 +458,7 @@ impl SignedBlock {
             committed_fragment_count,
             fastpq_transcripts,
             axt_envelopes,
+            lane_finality_statements,
             trigger_completions,
             axt_policy_snapshot,
         });
@@ -516,6 +549,14 @@ impl SignedBlock {
         self.result
             .as_ref()
             .map(|result| result.committed_fragment_count)
+    }
+
+    /// Borrow canonical post-execution lane-finality statements.
+    #[must_use]
+    pub fn lane_finality_statements(&self) -> &[crate::nexus::LaneFinalityStatement] {
+        self.result
+            .as_ref()
+            .map_or(&[], |result| result.lane_finality_statements.as_slice())
     }
 
     /// Set the number of successful execution fragments recorded with this block result.
@@ -931,6 +972,7 @@ impl SignedBlock {
             committed_fragment_count: 0,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            lane_finality_statements: Vec::new(),
             trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };
@@ -2036,6 +2078,7 @@ mod tests {
             committed_fragment_count: u64,
             fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+            lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
             trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
         }
 
@@ -2047,6 +2090,7 @@ mod tests {
             committed_fragment_count: 0,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            lane_finality_statements: Vec::new(),
             trigger_completions: Vec::new(),
         };
         let bytes = omitted_snapshot.encode();
@@ -2218,6 +2262,7 @@ mod tests {
             committed_fragment_count: 1,
             fastpq_transcripts: std::collections::BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            lane_finality_statements: Vec::new(),
             trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };

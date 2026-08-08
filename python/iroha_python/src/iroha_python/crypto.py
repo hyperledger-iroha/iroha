@@ -23,7 +23,7 @@ GOST_3410_2012_512_PARAMSET_B_ALGORITHM: Final[str] = "gost3410-2012-512-paramse
 BLS_NORMAL_ALGORITHM: Final[str] = "bls_normal"
 BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
 SM2_ALGORITHM: Final[str] = "sm2"
-PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21
+PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22
 PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Final[int] = 256 * 1024
 PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Final[Mapping[str, int]] = MappingProxyType(
     {
@@ -271,12 +271,14 @@ def _native_issue_replication_order(
     order_payload: str,
     issued_epoch: int,
     deadline_epoch: int,
+    musubi_archive: str | None,
 ) -> Any:
     return _native_instruction_builder("issue_replication_order")(
         order_id,
         order_payload,
         issued_epoch,
         deadline_epoch,
+        musubi_archive,
     )
 
 
@@ -342,6 +344,7 @@ if TYPE_CHECKING:
             order_payload: str,
             issued_epoch: int,
             deadline_epoch: int,
+            musubi_archive: str | None = None,
         ) -> Instruction:
             """Build one canonical replication-order issue instruction."""
 
@@ -438,6 +441,7 @@ else:
             order_payload: str,
             issued_epoch: int,
             deadline_epoch: int,
+            musubi_archive: str | None = None,
         ) -> Any:
             """Build a canonical native ``IssueReplicationOrder`` instruction."""
 
@@ -448,6 +452,7 @@ else:
                 order_payload,
                 issued_epoch,
                 deadline_epoch,
+                musubi_archive,
             )
 
         @staticmethod
@@ -513,16 +518,25 @@ AssetId = _crypto.AssetId
 def build_find_asset_escrow_query(
     authority: str,
     private_key: bytes,
+    canonical_genesis_hash: bytes,
     escrow_id: str,
 ) -> bytes:
     """Build a versioned Norito signed query for one native escrow."""
 
-    return bytes(_crypto.build_find_asset_escrow_query(authority, private_key, escrow_id))
+    return bytes(
+        _crypto.build_find_asset_escrow_query(
+            authority,
+            private_key,
+            canonical_genesis_hash,
+            escrow_id,
+        )
+    )
 
 
 def build_find_asset_escrows_by_seller_query(
     authority: str,
     private_key: bytes,
+    canonical_genesis_hash: bytes,
     seller: str,
 ) -> bytes:
     """Build a signed iterable query for escrows funded by ``seller``."""
@@ -531,6 +545,7 @@ def build_find_asset_escrows_by_seller_query(
         _crypto.build_find_asset_escrows_by_seller_query(
             authority,
             private_key,
+            canonical_genesis_hash,
             seller,
         )
     )
@@ -539,6 +554,7 @@ def build_find_asset_escrows_by_seller_query(
 def build_find_asset_escrows_by_buyer_query(
     authority: str,
     private_key: bytes,
+    canonical_genesis_hash: bytes,
     buyer: str,
 ) -> bytes:
     """Build a signed iterable query for escrows benefiting ``buyer``."""
@@ -547,6 +563,7 @@ def build_find_asset_escrows_by_buyer_query(
         _crypto.build_find_asset_escrows_by_buyer_query(
             authority,
             private_key,
+            canonical_genesis_hash,
             buyer,
         )
     )
@@ -555,6 +572,7 @@ def build_find_asset_escrows_by_buyer_query(
 def build_find_committed_transaction_query(
     authority: str,
     private_key: bytes,
+    canonical_genesis_hash: bytes,
     transaction_hash: str,
 ) -> bytes:
     """Build a signed native query for one canonical committed transaction."""
@@ -563,6 +581,7 @@ def build_find_committed_transaction_query(
         _crypto.build_find_committed_transaction_query(
             authority,
             private_key,
+            canonical_genesis_hash,
             transaction_hash,
         )
     )
@@ -571,6 +590,7 @@ def build_find_committed_transaction_query(
 def build_find_block_by_hash_query(
     authority: str,
     private_key: bytes,
+    canonical_genesis_hash: bytes,
     block_hash: str,
 ) -> bytes:
     """Build a signed native query for one exact carrier block."""
@@ -579,6 +599,7 @@ def build_find_block_by_hash_query(
         _crypto.build_find_block_by_hash_query(
             authority,
             private_key,
+            canonical_genesis_hash,
             block_hash,
         )
     )

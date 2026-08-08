@@ -11,7 +11,7 @@ use std::{
     num::NonZeroU64,
 };
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, Signature};
 use iroha_data_model::nexus::{
     AssetHandle as ModelAssetHandle, AxtBinding, AxtDescriptor as ModelAxtDescriptor,
     AxtHandleFragment, AxtPolicyEntry as ModelAxtPolicyEntry,
@@ -474,10 +474,10 @@ impl AxtPolicy for SnapshotAxtPolicy {
         if usage.handle.manifest_view_root.as_slice() != entry.manifest_root.as_slice() {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.handle_era < entry.min_handle_era {
+        if usage.handle.handle_era != entry.min_handle_era {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.sub_nonce < entry.min_sub_nonce {
+        if usage.handle.sub_nonce != entry.min_sub_nonce {
             return Err(VMError::PermissionDenied);
         }
         Ok(())
@@ -568,6 +568,8 @@ pub struct AssetHandle {
     pub expiry_slot: u64,
     /// Optional wall-clock skew allowance enforced by the host.
     pub max_clock_skew_ms: Option<u32>,
+    /// Signature made by the issuer key resolved from committed policy.
+    pub issuer_signature: Option<Signature>,
 }
 
 impl AssetHandle {
@@ -615,6 +617,7 @@ pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
         || handle.sub_nonce == 0
         || handle.group_binding.epoch_id == 0
         || handle.expiry_slot == 0
+        || handle.issuer_signature.is_none()
     {
         return Err(VMError::PermissionDenied);
     }
@@ -648,6 +651,7 @@ pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMEr
         manifest_view_root: handle.manifest_view_root.to_vec(),
         expiry_slot: handle.expiry_slot,
         max_clock_skew_ms: handle.max_clock_skew_ms,
+        issuer_signature: handle.issuer_signature.clone(),
     })
 }
 
@@ -1219,6 +1223,7 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
             manifest_view_root,
             expiry_slot: usage.handle.expiry_slot,
             max_clock_skew_ms: usage.handle.max_clock_skew_ms,
+            issuer_signature: usage.handle.issuer_signature.clone(),
         };
         let intent = ModelRemoteSpendIntent {
             asset_dsid: usage.intent.asset_dsid,
@@ -1458,6 +1463,7 @@ mod tests {
             manifest_view_root: vec![1; 32],
             expiry_slot: 99,
             max_clock_skew_ms: Some(0),
+            issuer_signature: Some(Signature::from_bytes(&[1_u8; 64])),
         }
     }
 

@@ -379,8 +379,24 @@ impl NexusFeeRelayWorker {
         let current_height = self.committed_height();
         let expiry_slot =
             current_height.saturating_add(self.state.view().nexus.axt.replay_retention_slots.get());
-        let (proven_envelope, proof_blob) =
-            match prove_lane_relay_envelope(&envelope, expiry_slot, current_height, &self.fastpq) {
+        let execution_commitment = match self
+            .state
+            .authenticated_lane_relay_execution_commitment(&envelope)
+        {
+            Ok(commitment) => commitment,
+            Err(error) => {
+                self.reject_or_retry_relay(key, envelope, &eyre::eyre!(error))?;
+                return Ok(());
+            }
+        };
+        let (proven_envelope, proof_blob) = match prove_lane_relay_envelope(
+            &envelope,
+            execution_commitment.parent_state_root,
+            execution_commitment.post_state_root,
+            expiry_slot,
+            current_height,
+            &self.fastpq,
+        ) {
                 Ok(proven) => proven,
                 Err(error) => {
                     self.reject_or_retry_relay(key, envelope, &error)?;
@@ -1070,7 +1086,7 @@ fn authoritative_status_relay<'a>(
         candidate.lane_incarnation,
         candidate.block_height,
     )?;
-    (recorded.qc.is_some() && recorded == candidate).then_some(recorded)
+    (recorded.finality_authority.is_some() && recorded == candidate).then_some(recorded)
 }
 
 fn allocation_work_key(work: &DurableAllocationWork) -> String {
@@ -1214,6 +1230,8 @@ fn worker_submission_metadata(endpoint: &'static str) -> Metadata {
 
 fn prove_lane_relay_envelope(
     envelope: &LaneRelayEnvelope,
+    parent_state_root: Hash,
+    post_state_root: Hash,
     expiry_slot: u64,
     verified_at_height: u64,
     fastpq: &Fastpq,
@@ -1224,10 +1242,9 @@ fn prove_lane_relay_envelope(
     if manifest_root.iter().all(|byte| *byte == 0) {
         eyre::bail!("lane relay envelope has zero manifest_root");
     }
-    let qc = envelope
-        .qc
-        .as_ref()
-        .ok_or_else(|| eyre::eyre!("lane relay proof requires a finalized QC"))?;
+    envelope
+        .validate_finality_authority_ref()
+        .wrap_err("lane relay proof requires global finality authority")?;
     let lane_finality_statement_hash = envelope
         .lane_finality_statement_hash()
         .wrap_err("derive finalized lane relay statement")?;
@@ -1266,8 +1283,8 @@ fn prove_lane_relay_envelope(
     let mut batch = transition_batch(
         dsid,
         expiry_slot,
-        qc.parent_state_root,
-        qc.post_state_root,
+        parent_state_root,
+        post_state_root,
         worker_digest(
             b"nexus-fee-relay:lane-relay-perm-root:v1",
             &[&manifest_root],
@@ -1594,7 +1611,7 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
-        LaneRelayEnvelope::new(header, None, None, settlement_commitment, 0)
+        LaneRelayEnvelope::new(header, None, settlement_commitment, 0)
             .expect("valid envelope")
             .with_manifest_root(Some(manifest_root))
             .with_lane_block_descriptor_hash(Some(Hash::new(

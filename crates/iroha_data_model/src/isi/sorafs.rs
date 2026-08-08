@@ -1,4 +1,5 @@
 use super::*;
+use crate::musubi::ArchiveId;
 use crate::sorafs::{
     capacity::{
         CapacityDeclarationRecord, CapacityDisputeId, CapacityDisputeOutcome,
@@ -141,6 +142,8 @@ pub struct IssueReplicationOrder {
         pub issued_epoch: u64,
         /// Epoch (inclusive) when the order expires.
         pub deadline_epoch: u64,
+        /// Optional immutable Musubi archive purpose installed atomically with this order.
+        pub musubi_archive: Option<ArchiveId>,
     }
 }
 
@@ -1206,7 +1209,15 @@ impl IssueReplicationOrder {
             order_payload,
             issued_epoch,
             deadline_epoch,
+            musubi_archive: None,
         }
+    }
+
+    /// Bind this order to one already-registered immutable Musubi archive.
+    #[must_use]
+    pub const fn for_musubi_archive(mut self, archive_id: ArchiveId) -> Self {
+        self.musubi_archive = Some(archive_id);
+        self
     }
 }
 
@@ -1915,6 +1926,7 @@ impl_sorafs_decode_from_slice!(IssueReplicationOrder {
     order_payload: Vec<u8>,
     issued_epoch: u64,
     deadline_epoch: u64,
+    musubi_archive: Option<ArchiveId>,
 });
 
 impl_sorafs_decode_from_slice!(CompleteReplicationOrder {
@@ -2590,6 +2602,29 @@ mod tests {
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 
+    #[test]
+    fn issue_replication_order_rejects_the_pre_binding_wire_layout() {
+        #[derive(Encode)]
+        struct PreBindingIssueReplicationOrder {
+            order_id: ReplicationOrderId,
+            order_payload: Vec<u8>,
+            issued_epoch: u64,
+            deadline_epoch: u64,
+        }
+
+        let retired = PreBindingIssueReplicationOrder {
+            order_id: order_id(),
+            order_payload: vec![0x01, 0x02, 0x03],
+            issued_epoch: 70,
+            deadline_epoch: 90,
+        }
+        .encode();
+        assert!(
+            IssueReplicationOrder::decode_from_slice(&retired).is_err(),
+            "the four-field pre-binding wire must be regenerated, not defaulted"
+        );
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn register_pin_manifest_json_roundtrip() {
@@ -2716,6 +2751,10 @@ mod tests {
             70,
             90,
         ));
+        assert_slice_roundtrip(
+            IssueReplicationOrder::new(order_id(), vec![0x04, 0x05], 70, 90)
+                .for_musubi_archive(ArchiveId::new([0xA5; 32])),
+        );
         assert_slice_roundtrip(CompleteReplicationOrder::new(
             order_id(),
             provider(0x35),

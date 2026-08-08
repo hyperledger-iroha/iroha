@@ -196,7 +196,7 @@ notes. Pending, reserved, spent, quarantined, and redeeming notes are not
 silently reclassified.
 
 The authenticated V4 manifest binds source commit, chain, asset, scale,
-activation and withdrawal heights, exact bridge ABI 21, proof size, transcript,
+activation and withdrawal heights, exact bridge ABI 22, proof size, transcript,
 backend, and benchmark evidence. It contains exactly two Pasta-cycle profiles
 in Eq-then-Ep order. Each profile carries exactly four external artifacts:
 `ParamsIPA`, processed proving key, processed verifying key, and the final-key

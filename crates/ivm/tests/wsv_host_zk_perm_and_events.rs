@@ -1,7 +1,7 @@
 use iroha_crypto::PublicKey;
 use ivm::mock_wsv::{
     AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, PermissionToken,
-    ZkAssetMode, ZkPolicyConfig,
+    ZkPolicyConfig,
 };
 
 fn account(public_key: &str) -> AccountId {
@@ -28,14 +28,7 @@ fn setup_asset(name: &str) -> (AccountId, AssetDefinitionId, MockWorldStateView)
 #[test]
 fn direct_zk_register_emits_policy_event() {
     let (_caller, asset, mut wsv) = setup_asset("rose");
-    assert!(wsv.register_zk_asset(
-        asset.clone(),
-        ZkPolicyConfig {
-            mode: ZkAssetMode::Hybrid,
-            allow_unshield: true,
-            vk_unshield: None,
-        }
-    ));
+    assert!(wsv.register_zk_asset(asset.clone(), ZkPolicyConfig { vk_unshield: None }));
 
     let events = wsv.drain_zk_events();
     assert!(events.iter().any(

@@ -651,8 +651,8 @@ for label in ("kotlin", "java"):
 
 require_regex(
     "kotlin",
-    r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*:\s*Int\s*=\s*21\b",
-    "exact ABI21 Kotlin constant",
+    r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*:\s*Int\s*=\s*22\b",
+    "exact ABI22 Kotlin constant",
 )
 require_regex(
     "kotlin",
@@ -856,8 +856,8 @@ require_regex(
 )
 require_regex(
     "java",
-    r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*=\s*21\s*;",
-    "exact ABI21 Java constant",
+    r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*=\s*22\s*;",
+    "exact ABI22 Java constant",
 )
 require_regex(
     "java",
@@ -1205,13 +1205,13 @@ if mode == "--self-test":
                 )
 
     run_negative(
-        "ABI21 cannot regress to ABI20",
+        "ABI22 cannot regress to ABI21",
         lambda fixture: replace_once(
             fixture / paths["kotlin"],
+            "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 22",
             "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 21",
-            "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 20",
         ),
-        "exact ABI21 Kotlin constant",
+        "exact ABI22 Kotlin constant",
     )
     run_negative(
         "promotion record cannot be removed from SDK authentication",

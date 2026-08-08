@@ -262,6 +262,11 @@ impl Execute for RegisterMusubiProviderBundleAttestationV1 {
                     if existing.attestation_digest == self.attestation.digest()
                         && existing.attestation == self.attestation
                     {
+                        validate_provider_bundle_attestation(
+                            &archive,
+                            &existing.attestation,
+                            state_transaction,
+                        )?;
                         return Ok(());
                     }
                     return Err(invariant(
@@ -277,6 +282,18 @@ impl Execute for RegisterMusubiProviderBundleAttestationV1 {
                     rejection_reason,
                     MusubiGovernanceRejectionReasonV1::StaleRevision,
                 )?;
+                if matches!(
+                    validate_replication_order_archive_binding(
+                        &archive,
+                        &key.replication_order,
+                        state_transaction.world(),
+                    )?,
+                    MusubiReplicationOrderLocationLifecycleV1::Retired(_)
+                ) {
+                    return Err(invariant(
+                        "Musubi provider attestation replication-order binding is retired",
+                    ));
+                }
                 validate_provider_bundle_attestation(
                     &archive,
                     &self.attestation,
@@ -3663,12 +3680,49 @@ fn ensure_admitted(
     }
 }
 
+fn validate_replication_order_archive_binding(
+    archive: &MusubiArchiveRecordV1,
+    replication_order: &iroha_data_model::sorafs::pin_registry::ReplicationOrderId,
+    world: &impl WorldReadOnly,
+) -> Result<MusubiReplicationOrderLocationLifecycleV1, Error> {
+    archive
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    let reference = world
+        .musubi_locations_by_replication_order()
+        .get(replication_order)
+        .ok_or_else(|| invariant("Musubi replication order has no consensus archive binding"))?;
+    reference
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    if reference.binding.replication_order != *replication_order
+        || reference.binding.archive_id != archive.archive_id
+        || reference.binding.commitment != archive.commitment
+    {
+        return Err(invariant(
+            "Musubi replication-order binding does not match the authoritative archive commitment",
+        ));
+    }
+    Ok(reference.lifecycle.clone())
+}
+
 fn bind_location_reverse_indices(
     existing: Option<&MusubiArchiveLocationV1>,
     location: &MusubiArchiveLocationV1,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     let key = location.key();
+    let archive = state_transaction
+        .world
+        .musubi_archives
+        .get(&location.archive_id)
+        .cloned()
+        .ok_or_else(|| invariant("Musubi order binding references a missing archive"))?;
+    let new_order_lifecycle = validate_replication_order_archive_binding(
+        &archive,
+        &location.replication_order,
+        state_transaction.world(),
+    )?;
     match state_transaction
         .world
         .musubi_locations_by_pin
@@ -3685,19 +3739,12 @@ fn bind_location_reverse_indices(
             ));
         }
     }
-    match state_transaction
-        .world
-        .musubi_locations_by_replication_order
-        .get(&location.replication_order)
-    {
-        None => {}
-        Some(reference)
-            if reference.active
-                && reference.location == key
-                && existing.is_some_and(|record| {
-                    record.replication_order == location.replication_order
-                }) => {}
-        Some(_) => {
+    match new_order_lifecycle {
+        MusubiReplicationOrderLocationLifecycleV1::PreLocation => {}
+        MusubiReplicationOrderLocationLifecycleV1::Active(bound_location)
+            if bound_location == key && existing == Some(location) => {}
+        MusubiReplicationOrderLocationLifecycleV1::Active(_)
+        | MusubiReplicationOrderLocationLifecycleV1::Retired(_) => {
             return Err(invariant(
                 "Musubi SoraFS replication orders cannot be reused by another location or renewal",
             ));
@@ -3729,20 +3776,24 @@ fn bind_location_reverse_indices(
             .get(&existing.replication_order)
             .cloned()
             .ok_or_else(|| invariant("Musubi order reverse index is inconsistent"))?;
-        if !old_order.active || old_order.location != key {
+        old_order
+            .validate()
+            .map_err(|error| invariant(error.reason()))?;
+        if old_order.active_location() != Some(key)
+            || old_order.binding.archive_id != location.archive_id
+            || old_order.binding.commitment != archive.commitment
+        {
             return Err(invariant("Musubi order reverse index is inconsistent"));
         }
         if existing.replication_order != location.replication_order {
+            let mut retired = old_order;
+            retired.lifecycle = MusubiReplicationOrderLocationLifecycleV1::Retired(
+                MusubiRetiredReplicationOrderLocationV1::new(key, existing.providers.clone()),
+            );
             state_transaction
                 .world
                 .musubi_locations_by_replication_order
-                .insert(
-                    existing.replication_order,
-                    MusubiReplicationOrderLocationReferenceV1 {
-                        active: false,
-                        ..old_order
-                    },
-                );
+                .insert(existing.replication_order, retired);
         }
         for provider in &existing.providers {
             state_transaction
@@ -3760,17 +3811,20 @@ fn bind_location_reverse_indices(
             active: true,
         },
     );
+    let mut active_order = state_transaction
+        .world
+        .musubi_locations_by_replication_order
+        .get(&location.replication_order)
+        .cloned()
+        .ok_or_else(|| invariant("Musubi order reverse index is inconsistent"))?;
+    active_order.lifecycle = MusubiReplicationOrderLocationLifecycleV1::Active(key);
+    active_order
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
     state_transaction
         .world
         .musubi_locations_by_replication_order
-        .insert(
-            location.replication_order,
-            MusubiReplicationOrderLocationReferenceV1 {
-                replication_order: location.replication_order,
-                location: key,
-                active: true,
-            },
-        );
+        .insert(location.replication_order, active_order);
     for provider in &location.providers {
         state_transaction
             .world
@@ -3920,9 +3974,10 @@ fn validate_exact_archive_location_replay(
     order_reference
         .validate()
         .map_err(|error| invariant(error.reason()))?;
-    if order_reference.replication_order != location.replication_order
-        || order_reference.location != key
-        || !order_reference.active
+    if order_reference.binding.replication_order != location.replication_order
+        || order_reference.binding.archive_id != archive.archive_id
+        || order_reference.binding.commitment != archive.commitment
+        || order_reference.active_location() != Some(key)
     {
         return Err(invariant("Musubi order reverse index is inconsistent"));
     }
@@ -3972,19 +4027,28 @@ fn retire_location_reverse_indices(
         .get(&location.replication_order)
         .cloned()
         .ok_or_else(|| invariant("Musubi order reverse index is inconsistent"))?;
-    if !order.active || order.location != key {
+    order
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    let archive = state_transaction
+        .world
+        .musubi_archives
+        .get(&location.archive_id)
+        .ok_or_else(|| invariant("Musubi order binding references a missing archive"))?;
+    if order.active_location() != Some(key)
+        || order.binding.archive_id != archive.archive_id
+        || order.binding.commitment != archive.commitment
+    {
         return Err(invariant("Musubi order reverse index is inconsistent"));
     }
+    let mut retired = order;
+    retired.lifecycle = MusubiReplicationOrderLocationLifecycleV1::Retired(
+        MusubiRetiredReplicationOrderLocationV1::new(key, location.providers.clone()),
+    );
     state_transaction
         .world
         .musubi_locations_by_replication_order
-        .insert(
-            location.replication_order,
-            MusubiReplicationOrderLocationReferenceV1 {
-                active: false,
-                ..order
-            },
-        );
+        .insert(location.replication_order, retired);
     for provider in &location.providers {
         state_transaction
             .world
@@ -4003,6 +4067,11 @@ fn validate_provider_bundle_attestation(
         .validate()
         .map_err(|error| invariant(error.reason()))?;
     let binding = &attestation.payload.binding;
+    validate_replication_order_archive_binding(
+        archive,
+        &binding.replication_order,
+        state_transaction.world(),
+    )?;
     let order = state_transaction
         .world
         .replication_orders
@@ -4070,6 +4139,18 @@ fn validate_sorafs_location(
     archive
         .validate()
         .map_err(|error| invariant(error.reason()))?;
+    if matches!(
+        validate_replication_order_archive_binding(
+            archive,
+            replication_order,
+            state_transaction.world(),
+        )?,
+        MusubiReplicationOrderLocationLifecycleV1::Retired(_)
+    ) {
+        return Err(invariant(
+            "Musubi archive replication-order binding is retired",
+        ));
+    }
     let commitment = &archive.commitment;
     let pin = state_transaction
         .world
@@ -4553,15 +4634,22 @@ pub(crate) fn current_location_providers(
         .musubi_locations_by_pin()
         .get(&location.pin_manifest)
         .is_some_and(|reference| reference.active && reference.location == key)
-        || !world
-            .musubi_locations_by_replication_order()
-            .get(&location.replication_order)
-            .is_some_and(|reference| reference.active && reference.location == key)
     {
         return None;
     }
     let archive = world.musubi_archives().get(&location.archive_id)?;
     archive.validate().ok()?;
+    if !matches!(
+        validate_replication_order_archive_binding(
+            archive,
+            &location.replication_order,
+            world,
+        ),
+        Ok(MusubiReplicationOrderLocationLifecycleV1::Active(bound_location))
+            if bound_location == key
+    ) {
+        return None;
+    }
     let pin = world.pin_manifests().get(&location.pin_manifest)?;
     if !pin.status.is_active()
         || pin.root_cid != archive.commitment.root_cid
@@ -6464,6 +6552,7 @@ mod tests {
                 order_id: order,
                 manifest_digest: pin,
                 manifest_root_cid: archive.commitment.root_cid.clone(),
+                musubi_archive: Some(archive_id),
                 issued_by: authority.clone(),
                 issued_epoch: 1,
                 deadline_epoch: location.expires_at_epoch,
@@ -6504,9 +6593,12 @@ mod tests {
         world.musubi_locations_by_replication_order.insert(
             order,
             MusubiReplicationOrderLocationReferenceV1 {
-                replication_order: order,
-                location: key,
-                active: true,
+                binding: MusubiReplicationOrderArchiveBindingV1::new(
+                    order,
+                    archive_id,
+                    archive.commitment.clone(),
+                ),
+                lifecycle: MusubiReplicationOrderLocationLifecycleV1::Active(key),
             },
         );
         world
@@ -6726,6 +6818,41 @@ mod tests {
                 .get(&key),
             Some(&record)
         );
+        assert!(take_musubi_events(&mut transaction).is_empty());
+    }
+
+    #[test]
+    fn provider_attestation_replay_requires_the_consensus_archive_binding() {
+        let (mut world, authority, location_key, instruction) =
+            archive_location_replay_fixture(0x39);
+        let provider = world
+            .musubi_archive_locations
+            .view()
+            .get(&location_key)
+            .expect("fixture location")
+            .providers[0];
+        let key = MusubiProviderBundleAttestationKeyV1 {
+            archive_id: instruction.archive_id,
+            replication_order: instruction.replication_order,
+            provider_id: provider,
+        };
+        let record = world
+            .musubi_provider_bundle_attestations
+            .view()
+            .get(&key)
+            .cloned()
+            .expect("fixture provider attestation");
+        let mut bindings = world.musubi_locations_by_replication_order.block();
+        let _ = bindings.remove(instruction.replication_order);
+        bindings.commit();
+        let state = archive_location_replay_state(world);
+        let mut block = archive_location_replay_block(&state);
+        let mut transaction = block.transaction();
+
+        let error = RegisterMusubiProviderBundleAttestationV1::new(record.attestation, 1)
+            .execute(&authority, &mut transaction)
+            .expect_err("an exact replay must not bless a missing consensus archive binding");
+        assert!(error.to_string().contains("no consensus archive binding"));
         assert!(take_musubi_events(&mut transaction).is_empty());
     }
 
@@ -7130,14 +7257,28 @@ mod tests {
     fn exact_archive_location_replay_rejects_an_inactive_order_reverse_reference() {
         assert_exact_archive_location_replay_rejects_corruption(
             0x46,
-            |world, _, instruction| {
+            |world, key, instruction| {
                 let mut reference = world
                     .musubi_locations_by_replication_order
                     .view()
                     .get(&instruction.replication_order)
-                    .copied()
+                    .cloned()
                     .expect("fixture order reverse reference");
-                reference.active = false;
+                reference.lifecycle = MusubiReplicationOrderLocationLifecycleV1::Retired(
+                    MusubiRetiredReplicationOrderLocationV1::new(
+                        MusubiArchiveLocationKeyV1::new(
+                            instruction.archive_id,
+                            MusubiArchiveLocationIdV1::new([0xFE; 32]),
+                        ),
+                        world
+                            .musubi_archive_locations
+                            .view()
+                            .get(&key)
+                            .expect("fixture location")
+                            .providers
+                            .clone(),
+                    ),
+                );
                 world
                     .musubi_locations_by_replication_order
                     .insert(instruction.replication_order, reference);
@@ -9230,7 +9371,26 @@ mod tests {
         let mut transaction = block.transaction();
         let pin = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xA1; 32]);
         let order = iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xA2; 32]);
-        let first = location_fixture(0xA3, pin, order);
+        let first_archive = retention_archive(0xA3);
+        let mut first = location_fixture(0xA3, pin, order);
+        first.archive_id = first_archive.archive_id;
+        transaction
+            .world
+            .musubi_archives
+            .insert(first_archive.archive_id, first_archive.clone());
+        transaction
+            .world
+            .musubi_locations_by_replication_order
+            .insert(
+                order,
+                MusubiReplicationOrderLocationReferenceV1::pre_location(
+                    MusubiReplicationOrderArchiveBindingV1::new(
+                        order,
+                        first_archive.archive_id,
+                        first_archive.commitment,
+                    ),
+                ),
+            );
         bind_location_reverse_indices(None, &first, &mut transaction)
             .expect("first exact location binding succeeds");
         assert!(
@@ -9241,11 +9401,28 @@ mod tests {
                 .is_some_and(|reference| reference.active && reference.location == first.key())
         );
 
-        let conflicting = location_fixture(
-            0xA4,
-            pin,
-            iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xA5; 32]),
-        );
+        let conflicting_order =
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xA5; 32]);
+        let conflicting_archive = retention_archive(0xA4);
+        let mut conflicting = location_fixture(0xA4, pin, conflicting_order);
+        conflicting.archive_id = conflicting_archive.archive_id;
+        transaction
+            .world
+            .musubi_archives
+            .insert(conflicting_archive.archive_id, conflicting_archive.clone());
+        transaction
+            .world
+            .musubi_locations_by_replication_order
+            .insert(
+                conflicting_order,
+                MusubiReplicationOrderLocationReferenceV1::pre_location(
+                    MusubiReplicationOrderArchiveBindingV1::new(
+                        conflicting_order,
+                        conflicting_archive.archive_id,
+                        conflicting_archive.commitment,
+                    ),
+                ),
+            );
         bind_location_reverse_indices(None, &conflicting, &mut transaction)
             .expect_err("one pin manifest cannot be rebound to another location");
 
@@ -9258,8 +9435,831 @@ mod tests {
                 .get(&pin)
                 .is_some_and(|reference| !reference.active && reference.location == first.key())
         );
+        assert!(
+            transaction
+                .world
+                .musubi_locations_by_replication_order
+                .get(&order)
+                .is_some_and(|reference| reference.retired_location() == Some(first.key()))
+        );
         bind_location_reverse_indices(None, &conflicting, &mut transaction)
             .expect_err("retired pin tombstones permanently reject reuse");
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn location_renewal_with_changed_providers_roundtrips_retired_and_active_bindings() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("nonzero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let archive = retention_archive(0xD1);
+        let old_pin = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xD2; 32]);
+        let old_order = iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xD3; 32]);
+        let old_providers = [
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xD7; 32]),
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xD8; 32]),
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xD9; 32]),
+        ];
+        let new_providers = [
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xE1; 32]),
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xE2; 32]),
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xE3; 32]),
+        ];
+        let make_pin = |digest, retention_epoch| {
+            let mut record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
+                digest,
+                archive.commitment.root_cid.clone(),
+                archive.commitment.chunker.clone(),
+                *archive.commitment.chunk_plan_digest.as_bytes(),
+                *archive.commitment.por_root.as_bytes(),
+                archive.commitment.content_length,
+                iroha_data_model::sorafs::pin_registry::PinPolicy {
+                    min_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                    storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
+                    retention_epoch,
+                },
+                archive.registered_by.clone(),
+                1,
+                None,
+                None,
+                iroha_data_model::metadata::Metadata::default(),
+            );
+            record.approve(1, None);
+            record
+        };
+        let make_order = |order: iroha_data_model::sorafs::pin_registry::ReplicationOrderId,
+                          pin: iroha_data_model::sorafs::pin_registry::ManifestDigest,
+                          providers: &[iroha_data_model::sorafs::capacity::ProviderId],
+                          completion_epoch: u64,
+                          deadline_epoch: u64| {
+            let canonical = sorafs_manifest::capacity::ReplicationOrderV1 {
+                version: sorafs_manifest::capacity::REPLICATION_ORDER_VERSION_V1,
+                order_id: *order.as_bytes(),
+                manifest_cid: archive.commitment.root_cid.as_bytes().to_vec(),
+                manifest_digest: *pin.as_bytes(),
+                chunking_profile: archive.commitment.chunker.to_handle(),
+                target_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                assignments: providers
+                    .iter()
+                    .map(
+                        |provider| sorafs_manifest::capacity::ReplicationAssignmentV1 {
+                            provider_id: *provider.as_bytes(),
+                            slice_gib: 1,
+                            lane: None,
+                        },
+                    )
+                    .collect(),
+                issued_at: 1,
+                deadline_at: deadline_epoch,
+                sla: sorafs_manifest::capacity::ReplicationOrderSlaV1 {
+                    ingest_deadline_secs: 1,
+                    min_availability_percent_milli: 99_500,
+                    min_por_success_percent_milli: 98_000,
+                },
+                metadata: Vec::new(),
+            };
+            canonical
+                .validate()
+                .expect("valid renewal snapshot replication order");
+            let provider_completions = providers
+                .iter()
+                .map(|provider_id| {
+                    let seed = provider_id.as_bytes()[0];
+                    let provider_owner = account(seed);
+                    iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
+                        provider_id: *provider_id,
+                        completed_by: provider_owner.clone(),
+                        completion_epoch,
+                        assignment_revision: 1,
+                        completion_authority: iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+                            provider_owner,
+                            iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                                policy_id: [seed; 32],
+                                revision: 1,
+                                predecessor_digest: None,
+                                policy_digest: [seed.wrapping_add(1); 32],
+                            },
+                        ),
+                        finalized_anchor: iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
+                            height: completion_epoch,
+                            block_hash: [seed.wrapping_add(2); 32],
+                        },
+                    }
+                })
+                .collect();
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
+                order_id: order,
+                manifest_digest: pin,
+                manifest_root_cid: archive.commitment.root_cid.clone(),
+                musubi_archive: Some(archive.archive_id),
+                issued_by: archive.registered_by.clone(),
+                issued_epoch: 1,
+                deadline_epoch,
+                canonical_order: norito::encode_canonical(&canonical)
+                    .expect("encode renewal snapshot replication order"),
+                assignment_revision: 1,
+                provider_completions,
+                status: ReplicationOrderStatus::Completed(completion_epoch),
+            }
+        };
+        let old_pin_record = make_pin(old_pin, 10);
+        let old_order_record = make_order(old_order, old_pin, &old_providers, 2, 10);
+        let mut original = location_fixture(0xD4, old_pin, old_order);
+        original.archive_id = archive.archive_id;
+        original.providers = old_providers.to_vec();
+        original.renew_after_epoch = 5;
+        original.expires_at_epoch = 10;
+        original.finalized_height = 2;
+        original.revision = 2;
+        original.state = MusubiArchiveLocationStateV1::Healthy;
+        let mut active_archive = archive.clone();
+        active_archive.location_revision = original.revision;
+        active_archive.location_ids = vec![original.location_id];
+        active_archive
+            .validate()
+            .expect("active archive directory fixture");
+        transaction
+            .world
+            .musubi_archives
+            .insert(archive.archive_id, active_archive);
+        transaction
+            .world
+            .pin_manifests
+            .insert(old_pin, old_pin_record.clone());
+        transaction
+            .world
+            .replication_orders
+            .insert(old_order, old_order_record.clone());
+        transaction
+            .world
+            .musubi_locations_by_replication_order
+            .insert(
+                old_order,
+                MusubiReplicationOrderLocationReferenceV1::pre_location(
+                    MusubiReplicationOrderArchiveBindingV1::new(
+                        old_order,
+                        archive.archive_id,
+                        archive.commitment.clone(),
+                    ),
+                ),
+            );
+        bind_location_reverse_indices(None, &original, &mut transaction)
+            .expect("initial prebinding becomes active");
+        transaction
+            .world
+            .musubi_archive_locations
+            .insert(original.key(), original.clone());
+
+        let new_pin = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xD5; 32]);
+        let new_order = iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xD6; 32]);
+        let new_pin_record = make_pin(new_pin, 20);
+        let new_order_record = make_order(new_order, new_pin, &new_providers, 3, 20);
+        let mut renewed = original.clone();
+        renewed.pin_manifest = new_pin;
+        renewed.replication_order = new_order;
+        renewed.providers = new_providers.to_vec();
+        renewed.provider_attestation_set_digest =
+            MusubiProviderBundleAttestationSetDigestV1::new([0xE4; 32]);
+        renewed.renew_after_epoch = 15;
+        renewed.expires_at_epoch = 20;
+        renewed.finalized_height = 3;
+        renewed.revision = 3;
+        transaction
+            .world
+            .pin_manifests
+            .insert(new_pin, new_pin_record.clone());
+        transaction
+            .world
+            .replication_orders
+            .insert(new_order, new_order_record.clone());
+        transaction
+            .world
+            .musubi_locations_by_replication_order
+            .insert(
+                new_order,
+                MusubiReplicationOrderLocationReferenceV1::pre_location(
+                    MusubiReplicationOrderArchiveBindingV1::new(
+                        new_order,
+                        archive.archive_id,
+                        archive.commitment.clone(),
+                    ),
+                ),
+            );
+        bind_location_reverse_indices(Some(&original), &renewed, &mut transaction)
+            .expect("renewal consumes the new pre-location binding");
+        transaction
+            .world
+            .musubi_archive_locations
+            .insert(renewed.key(), renewed.clone());
+        let mut renewed_archive = transaction
+            .world
+            .musubi_archives
+            .get(&archive.archive_id)
+            .cloned()
+            .expect("active archive directory");
+        renewed_archive.location_revision = renewed.revision;
+        renewed_archive
+            .validate()
+            .expect("renewed archive directory fixture");
+        transaction
+            .world
+            .musubi_archives
+            .insert(archive.archive_id, renewed_archive);
+
+        let retired = transaction
+            .world
+            .musubi_locations_by_replication_order
+            .get(&old_order)
+            .cloned()
+            .expect("retired historical order binding");
+        assert_eq!(retired.retired_location(), Some(original.key()));
+        let MusubiReplicationOrderLocationLifecycleV1::Retired(history) = &retired.lifecycle else {
+            panic!("old order must retain a retired provider history")
+        };
+        assert_eq!(history.providers.as_slice(), old_providers.as_slice());
+        assert_eq!(
+            transaction
+                .world
+                .musubi_locations_by_replication_order
+                .get(&new_order)
+                .and_then(MusubiReplicationOrderLocationReferenceV1::active_location),
+            Some(renewed.key())
+        );
+        bind_location_reverse_indices(Some(&renewed), &renewed, &mut transaction)
+            .expect("an exact renewal retry preserves the active binding");
+
+        let active = transaction
+            .world
+            .musubi_locations_by_replication_order
+            .get(&new_order)
+            .cloned()
+            .expect("active renewed order binding");
+        let old_pin_reference = transaction
+            .world
+            .musubi_locations_by_pin
+            .get(&old_pin)
+            .cloned()
+            .expect("retired pin tombstone");
+        let new_pin_reference = transaction
+            .world
+            .musubi_locations_by_pin
+            .get(&new_pin)
+            .cloned()
+            .expect("active renewed pin binding");
+        for provider in old_providers.iter().copied() {
+            assert!(
+                transaction
+                    .world
+                    .musubi_locations_by_provider
+                    .get(&MusubiProviderLocationKeyV1::new(provider, renewed.key()))
+                    .is_none(),
+                "retired providers must not remain in the live reverse index"
+            );
+        }
+
+        let mut snapshot_world = World::new();
+        let mut snapshot_archive = archive;
+        snapshot_archive.location_revision = renewed.revision;
+        snapshot_archive.location_ids = vec![renewed.location_id];
+        snapshot_world
+            .musubi_archives
+            .insert(snapshot_archive.archive_id, snapshot_archive);
+        snapshot_world
+            .musubi_archive_locations
+            .insert(renewed.key(), renewed.clone());
+        snapshot_world.pin_manifests.insert(old_pin, old_pin_record);
+        snapshot_world.pin_manifests.insert(new_pin, new_pin_record);
+        snapshot_world
+            .replication_orders
+            .insert(old_order, old_order_record);
+        snapshot_world
+            .replication_orders
+            .insert(new_order, new_order_record);
+        snapshot_world
+            .musubi_locations_by_pin
+            .insert(old_pin, old_pin_reference);
+        snapshot_world
+            .musubi_locations_by_pin
+            .insert(new_pin, new_pin_reference);
+        snapshot_world
+            .musubi_locations_by_replication_order
+            .insert(old_order, retired);
+        snapshot_world
+            .musubi_locations_by_replication_order
+            .insert(new_order, active);
+        for provider in new_providers.iter().copied() {
+            assert!(
+                transaction
+                    .world
+                    .musubi_locations_by_provider
+                    .get(&MusubiProviderLocationKeyV1::new(provider, renewed.key()))
+                    .is_some(),
+                "renewed providers must have live reverse entries"
+            );
+            snapshot_world.musubi_locations_by_provider.insert(
+                MusubiProviderLocationKeyV1::new(provider, renewed.key()),
+                (),
+            );
+        }
+
+        // State snapshots encode these authoritative MV stores independently;
+        // roundtrip every input consumed by the location snapshot validator.
+        let mut roundtripped = World::new();
+        macro_rules! roundtrip_snapshot_store {
+            ($field:ident) => {
+                roundtripped.$field = norito::json::from_value(
+                    norito::json::to_value(&snapshot_world.$field).expect(concat!(
+                        "encode ",
+                        stringify!($field),
+                        " snapshot store"
+                    )),
+                )
+                .expect(concat!("decode ", stringify!($field), " snapshot store"));
+            };
+        }
+        roundtrip_snapshot_store!(musubi_archives);
+        roundtrip_snapshot_store!(musubi_archive_locations);
+        roundtrip_snapshot_store!(pin_manifests);
+        roundtrip_snapshot_store!(replication_orders);
+        roundtrip_snapshot_store!(musubi_locations_by_pin);
+        roundtrip_snapshot_store!(musubi_locations_by_replication_order);
+        roundtrip_snapshot_store!(musubi_locations_by_provider);
+
+        crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &roundtripped.musubi_archives,
+            &roundtripped.musubi_archive_locations,
+            &roundtripped.pin_manifests,
+            &roundtripped.replication_orders,
+            &roundtripped.musubi_locations_by_pin,
+            &roundtripped.musubi_locations_by_replication_order,
+            &roundtripped.musubi_locations_by_provider,
+        )
+        .expect("renewal snapshot preserves distinct retired and active completion sets");
+
+        let order_bindings = roundtripped.musubi_locations_by_replication_order.view();
+        let decoded_old = order_bindings
+            .get(&old_order)
+            .expect("roundtripped retired order binding");
+        let MusubiReplicationOrderLocationLifecycleV1::Retired(history) = &decoded_old.lifecycle
+        else {
+            panic!("roundtripped old order must remain retired")
+        };
+        assert_eq!(history.providers.as_slice(), old_providers.as_slice());
+        let decoded_new = order_bindings
+            .get(&new_order)
+            .expect("roundtripped active order binding");
+        assert_eq!(decoded_new.active_location(), Some(renewed.key()));
+        let locations = roundtripped.musubi_archive_locations.view();
+        assert_eq!(
+            locations
+                .get(&renewed.key())
+                .expect("roundtripped renewed location")
+                .providers
+                .as_slice(),
+            new_providers.as_slice()
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn snapshot_accepts_pre_location_binding_and_rejects_archive_substitution() {
+        let mut world = World::new();
+        let archive = retention_archive(0xB1);
+        let archive_id = archive.archive_id;
+        let pin = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]);
+        let order = iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xB3; 32]);
+        let providers = [
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xB4; 32]),
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xB5; 32]),
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xB6; 32]),
+        ];
+        let mut pin_record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
+            pin,
+            archive.commitment.root_cid.clone(),
+            archive.commitment.chunker.clone(),
+            *archive.commitment.chunk_plan_digest.as_bytes(),
+            *archive.commitment.por_root.as_bytes(),
+            archive.commitment.content_length,
+            iroha_data_model::sorafs::pin_registry::PinPolicy {
+                min_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
+                retention_epoch: 10,
+            },
+            archive.registered_by.clone(),
+            1,
+            None,
+            None,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        pin_record.approve(1, None);
+        let canonical_order = sorafs_manifest::capacity::ReplicationOrderV1 {
+            version: sorafs_manifest::capacity::REPLICATION_ORDER_VERSION_V1,
+            order_id: *order.as_bytes(),
+            manifest_cid: archive.commitment.root_cid.as_bytes().to_vec(),
+            manifest_digest: *pin.as_bytes(),
+            chunking_profile: archive.commitment.chunker.to_handle(),
+            target_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+            assignments: providers
+                .iter()
+                .map(
+                    |provider| sorafs_manifest::capacity::ReplicationAssignmentV1 {
+                        provider_id: *provider.as_bytes(),
+                        slice_gib: 1,
+                        lane: None,
+                    },
+                )
+                .collect(),
+            issued_at: 1,
+            deadline_at: 2,
+            sla: sorafs_manifest::capacity::ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 1,
+                min_availability_percent_milli: 99_500,
+                min_por_success_percent_milli: 98_000,
+            },
+            metadata: Vec::new(),
+        };
+        canonical_order
+            .validate()
+            .expect("valid snapshot order fixture");
+        world.replication_orders.insert(
+            order,
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
+                order_id: order,
+                manifest_digest: pin,
+                manifest_root_cid: archive.commitment.root_cid.clone(),
+                musubi_archive: Some(archive_id),
+                issued_by: archive.registered_by.clone(),
+                issued_epoch: 1,
+                deadline_epoch: 10,
+                canonical_order: norito::encode_canonical(&canonical_order)
+                    .expect("encode canonical snapshot order"),
+                assignment_revision: 1,
+                provider_completions: Vec::new(),
+                status: ReplicationOrderStatus::Pending,
+            },
+        );
+        world.pin_manifests.insert(pin, pin_record);
+        world.musubi_archives.insert(archive_id, archive.clone());
+        world.musubi_locations_by_replication_order.insert(
+            order,
+            MusubiReplicationOrderLocationReferenceV1::pre_location(
+                MusubiReplicationOrderArchiveBindingV1::new(order, archive_id, archive.commitment),
+            ),
+        );
+
+        crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect("a complete pre-location binding is snapshot-valid");
+
+        let removed_binding = {
+            let mut bindings = world.musubi_locations_by_replication_order.block();
+            let removed = bindings
+                .remove(order)
+                .expect("remove pre-location binding fixture");
+            bindings.commit();
+            removed
+        };
+        let error = crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect_err("a Musubi-purpose order cannot lose its reverse binding");
+        assert!(error.to_string().contains("missing its archive binding"));
+        world
+            .musubi_locations_by_replication_order
+            .insert(order, removed_binding);
+
+        let original_order = world
+            .replication_orders
+            .view()
+            .get(&order)
+            .cloned()
+            .expect("snapshot order fixture");
+        let mut generic_order = original_order.clone();
+        generic_order.musubi_archive = None;
+        world.replication_orders.insert(order, generic_order);
+        let error = crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect_err("a generic order cannot acquire an injected Musubi binding");
+        assert!(error.to_string().contains("generic replication order"));
+        world
+            .replication_orders
+            .insert(order, original_order.clone());
+
+        let mut substituted_payload = canonical_order.clone();
+        substituted_payload.manifest_digest = [0xD1; 32];
+        substituted_payload
+            .validate()
+            .expect("substituted payload remains structurally valid");
+        let mut corrupted_order = original_order.clone();
+        corrupted_order.canonical_order = norito::encode_canonical(&substituted_payload)
+            .expect("encode substituted canonical order");
+        world.replication_orders.insert(order, corrupted_order);
+        let error = crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect_err("substituted canonical order bytes must fail snapshot validation");
+        assert!(error.to_string().contains("not canonical or bound"));
+        world.replication_orders.insert(order, original_order);
+
+        let substituted = retention_archive(0xC1);
+        world
+            .musubi_archives
+            .insert(substituted.archive_id, substituted.clone());
+        world.musubi_locations_by_replication_order.insert(
+            order,
+            MusubiReplicationOrderLocationReferenceV1::pre_location(
+                MusubiReplicationOrderArchiveBindingV1::new(
+                    order,
+                    substituted.archive_id,
+                    substituted.commitment,
+                ),
+            ),
+        );
+        let error = crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect_err("a substituted archive must not survive snapshot validation");
+        assert!(
+            error
+                .to_string()
+                .contains("authoritative replication order")
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn snapshot_requires_completed_exact_provider_sets_for_active_and_retired_bindings() {
+        let (mut world, _, location_key, _) = archive_location_replay_fixture(0x20);
+        let archive = world
+            .musubi_archives
+            .view()
+            .get(&location_key.archive_id)
+            .cloned()
+            .expect("snapshot archive fixture");
+        let mut location = world
+            .musubi_archive_locations
+            .view()
+            .get(&location_key)
+            .cloned()
+            .expect("snapshot location fixture");
+        let order = location.replication_order;
+        let pin = location.pin_manifest;
+        let mut record = world
+            .replication_orders
+            .view()
+            .get(&order)
+            .cloned()
+            .expect("snapshot replication-order fixture");
+        let providers = [
+            record.provider_completions[0].provider_id,
+            iroha_data_model::sorafs::capacity::ProviderId::new([0x30; 32]),
+            iroha_data_model::sorafs::capacity::ProviderId::new([0x31; 32]),
+        ];
+        assert!(providers.windows(2).all(|pair| pair[0] < pair[1]));
+
+        let canonical_order = sorafs_manifest::capacity::ReplicationOrderV1 {
+            version: sorafs_manifest::capacity::REPLICATION_ORDER_VERSION_V1,
+            order_id: *order.as_bytes(),
+            manifest_cid: archive.commitment.root_cid.as_bytes().to_vec(),
+            manifest_digest: *pin.as_bytes(),
+            chunking_profile: archive.commitment.chunker.to_handle(),
+            target_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+            assignments: providers
+                .iter()
+                .map(
+                    |provider| sorafs_manifest::capacity::ReplicationAssignmentV1 {
+                        provider_id: *provider.as_bytes(),
+                        slice_gib: 1,
+                        lane: None,
+                    },
+                )
+                .collect(),
+            issued_at: 1,
+            deadline_at: 2,
+            sla: sorafs_manifest::capacity::ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 1,
+                min_availability_percent_milli: 99_500,
+                min_por_success_percent_milli: 98_000,
+            },
+            metadata: Vec::new(),
+        };
+        canonical_order
+            .validate()
+            .expect("valid completed snapshot order fixture");
+        record.canonical_order = norito::encode_canonical(&canonical_order)
+            .expect("encode completed snapshot order fixture");
+        for (provider_id, seed) in providers[1..].iter().copied().zip([0x32_u8, 0x33]) {
+            let provider_owner = account(seed);
+            record.provider_completions.push(
+                iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
+                    provider_id,
+                    completed_by: provider_owner.clone(),
+                    completion_epoch: 2,
+                    assignment_revision: record.assignment_revision,
+                    completion_authority: iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+                        provider_owner,
+                        iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                            policy_id: [seed; 32],
+                            revision: 1,
+                            predecessor_digest: None,
+                            policy_digest: [seed.wrapping_add(1); 32],
+                        },
+                    ),
+                    finalized_anchor: iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
+                        height: 1,
+                        block_hash: [seed.wrapping_add(2); 32],
+                    },
+                },
+            );
+        }
+        record.status = ReplicationOrderStatus::Completed(2);
+        world.replication_orders.insert(order, record.clone());
+        location.providers = providers.to_vec();
+        world
+            .musubi_archive_locations
+            .insert(location_key, location.clone());
+        for provider in providers[1..].iter().copied() {
+            world
+                .musubi_locations_by_provider
+                .insert(MusubiProviderLocationKeyV1::new(provider, location_key), ());
+        }
+
+        crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect("an active binding with its exact completed provider set is snapshot-valid");
+
+        let mut pending = record.clone();
+        pending.provider_completions.clear();
+        pending.status = ReplicationOrderStatus::Pending;
+        world.replication_orders.insert(order, pending);
+        let error = crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect_err("an active binding cannot target a pending order");
+        assert!(error.to_string().contains("completed provider location"));
+        world.replication_orders.insert(order, record.clone());
+
+        let mut pending_location = location.clone();
+        pending_location.state = MusubiArchiveLocationStateV1::Pending;
+        world
+            .musubi_archive_locations
+            .insert(location_key, pending_location);
+        let error = crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect_err("an active binding cannot target a pre-admission location");
+        assert!(error.to_string().contains("completed provider location"));
+
+        let mut incomplete_location = location.clone();
+        incomplete_location.providers.pop();
+        world
+            .musubi_archive_locations
+            .insert(location_key, incomplete_location);
+        let error = crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect_err("an active binding cannot omit a completed provider");
+        assert!(error.to_string().contains("completed provider location"));
+        location.state = MusubiArchiveLocationStateV1::Retired;
+        world
+            .musubi_archive_locations
+            .insert(location_key, location.clone());
+        world.musubi_locations_by_pin.insert(
+            pin,
+            MusubiPinLocationReferenceV1 {
+                pin_manifest: pin,
+                location: location_key,
+                active: false,
+            },
+        );
+        world.musubi_locations_by_replication_order.insert(
+            order,
+            MusubiReplicationOrderLocationReferenceV1 {
+                binding: MusubiReplicationOrderArchiveBindingV1::new(
+                    order,
+                    archive.archive_id,
+                    archive.commitment.clone(),
+                ),
+                lifecycle: MusubiReplicationOrderLocationLifecycleV1::Retired(
+                    MusubiRetiredReplicationOrderLocationV1::new(location_key, providers.to_vec()),
+                ),
+            },
+        );
+        {
+            let mut provider_index = world.musubi_locations_by_provider.block();
+            for provider in providers {
+                let _ =
+                    provider_index.remove(MusubiProviderLocationKeyV1::new(provider, location_key));
+            }
+            provider_index.commit();
+        }
+        crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect("a retired binding retains its exact historical completed provider set");
+
+        world.musubi_locations_by_replication_order.insert(
+            order,
+            MusubiReplicationOrderLocationReferenceV1 {
+                binding: MusubiReplicationOrderArchiveBindingV1::new(
+                    order,
+                    archive.archive_id,
+                    archive.commitment,
+                ),
+                lifecycle: MusubiReplicationOrderLocationLifecycleV1::Retired(
+                    MusubiRetiredReplicationOrderLocationV1::new(
+                        location_key,
+                        providers[..2].to_vec(),
+                    ),
+                ),
+            },
+        );
+        let error = crate::state::deserialize::validate_musubi_location_reverse_indices(
+            &world.musubi_archives,
+            &world.musubi_archive_locations,
+            &world.pin_manifests,
+            &world.replication_orders,
+            &world.musubi_locations_by_pin,
+            &world.musubi_locations_by_replication_order,
+            &world.musubi_locations_by_provider,
+        )
+        .expect_err("a retired binding cannot rewrite its historical completion set");
+        assert!(error.to_string().contains("completed historical location"));
     }
 
     #[test]

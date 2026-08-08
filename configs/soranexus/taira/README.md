@@ -1394,8 +1394,9 @@ catalog, and committed-chain identity.
 
 That config must be a normal `iroha` client TOML for a low-risk runtime-only
 signer. Start from `taira-canary-client.example.toml`, not
-`defaults/client.toml`: the generic repo client uses the zero chain id and is
-not valid for Taira. The canary alias defaults to the dataspace-root form
+`defaults/client.toml`: the generic repo client uses the zero chain id and the
+development genesis `network_id`, so it is not valid for Taira. The canary
+alias defaults to the dataspace-root form
 `<label>@universal`; do not expand it to `@wonderland.universal` or
 `@universal.universal`. When `--write-config` is omitted and the automatically
 selected runtime path is missing, `check_mcp_rollout.sh` requires

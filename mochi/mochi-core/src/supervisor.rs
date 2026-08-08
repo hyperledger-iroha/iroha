@@ -28,7 +28,7 @@ use iroha_data_model::{
     block::BlockHeader,
     parameter::system::SumeragiConsensusMode,
     peer::PeerId,
-    prelude::{AccountId, ChainId},
+    prelude::{AccountId, ChainId, NetworkId},
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_version::build_line::BuildLine;
@@ -2436,10 +2436,9 @@ impl Supervisor {
 
     /// Construct a Torii client for the specified peer alias.
     pub fn torii_client(&self, alias: &str) -> Option<ToriiClient> {
-        self.peers
-            .iter()
-            .find(|peer| peer.alias() == alias)
-            .and_then(|peer| peer.torii_client().ok())
+        let peer = self.peers.iter().find(|peer| peer.alias() == alias)?;
+        let network_id = NetworkId::from_genesis_hash(self.genesis.expected_hash?);
+        ToriiClient::new_for_network(peer.spec.torii_base_http(), network_id).ok()
     }
 
     /// Produce local sandbox connection details for bootstrap files and automation.

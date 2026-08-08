@@ -897,13 +897,8 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
                 format!("Orchard pool bootstrap canonical encoding failed: {error}").into(),
             )
         })?;
-        let pool_state = PrivacyOrchardPoolStateV1::bootstrap(
-            bootstrap_digest,
-            self.bootstrap.asset_definition_id.clone(),
-            self.bootstrap.public_balance_scope,
-            self.bootstrap.reserve_account.clone(),
-        )
-        .map_err(invalid_privacy_parameter)?;
+        let pool_state = PrivacyOrchardPoolStateV1::bootstrap(self.bootstrap.clone())
+            .map_err(invalid_privacy_parameter)?;
         let state_record = PrivacyStateItemRecordV1::orchard_pool_state(pool_state.clone())
             .map_err(invalid_privacy_parameter)?;
         let root_provenance =
@@ -4566,6 +4561,33 @@ impl Execute for SubmitPrivacyProofV1 {
         } else {
             (None, None)
         };
+        match &self.envelope.statement {
+            PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) => {
+                super::asset::isi::validate_committed_public_balance_scope(
+                    state_transaction,
+                    &statement.asset_definition_id,
+                    statement.public_balance_scope,
+                    "ZK-ACE authorization",
+                )?;
+            }
+            PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => {
+                super::asset::isi::validate_committed_public_balance_scope(
+                    state_transaction,
+                    &statement.asset_definition_id,
+                    statement.public_balance_scope,
+                    "Orchard action",
+                )?;
+            }
+            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => {
+                super::asset::isi::validate_committed_public_balance_scope(
+                    state_transaction,
+                    &statement.asset_definition_id,
+                    statement.public_balance_scope,
+                    "private-IVM action",
+                )?;
+            }
+            _ => {}
+        }
         let pgc_verification_state =
             pgc_snapshot
                 .as_ref()
@@ -4744,8 +4766,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.bootstrap_digest() != snapshot.bootstrap_digest()
                     || effect.asset_definition_id() != snapshot.state().asset_definition_id()
                     || effect.asset_definition_id() != &statement.asset_definition_id
-                    || effect.public_balance_scope()
-                        != snapshot.state().public_balance_scope()
+                    || effect.public_balance_scope() != snapshot.state().public_balance_scope()
                     || effect.public_balance_scope() != statement.public_balance_scope
                     || effect.reserve_account() != snapshot.state().reserve_account()
                     || effect.anchor() != statement.anchor
@@ -4880,8 +4901,7 @@ impl Execute for SubmitPrivacyProofV1 {
                                 authority,
                                 effect.reserve_account(),
                                 amount,
-                            )
-                            ?;
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
                             super::asset::isi::execute_verified_privacy_public_balance_transfer(
@@ -4976,8 +4996,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.next_root() == effect.current_root()
                     || effect.value_balance() != value_balance
                     || effect.public_balance_scope() != public_balance_scope
-                    || effect.public_balance_scope()
-                        != snapshot.bootstrap().public_balance_scope()
+                    || effect.public_balance_scope() != snapshot.bootstrap().public_balance_scope()
                 {
                     return Err(Error::InvariantViolation(
                         "native proof-managed effect is inconsistent with trusted state or its statement"
@@ -5324,8 +5343,7 @@ impl Execute for SubmitPrivacyProofV1 {
                                 authority,
                                 reserve_account,
                                 amount,
-                            )
-                            ?;
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
                             super::asset::isi::execute_verified_privacy_public_balance_transfer(

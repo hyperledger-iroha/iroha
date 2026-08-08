@@ -1181,6 +1181,9 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             canonical_genesis_hash(&bounded_client(restart_peer.client()))? == genesis_hash,
             "restarted peer derived a different canonical genesis hash"
         );
+        println!(
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_orchard_pq_masp_network::canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart:passed"
+        );
         Ok(())
     }
     .await;

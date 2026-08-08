@@ -21,6 +21,7 @@ use iroha_data_model::{
     block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
     events::EventBox,
     merge::MergeLedgerEntry,
+    nexus::{LaneFinalityAuthorityV1, LaneRelayEnvelope},
     transaction::SignedTransaction,
 };
 use iroha_primitives::time::TimeSource;
@@ -917,6 +918,69 @@ impl VerifiedRecoveredFinalitySubject {
 }
 
 impl V2ApplyService {
+    /// Reconstruct compact relay authority from immutable block/finality data.
+    ///
+    /// This updates only the process-local relay service cache. Contract/world
+    /// state can consume the envelope only through a later consensus-applied
+    /// `RegisterVerifiedLaneRelay` transaction.
+    fn publish_finalized_lane_relays(
+        &self,
+        block: &SignedBlock,
+        artifact: &wire::finality::V2FinalityArtifact,
+    ) -> Result<(), V2ApplyError> {
+        let manifest =
+            crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(block)
+                .map_err(V2ApplyError::ExecutionCommitment)?;
+        if manifest.commitment()
+            != artifact
+                .commit_qc
+                .execution_commitment
+                .lane_finality_manifest
+        {
+            return Err(V2ApplyError::ExecutionCommitmentMismatch);
+        }
+        for (index, statement) in manifest.statements().iter().enumerate() {
+            let proof_index = u32::try_from(index).map_err(|_| {
+                V2ApplyError::ExecutionCommitment(
+                    "lane-finality proof index does not fit u32".to_owned(),
+                )
+            })?;
+            let proof = manifest.proof(proof_index).ok_or_else(|| {
+                V2ApplyError::ExecutionCommitment(
+                    "canonical lane-finality proof is unavailable".to_owned(),
+                )
+            })?;
+            let envelope = LaneRelayEnvelope::new(
+                block.header(),
+                statement.da_commitment_hash,
+                statement.settlement_commitment.clone(),
+                statement.rbc_bytes_total,
+            )
+            .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_string()))?
+            .with_lane_block_descriptor_hash(Some(statement.lane_block_descriptor_hash))
+            .with_manifest_root(Some(statement.manifest_root))
+            .with_finality_authority(Some(LaneFinalityAuthorityV1 {
+                version: 1,
+                global_block_height: artifact.height,
+                finality_artifact_hash: HashOf::new(artifact),
+                statement_proof: proof,
+            }));
+            if envelope
+                .lane_finality_statement()
+                .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_string()))?
+                != *statement
+            {
+                return Err(V2ApplyError::ExecutionCommitment(
+                    "canonical lane-finality statement cannot reconstruct its relay".to_owned(),
+                ));
+            }
+            self.state.record_lane_relay(&envelope).map_err(|error| {
+                V2ApplyError::committed_recovery_required("lane-finality relay publication", &error)
+            })?;
+        }
+        Ok(())
+    }
+
     fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
         failed_block: &SignedBlock,
@@ -1244,6 +1308,8 @@ impl V2ApplyService {
                 V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
             })?;
 
+        self.publish_finalized_lane_relays(committed_block.as_ref(), &artifact)?;
+
         // The strict restart-repair path authenticates Native AMX evidence
         // against both finality and the post-WSV Kura metadata join. Publish
         // that join first on every fresh or recovery attempt, then repair or
@@ -1473,8 +1539,17 @@ impl V2ApplyService {
                 valid.as_ref(),
             )
             .map_err(V2ApplyError::ExecutionCommitment)?;
-        crate::sumeragi::exec::execution_commitment_from_witness(&witness, &native_amx_manifest)
-            .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))
+        let lane_finality_manifest =
+            crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
+                valid.as_ref(),
+            )
+            .map_err(V2ApplyError::ExecutionCommitment)?;
+        crate::sumeragi::exec::execution_commitment_from_witness(
+            &witness,
+            &native_amx_manifest,
+            &lane_finality_manifest,
+        )
+        .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))
     }
 
     /// Revalidate one checksummed restart marker before it can restore vote authority.
@@ -1581,9 +1656,15 @@ impl V2ApplyService {
                 valid_block.as_ref(),
             )
             .map_err(V2ApplyError::ExecutionCommitment)?;
+        let lane_finality_manifest =
+            crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
+                valid_block.as_ref(),
+            )
+            .map_err(V2ApplyError::ExecutionCommitment)?;
         let actual_execution_commitment = crate::sumeragi::exec::execution_commitment_from_witness(
             &witness,
             &native_amx_manifest,
+            &lane_finality_manifest,
         )
         .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))?;
         if actual_execution_commitment != expected_execution_commitment {

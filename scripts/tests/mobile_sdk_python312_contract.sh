@@ -119,7 +119,7 @@ TEST_ROOT="$("$PYTHON312" -I -S -c \
 for script in "$APPLE_BUILDER" "$MOBILE_PACKAGER"; do
   grep -Fq 'MOBILE_SDK_PYTHON_BINARY' "$script" \
     || fail "$script does not expose the canonical Python override"
-  grep -Fq "\"\$PYTHON_BINARY\" -I -S \"\$@\"" "$script" \
+  grep -Fq "\"\$PYTHON_BINARY\" -I -S -B \"\$@\"" "$script" \
     || fail "$script does not isolate helper Python invocations"
   if grep -Eq '^[[:space:]]*python3([[:space:]]|$)' "$script"; then
     fail "$script still invokes Python through ambient PATH"
@@ -130,7 +130,7 @@ grep -Fq 'resolve_trusted_python312()' "$MOBILE_CHECKER" \
   || fail "mobile checker does not authenticate Python 3.12"
 grep -Fq 'MOBILE_SDK_PYTHON_BINARY' "$MOBILE_CHECKER" \
   || fail "mobile checker does not expose the canonical Python override"
-grep -Fq '"$CHECK_PYTHON_BINARY" -I -S "$@"' "$MOBILE_CHECKER" \
+grep -Fq '"$CHECK_PYTHON_BINARY" -I -S -B "$@"' "$MOBILE_CHECKER" \
   || fail "mobile checker does not isolate Python helpers from site packages"
 grep -Fq 'NORITO_BRIDGE_BUILD_LOCK_FDS' "$APPLE_BUILDER" \
   || fail "Apple builder does not authenticate inherited target/stage/output locks"
@@ -259,6 +259,8 @@ expect_failure_containing \
   "NORITO_BRIDGE_BUILD_LOCK_HELD is not part of the first-release build contract" \
   env \
     MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    NORITO_BRIDGE_BUILD_DIR="$APPLE_BUILD_DIR" \
+    NORITO_BRIDGE_OUT_DIR="$APPLE_OUT_DIR" \
     NORITO_BRIDGE_BUILD_LOCK_HELD=1 \
     /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
 expect_failure_containing \

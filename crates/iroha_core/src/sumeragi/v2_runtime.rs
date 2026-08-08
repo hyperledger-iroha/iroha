@@ -2307,18 +2307,8 @@ pub(crate) fn production_adapter_effect_semantic_identity(effect: &AdapterEffect
                 }
             }
         }
-        AdapterEffect::ReportEquivocation {
-            offender,
-            round,
-            kind,
-        } => {
-            append_runtime_identity_field(&mut identity, &offender.encode());
-            append_runtime_identity_field(&mut identity, &round.encode());
-            identity.push(match kind {
-                super::v2_core::EquivocationKind::Vote => 1,
-                super::v2_core::EquivocationKind::Timeout => 2,
-                super::v2_core::EquivocationKind::Proposal => 3,
-            });
+        AdapterEffect::ReportEquivocation { evidence } => {
+            append_runtime_identity_field(&mut identity, &evidence.encode());
         }
         AdapterEffect::ReportInvalidCertifiedBody {
             subject,
@@ -7814,19 +7804,9 @@ impl RuntimeDriver for SumeragiV2Adapter {
                     append_runtime_identity_field(&mut identity, &subject.encode());
                 }
             }
-            AdapterEffect::ReportEquivocation {
-                offender,
-                round,
-                kind: equivocation_kind,
-            } => {
+            AdapterEffect::ReportEquivocation { evidence } => {
                 identity.push(7);
-                append_runtime_identity_field(&mut identity, &offender.encode());
-                append_runtime_identity_field(&mut identity, &round.encode());
-                identity.push(match equivocation_kind {
-                    super::v2_core::EquivocationKind::Vote => 1,
-                    super::v2_core::EquivocationKind::Timeout => 2,
-                    super::v2_core::EquivocationKind::Proposal => 3,
-                });
+                append_runtime_identity_field(&mut identity, &evidence.encode());
             }
             AdapterEffect::ReportInvalidCertifiedBody {
                 subject,

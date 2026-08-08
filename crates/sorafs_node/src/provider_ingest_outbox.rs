@@ -32,6 +32,7 @@ use iroha_data_model::{
     ChainId,
     account::AccountId,
     isi::sorafs::CompleteReplicationOrder,
+    musubi::ArchiveId,
     sorafs::pin_registry::{
         ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
         ProviderIngestFinalizedAnchorV1,
@@ -41,6 +42,9 @@ use iroha_data_model::{
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
+use crate::provider_ingest_runtime::{
+    ProviderIngestVerifiedMusubiBundleReceiptV1, StoredProviderIngestVerifiedMusubiBundleReceiptV1,
+};
 use crate::{
     durable_transaction_forwarder::{
         self as durable, DeliveryRecord, DeliveryTransitionError, FinalizedCursorV1,
@@ -51,8 +55,8 @@ use crate::{
 
 // Internal persisted-layout revision. The product/wire contract remains V1,
 // while pre-release checkpoint layouts are intentionally rejected and reseeded.
-const PROVIDER_INGEST_OUTBOX_LAYOUT_VERSION_V2: u8 = 2;
-const PROVIDER_INGEST_CHECKPOINT_MAGIC_V2: [u8; 16] = *b"SORAFSINGESTV2\0\0";
+const PROVIDER_INGEST_OUTBOX_LAYOUT_VERSION_V5: u8 = 5;
+const PROVIDER_INGEST_CHECKPOINT_MAGIC_V5: [u8; 16] = *b"SORAFSINGESTV5\0\0";
 const PROVIDER_INGEST_JOB_ID_DOMAIN_V1: &[u8] = b"sorafs.provider.ingest.job.v1\0";
 const PROVIDER_INGEST_LEASE_TOKEN_DOMAIN_V1: &[u8] = b"sorafs.provider.ingest.source-lease.v1\0";
 const PROVIDER_INGEST_SIGNING_TOKEN_DOMAIN_V1: &[u8] =
@@ -530,6 +534,76 @@ impl ProviderIngestClaimOwnerV1 {
     }
 }
 
+/// Exact finalized chain and archive identity retained for one Musubi ingest job.
+///
+/// `ChainId` is additionally constrained by the provider-ingest policy's
+/// 255-byte completion-chain bound, and the remaining fields are fixed-width
+/// digests. Generic replication jobs omit this context entirely.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct FinalizedProviderIngestMusubiContextV1 {
+    chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
+    archive_id: ArchiveId,
+}
+
+impl FinalizedProviderIngestMusubiContextV1 {
+    /// Construct and validate an exact finalized Musubi context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the chain identity is empty or overlong, or when
+    /// either fixed-width identity uses its forbidden all-zero sentinel.
+    pub fn new(
+        chain_id: ChainId,
+        genesis_block_hash: [u8; 32],
+        archive_id: ArchiveId,
+    ) -> Result<Self, ProviderIngestOutboxError> {
+        let context = Self {
+            chain_id,
+            genesis_block_hash,
+            archive_id,
+        };
+        context.validate()?;
+        Ok(context)
+    }
+
+    /// Exact configured chain identity.
+    #[must_use]
+    pub const fn chain_id(&self) -> &ChainId {
+        &self.chain_id
+    }
+
+    /// Exact configured genesis block hash.
+    #[must_use]
+    pub const fn genesis_block_hash(&self) -> [u8; 32] {
+        self.genesis_block_hash
+    }
+
+    /// Exact finalized Musubi archive identity.
+    #[must_use]
+    pub const fn archive_id(&self) -> ArchiveId {
+        self.archive_id
+    }
+
+    /// Validate the bounded canonical context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty or overlong chain identity or an inert
+    /// genesis/archive digest.
+    pub fn validate(&self) -> Result<(), ProviderIngestOutboxError> {
+        if self.chain_id.as_str().is_empty()
+            || self.chain_id.as_str().len()
+                > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+            || self.genesis_block_hash == [0; 32]
+            || self.archive_id.is_zero()
+        {
+            return Err(ProviderIngestOutboxError::InvalidAuthorization);
+        }
+        Ok(())
+    }
+}
+
 /// Immutable authorization derived from exact finalized ledger state.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FinalizedProviderIngestAuthorizationV1 {
@@ -543,6 +617,7 @@ pub struct FinalizedProviderIngestAuthorizationV1 {
     chunk_digest_sha3_256: [u8; 32],
     por_root: [u8; 32],
     content_length: u64,
+    musubi_context: Option<FinalizedProviderIngestMusubiContextV1>,
 }
 
 impl FinalizedProviderIngestAuthorizationV1 {
@@ -584,7 +659,52 @@ impl FinalizedProviderIngestAuthorizationV1 {
             chunk_digest_sha3_256,
             por_root,
             content_length,
+            musubi_context: None,
         };
+        authorization.job_id = authorization.derived_job_id();
+        authorization.validate()?;
+        Ok(authorization)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Construct and validate an immutable Musubi authorization captured from
+    /// one exact finalized ledger view.
+    ///
+    /// The supplied context becomes part of both the durable binding and the
+    /// derived job identity. A generic authorization with otherwise identical
+    /// fields is therefore a different job.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any finalized field or Musubi context field is
+    /// zero, malformed, out of bounds, or inconsistent with the derived job ID.
+    pub fn from_finalized_musubi_state(
+        finalized_height: u64,
+        finalized_block_hash: [u8; 32],
+        provider_id: [u8; 32],
+        order_id: [u8; 32],
+        manifest_digest: [u8; 32],
+        manifest_cid: Vec<u8>,
+        chunker_handle: String,
+        chunk_digest_sha3_256: [u8; 32],
+        por_root: [u8; 32],
+        content_length: u64,
+        musubi_context: FinalizedProviderIngestMusubiContextV1,
+    ) -> Result<Self, ProviderIngestOutboxError> {
+        musubi_context.validate()?;
+        let mut authorization = Self::from_finalized_state(
+            finalized_height,
+            finalized_block_hash,
+            provider_id,
+            order_id,
+            manifest_digest,
+            manifest_cid,
+            chunker_handle,
+            chunk_digest_sha3_256,
+            por_root,
+            content_length,
+        )?;
+        authorization.musubi_context = Some(musubi_context);
         authorization.job_id = authorization.derived_job_id();
         authorization.validate()?;
         Ok(authorization)
@@ -665,6 +785,12 @@ impl FinalizedProviderIngestAuthorizationV1 {
         self.content_length
     }
 
+    /// Exact finalized Musubi context, absent for a generic replication job.
+    #[must_use]
+    pub const fn musubi_context(&self) -> Option<&FinalizedProviderIngestMusubiContextV1> {
+        self.musubi_context.as_ref()
+    }
+
     fn derived_job_id(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         hasher.update(PROVIDER_INGEST_JOB_ID_DOMAIN_V1);
@@ -676,6 +802,17 @@ impl FinalizedProviderIngestAuthorizationV1 {
         hasher.update(&self.chunk_digest_sha3_256);
         hasher.update(&self.por_root);
         hasher.update(&self.content_length.to_le_bytes());
+        match &self.musubi_context {
+            None => {
+                hasher.update(&[0]);
+            }
+            Some(context) => {
+                hasher.update(&[1]);
+                hash_length_prefixed(&mut hasher, context.chain_id().as_str().as_bytes());
+                hasher.update(&context.genesis_block_hash());
+                hasher.update(context.archive_id().as_bytes());
+            }
+        }
         *hasher.finalize().as_bytes()
     }
 
@@ -688,6 +825,7 @@ impl FinalizedProviderIngestAuthorizationV1 {
             && self.chunk_digest_sha3_256 == other.chunk_digest_sha3_256
             && self.por_root == other.por_root
             && self.content_length == other.content_length
+            && self.musubi_context == other.musubi_context
     }
 
     /// Validate the complete canonical finalized authorization binding.
@@ -713,6 +851,10 @@ impl FinalizedProviderIngestAuthorizationV1 {
             || self.chunk_digest_sha3_256 == [0; 32]
             || self.por_root == [0; 32]
             || self.content_length == 0
+            || self
+                .musubi_context
+                .as_ref()
+                .is_some_and(|context| context.validate().is_err())
             || self.job_id != self.derived_job_id()
         {
             return Err(ProviderIngestOutboxError::InvalidAuthorization);
@@ -848,6 +990,8 @@ pub enum ProviderIngestDeliveryStateV1 {
     LocalStored {
         /// Canonical local manifest identifier.
         manifest_id: String,
+        /// Exact persisted Musubi verification receipt, absent for generic orders.
+        musubi_bundle: Option<Box<ProviderIngestVerifiedMusubiBundleReceiptV1>>,
         /// Provider-specific completion transaction delivery.
         completion: ProviderIngestCompletionStateV1,
     },
@@ -855,6 +999,8 @@ pub enum ProviderIngestDeliveryStateV1 {
     FinalizedCompleted {
         /// Canonical local manifest identifier, when this replica stored it.
         manifest_id: Option<String>,
+        /// Exact pre-completion Musubi verification receipt, when applicable.
+        musubi_bundle: Option<Box<ProviderIngestVerifiedMusubiBundleReceiptV1>>,
         /// Provider-specific completion epoch.
         completion_epoch: u64,
         /// Ledger account that committed the provider completion.
@@ -1320,6 +1466,7 @@ enum StoredProviderIngestStateV1 {
     },
     LocalStored {
         manifest_id: String,
+        musubi_bundle: Option<Box<StoredProviderIngestVerifiedMusubiBundleReceiptV1>>,
         completion: BoxedStoredCompletionDeliveryV1,
     },
 }
@@ -1337,6 +1484,7 @@ struct StoredActiveProviderIngestV1 {
 enum StoredProviderIngestTerminalOutcomeV1 {
     FinalizedCompleted {
         manifest_id: Option<String>,
+        musubi_bundle: Option<Box<StoredProviderIngestVerifiedMusubiBundleReceiptV1>>,
         completion_epoch: u64,
         completed_by: AccountId,
         committed_transaction_hash: Option<[u8; 32]>,
@@ -1375,8 +1523,8 @@ struct ProviderIngestOutboxCheckpointV1 {
 impl Default for ProviderIngestOutboxCheckpointV1 {
     fn default() -> Self {
         Self {
-            magic: PROVIDER_INGEST_CHECKPOINT_MAGIC_V2,
-            version: PROVIDER_INGEST_OUTBOX_LAYOUT_VERSION_V2,
+            magic: PROVIDER_INGEST_CHECKPOINT_MAGIC_V5,
+            version: PROVIDER_INGEST_OUTBOX_LAYOUT_VERSION_V5,
             next_sequence: 1,
             finalized_cursor_high_water: None,
             finalized_block_time_ms_high_water: None,
@@ -2794,16 +2942,33 @@ impl ProviderIngestOutbox {
         now_ms: u64,
         manifest_id: String,
     ) -> Result<(), ProviderIngestOutboxError> {
+        self.mark_local_stored_verified(claim, now_ms, manifest_id, None)
+    }
+
+    /// Record exact locally stored bytes together with any mandatory Musubi verifier receipt.
+    pub fn mark_local_stored_verified(
+        &self,
+        claim: &ProviderIngestSourceClaimV1,
+        now_ms: u64,
+        manifest_id: String,
+        musubi_bundle: Option<ProviderIngestVerifiedMusubiBundleReceiptV1>,
+    ) -> Result<(), ProviderIngestOutboxError> {
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
         let position = active_position(&candidate, claim.job_id)?;
-        validate_manifest_id(&candidate.active[position].authorization, &manifest_id)?;
+        let authorization = &candidate.active[position].authorization;
+        validate_manifest_id(authorization, &manifest_id)?;
+        if !provided_musubi_receipt_shape_is_valid(authorization, musubi_bundle.as_ref()) {
+            return Err(ProviderIngestOutboxError::InvalidAuthorization);
+        }
+        let musubi_bundle = musubi_bundle.map(|receipt| Box::new(receipt.to_stored()));
         if let StoredProviderIngestStateV1::LocalStored {
             manifest_id: existing,
+            musubi_bundle: existing_musubi,
             ..
         } = &candidate.active[position].state
         {
-            return if existing == &manifest_id {
+            return if existing == &manifest_id && existing_musubi == &musubi_bundle {
                 Ok(())
             } else {
                 Err(ProviderIngestOutboxError::InvalidManifestId)
@@ -2812,6 +2977,7 @@ impl ProviderIngestOutbox {
         validate_live_claim(&candidate.active[position], claim, now_ms)?;
         candidate.active[position].state = StoredProviderIngestStateV1::LocalStored {
             manifest_id,
+            musubi_bundle,
             completion: BoxedStoredCompletionDeliveryV1::new(StoredCompletionDeliveryV1::default()),
         };
         self.persist_candidate(&mut state, candidate)
@@ -4221,6 +4387,7 @@ impl ProviderIngestOutbox {
                     let terminal = &mut candidate.terminal[position];
                     terminal.outcome = StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
                         manifest_id: None,
+                        musubi_bundle: None,
                         completion_epoch: evidence.completion_epoch,
                         completed_by: evidence.completed_by,
                         committed_transaction_hash: evidence.committed_transaction_hash,
@@ -4240,19 +4407,20 @@ impl ProviderIngestOutbox {
         let authorization = &candidate.active[position].authorization;
         validate_cursor_after_admission(authorization, evidence.finalized_cursor)?;
         validate_completion_binding(authorization, &evidence)?;
-        let manifest_id = match &candidate.active[position].state {
+        let (manifest_id, musubi_bundle) = match &candidate.active[position].state {
             StoredProviderIngestStateV1::LocalStored {
                 manifest_id,
+                musubi_bundle,
                 completion,
             } => {
                 if completion.baseline_finalized_height != 0 {
                     validate_cursor_after_baseline(completion, evidence.finalized_cursor)?;
                 }
-                Some(manifest_id.clone())
+                (Some(manifest_id.clone()), musubi_bundle.clone())
             }
             StoredProviderIngestStateV1::PendingSource
             | StoredProviderIngestStateV1::SourceClaimed { .. }
-            | StoredProviderIngestStateV1::RetryScheduled { .. } => None,
+            | StoredProviderIngestStateV1::RetryScheduled { .. } => (None, None),
         };
         prune_terminal_entries(
             &mut candidate,
@@ -4266,6 +4434,7 @@ impl ProviderIngestOutbox {
             authorization: active.authorization,
             outcome: StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
                 manifest_id,
+                musubi_bundle,
                 completion_epoch: evidence.completion_epoch,
                 completed_by: evidence.completed_by,
                 committed_transaction_hash: evidence.committed_transaction_hash,
@@ -4352,6 +4521,7 @@ impl ProviderIngestOutbox {
             authorization,
             outcome: StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
                 manifest_id: None,
+                musubi_bundle: None,
                 completion_epoch: evidence.completion_epoch,
                 completed_by: evidence.completed_by,
                 committed_transaction_hash: evidence.committed_transaction_hash,
@@ -4560,6 +4730,32 @@ impl ProviderIngestOutbox {
         let state = self.lock_state()?;
         validate_checkpoint_count_snapshot(&state.checkpoint, state.aggregate_counts, self.policy)?;
         Ok(state.aggregate_counts)
+    }
+
+    /// Return the exact cloned finalized authorization retained for one job.
+    ///
+    /// This accessor exposes no lease or signer material and returns the same
+    /// durable binding for active and terminal jobs.
+    pub fn authorization(
+        &self,
+        job_id: [u8; 32],
+    ) -> Result<FinalizedProviderIngestAuthorizationV1, ProviderIngestOutboxError> {
+        let state = self.lock_state()?;
+        state
+            .checkpoint
+            .active
+            .iter()
+            .map(|entry| &entry.authorization)
+            .chain(
+                state
+                    .checkpoint
+                    .terminal
+                    .iter()
+                    .map(|entry| &entry.authorization),
+            )
+            .find(|authorization| authorization.job_id == job_id)
+            .cloned()
+            .ok_or(ProviderIngestOutboxError::UnknownJob)
     }
 
     /// Return one payload-free status by stable job identity.
@@ -4951,6 +5147,28 @@ fn validate_manifest_id(
         return Err(ProviderIngestOutboxError::InvalidManifestId);
     }
     Ok(())
+}
+
+fn provided_musubi_receipt_shape_is_valid(
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    musubi_bundle: Option<&ProviderIngestVerifiedMusubiBundleReceiptV1>,
+) -> bool {
+    match (authorization.musubi_context(), musubi_bundle) {
+        (None, None) => true,
+        (Some(_), Some(receipt)) => receipt.validate_stored(authorization),
+        (None, Some(_)) | (Some(_), None) => false,
+    }
+}
+
+fn stored_musubi_receipt_shape_is_valid(
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    musubi_bundle: Option<&StoredProviderIngestVerifiedMusubiBundleReceiptV1>,
+) -> bool {
+    match (authorization.musubi_context(), musubi_bundle) {
+        (None, None) => true,
+        (Some(_), Some(receipt)) => receipt.validate_stored(authorization),
+        (None, Some(_)) | (Some(_), None) => false,
+    }
 }
 
 fn increment_attempt(attempts: u32) -> Result<u32, ProviderIngestOutboxError> {
@@ -5655,9 +5873,13 @@ fn active_status(entry: &StoredActiveProviderIngestV1) -> ProviderIngestStatusV1
         },
         StoredProviderIngestStateV1::LocalStored {
             manifest_id,
+            musubi_bundle,
             completion,
         } => ProviderIngestDeliveryStateV1::LocalStored {
             manifest_id: manifest_id.clone(),
+            musubi_bundle: musubi_bundle
+                .as_deref()
+                .map(|receipt| Box::new(receipt.to_receipt())),
             completion: completion_status(completion),
         },
     };
@@ -5668,12 +5890,16 @@ fn terminal_status(entry: &StoredTerminalProviderIngestV1) -> ProviderIngestStat
     let state = match &entry.outcome {
         StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
             manifest_id,
+            musubi_bundle,
             completion_epoch,
             completed_by,
             committed_transaction_hash,
             finalized_cursor,
         } => ProviderIngestDeliveryStateV1::FinalizedCompleted {
             manifest_id: manifest_id.clone(),
+            musubi_bundle: musubi_bundle
+                .as_deref()
+                .map(|receipt| Box::new(receipt.to_receipt())),
             completion_epoch: *completion_epoch,
             completed_by: completed_by.clone(),
             committed_transaction_hash: *committed_transaction_hash,
@@ -5744,8 +5970,8 @@ fn validate_checkpoint_count_snapshot(
         .checked_add(counts.terminal)
         .and_then(|count| u64::try_from(count).ok())
         .ok_or(ProviderIngestOutboxError::InvalidCheckpoint)?;
-    if checkpoint.magic != PROVIDER_INGEST_CHECKPOINT_MAGIC_V2
-        || checkpoint.version != PROVIDER_INGEST_OUTBOX_LAYOUT_VERSION_V2
+    if checkpoint.magic != PROVIDER_INGEST_CHECKPOINT_MAGIC_V5
+        || checkpoint.version != PROVIDER_INGEST_OUTBOX_LAYOUT_VERSION_V5
         || checkpoint.next_sequence == 0
         || counts.active != checkpoint.active.len()
         || counts.terminal != checkpoint.terminal.len()
@@ -5812,8 +6038,30 @@ fn validate_checkpoint(
 fn validate_checkpoint_finalized_high_water(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
 ) -> Result<(), ProviderIngestOutboxError> {
-    let Some((high_water, _)) = validate_retained_finalized_snapshot(checkpoint, None)? else {
-        return Ok(());
+    let retained_snapshot = validate_retained_finalized_snapshot(checkpoint, None)?;
+    let Some((high_water, _)) = retained_snapshot else {
+        let has_receipt = checkpoint.active.iter().any(|entry| {
+            matches!(
+                &entry.state,
+                StoredProviderIngestStateV1::LocalStored {
+                    musubi_bundle: Some(_),
+                    ..
+                }
+            )
+        }) || checkpoint.terminal.iter().any(|entry| {
+            matches!(
+                &entry.outcome,
+                StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
+                    musubi_bundle: Some(_),
+                    ..
+                }
+            )
+        });
+        return if has_receipt {
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        } else {
+            Ok(())
+        };
     };
     for entry in &checkpoint.active {
         validate_cursor_not_before(entry.authorization.admission_finalized_cursor, high_water)
@@ -5836,6 +6084,14 @@ fn validate_checkpoint_finalized_high_water(
             validate_cursor_not_before(observation.cursor, high_water)
                 .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
         }
+        if let StoredProviderIngestStateV1::LocalStored {
+            musubi_bundle: Some(receipt),
+            ..
+        } = &entry.state
+        {
+            validate_cursor_not_before(receipt.observed_finalized_cursor(), high_water)
+                .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
+        }
     }
     for entry in &checkpoint.terminal {
         validate_cursor_not_before(entry.authorization.admission_finalized_cursor, high_water)
@@ -5855,6 +6111,17 @@ fn validate_checkpoint_finalized_high_water(
         };
         validate_cursor_not_before(terminal_cursor, high_water)
             .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
+        if let StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
+            musubi_bundle: Some(receipt),
+            finalized_cursor,
+            ..
+        } = &entry.outcome
+        {
+            validate_cursor_not_before(receipt.observed_finalized_cursor(), *finalized_cursor)
+                .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
+            validate_cursor_not_before(receipt.observed_finalized_cursor(), high_water)
+                .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
+        }
     }
     Ok(())
 }
@@ -5898,9 +6165,14 @@ fn validate_active_state(
         }
         StoredProviderIngestStateV1::LocalStored {
             manifest_id,
+            musubi_bundle,
             completion,
         } => {
             validate_manifest_id(&entry.authorization, manifest_id)?;
+            if !stored_musubi_receipt_shape_is_valid(&entry.authorization, musubi_bundle.as_deref())
+            {
+                return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+            }
             validate_completion_delivery(&entry.authorization, completion, policy)?;
         }
     }
@@ -6076,13 +6348,26 @@ fn validate_terminal(
     match &entry.outcome {
         StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
             manifest_id,
+            musubi_bundle,
             completion_epoch,
             completed_by,
             committed_transaction_hash,
             finalized_cursor,
         } => {
-            if let Some(manifest_id) = manifest_id {
-                validate_manifest_id(&entry.authorization, manifest_id)?;
+            match manifest_id {
+                Some(manifest_id) => {
+                    validate_manifest_id(&entry.authorization, manifest_id)?;
+                    if !stored_musubi_receipt_shape_is_valid(
+                        &entry.authorization,
+                        musubi_bundle.as_deref(),
+                    ) {
+                        return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+                    }
+                }
+                None if musubi_bundle.is_some() => {
+                    return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+                }
+                None => {}
             }
             validate_cursor_after_admission(&entry.authorization, *finalized_cursor)?;
             if *completion_epoch == 0
@@ -6342,10 +6627,16 @@ mod tests {
         ChainId,
         account::AccountId,
         isi::InstructionBox,
+        musubi::{
+            MusubiArchiveCommitmentV1, MusubiContentDigestV1, MusubiSemanticReleaseDigestV1,
+            MusubiVerificationLockDigestV1,
+        },
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         sorafs::{
             capacity::ProviderId,
-            pin_registry::{ManifestDigest, ReplicationOrderId},
+            pin_registry::{
+                ChunkerProfileHandle, ManifestDigest, ManifestRootCid, ReplicationOrderId,
+            },
         },
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
@@ -7343,6 +7634,88 @@ mod tests {
         .expect("authorization")
     }
 
+    fn authorization_with_musubi_context(
+        generic: &FinalizedProviderIngestAuthorizationV1,
+        context: FinalizedProviderIngestMusubiContextV1,
+    ) -> FinalizedProviderIngestAuthorizationV1 {
+        FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+            generic.finalized_height(),
+            generic.finalized_block_hash(),
+            generic.provider_id(),
+            generic.order_id(),
+            generic.manifest_digest(),
+            generic.manifest_cid().to_vec(),
+            generic.chunker_handle().to_owned(),
+            generic.chunk_digest_sha3_256(),
+            generic.por_root(),
+            generic.content_length(),
+            context,
+        )
+        .expect("Musubi authorization")
+    }
+
+    fn musubi_commitment(
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        seed: u8,
+    ) -> MusubiArchiveCommitmentV1 {
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: ManifestRootCid::try_from_slice(authorization.manifest_cid())
+                .expect("canonical manifest root CID"),
+            chunker: ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".to_owned(),
+                name: "sf1".to_owned(),
+                semver: "1.0.0".to_owned(),
+                multihash_code: 0x1f,
+            },
+            chunk_plan_digest: MusubiContentDigestV1::new(authorization.chunk_digest_sha3_256()),
+            por_root: MusubiContentDigestV1::new(authorization.por_root()),
+            content_length: authorization.content_length(),
+            car_digest: MusubiContentDigestV1::new([seed; 32]),
+            car_size: authorization.content_length().saturating_add(1_024),
+            bundle_digest: MusubiContentDigestV1::new([seed.wrapping_add(1); 32]),
+            source_tree_digest: MusubiContentDigestV1::new([seed.wrapping_add(2); 32]),
+            descriptor_digest: MusubiContentDigestV1::new([seed.wrapping_add(3); 32]),
+            file_count: 1,
+            chunk_count: 1,
+        };
+        commitment.validate().expect("valid Musubi commitment");
+        commitment
+    }
+
+    fn verified_musubi_receipt(
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        commitment: MusubiArchiveCommitmentV1,
+    ) -> ProviderIngestVerifiedMusubiBundleReceiptV1 {
+        ProviderIngestVerifiedMusubiBundleReceiptV1::new_for_test(
+            authorization,
+            commitment,
+            MusubiSemanticReleaseDigestV1::new([0xC1; 32]),
+            MusubiVerificationLockDigestV1::new([0xC2; 32]),
+        )
+    }
+
+    fn musubi_authorization_and_receipt(
+        order: u8,
+        height: u64,
+        context_seed: u8,
+    ) -> (
+        FinalizedProviderIngestAuthorizationV1,
+        ProviderIngestVerifiedMusubiBundleReceiptV1,
+    ) {
+        let generic = authorization(order, height);
+        let commitment = musubi_commitment(&generic, context_seed);
+        let context = FinalizedProviderIngestMusubiContextV1::new(
+            ChainId::from("provider-ingest-musubi-test"),
+            [context_seed.wrapping_add(0x40); 32],
+            commitment.archive_id(),
+        )
+        .expect("Musubi context");
+        let authorization = authorization_with_musubi_context(&generic, context);
+        let receipt = verified_musubi_receipt(&authorization, commitment);
+        (authorization, receipt)
+    }
+
     fn owner(seed: u8) -> ProviderIngestClaimOwnerV1 {
         ProviderIngestClaimOwnerV1::new([seed; 32]).expect("owner")
     }
@@ -7820,6 +8193,16 @@ mod tests {
 
     #[test]
     fn canonical_terminal_fixture_fits_derived_structural_charge_and_capacity_boundary() {
+        assert!(
+            provider_ingest_outbox_defaults::TERMINAL_OUTCOME_FIXED_CANONICAL_RESERVE_BYTES_V1
+                >= u64::try_from(
+                    crate::provider_ingest_runtime::
+                        PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1,
+                )
+                .expect("Musubi receipt bound fits u64")
+                .saturating_add(4 * 1024),
+            "terminal outcome reserve must include the bounded Musubi receipt and fixed evidence",
+        );
         let authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_state(
             7,
             cursor(7).block_hash,
@@ -7836,6 +8219,7 @@ mod tests {
         let completed_by = completed_by(0xA1);
         let outcome = StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
             manifest_id: Some(manifest_id(&authorization)),
+            musubi_bundle: None,
             completion_epoch: u64::MAX,
             completed_by: completed_by.clone(),
             committed_transaction_hash: Some([0xB1; 32]),
@@ -8995,6 +9379,453 @@ mod tests {
         assert!(matches!(
             ProviderIngestOutbox::open(&path, tiny),
             Err(ProviderIngestOutboxError::Checkpoint(_))
+        ));
+    }
+
+    #[test]
+    fn retired_v2_checkpoint_magic_and_layout_are_rejected() {
+        let directory = tempdir().expect("tempdir");
+        let path = checkpoint_path(&directory);
+        let outbox = ProviderIngestOutbox::open(&path, policy()).expect("outbox");
+        outbox.enqueue(authorization(0x58, 7)).expect("enqueue");
+        let mut retired_v2 = outbox.state.lock().unwrap().checkpoint.clone();
+        retired_v2.magic = *b"SORAFSINGESTV2\0\0";
+        retired_v2.version = 2;
+        drop(outbox);
+
+        fs::write(
+            &path,
+            norito::to_bytes(&retired_v2).expect("encode retired V2 layout"),
+        )
+        .expect("write retired V2 layout");
+        assert!(matches!(
+            ProviderIngestOutbox::open(&path, policy()),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        ));
+    }
+
+    #[test]
+    fn retired_v3_checkpoint_magic_and_layout_are_rejected() {
+        let directory = tempdir().expect("tempdir");
+        let path = checkpoint_path(&directory);
+        let outbox = ProviderIngestOutbox::open(&path, policy()).expect("outbox");
+        outbox.enqueue(authorization(0x59, 7)).expect("enqueue");
+        let mut retired_v3 = outbox.state.lock().unwrap().checkpoint.clone();
+        retired_v3.magic = *b"SORAFSINGESTV3\0\0";
+        retired_v3.version = 3;
+        drop(outbox);
+
+        fs::write(
+            &path,
+            norito::to_bytes(&retired_v3).expect("encode retired V3 layout"),
+        )
+        .expect("write retired V3 layout");
+        assert!(matches!(
+            ProviderIngestOutbox::open(&path, policy()),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        ));
+    }
+
+    #[test]
+    fn retired_v4_checkpoint_magic_and_layout_are_rejected() {
+        let directory = tempdir().expect("tempdir");
+        let path = checkpoint_path(&directory);
+        let outbox = ProviderIngestOutbox::open(&path, policy()).expect("outbox");
+        outbox.enqueue(authorization(0x5A, 7)).expect("enqueue");
+        let mut retired_v4 = outbox.state.lock().unwrap().checkpoint.clone();
+        retired_v4.magic = *b"SORAFSINGESTV4\0\0";
+        retired_v4.version = 4;
+        drop(outbox);
+
+        fs::write(
+            &path,
+            norito::to_bytes(&retired_v4).expect("encode retired V4 layout"),
+        )
+        .expect("write retired V4 layout");
+        assert!(matches!(
+            ProviderIngestOutbox::open(&path, policy()),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        ));
+    }
+
+    #[test]
+    fn musubi_context_is_bounded_and_separates_job_identity() {
+        let generic = authorization(0x5A, 7);
+        let commitment = musubi_commitment(&generic, 0x31);
+        let first_context = FinalizedProviderIngestMusubiContextV1::new(
+            ChainId::from("provider-ingest-musubi-a"),
+            [0x41; 32],
+            commitment.archive_id(),
+        )
+        .expect("first context");
+        assert_eq!(
+            first_context.chain_id().as_str(),
+            "provider-ingest-musubi-a"
+        );
+        assert_eq!(first_context.genesis_block_hash(), [0x41; 32]);
+        assert_eq!(first_context.archive_id(), commitment.archive_id());
+        first_context.validate().expect("valid bounded context");
+
+        let encoded = norito::to_bytes(&first_context).expect("encode context");
+        let decoded: FinalizedProviderIngestMusubiContextV1 =
+            norito::decode_from_bytes(&encoded).expect("decode context");
+        assert_eq!(decoded, first_context);
+
+        let first = authorization_with_musubi_context(&generic, first_context.clone());
+        let second_context = FinalizedProviderIngestMusubiContextV1::new(
+            ChainId::from("provider-ingest-musubi-a"),
+            [0x42; 32],
+            commitment.archive_id(),
+        )
+        .expect("second context");
+        let second = authorization_with_musubi_context(&generic, second_context);
+        assert_ne!(generic.job_id(), first.job_id());
+        assert_ne!(first.job_id(), second.job_id());
+        assert!(!generic.same_binding(&first));
+        assert!(!first.same_binding(&second));
+
+        let mut zero_genesis = first_context.clone();
+        zero_genesis.genesis_block_hash = [0; 32];
+        assert_eq!(
+            zero_genesis.validate(),
+            Err(ProviderIngestOutboxError::InvalidAuthorization)
+        );
+        let mut zero_archive = first_context;
+        zero_archive.archive_id = ArchiveId::new([0; 32]);
+        assert_eq!(
+            zero_archive.validate(),
+            Err(ProviderIngestOutboxError::InvalidAuthorization)
+        );
+    }
+
+    #[test]
+    fn generic_and_musubi_local_receipt_pairing_is_exact() {
+        let (musubi, receipt) = musubi_authorization_and_receipt(0x5B, 7, 0x32);
+        let generic = authorization(0x5B, 7);
+
+        let generic_outbox = ProviderIngestOutbox::in_memory(policy()).expect("generic outbox");
+        generic_outbox
+            .enqueue(generic.clone())
+            .expect("enqueue generic");
+        let generic_claim = generic_outbox
+            .claim_source(generic.job_id(), owner(1), 100, cursor(7))
+            .expect("claim generic");
+        assert_eq!(
+            generic_outbox.mark_local_stored_verified(
+                &generic_claim,
+                101,
+                manifest_id(&generic),
+                Some(receipt.clone()),
+            ),
+            Err(ProviderIngestOutboxError::InvalidAuthorization)
+        );
+        generic_outbox
+            .mark_local_stored(&generic_claim, 101, manifest_id(&generic))
+            .expect("store generic without receipt");
+
+        let musubi_outbox = ProviderIngestOutbox::in_memory(policy()).expect("Musubi outbox");
+        observe_finalized(&musubi_outbox, cursor(7));
+        musubi_outbox
+            .enqueue(musubi.clone())
+            .expect("enqueue Musubi");
+        let musubi_claim = musubi_outbox
+            .claim_source(musubi.job_id(), owner(2), 100, cursor(7))
+            .expect("claim Musubi");
+        assert_eq!(
+            musubi_outbox.mark_local_stored(&musubi_claim, 101, manifest_id(&musubi)),
+            Err(ProviderIngestOutboxError::InvalidAuthorization)
+        );
+        musubi_outbox
+            .mark_local_stored_verified(&musubi_claim, 101, manifest_id(&musubi), Some(receipt))
+            .expect("store Musubi with exact receipt");
+        assert_eq!(
+            musubi_outbox
+                .authorization(musubi.job_id())
+                .expect("active authorization"),
+            musubi
+        );
+        assert!(matches!(
+            musubi_outbox
+                .status(musubi.job_id())
+                .expect("local Musubi status")
+                .state,
+            ProviderIngestDeliveryStateV1::LocalStored {
+                musubi_bundle: Some(_),
+                ..
+            }
+        ));
+
+        observe_finalized(&musubi_outbox, cursor(8));
+        musubi_outbox
+            .mark_finalized_complete(musubi.job_id(), finalized_evidence(&musubi, 8, None, 8))
+            .expect("finalize locally stored Musubi");
+        assert_eq!(
+            musubi_outbox
+                .authorization(musubi.job_id())
+                .expect("terminal authorization"),
+            musubi
+        );
+        assert!(matches!(
+            musubi_outbox
+                .status(musubi.job_id())
+                .expect("terminal Musubi status")
+                .state,
+            ProviderIngestDeliveryStateV1::FinalizedCompleted {
+                manifest_id: Some(_),
+                musubi_bundle: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn private_musubi_receipt_checkpoint_roundtrip_preserves_public_projection() {
+        let directory = tempdir().expect("tempdir");
+        let path = checkpoint_path(&directory);
+        let (authorization, receipt) = musubi_authorization_and_receipt(0x60, 7, 0x36);
+        let job_id = authorization.job_id();
+
+        let outbox = ProviderIngestOutbox::open(&path, policy()).expect("outbox");
+        observe_finalized(&outbox, cursor(7));
+        outbox
+            .enqueue(authorization.clone())
+            .expect("enqueue Musubi");
+        let claim = outbox
+            .claim_source(job_id, owner(6), 100, cursor(7))
+            .expect("claim Musubi source");
+        outbox
+            .mark_local_stored_verified(
+                &claim,
+                101,
+                manifest_id(&authorization),
+                Some(receipt.clone()),
+            )
+            .expect("persist private receipt DTO");
+        drop(outbox);
+
+        let restored = ProviderIngestOutbox::open(&path, policy()).expect("restore local state");
+        let ProviderIngestDeliveryStateV1::LocalStored {
+            musubi_bundle: Some(local_receipt),
+            ..
+        } = restored.status(job_id).expect("local status").state
+        else {
+            panic!("restored Musubi state must project its opaque receipt");
+        };
+        assert_eq!(*local_receipt, receipt);
+
+        observe_finalized(&restored, cursor(8));
+        restored
+            .mark_finalized_complete(job_id, finalized_evidence(&authorization, 8, None, 8))
+            .expect("finalize restored Musubi state");
+        drop(restored);
+
+        let restored = ProviderIngestOutbox::open(&path, policy()).expect("restore terminal state");
+        let ProviderIngestDeliveryStateV1::FinalizedCompleted {
+            musubi_bundle: Some(terminal_receipt),
+            ..
+        } = restored.status(job_id).expect("terminal status").state
+        else {
+            panic!("terminal Musubi state must project its opaque receipt");
+        };
+        assert_eq!(*terminal_receipt, receipt);
+    }
+
+    #[test]
+    fn checkpoint_rejects_future_or_postcompletion_receipt_cursor() {
+        let (authorization, receipt) = musubi_authorization_and_receipt(0x61, 7, 0x37);
+        let job_id = authorization.job_id();
+        let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
+        observe_finalized(&outbox, cursor(8));
+        outbox
+            .enqueue(authorization.clone())
+            .expect("enqueue Musubi");
+        let claim = outbox
+            .claim_source(job_id, owner(7), 100, cursor(8))
+            .expect("claim Musubi source");
+        outbox
+            .mark_local_stored_verified(&claim, 101, manifest_id(&authorization), Some(receipt))
+            .expect("store exact Musubi receipt");
+
+        let mut future = outbox.state.lock().unwrap().checkpoint.clone();
+        let StoredProviderIngestStateV1::LocalStored {
+            musubi_bundle: Some(receipt),
+            ..
+        } = &mut future.active[0].state
+        else {
+            panic!("fixture must retain a Musubi receipt");
+        };
+        receipt.set_observed_finalized_cursor_for_test(cursor(9));
+        assert_eq!(
+            validate_checkpoint(&future, policy()),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        outbox
+            .mark_finalized_complete(job_id, finalized_evidence(&authorization, 8, None, 8))
+            .expect("finalize Musubi receipt at height eight");
+        observe_finalized(&outbox, cursor(10));
+        let mut postcompletion = outbox.state.lock().unwrap().checkpoint.clone();
+        let StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted {
+            musubi_bundle: Some(receipt),
+            ..
+        } = &mut postcompletion.terminal[0].outcome
+        else {
+            panic!("terminal fixture must retain a Musubi receipt");
+        };
+        receipt.set_observed_finalized_cursor_for_test(cursor(9));
+        assert_eq!(
+            validate_checkpoint(&postcompletion, policy()),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+    }
+
+    #[test]
+    fn musubi_receipt_context_substitution_is_rejected() {
+        let (original, receipt) = musubi_authorization_and_receipt(0x5C, 7, 0x33);
+        let original_context = original.musubi_context().expect("Musubi context");
+        let substituted_context = FinalizedProviderIngestMusubiContextV1::new(
+            original_context.chain_id().clone(),
+            [0xF1; 32],
+            original_context.archive_id(),
+        )
+        .expect("substituted context");
+        let substituted =
+            authorization_with_musubi_context(&authorization(0x5C, 7), substituted_context);
+        assert_ne!(original.job_id(), substituted.job_id());
+
+        let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
+        outbox
+            .enqueue(substituted.clone())
+            .expect("enqueue substituted authorization");
+        let claim = outbox
+            .claim_source(substituted.job_id(), owner(3), 100, cursor(7))
+            .expect("claim source");
+        assert_eq!(
+            outbox.mark_local_stored_verified(
+                &claim,
+                101,
+                manifest_id(&substituted),
+                Some(receipt),
+            ),
+            Err(ProviderIngestOutboxError::InvalidAuthorization)
+        );
+    }
+
+    #[test]
+    fn checkpoint_validation_rejects_musubi_receipt_shape_substitution() {
+        let (musubi, receipt) = musubi_authorization_and_receipt(0x5D, 7, 0x34);
+        let generic = authorization(0x5D, 7);
+
+        let generic_outbox = ProviderIngestOutbox::in_memory(policy()).expect("generic outbox");
+        generic_outbox
+            .enqueue(generic.clone())
+            .expect("enqueue generic");
+        let generic_claim = generic_outbox
+            .claim_source(generic.job_id(), owner(4), 100, cursor(7))
+            .expect("claim generic");
+        generic_outbox
+            .mark_local_stored(&generic_claim, 101, manifest_id(&generic))
+            .expect("store generic");
+        let mut generic_checkpoint = generic_outbox.state.lock().unwrap().checkpoint.clone();
+        let StoredProviderIngestStateV1::LocalStored { musubi_bundle, .. } =
+            &mut generic_checkpoint.active[0].state
+        else {
+            panic!("generic fixture must be locally stored");
+        };
+        *musubi_bundle = Some(Box::new(receipt.to_stored()));
+        assert_eq!(
+            validate_checkpoint(&generic_checkpoint, policy()),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        let musubi_outbox = ProviderIngestOutbox::in_memory(policy()).expect("Musubi outbox");
+        observe_finalized(&musubi_outbox, cursor(7));
+        musubi_outbox
+            .enqueue(musubi.clone())
+            .expect("enqueue Musubi");
+        let musubi_claim = musubi_outbox
+            .claim_source(musubi.job_id(), owner(5), 100, cursor(7))
+            .expect("claim Musubi");
+        musubi_outbox
+            .mark_local_stored_verified(&musubi_claim, 101, manifest_id(&musubi), Some(receipt))
+            .expect("store Musubi");
+        let mut musubi_checkpoint = musubi_outbox.state.lock().unwrap().checkpoint.clone();
+        let StoredProviderIngestStateV1::LocalStored { musubi_bundle, .. } =
+            &mut musubi_checkpoint.active[0].state
+        else {
+            panic!("Musubi fixture must be locally stored");
+        };
+        *musubi_bundle = None;
+        assert_eq!(
+            validate_checkpoint(&musubi_checkpoint, policy()),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+    }
+
+    #[test]
+    fn terminal_without_local_manifest_permits_no_receipt_only() {
+        let (musubi, receipt) = musubi_authorization_and_receipt(0x5E, 7, 0x35);
+        let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
+        outbox.enqueue(musubi.clone()).expect("enqueue Musubi");
+        observe_finalized(&outbox, cursor(8));
+        outbox
+            .mark_finalized_complete(musubi.job_id(), finalized_evidence(&musubi, 8, None, 8))
+            .expect("observe another provider's completion");
+        assert!(matches!(
+            outbox
+                .status(musubi.job_id())
+                .expect("terminal status")
+                .state,
+            ProviderIngestDeliveryStateV1::FinalizedCompleted {
+                manifest_id: None,
+                musubi_bundle: None,
+                ..
+            }
+        ));
+
+        let mut substituted = outbox.state.lock().unwrap().checkpoint.clone();
+        let StoredProviderIngestTerminalOutcomeV1::FinalizedCompleted { musubi_bundle, .. } =
+            &mut substituted.terminal[0].outcome
+        else {
+            panic!("fixture must be finalized completed");
+        };
+        *musubi_bundle = Some(Box::new(receipt.to_stored()));
+        assert_eq!(
+            validate_checkpoint(&substituted, policy()),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+    }
+
+    #[test]
+    fn generic_local_and_terminal_rows_remain_receipt_free() {
+        let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
+        let authorization = authorization(0x59, 7);
+        let job_id = authorization.job_id();
+        outbox.enqueue(authorization.clone()).expect("enqueue");
+        let claim = outbox
+            .claim_source(job_id, owner(1), 100, cursor(7))
+            .expect("claim source");
+        outbox
+            .mark_local_stored(&claim, 101, manifest_id(&authorization))
+            .expect("store generic payload");
+        assert!(matches!(
+            outbox.status(job_id).expect("local status").state,
+            ProviderIngestDeliveryStateV1::LocalStored {
+                musubi_bundle: None,
+                ..
+            }
+        ));
+
+        observe_finalized(&outbox, cursor(8));
+        outbox
+            .mark_finalized_complete(job_id, finalized_evidence(&authorization, 8, None, 8))
+            .expect("finalize generic payload");
+        assert!(matches!(
+            outbox.status(job_id).expect("terminal status").state,
+            ProviderIngestDeliveryStateV1::FinalizedCompleted {
+                musubi_bundle: None,
+                ..
+            }
         ));
     }
 

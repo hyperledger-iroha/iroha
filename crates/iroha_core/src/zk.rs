@@ -416,6 +416,20 @@ fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_backe
     Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
 }
 
+/// Build a parseable non-IVM key whose envelope is relabelled as the IVM
+/// execution circuit, for registry-boundary regression tests.
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+pub(crate) fn relabelled_halo2_ipa_demo_vk_box_for_test() -> Result<VerifyingKeyBox, String> {
+    let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
+    let vk = halo2_backend::keygen_vk(&params, &pasta_tiny::Add)
+        .map_err(|err| format!("failed to generate relabelled demo key: {err}"))?;
+    let mut bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut bytes, IVM_EXECUTION_V1_IPA_K);
+    zk1::wrap_append_circuit_id(&mut bytes, IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID);
+    zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+    Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
+}
+
 /// Require the exact first-release IVM execution verifier key and parameter source.
 ///
 /// Halo2/Pasta IPA parameters are transparent and deterministic for the fixed
@@ -1320,6 +1334,123 @@ fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str)
     true
 }
 
+#[cfg(feature = "zk-stark")]
+#[derive(Clone, Copy)]
+enum StarkFriBackendHashPolicyV1 {
+    Any,
+    Exact(u8),
+}
+
+#[cfg(feature = "zk-stark")]
+impl StarkFriBackendHashPolicyV1 {
+    fn expected(self) -> Option<u8> {
+        match self {
+            Self::Any => None,
+            Self::Exact(hash_fn) => Some(hash_fn),
+        }
+    }
+}
+
+#[cfg(feature = "zk-stark")]
+fn stark_fri_backend_hash_policy_v1(backend: &str) -> Option<StarkFriBackendHashPolicyV1> {
+    use crate::zk_stark::{STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1};
+
+    match backend {
+        ZK_BACKEND_STARK_FRI_V1 => Some(StarkFriBackendHashPolicyV1::Any),
+        "stark/fri/sha256-goldilocks" | "stark/fri/sha256_goldilocks.v1" => {
+            Some(StarkFriBackendHashPolicyV1::Exact(STARK_HASH_SHA256_V1))
+        }
+        "stark/fri/poseidon2-goldilocks" => {
+            Some(StarkFriBackendHashPolicyV1::Exact(STARK_HASH_POSEIDON2_V1))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "zk-stark")]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+struct StarkVerifyingKeyCacheKeyV1 {
+    backend: String,
+    circuit_id: String,
+    vk_hash: [u8; 32],
+}
+
+#[cfg(feature = "zk-stark")]
+type StarkVerifyingKeyCacheV1 = std::sync::Mutex<
+    std::collections::BTreeMap<
+        StarkVerifyingKeyCacheKeyV1,
+        crate::zk_stark::StarkFriVerifyingKeyV1,
+    >,
+>;
+
+#[cfg(feature = "zk-stark")]
+static STARK_VERIFYING_KEY_CACHE_V1: std::sync::OnceLock<StarkVerifyingKeyCacheV1> =
+    std::sync::OnceLock::new();
+
+/// Decode and validate a canonical STARK/FRI V1 verifier key for one registry binding.
+///
+/// The returned value is the typed, bounded material that proof verification
+/// consumes. Validation binds its circuit and hash function to the exact
+/// production backend before a registry record can retain the original bytes.
+#[cfg(feature = "zk-stark")]
+pub(crate) fn validate_stark_fri_verifying_key_v1(
+    backend: &str,
+    circuit_id: &str,
+    bytes: &[u8],
+) -> Result<crate::zk_stark::StarkFriVerifyingKeyV1, String> {
+    if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
+        return Err("STARK/FRI circuit id does not match the production backend".to_owned());
+    }
+    if bytes.len() > crate::zk_stark::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES {
+        return Err(format!(
+            "STARK/FRI verifier key exceeds the {}-byte limit",
+            crate::zk_stark::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES
+        ));
+    }
+    let hash_policy = stark_fri_backend_hash_policy_v1(backend)
+        .ok_or_else(|| "unsupported STARK/FRI backend variant".to_owned())?;
+    let expected_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
+        .ok_or_else(|| "invalid STARK/FRI registry circuit id".to_owned())?;
+    let cache_key = StarkVerifyingKeyCacheKeyV1 {
+        backend: backend.to_owned(),
+        circuit_id: expected_circuit_id.clone(),
+        vk_hash: hash_vk_bytes(backend, bytes),
+    };
+    let cache = STARK_VERIFYING_KEY_CACHE_V1
+        .get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+    if let Some(cached) = cache
+        .lock()
+        .map_err(|_| "STARK/FRI verifier-key cache lock poisoned".to_owned())?
+        .get(&cache_key)
+        .cloned()
+    {
+        return Ok(cached);
+    }
+
+    let payload = crate::zk_stark::decode_stark_fri_verifying_key_v1(bytes)?;
+    crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
+        &payload,
+        &payload.circuit_id,
+        "OpenVerify",
+    )?;
+    let payload_circuit_id =
+        normalize_stark_fri_circuit_id_for_backend(backend, &payload.circuit_id)
+            .ok_or_else(|| "invalid STARK/FRI verifier-key circuit id".to_owned())?;
+    if payload_circuit_id != expected_circuit_id {
+        return Err("STARK/FRI verifier-key circuit id does not match registry record".to_owned());
+    }
+    if hash_policy
+        .expected()
+        .is_some_and(|expected| payload.hash_fn != expected)
+    {
+        return Err("STARK/FRI verifier-key hash function does not match backend".to_owned());
+    }
+    let mut guard = cache
+        .lock()
+        .map_err(|_| "STARK/FRI verifier-key cache lock poisoned".to_owned())?;
+    Ok(guard.entry(cache_key).or_insert(payload).clone())
+}
+
 fn stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> bool {
     let trimmed = circuit_id.trim();
     if stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(trimmed) {
@@ -1589,18 +1720,9 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     if vk_box.backend != backend {
         return Err("STARK verifying key backend mismatch".to_owned());
     }
-    let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-        norito::decode_canonical(&vk_box.bytes)
+    let vk_payload =
+        validate_stark_fri_verifying_key_v1(backend, circuit_id, vk_box.bytes.as_slice())
             .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
-    if vk_payload.version != 1 {
-        return Err("unsupported STARK verifying key payload version".to_owned());
-    }
-    crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
-        &vk_payload,
-        &vk_payload.circuit_id,
-        "OpenVerify",
-    )
-    .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
     let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
         .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
     if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
@@ -1663,15 +1785,10 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     if env_circuit_id != vk_circuit_id {
         return Err("STARK verifying key circuit_id mismatch".to_owned());
     }
-    let expected_hash_fn = if backend == ZK_BACKEND_STARK_FRI_V1 {
-        vk_payload.hash_fn
-    } else if backend.contains("/sha256-") {
-        crate::zk_stark::STARK_HASH_SHA256_V1
-    } else if backend.contains("/poseidon2-") {
-        crate::zk_stark::STARK_HASH_POSEIDON2_V1
-    } else {
-        return Err("unsupported STARK/FRI backend variant".to_owned());
-    };
+    let expected_hash_fn = stark_fri_backend_hash_policy_v1(backend)
+        .ok_or_else(|| "unsupported STARK/FRI backend variant".to_owned())?
+        .expected()
+        .unwrap_or(vk_payload.hash_fn);
     if vk_payload.hash_fn != expected_hash_fn {
         return Err("STARK verifying key hash_fn mismatch".to_owned());
     }
@@ -2770,6 +2887,131 @@ macro_rules! cached_vk_for {
             Err(_) => false,
         }
     }};
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn validate_canonical_halo2_ipa_circuit_key<C>(
+    backend: &str,
+    params: &PastaParams,
+    vk_box: &VerifyingKeyBox,
+    circuit: C,
+) -> Result<(), String>
+where
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+{
+    resolve_vk_cached_for_type::<C, _>(backend, params, vk_box, || {
+        halo2_backend::keygen_vk(params, &circuit)
+    })
+    .map(|_| ())
+    .map_err(|_| {
+        "Halo2 IPA verifier key does not match the canonical compiled circuit key".to_owned()
+    })
+}
+
+/// Validate the exact compiled verifier key for a built-in Halo2 IPA V1 circuit.
+///
+/// Fixed circuit metadata is checked before deterministic parameter
+/// construction. The processed `H2VK` bytes are then compared with the key
+/// generated from the same concrete circuit type used by proof verification,
+/// before attacker-controlled key bytes reach the Halo2 reader.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
+    backend: &str,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    if vk_box.backend != backend {
+        return Err("Halo2 IPA verifier-key backend does not match registry id".to_owned());
+    }
+    if !halo2_open_verify_circuit_id_matches_backend(backend, circuit_id) {
+        return Err("Halo2 IPA circuit id is not admitted for the registry backend".to_owned());
+    }
+    let params = zkparse::params_for_circuit_v1(&vk_box.bytes, circuit_id)
+        .ok_or_else(|| "invalid fixed Halo2 IPA verifier-key metadata".to_owned())?;
+    let canonical_circuit_id = normalize_halo2_ipa_circuit_id(circuit_id)
+        .ok_or_else(|| "invalid Halo2 IPA circuit id".to_owned())?;
+
+    if confidential_v2::is_confidential_transfer_v2_circuit_id(&canonical_circuit_id) {
+        return validate_canonical_halo2_ipa_circuit_key(
+            backend,
+            &params,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialTransferCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+        );
+    }
+    if confidential_v2::is_kagemusha_topup_shield_v2_circuit_id(&canonical_circuit_id) {
+        return validate_canonical_halo2_ipa_circuit_key(
+            backend,
+            &params,
+            vk_box,
+            confidential_v2::secure_relation_v3::KagemushaTopUpShieldCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+        );
+    }
+    if confidential_v2::is_confidential_unshield_v2_circuit_id(&canonical_circuit_id) {
+        return validate_canonical_halo2_ipa_circuit_key(
+            backend,
+            &params,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialUnshieldFullCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+        );
+    }
+    if confidential_v2::is_confidential_unshield_v3_circuit_id(&canonical_circuit_id) {
+        return validate_canonical_halo2_ipa_circuit_key(
+            backend,
+            &params,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialUnshieldChangeCircuitV4::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+        );
+    }
+
+    let verifier_backend = canonical_circuit_id.replace("/ipa/", "/");
+    if verifier_backend == IVM_EXECUTION_V1_HALO2_BACKEND {
+        return validate_canonical_halo2_ipa_circuit_key(
+            backend,
+            &params,
+            vk_box,
+            pasta_tiny::IvmExecutionBindV1::default(),
+        );
+    }
+    #[cfg(feature = "zk-halo2")]
+    {
+        if verifier_backend == KAIGI_ROSTER_BACKEND {
+            return validate_canonical_halo2_ipa_circuit_key(
+                backend,
+                &params,
+                vk_box,
+                KaigiRosterJoinCircuit::default(),
+            );
+        }
+        if verifier_backend == KAIGI_USAGE_BACKEND {
+            return validate_canonical_halo2_ipa_circuit_key(
+                backend,
+                &params,
+                vk_box,
+                KaigiUsageCommitmentCircuit::default(),
+            );
+        }
+    }
+    Err("Halo2 IPA circuit has no compiled V1 verifier-key validator".to_owned())
+}
+
+/// Reject built-in Halo2 IPA verifier-key registration when the verifier
+/// backend is not compiled into this binary.
+#[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
+    _backend: &str,
+    _circuit_id: &str,
+    _vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    Err("Halo2 IPA verifier-key validation requires the Halo2 backend".to_owned())
 }
 
 #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
@@ -5968,7 +6210,6 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     vk: Option<&VerifyingKeyBox>,
     limits: &crate::zk_stark::StarkVerifierLimits,
 ) -> bool {
-    use crate::zk_stark::{STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
 
     let reject = |reason: &'static str| {
@@ -6005,42 +6246,21 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
         return reject("verifying key commitment mismatch");
     }
 
-    let expected_hash_fn = if backend == ZK_BACKEND_STARK_FRI_V1 {
-        None
-    } else if backend.contains("/sha256-") {
-        Some(STARK_HASH_SHA256_V1)
-    } else if backend.contains("/poseidon2-") {
-        Some(STARK_HASH_POSEIDON2_V1)
-    } else {
-        return reject("unsupported stark/fri backend variant");
+    let expected_hash_fn = match stark_fri_backend_hash_policy_v1(backend) {
+        Some(policy) => policy.expected(),
+        None => return reject("unsupported stark/fri backend variant"),
     };
 
     // Decode and validate the STARK verifying key payload. This pins the verifier
     // parameters so a prover cannot select weaker hash/query settings at runtime.
-    let vk_payload: StarkFriVerifyingKeyV1 = match norito::decode_canonical(&vk_box.bytes) {
+    let vk_payload = match validate_stark_fri_verifying_key_v1(
+        backend,
+        &env.circuit_id,
+        vk_box.bytes.as_slice(),
+    ) {
         Ok(vk) => vk,
         Err(_) => return reject("invalid STARK verifying key payload"),
     };
-    if vk_payload.version != 1 {
-        return reject("unsupported STARK verifying key payload version");
-    }
-    if vk_payload.hash_fn != STARK_HASH_SHA256_V1 && vk_payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
-        return reject("unsupported STARK verifying key hash_fn");
-    }
-    if crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
-        &vk_payload,
-        &vk_payload.circuit_id,
-        "OpenVerify",
-    )
-    .is_err()
-    {
-        return reject("invalid canonical STARK verifying key payload");
-    }
-    if let Some(expected_hash_fn) = expected_hash_fn {
-        if vk_payload.hash_fn != expected_hash_fn {
-            return reject("STARK verifying key hash_fn mismatch");
-        }
-    }
     let env_circuit_id = match normalize_stark_fri_circuit_id_for_backend(backend, &env.circuit_id)
     {
         Some(id) => id,

@@ -1163,25 +1163,31 @@ fn signed_find_triggers_query_for_test(
     authority: AccountId,
     key_pair: &KeyPair,
 ) -> iroha_data_model::query::SignedQuery {
-    iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test())
-        .with_authority(authority)
-        .sign(key_pair)
+    authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test()),
+        authority,
+    )
+    .sign(key_pair)
 }
 
 fn signed_find_active_trigger_ids_query_for_test(
     authority: AccountId,
     key_pair: &KeyPair,
 ) -> iroha_data_model::query::SignedQuery {
-    iroha_data_model::query::QueryRequest::Start(build_find_active_trigger_ids_query_for_test())
-        .with_authority(authority)
-        .sign(key_pair)
+    authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(
+            build_find_active_trigger_ids_query_for_test(),
+        ),
+        authority,
+    )
+    .sign(key_pair)
 }
 
 fn request_for_test(
     authority: &AccountId,
     request: iroha_data_model::query::QueryRequest,
 ) -> iroha_data_model::query::QueryRequestWithAuthority {
-    request.with_authority(authority.clone())
+    authorize_query_for_test(request, authority.clone())
 }
 
 fn roundtrip_request_for_test(
@@ -1836,6 +1842,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         events,
         kura,
         chain_id: Arc::new(chain_id),
+        signed_query_admission: signed_query_test_admission(),
         #[cfg(feature = "app_api")]
         transaction_max_content_len: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
@@ -2262,6 +2269,7 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
     let _ = peers_tx;
     let torii = Torii::new_with_handle(
         ChainId::from("tx-rate-test"),
+        signed_query_test_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
@@ -2318,6 +2326,7 @@ async fn torii_ram_lfe_uses_config_runtime() {
 
     let torii = Torii::new_with_handle(
         ChainId::from("identifier-resolver-config-test"),
+        signed_query_test_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

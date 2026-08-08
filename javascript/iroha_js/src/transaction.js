@@ -2976,17 +2976,14 @@ function buildRegisterAssetDefinitionInstructions({
     assetDefinition.assetDefinitionId,
     "assetDefinition.assetDefinitionId",
   );
-  const defaultConfidentialPolicy = {
-    mode: "TransparentOnly",
-    vk_set_hash: null,
-    poseidon_params_id: null,
-    pedersen_params_id: null,
-    pending_transition: null,
-  };
-  const confidentialPolicy =
-    assetDefinition.confidentialPolicy === undefined
-      ? defaultConfidentialPolicy
-      : { ...defaultConfidentialPolicy, ...assetDefinition.confidentialPolicy };
+  if (
+    Object.prototype.hasOwnProperty.call(assetDefinition, "confidentialPolicy") ||
+    Object.prototype.hasOwnProperty.call(assetDefinition, "confidential_policy")
+  ) {
+    throw new TypeError(
+      "assetDefinition cannot carry confidential policy; use RegisterZkAsset with canonical verifier bindings",
+    );
+  }
   instructions.push({
     Register: {
       AssetDefinition: {
@@ -2997,7 +2994,6 @@ function buildRegisterAssetDefinitionInstructions({
         spec: assetDefinition.spec ?? { scale: null },
         balance_scope_policy: balanceScopePolicy,
         owning_domain: owningDomain,
-        confidential_policy: confidentialPolicy,
       },
     },
   });

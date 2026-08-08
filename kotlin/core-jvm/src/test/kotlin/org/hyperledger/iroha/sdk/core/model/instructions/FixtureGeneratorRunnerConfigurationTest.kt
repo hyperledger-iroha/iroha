@@ -1,108 +1,111 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 import java.io.File
+import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+/** Tests fail-closed fixture-generator path resolution without starting a process. */
 class FixtureGeneratorRunnerConfigurationTest {
-    private val repoRoot = File("/iroha-repository")
-
     @Test
-    fun `uses deterministic Cargo defaults`() {
-        val configuration = FixtureGeneratorRunner.configurationFor(repoRoot, emptyMap())
-            as FixtureGeneratorConfiguration.CargoBuild
+    fun `requires an explicit nonblank binary path`() {
+        val repoRoot = File("/iroha-repository")
+        val missing = assertFailsWith<IllegalArgumentException> {
+            FixtureGeneratorRunner.executableFor(repoRoot, emptyMap())
+        }
+        assertContains(missing.message.orEmpty(), "must be set")
 
-        assertEquals(
-            listOf("cargo", "build", "-p", "kotlin-fixture-gen", "--locked", "--jobs", "1"),
-            configuration.command(),
-        )
-        assertEquals(
-            File(repoRoot, "target/kotlin-fixture-gen-test").absolutePath,
-            configuration.targetDirectory.absolutePath,
-        )
-    }
-
-    @Test
-    fun `honors Cargo target offline and absolute lockfile configuration`() {
-        val lockfile = File("/tmp/kotlin-fixture-gen-Cargo.lock")
-        val configuration = FixtureGeneratorRunner.configurationFor(
-            repoRoot,
-            mapOf(
-                "CARGO" to "/opt/rust/bin/cargo",
-                "CARGO_TARGET_DIR" to "build/fixture-target",
-                "CARGO_NET_OFFLINE" to "1",
-                "IROHA_KOTLIN_FIXTURE_GEN_LOCKFILE_PATH" to lockfile.absolutePath,
-            ),
-        ) as FixtureGeneratorConfiguration.CargoBuild
-
-        assertEquals(File(repoRoot, "build/fixture-target").absolutePath, configuration.targetDirectory.absolutePath)
-        assertEquals(
-            listOf(
-                "/opt/rust/bin/cargo",
-                "build",
-                "-p",
-                "kotlin-fixture-gen",
-                "--locked",
-                "--jobs",
-                "1",
-                "--offline",
-                "-Z",
-                "unstable-options",
-                "--lockfile-path",
-                lockfile.absolutePath,
-            ),
-            configuration.command(),
-        )
-    }
-
-    @Test
-    fun `uses prebuilt binary resolved against repository root`() {
-        val configuration = FixtureGeneratorRunner.configurationFor(
-            repoRoot,
-            mapOf("IROHA_KOTLIN_FIXTURE_GEN_BIN" to "tools/bin/kotlin-fixture-gen"),
-        ) as FixtureGeneratorConfiguration.Prebuilt
-
-        assertEquals(
-            File(repoRoot, "tools/bin/kotlin-fixture-gen").absolutePath,
-            configuration.binary.absolutePath,
-        )
-    }
-
-    @Test
-    fun `prebuilt configuration bypasses invalid Cargo settings`() {
-        val configuration = FixtureGeneratorRunner.configurationFor(
-            repoRoot,
-            mapOf(
-                "IROHA_KOTLIN_FIXTURE_GEN_BIN" to "/opt/fixture-gen",
-                "CARGO_NET_OFFLINE" to "unexpected",
-                "IROHA_KOTLIN_FIXTURE_GEN_LOCKFILE_PATH" to "relative.lock",
-            ),
-        )
-
-        assertTrue(configuration is FixtureGeneratorConfiguration.Prebuilt)
-    }
-
-    @Test
-    fun `rejects unsupported offline values and relative lockfiles`() {
-        assertFailsWith<IllegalStateException> {
-            FixtureGeneratorRunner.configurationFor(
+        val blank = assertFailsWith<IllegalArgumentException> {
+            FixtureGeneratorRunner.executableFor(
                 repoRoot,
-                mapOf("CARGO_NET_OFFLINE" to "yes"),
+                mapOf(FixtureGeneratorRunner.BINARY_ENVIRONMENT_VARIABLE to " \t"),
             )
         }
-        assertFailsWith<IllegalStateException> {
-            FixtureGeneratorRunner.configurationFor(
+        assertContains(blank.message.orEmpty(), "must not be blank")
+    }
+
+    @Test
+    fun `resolves relative paths from repository root`() = withTemporaryRepoRoot { repoRoot ->
+        val binary = executable(repoRoot, "tools/bin/kotlin-fixture-gen")
+        val resolved = FixtureGeneratorRunner.executableFor(
+            repoRoot,
+            mapOf(FixtureGeneratorRunner.BINARY_ENVIRONMENT_VARIABLE to "tools/bin/kotlin-fixture-gen"),
+        )
+
+        assertEquals(binary.absolutePath, resolved.absolutePath)
+    }
+
+    @Test
+    fun `accepts an absolute executable and ignores Cargo settings`() =
+        withTemporaryRepoRoot { repoRoot ->
+            val binary = executable(repoRoot, "outside-target/kotlin-fixture-gen")
+            val resolved = FixtureGeneratorRunner.executableFor(
                 repoRoot,
-                mapOf("CARGO_NET_OFFLINE" to " true "),
+                mapOf(
+                    FixtureGeneratorRunner.BINARY_ENVIRONMENT_VARIABLE to binary.absolutePath,
+                    "CARGO" to "/must/not/run/cargo",
+                    "CARGO_TARGET_DIR" to "ignored",
+                ),
+            )
+
+            assertEquals(binary.absolutePath, resolved.absolutePath)
+        }
+
+    @Test
+    fun `rejects missing paths and directories`() = withTemporaryRepoRoot { repoRoot ->
+        val missing = assertFailsWith<IllegalArgumentException> {
+            FixtureGeneratorRunner.executableFor(
+                repoRoot,
+                mapOf(FixtureGeneratorRunner.BINARY_ENVIRONMENT_VARIABLE to "missing-generator"),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
-            FixtureGeneratorRunner.configurationFor(
+        assertContains(missing.message.orEmpty(), "existing regular file")
+
+        val directory = File(repoRoot, "generator-directory")
+        assertTrue(directory.mkdir())
+        val notAFile = assertFailsWith<IllegalArgumentException> {
+            FixtureGeneratorRunner.executableFor(
                 repoRoot,
-                mapOf("IROHA_KOTLIN_FIXTURE_GEN_LOCKFILE_PATH" to "Cargo.lock"),
+                mapOf(FixtureGeneratorRunner.BINARY_ENVIRONMENT_VARIABLE to directory.absolutePath),
             )
+        }
+        assertContains(notAFile.message.orEmpty(), "existing regular file")
+    }
+
+    @Test
+    fun `rejects a nonexecutable regular file`() = withTemporaryRepoRoot { repoRoot ->
+        val binary = File(repoRoot, "kotlin-fixture-gen")
+        binary.writeText("fixture")
+        binary.setExecutable(false, false)
+        assertFalse(binary.canExecute())
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            FixtureGeneratorRunner.executableFor(
+                repoRoot,
+                mapOf(FixtureGeneratorRunner.BINARY_ENVIRONMENT_VARIABLE to binary.absolutePath),
+            )
+        }
+        assertContains(error.message.orEmpty(), "is not executable")
+    }
+
+    private fun executable(repoRoot: File, relativePath: String): File {
+        val binary = File(repoRoot, relativePath)
+        assertTrue(binary.parentFile.mkdirs() || binary.parentFile.isDirectory)
+        binary.writeText("#!/bin/sh\n")
+        assertTrue(binary.setExecutable(true, false) || binary.canExecute())
+        return binary
+    }
+
+    private fun withTemporaryRepoRoot(test: (File) -> Unit) {
+        val repoRoot = Files.createTempDirectory("iroha-fixture-runner-test").toFile()
+        try {
+            test(repoRoot)
+        } finally {
+            repoRoot.deleteRecursively()
         }
     }
 }

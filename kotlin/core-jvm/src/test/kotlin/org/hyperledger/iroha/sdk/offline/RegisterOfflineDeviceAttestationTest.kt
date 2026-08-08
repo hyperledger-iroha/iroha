@@ -30,7 +30,7 @@ class RegisterOfflineDeviceAttestationTest {
         assertEquals(5, rust.size)
         val registration = registration(rust[3])
 
-        assertEquals(21, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(22, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertContentEquals(hexToBytes(rust[0]), registration.noritoEncoded())
         assertContentEquals(hexToBytes(rust[2]), registration.challengeHash)
         assertContentEquals(hexToBytes(rust[4]), registration.canonicalRegistrationHash())

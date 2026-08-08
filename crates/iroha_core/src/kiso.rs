@@ -1591,6 +1591,8 @@ mod tests {
                     iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
                 policy_transition_window_blocks:
                     iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+                policy_transition_max_per_height:
+                    iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
                 tree_roots_history_len:
                     iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
                 tree_frontier_checkpoint_interval:
@@ -1786,6 +1788,8 @@ mod tests {
                     iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
                 policy_transition_window_blocks:
                     iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+                policy_transition_max_per_height:
+                    iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
                 tree_roots_history_len:
                     iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
                 tree_frontier_checkpoint_interval:

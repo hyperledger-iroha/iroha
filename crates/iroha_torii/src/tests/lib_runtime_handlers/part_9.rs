@@ -1875,6 +1875,7 @@
         let _ = peers_tx;
         let torii = Torii::new_with_handle(
             ChainId::from("contracts-router-test"),
+            signed_query_test_network_id(),
             kiso,
             cfg.torii.clone(),
             queue,
@@ -1960,6 +1961,7 @@
             .with_sorafs_node(sorafs_node);
         let torii = Torii::new_with_handle(
             ChainId::from("sorafs-retired-storage-pin-router-test"),
+            signed_query_test_network_id(),
             kiso,
             cfg.torii.clone(),
             queue,
@@ -2034,6 +2036,7 @@
         let _ = peers_tx;
         let torii = Torii::new_with_handle(
             ChainId::from("contracts-aliases-router-test"),
+            signed_query_test_network_id(),
             kiso,
             cfg.torii.clone(),
             queue,
@@ -2097,6 +2100,7 @@
         let _ = peers_tx;
         let torii = Torii::new_with_handle(
             ChainId::from("sorafs-capacity-declare-router-test"),
+            signed_query_test_network_id(),
             kiso,
             cfg.torii.clone(),
             queue,
@@ -2160,6 +2164,7 @@
         let _ = peers_tx;
         let torii = Torii::new_with_handle(
             ChainId::from("sorafs-retired-por-router-test"),
+            signed_query_test_network_id(),
             kiso,
             cfg.torii.clone(),
             queue,
@@ -2263,6 +2268,7 @@
         let _ = peers_tx;
         let torii = Torii::new_with_handle(
             ChainId::from("sccp-recent-route-test"),
+            signed_query_test_network_id(),
             kiso,
             cfg.torii.clone(),
             queue,

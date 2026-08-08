@@ -208,6 +208,7 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
     drop(peers_tx);
     let torii = Torii::new_with_handle(
         chain_id.clone(),
+        iroha_torii::test_utils::signed_query_network_id(),
         KisoHandle::mock(&cfg),
         cfg.torii.clone(),
         queue,

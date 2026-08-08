@@ -11,7 +11,10 @@ use iroha_data_model::{
     },
     isi::error::{InstructionExecutionError, InvalidParameterError},
     metadata::Metadata,
-    musubi::{MusubiArchiveLocationKeyV1, MusubiProviderLocationKeyV1},
+    musubi::{
+        MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveLocationKeyV1, MusubiProviderLocationKeyV1,
+        MusubiReplicationOrderArchiveBindingV1, MusubiReplicationOrderLocationReferenceV1,
+    },
     name::Name,
     permission::{Permission, Permissions},
     query::{
@@ -1771,6 +1774,7 @@ fn build_auto_replication_order(
         order_id,
         manifest_digest: record.digest,
         manifest_root_cid: record.root_cid,
+        musubi_archive: None,
         issued_by: issued_by.clone(),
         issued_epoch,
         deadline_epoch,
@@ -2926,6 +2930,19 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                 format!("replication order {order_label} already exists").into(),
             ));
         }
+        if state_transaction
+            .world
+            .musubi_locations_by_replication_order
+            .get(&self.order_id)
+            .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} already has an immutable Musubi archive binding"
+                )
+                .into(),
+            ));
+        }
 
         let order_payload = decode_from_bytes_with_limits::<ReplicationOrderV1>(
             &self.order_payload,
@@ -3044,10 +3061,84 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
             }
         }
 
+        let musubi_reference = if let Some(archive_id) = self.musubi_archive {
+            let archive = state_transaction
+                .world
+                .musubi_archives
+                .get(&archive_id)
+                .cloned()
+                .ok_or_else(|| {
+                    invalid_parameter(format!(
+                        "replication order {order_label} references an unregistered Musubi archive {}",
+                        hex::encode(archive_id.as_bytes())
+                    ))
+                })?;
+            archive.validate().map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "replication order {order_label} resolved an invalid Musubi archive: {}",
+                        error.reason()
+                    )
+                    .into(),
+                )
+            })?;
+            if archive.archive_id != archive_id {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "replication order {order_label} resolved a Musubi archive with the wrong embedded identity"
+                    )
+                    .into(),
+                ));
+            }
+            let commitment = &archive.commitment;
+            if manifest_record.root_cid != commitment.root_cid
+                || manifest_record.chunker != commitment.chunker
+                || manifest_record.chunk_digest_sha3_256 != *commitment.chunk_plan_digest.as_bytes()
+                || manifest_record.por_root != *commitment.por_root.as_bytes()
+                || manifest_record.content_length != commitment.content_length
+            {
+                return Err(invalid_parameter(format!(
+                    "replication order {order_label} pin manifest does not match the complete Musubi archive commitment"
+                )));
+            }
+            if manifest_record.policy.min_replicas < MUSUBI_MIN_HEALTHY_REPLICAS_V1
+                || order_payload.target_replicas < MUSUBI_MIN_HEALTHY_REPLICAS_V1
+            {
+                return Err(invalid_parameter(format!(
+                    "replication order {order_label} does not meet the Musubi minimum of {MUSUBI_MIN_HEALTHY_REPLICAS_V1} replicas"
+                )));
+            }
+            if self.deadline_epoch > manifest_record.policy.retention_epoch {
+                return Err(invalid_parameter(format!(
+                    "replication order {order_label} deadline {} exceeds Musubi pin retention epoch {}",
+                    self.deadline_epoch, manifest_record.policy.retention_epoch
+                )));
+            }
+            let binding = MusubiReplicationOrderArchiveBindingV1::new(
+                self.order_id,
+                archive_id,
+                commitment.clone(),
+            );
+            let reference = MusubiReplicationOrderLocationReferenceV1::pre_location(binding);
+            reference.validate().map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "replication order {order_label} produced an invalid Musubi archive binding: {}",
+                        error.reason()
+                    )
+                    .into(),
+                )
+            })?;
+            Some(reference)
+        } else {
+            None
+        };
+
         let record = ReplicationOrderRecord {
             order_id: self.order_id,
             manifest_digest,
             manifest_root_cid: manifest_record.root_cid,
+            musubi_archive: self.musubi_archive,
             issued_by: authority.clone(),
             issued_epoch: self.issued_epoch,
             deadline_epoch: self.deadline_epoch,
@@ -3061,6 +3152,17 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
             .world
             .replication_orders
             .insert(self.order_id, record);
+        if let Some(reference) = musubi_reference {
+            state_transaction
+                .world
+                .musubi_locations_by_replication_order
+                .insert(self.order_id, reference);
+        }
+
+        // TODO: Bind chain/genesis to the finalized reader-created precursor,
+        // propagate it through the lifecycle lease or private broker, run the
+        // shared verifier, re-read the exact post-completion finalized row,
+        // then construct the attestation and request approval-only signing.
 
         Ok(())
     }
@@ -3105,7 +3207,7 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
             .world
             .musubi_locations_by_replication_order
             .get(&self.order_id)
-            .is_some_and(|reference| reference.active)
+            .is_some_and(|reference| reference.active_location().is_some())
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
@@ -3193,7 +3295,7 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
     }
 }
 
-fn validate_stored_replication_order(
+pub(crate) fn validate_stored_replication_order(
     record: &ReplicationOrderRecord,
     order_label: &str,
 ) -> Result<ReplicationOrderV1, InstructionExecutionError> {
@@ -3261,6 +3363,14 @@ fn validate_stored_replication_order(
     if record.assignment_revision == 0 {
         return Err(InstructionExecutionError::InvariantViolation(
             format!("replication order {order_label} has a zero assignment revision").into(),
+        ));
+    }
+    if record
+        .musubi_archive
+        .is_some_and(|archive_id| archive_id.is_zero())
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("replication order {order_label} has an inert Musubi archive purpose").into(),
         ));
     }
 
@@ -3569,8 +3679,7 @@ impl Execute for iroha_data_model::isi::sorafs::ExpireReplicationOrder {
             .world
             .musubi_locations_by_replication_order
             .get(&self.order_id)
-            .filter(|reference| reference.active)
-            .map(|reference| reference.location);
+            .and_then(MusubiReplicationOrderLocationReferenceV1::active_location);
         validate_stored_replication_order(&record, &order_label)?;
 
         let manifest = state_transaction
@@ -6029,7 +6138,7 @@ mod sorafs_tests {
     use blake3::hash as blake3_hash;
     use core::str::FromStr;
     use hex;
-    use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature, SignatureOf};
     use iroha_data_model::{
         IntoKeyValue, Registrable,
         isi::{
@@ -6048,7 +6157,13 @@ mod sorafs_tests {
             },
         },
         metadata::Metadata,
-        musubi::{ArchiveId, MusubiArchiveLocationIdV1},
+        musubi::{
+            ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1,
+            MusubiArchiveLocationIdV1, MusubiArchiveRecordV1, MusubiContentDigestV1,
+            MusubiReplicationOrderLocationLifecycleV1, MusubiSeedIngressReceiptApprovalV1,
+            MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptPayloadV1,
+            MusubiSeedIngressReceiptV1, MusubiSemanticReleaseDigestV1,
+        },
         name::Name,
         permission::{Permission as AccountPermission, Permissions},
         prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain},
@@ -6958,6 +7073,91 @@ mod sorafs_tests {
             storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
             retention_epoch: 42,
         }
+    }
+
+    fn musubi_archive_for_pin(pin: &PinManifestRecord, seed: u8) -> MusubiArchiveRecordV1 {
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: pin.root_cid.clone(),
+            chunker: pin.chunker.clone(),
+            chunk_plan_digest: MusubiContentDigestV1::new(pin.chunk_digest_sha3_256),
+            por_root: MusubiContentDigestV1::new(pin.por_root),
+            content_length: pin.content_length,
+            car_digest: MusubiContentDigestV1::new([seed.wrapping_add(1); 32]),
+            car_size: pin
+                .content_length
+                .checked_add(1)
+                .expect("fixture CAR size remains bounded"),
+            bundle_digest: MusubiContentDigestV1::new([seed.wrapping_add(2); 32]),
+            source_tree_digest: MusubiContentDigestV1::new([seed.wrapping_add(3); 32]),
+            descriptor_digest: MusubiContentDigestV1::new([seed.wrapping_add(4); 32]),
+            file_count: 1,
+            chunk_count: 1,
+        };
+        let archive_id = commitment.archive_id();
+        let broker_keypair =
+            KeyPair::try_from_seed(vec![seed.wrapping_add(5); 32], Algorithm::Ed25519)
+                .expect("derive fixture ingress broker");
+        let broker = AccountId::new(broker_keypair.public_key().clone());
+        let payload = MusubiSeedIngressReceiptPayloadV1 {
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            binding: MusubiSeedIngressReceiptBindingV1 {
+                chain_id: iroha_data_model::ChainId::from("musubi-order-binding-test"),
+                genesis_block_hash: [seed.wrapping_add(6); 32],
+                publisher: alice(),
+                ingress_broker: broker,
+                seed_provider: ProviderId::new([seed.wrapping_add(7); 32]),
+                semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1::new(
+                    [seed.wrapping_add(8); 32],
+                ),
+                archive_id,
+                car_body_digest: commitment.car_digest,
+                car_body_length: commitment.car_size,
+                nonce: [seed.wrapping_add(9); 32],
+            },
+            issued_at_ms: 1,
+            expires_at_ms: 2,
+        };
+        let approval = MusubiSeedIngressReceiptApprovalV1 {
+            public_key: broker_keypair.public_key().clone(),
+            signature: SignatureOf::try_from_hash(
+                broker_keypair.private_key(),
+                payload.signing_hash(),
+            )
+            .expect("sign fixture ingress receipt"),
+        };
+        let archive = MusubiArchiveRecordV1 {
+            archive_id,
+            commitment,
+            staging_receipt: MusubiSeedIngressReceiptV1 {
+                payload,
+                approvals: vec![approval],
+            },
+            registered_by: alice(),
+            registered_at_height: 1,
+            location_revision: 1,
+            location_ids: Vec::new(),
+        };
+        archive.validate().expect("valid Musubi archive fixture");
+        archive
+    }
+
+    fn registry_grade_musubi_pin() -> PinManifestRecord {
+        let mut pin = PinManifestRecord::new(
+            default_digest(),
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            por_root_for_manifest(default_digest()),
+            1_024,
+            default_policy(),
+            alice(),
+            1,
+            None,
+            None,
+            Metadata::default(),
+        );
+        pin.approve(1, None);
+        pin
     }
 
     pub(super) fn second_digest() -> ManifestDigest {
@@ -11554,6 +11754,7 @@ mod sorafs_tests {
             order_payload: Vec::new(),
             issued_epoch: 1,
             deadline_epoch: 2,
+            musubi_archive: None,
         };
 
         let err = issue
@@ -11666,6 +11867,7 @@ mod sorafs_tests {
             order_payload: payload.clone(),
             issued_epoch: 12,
             deadline_epoch: 32,
+            musubi_archive: None,
         };
         issue
             .execute(&alice(), &mut stx)
@@ -11686,6 +11888,102 @@ mod sorafs_tests {
         let decoded = norito::decode_from_bytes::<ReplicationOrderV1>(&record.canonical_order)
             .expect("decode order");
         assert_eq!(decoded.order_id, *order_id.as_bytes());
+        assert!(
+            stx.world
+                .musubi_locations_by_replication_order
+                .get(&order_id)
+                .is_none(),
+            "generic SoraFS orders must not acquire a Musubi binding"
+        );
+    }
+
+    #[test]
+    fn issue_replication_order_atomically_installs_musubi_archive_binding() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+
+        let pin = registry_grade_musubi_pin();
+        let archive = musubi_archive_for_pin(&pin, 0x61);
+        let archive_id = archive.archive_id;
+        stx.world.pin_manifests.insert(pin.digest, pin);
+        stx.world
+            .musubi_archives
+            .insert(archive_id, archive.clone());
+
+        let order_id = ReplicationOrderId::new([0x62; 32]);
+        let providers = vec![
+            ProviderId::new([0x63; 32]),
+            ProviderId::new([0x64; 32]),
+            ProviderId::new([0x65; 32]),
+        ];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let order = replication_order_struct(order_id, default_digest(), &providers, 3);
+        IssueReplicationOrder::new(order_id, encode_replication_order(&order), 12, 32)
+            .for_musubi_archive(archive_id)
+            .execute(&alice(), &mut stx)
+            .expect("issue archive-bound replication order");
+
+        assert!(stx.world.replication_orders.get(&order_id).is_some());
+        let reference = stx
+            .world
+            .musubi_locations_by_replication_order
+            .get(&order_id)
+            .expect("pre-location archive binding stored");
+        reference.validate().expect("stored binding validates");
+        assert_eq!(reference.binding.archive_id, archive_id);
+        assert_eq!(reference.binding.commitment, archive.commitment);
+        assert_eq!(
+            reference.lifecycle,
+            MusubiReplicationOrderLocationLifecycleV1::PreLocation
+        );
+    }
+
+    #[test]
+    fn issue_replication_order_rejects_musubi_commitment_mismatch_without_partial_state() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+
+        let canonical_pin = registry_grade_musubi_pin();
+        let archive = musubi_archive_for_pin(&canonical_pin, 0x71);
+        let archive_id = archive.archive_id;
+        let mut substituted_pin = canonical_pin;
+        substituted_pin.content_length = substituted_pin
+            .content_length
+            .checked_add(1)
+            .expect("fixture length remains bounded");
+        stx.world
+            .pin_manifests
+            .insert(substituted_pin.digest, substituted_pin);
+        stx.world.musubi_archives.insert(archive_id, archive);
+
+        let order_id = ReplicationOrderId::new([0x72; 32]);
+        let providers = vec![
+            ProviderId::new([0x73; 32]),
+            ProviderId::new([0x74; 32]),
+            ProviderId::new([0x75; 32]),
+        ];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let order = replication_order_struct(order_id, default_digest(), &providers, 3);
+        let error = IssueReplicationOrder::new(order_id, encode_replication_order(&order), 12, 32)
+            .for_musubi_archive(archive_id)
+            .execute(&alice(), &mut stx)
+            .expect_err("substituted pin commitment must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("complete Musubi archive commitment")
+        );
+        assert!(stx.world.replication_orders.get(&order_id).is_none());
+        assert!(
+            stx.world
+                .musubi_locations_by_replication_order
+                .get(&order_id)
+                .is_none()
+        );
     }
 
     #[test]
@@ -11712,6 +12010,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 12,
             deadline_epoch: 32,
+            musubi_archive: None,
         });
         instruction
             .execute(&alice(), &mut stx)
@@ -11746,6 +12045,7 @@ mod sorafs_tests {
             order_payload: payload.clone(),
             issued_epoch: 20,
             deadline_epoch: 40,
+            musubi_archive: None,
         };
         issue
             .execute(&alice(), &mut stx)
@@ -11756,6 +12056,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 21,
             deadline_epoch: 41,
+            musubi_archive: None,
         };
         let err = duplicate
             .execute(&alice(), &mut stx)
@@ -11789,6 +12090,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 10,
             deadline_epoch: 20,
+            musubi_archive: None,
         };
         let err = issue
             .execute(&alice(), &mut stx)
@@ -11830,6 +12132,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 15,
             deadline_epoch: 25,
+            musubi_archive: None,
         };
         let err = issue
             .execute(&alice(), &mut stx)
@@ -11869,6 +12172,7 @@ mod sorafs_tests {
             order_payload: encode_replication_order(&mismatch),
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect_err("manifest CID must be bound to the digest");
@@ -11891,6 +12195,7 @@ mod sorafs_tests {
             order_payload: noncanonical_bytes,
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect_err("alternate Norito layout must fail");
@@ -11907,6 +12212,7 @@ mod sorafs_tests {
             order_payload: vec![0xA5; MAX_REPLICATION_ORDER_PAYLOAD_BYTES + 1],
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect_err("oversized payload must fail before decode");
@@ -11931,6 +12237,7 @@ mod sorafs_tests {
             order_payload: allocation_bomb,
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect_err("sequence allocation bomb must fail before semantic validation");
@@ -11955,6 +12262,7 @@ mod sorafs_tests {
             order_payload: vec![1],
             issued_epoch: 5,
             deadline_epoch: 5,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect_err("zero-length order epoch window must fail");
@@ -11987,6 +12295,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 22,
             deadline_epoch: 33,
+            musubi_archive: None,
         };
 
         let err = issue
@@ -12022,6 +12331,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 22,
             deadline_epoch: 33,
+            musubi_archive: None,
         };
 
         issue
@@ -12055,6 +12365,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 22,
             deadline_epoch: 33,
+            musubi_archive: None,
         };
 
         let err = issue
@@ -12090,6 +12401,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 30,
             deadline_epoch: 60,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
@@ -12187,6 +12499,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 30,
             deadline_epoch: 60,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
@@ -12298,6 +12611,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue order");
@@ -12347,6 +12661,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue order");
@@ -12439,6 +12754,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue order");
@@ -12499,6 +12815,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue order");
@@ -12551,6 +12868,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 30,
             deadline_epoch: 60,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
@@ -12591,6 +12909,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
@@ -12639,6 +12958,7 @@ mod sorafs_tests {
             order_payload: payload,
             issued_epoch: 5,
             deadline_epoch: 15,
+            musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue replication order");

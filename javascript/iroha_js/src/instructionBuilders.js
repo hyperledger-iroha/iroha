@@ -1315,19 +1315,6 @@ function normalizeVerifyingKeyId(value, name) {
   return { backend, name: keyName };
 }
 
-function normalizeZkAssetMode(value, name) {
-  const raw = value ?? "Hybrid";
-  const normalized = String(raw).trim().toLowerCase();
-  if (normalized === "hybrid") {
-    return "Hybrid";
-  }
-  fail(
-    ValidationErrorCode.INVALID_STRING,
-    `${name} must be 'Hybrid'`,
-    name,
-  );
-}
-
 function normalizeConfidentialPolicyMode(value, name) {
   const raw = value ?? "Convertible";
   const normalized = String(raw)
@@ -3407,14 +3394,20 @@ function normalizeSorafsReplicationPayload(value, name) {
  * The returned object uses the Rust/Norito field names. `orderPayload` must be
  * exact standard base64 containing between 1 byte and 1 MiB.
  *
- * @param {{orderId: string, orderPayload: string, issuedEpoch: number|string|bigint, deadlineEpoch: number|string|bigint}} options
- * @returns {{IssueReplicationOrder: {order_id: string, order_payload: string, issued_epoch: number, deadline_epoch: number}}}
+ * @param {{orderId: string, orderPayload: string, issuedEpoch: number|string|bigint, deadlineEpoch: number|string|bigint, musubiArchiveId?: string|null}} options
+ * @returns {{IssueReplicationOrder: {order_id: string, order_payload: string, issued_epoch: number, deadline_epoch: number, musubi_archive: string|null}}}
  */
 export function buildIssueReplicationOrderInstruction(options) {
   const source = assertPlainObject(options, "issueReplicationOrder");
   assertAllowedFields(
     source,
-    new Set(["orderId", "orderPayload", "issuedEpoch", "deadlineEpoch"]),
+    new Set([
+      "orderId",
+      "orderPayload",
+      "issuedEpoch",
+      "deadlineEpoch",
+      "musubiArchiveId",
+    ]),
     "issueReplicationOrder",
   );
   const issuedEpoch = asNonNegativeInteger(
@@ -3442,12 +3435,19 @@ export function buildIssueReplicationOrderInstruction(options) {
       "issueReplicationOrder.orderPayload",
     );
   validateSorafsReplicationOrderPayloadV1(orderPayloadBytes, orderId);
+  const musubiArchive = source.musubiArchiveId == null
+    ? null
+    : normalizeSorafsReplicationIdentifier(
+      source.musubiArchiveId,
+      "issueReplicationOrder.musubiArchiveId",
+    );
   return {
     IssueReplicationOrder: {
       order_id: orderId,
       order_payload: orderPayload,
       issued_epoch: issuedEpoch,
       deadline_epoch: deadlineEpoch,
+      musubi_archive: musubiArchive,
     },
   };
 }
@@ -4121,14 +4121,20 @@ export function buildRegisterAccountInstruction({
  *   balanceScopePolicy: string,
  *   balance_scope_policy?: string,
  *   owningDomain?: string | null,
- *   owning_domain?: string | null,
- *   confidentialPolicy?: object,
- *   confidential_policy?: object
+ *   owning_domain?: string | null
  * }} options
  * @returns {{Register: {AssetDefinition: object}}}
  */
 export function buildRegisterAssetDefinitionInstruction(options = {}) {
   const source = assertPlainObject(options, "registerAssetDefinition");
+  if (
+    Object.prototype.hasOwnProperty.call(source, "confidentialPolicy") ||
+    Object.prototype.hasOwnProperty.call(source, "confidential_policy")
+  ) {
+    throw new TypeError(
+      "registerAssetDefinition cannot carry confidential policy; use RegisterZkAsset with canonical verifier bindings",
+    );
+  }
   const hasOwningDomain = Object.prototype.hasOwnProperty.call(source, "owningDomain");
   const hasSnakeOwningDomain = Object.prototype.hasOwnProperty.call(source, "owning_domain");
   if (!hasOwningDomain && !hasSnakeOwningDomain) {
@@ -4209,13 +4215,6 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
         metadata: normalizeMetadata(source.metadata),
         balance_scope_policy: balanceScopePolicy,
         owning_domain: owningDomain,
-        confidential_policy: source.confidentialPolicy ?? source.confidential_policy ?? {
-          mode: "TransparentOnly",
-          vk_set_hash: null,
-          poseidon_params_id: null,
-          pedersen_params_id: null,
-          pending_transition: null,
-        },
       },
     },
   };
@@ -5756,33 +5755,44 @@ export function buildRemoveSmartContractBytesInstruction(options) {
  */
 export function buildRegisterZkAssetInstruction(options) {
   const source = assertPlainObject(options, "registerZkAsset");
-  for (const retiredField of ["transferVerifyingKey", "vkTransfer", "vk_transfer"]) {
-    if (Object.prototype.hasOwnProperty.call(source, retiredField)) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        `registerZkAsset.${retiredField} is no longer supported`,
-        `registerZkAsset.${retiredField}`,
-      );
-    }
-  }
+  assertAllowedFields(
+    source,
+    new Set([
+      "assetDefinitionId",
+      "asset_definition_id",
+      "asset",
+      "definitionId",
+      "unshieldVerifyingKey",
+      "vkUnshield",
+      "vk_unshield",
+      "shieldVerifyingKey",
+      "vkShield",
+      "vk_shield",
+    ]),
+    "registerZkAsset",
+  );
   const asset =
     source.assetDefinitionId ??
     source.asset_definition_id ??
     source.asset ??
     source.definitionId;
+  const vkUnshield = normalizeVerifyingKeyId(
+    source.unshieldVerifyingKey ?? source.vkUnshield ?? source.vk_unshield,
+    "registerZkAsset.vkUnshield",
+  );
+  const vkShield = normalizeVerifyingKeyId(
+    source.shieldVerifyingKey ?? source.vkShield ?? source.vk_shield,
+    "registerZkAsset.vkShield",
+  );
+  if (vkShield !== null && vkUnshield === null) {
+    throw new TypeError(
+      "registerZkAsset.vkShield requires vkUnshield so shielded funds remain redeemable",
+    );
+  }
   const payload = {
     asset: assertString(asset, "registerZkAsset.asset"),
-    mode: normalizeZkAssetMode(source.mode ?? source.assetMode, "registerZkAsset.mode"),
-    allow_shield: Boolean(source.allowShield ?? source.allow_shield ?? true),
-    allow_unshield: Boolean(source.allowUnshield ?? source.allow_unshield ?? true),
-    vk_unshield: normalizeVerifyingKeyId(
-      source.unshieldVerifyingKey ?? source.vkUnshield ?? source.vk_unshield,
-      "registerZkAsset.vkUnshield",
-    ),
-    vk_shield: normalizeVerifyingKeyId(
-      source.shieldVerifyingKey ?? source.vkShield ?? source.vk_shield,
-      "registerZkAsset.vkShield",
-    ),
+    vk_unshield: vkUnshield,
+    vk_shield: vkShield,
   };
   return {
     zk: {

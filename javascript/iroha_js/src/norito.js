@@ -4686,9 +4686,6 @@ function decodeZkInstructionPayload(wireId, payload) {
     case "iroha_data_model::isi::zk::RegisterZkAsset": {
       const fields = decodeStructFields(payload, "zk.RegisterZkAsset", [
         "asset",
-        "mode",
-        "allow_shield",
-        "allow_unshield",
         "vk_unshield",
         "vk_shield",
       ]);
@@ -4696,15 +4693,6 @@ function decodeZkInstructionPayload(wireId, payload) {
         zk: {
           RegisterZkAsset: {
             asset: decodeAssetDefinitionIdValue(fields.asset, "zk.RegisterZkAsset.asset"),
-            mode: decodeZkAssetModeValue(fields.mode, "zk.RegisterZkAsset.mode"),
-            allow_shield: decodeBoolValue(
-              fields.allow_shield,
-              "zk.RegisterZkAsset.allow_shield",
-            ),
-            allow_unshield: decodeBoolValue(
-              fields.allow_unshield,
-              "zk.RegisterZkAsset.allow_unshield",
-            ),
             vk_unshield: decodeOptionValue(
               fields.vk_unshield,
               decodeVerifyingKeyIdValue,
@@ -5432,6 +5420,14 @@ function encodeNewAssetDefinitionValue(value, context) {
       `${context}.owning_domain is required for DataspaceRestricted balances`,
     );
   }
+  if (
+    Object.prototype.hasOwnProperty.call(value, "confidential_policy") ||
+    Object.prototype.hasOwnProperty.call(value, "confidentialPolicy")
+  ) {
+    throw new TypeError(
+      `${context} cannot carry confidential policy; use RegisterZkAsset with canonical verifier bindings`,
+    );
+  }
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.id, `${context}.id`)],
     [encodeStringValue(value.name ?? "", `${context}.name`)],
@@ -5454,12 +5450,6 @@ function encodeNewAssetDefinitionValue(value, context) {
       ),
     ],
     [encodeOptionValue(owningDomain, encodeDomainIdValue, `${context}.owning_domain`)],
-    [
-      encodeAssetConfidentialPolicyValue(
-        value.confidential_policy ?? value.confidentialPolicy ?? defaultAssetConfidentialPolicy(),
-        `${context}.confidential_policy`,
-      ),
-    ],
   ]);
 }
 
@@ -5475,7 +5465,6 @@ function decodeNewAssetDefinitionValue(payload, context) {
     "metadata",
     "balance_scope_policy",
     "owning_domain",
-    "confidential_policy",
   ]);
   return {
     id: decodeAssetDefinitionIdValue(fields.id, `${context}.id`),
@@ -5499,20 +5488,6 @@ function decodeNewAssetDefinitionValue(payload, context) {
       decodeDomainIdValue,
       `${context}.owning_domain`,
     ),
-    confidential_policy: decodeAssetConfidentialPolicyValue(
-      fields.confidential_policy,
-      `${context}.confidential_policy`,
-    ),
-  };
-}
-
-function defaultAssetConfidentialPolicy() {
-  return {
-    mode: "TransparentOnly",
-    vk_set_hash: null,
-    poseidon_params_id: null,
-    pedersen_params_id: null,
-    pending_transition: null,
   };
 }
 
@@ -5944,9 +5919,15 @@ function encodeReplicationOrderInstruction(instruction) {
   if (isPlainObject(instruction.IssueReplicationOrder)) {
     assertOnlyObjectKeys(instruction, ["IssueReplicationOrder"], "instruction");
     const value = instruction.IssueReplicationOrder;
-    assertOnlyObjectKeys(
+    assertExactObjectKeys(
       value,
-      ["order_id", "order_payload", "issued_epoch", "deadline_epoch"],
+      [
+        "order_id",
+        "order_payload",
+        "issued_epoch",
+        "deadline_epoch",
+        "musubi_archive",
+      ],
       "IssueReplicationOrder",
     );
     const orderPayload = decodeExactStandardBase64(
@@ -5979,6 +5960,13 @@ function encodeReplicationOrderInstruction(instruction) {
         [encodeByteVecValue(orderPayload, "IssueReplicationOrder.order_payload")],
         [encodeU64Value(issuedEpoch, "IssueReplicationOrder.issued_epoch")],
         [encodeU64Value(deadlineEpoch, "IssueReplicationOrder.deadline_epoch")],
+        [
+          encodeOptionValue(
+            value.musubi_archive,
+            encodeReplicationIdValue,
+            "IssueReplicationOrder.musubi_archive",
+          ),
+        ],
       ]),
     );
   }
@@ -6084,6 +6072,7 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
       "order_payload",
       "issued_epoch",
       "deadline_epoch",
+      "musubi_archive",
     ]);
     const orderId = decodeReplicationIdValue(
       fields.order_id,
@@ -6102,6 +6091,11 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
       fields.deadline_epoch,
       "IssueReplicationOrder.deadline_epoch",
     );
+    const musubiArchive = decodeOptionValue(
+      fields.musubi_archive,
+      decodeReplicationIdValue,
+      "IssueReplicationOrder.musubi_archive",
+    );
     if (deadlineEpoch <= issuedEpoch) {
       throw new TypeError(
         "IssueReplicationOrder.deadline_epoch must be greater than issued_epoch",
@@ -6113,6 +6107,7 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
         order_payload: orderPayload.toString("base64"),
         issued_epoch: issuedEpoch,
         deadline_epoch: deadlineEpoch,
+        musubi_archive: musubiArchive,
       },
     };
   }
@@ -6700,11 +6695,13 @@ function encodeZkInstruction(instruction) {
 }
 
 function encodeRegisterZkAssetPayload(value) {
+  assertExactObjectKeys(
+    value,
+    ["asset", "vk_unshield", "vk_shield"],
+    "zk.RegisterZkAsset",
+  );
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.asset, "zk.RegisterZkAsset.asset")],
-    [encodeZkAssetModeValue(value.mode, "zk.RegisterZkAsset.mode")],
-    [encodeBoolValue(value.allow_shield, "zk.RegisterZkAsset.allow_shield")],
-    [encodeBoolValue(value.allow_unshield, "zk.RegisterZkAsset.allow_unshield")],
     [encodeOptionValue(value.vk_unshield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_unshield")],
     [encodeOptionValue(value.vk_shield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_shield")],
   ]);
@@ -7805,88 +7802,6 @@ function decodeAssetBalancePolicyValue(payload, context) {
   }
 }
 
-function encodeAssetConfidentialPolicyValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  return encodeStructValue([
-    [encodeConfidentialPolicyModeValue(value.mode ?? "TransparentOnly", `${context}.mode`)],
-    [encodeOptionValue(value.vk_set_hash ?? null, encodeHashValue, `${context}.vk_set_hash`)],
-    [encodeOptionValue(value.poseidon_params_id ?? null, encodeU32Value, `${context}.poseidon_params_id`)],
-    [encodeOptionValue(value.pedersen_params_id ?? null, encodeU32Value, `${context}.pedersen_params_id`)],
-    [
-      encodeOptionValue(
-        value.pending_transition ?? null,
-        encodeConfidentialPolicyTransitionValue,
-        `${context}.pending_transition`,
-      ),
-    ],
-  ]);
-}
-
-function decodeAssetConfidentialPolicyValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "mode",
-    "vk_set_hash",
-    "poseidon_params_id",
-    "pedersen_params_id",
-    "pending_transition",
-  ]);
-  return {
-    mode: decodeConfidentialPolicyModeValue(fields.mode, `${context}.mode`),
-    vk_set_hash: decodeOptionValue(fields.vk_set_hash, decodeHashValue, `${context}.vk_set_hash`),
-    poseidon_params_id: decodeOptionValue(
-      fields.poseidon_params_id,
-      decodeU32Value,
-      `${context}.poseidon_params_id`,
-    ),
-    pedersen_params_id: decodeOptionValue(
-      fields.pedersen_params_id,
-      decodeU32Value,
-      `${context}.pedersen_params_id`,
-    ),
-    pending_transition: decodeOptionValue(
-      fields.pending_transition,
-      decodeConfidentialPolicyTransitionValue,
-      `${context}.pending_transition`,
-    ),
-  };
-}
-
-function encodeConfidentialPolicyTransitionValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  return encodeStructValue([
-    [encodeConfidentialPolicyModeValue(value.new_mode, `${context}.new_mode`)],
-    [encodeU64NumberValue(value.effective_height, `${context}.effective_height`)],
-    [encodeConfidentialPolicyModeValue(value.previous_mode, `${context}.previous_mode`)],
-    [encodeHashValue(value.transition_id, `${context}.transition_id`)],
-    [encodeOptionValue(value.conversion_window ?? null, encodeU64NumberValue, `${context}.conversion_window`)],
-  ]);
-}
-
-function decodeConfidentialPolicyTransitionValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "new_mode",
-    "effective_height",
-    "previous_mode",
-    "transition_id",
-    "conversion_window",
-  ]);
-  return {
-    new_mode: decodeConfidentialPolicyModeValue(fields.new_mode, `${context}.new_mode`),
-    effective_height: decodeU64NumberValue(fields.effective_height, `${context}.effective_height`),
-    previous_mode: decodeConfidentialPolicyModeValue(fields.previous_mode, `${context}.previous_mode`),
-    transition_id: decodeHashValue(fields.transition_id, `${context}.transition_id`),
-    conversion_window: decodeOptionValue(
-      fields.conversion_window,
-      decodeU64NumberValue,
-      `${context}.conversion_window`,
-    ),
-  };
-}
-
 function encodeAssetDefinitionAliasValue(value, context) {
   const literal = assertNonEmptyString(value, context);
   if (!literal.includes("#")) {
@@ -7995,26 +7910,6 @@ function decodeKaigiRoomPolicyValue(payload, context) {
       return { policy: "Authenticated", state: null };
     default:
       throw new Error(`${context} uses unsupported room policy ${tag}`);
-  }
-}
-
-function encodeZkAssetModeValue(value, context) {
-  const normalized = assertNonEmptyString(value, context).toLowerCase();
-  if (normalized === "hybrid") {
-    return encodeEnumTagValue(0);
-  }
-  throw new Error(`${context} must be Hybrid`);
-}
-
-function decodeZkAssetModeValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const tag = reader.readU32LE("tag");
-  reader.assertEof();
-  switch (tag) {
-    case 0:
-      return "Hybrid";
-    default:
-      throw new Error(`${context} uses unsupported zk asset mode ${tag}`);
   }
 }
 

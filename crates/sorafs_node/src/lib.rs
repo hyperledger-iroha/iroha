@@ -27,6 +27,7 @@ pub mod pop_credentials;
 pub mod por;
 pub mod potr;
 pub mod proof_outcome_forwarder;
+pub mod provider_attestation_journal;
 pub mod provider_ingest_outbox;
 pub mod provider_ingest_runtime;
 mod reconciliation;
@@ -140,22 +141,46 @@ pub use proof_outcome_forwarder::{
     ProofOutcomeEnqueueResultV1, ProofOutcomeOutbox, ProofOutcomeOutboxError,
     ProofOutcomeOutboxPolicyV1, ProofOutcomePendingDeliveryV1, potr_proof_outcome_operation_id_v1,
 };
+pub use provider_attestation_journal::{
+    MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1,
+    MUSUBI_PROVIDER_ATTESTATION_JOURNAL_MAX_ENTRIES_V1, MusubiProviderAttestationApprovalClaimV1,
+    MusubiProviderAttestationApprovalErrorV1, MusubiProviderAttestationApprovalIdV1,
+    MusubiProviderAttestationApprovalIntentV1, MusubiProviderAttestationApprovalStoreOutcomeV1,
+    MusubiProviderAttestationClaimOwnerV1, MusubiProviderAttestationDeadLetterReasonV1,
+    MusubiProviderAttestationDeliveryOutcomeV1, MusubiProviderAttestationEnqueueOutcomeV1,
+    MusubiProviderAttestationFailureClassV1, MusubiProviderAttestationHandoffClaimV1,
+    MusubiProviderAttestationInventoryErrorV1, MusubiProviderAttestationInventoryHandoffIdV1,
+    MusubiProviderAttestationInventoryItemV1, MusubiProviderAttestationInventoryReaderV1,
+    MusubiProviderAttestationInventoryReceiptV1, MusubiProviderAttestationInventoryScopeV1,
+    MusubiProviderAttestationInventorySinkV1, MusubiProviderAttestationInventoryV1,
+    MusubiProviderAttestationJournalCasOutcomeV1, MusubiProviderAttestationJournalErrorV1,
+    MusubiProviderAttestationJournalPolicyV1, MusubiProviderAttestationJournalStageV1,
+    MusubiProviderAttestationJournalStatusV1, MusubiProviderAttestationJournalStoreErrorV1,
+    MusubiProviderAttestationJournalStoreSnapshotV1, MusubiProviderAttestationJournalStoreV1,
+    MusubiProviderAttestationJournalV1, MusubiProviderAttestationRetryOutcomeV1,
+    MusubiProviderAttestationSignerBindingErrorV1, MusubiProviderAttestationSignerErrorV1,
+    MusubiProviderAttestationSignerQualificationV1, MusubiProviderAttestationSignerV1,
+    approve_musubi_provider_attestation_v1, musubi_provider_attestation_approval_id_v1,
+    musubi_provider_attestation_inventory_handoff_id_v1,
+    musubi_provider_attestation_journal_checkpoint_revision_v1,
+};
 pub use provider_ingest_outbox::{
-    FinalizedProviderIngestAuthorizationV1, PROVIDER_INGEST_OUTBOX_FILE_V1,
-    PROVIDER_INGEST_STATUS_PAGE_MAX_V1, ProviderIngestCancellationReasonV1,
-    ProviderIngestCheckpointExternalErrorV1, ProviderIngestCheckpointProviderBindingV1,
-    ProviderIngestCheckpointProviderQualificationV1, ProviderIngestCheckpointRuntimeV1,
-    ProviderIngestClaimOwnerV1, ProviderIngestCompletionSigningClaimV1,
-    ProviderIngestCompletionSigningContextV1, ProviderIngestCompletionStateV1,
-    ProviderIngestCompletionSubmissionV1, ProviderIngestDeadLetterReasonV1,
-    ProviderIngestDeliveryStateV1, ProviderIngestEnqueueResultV1, ProviderIngestFailureClassV1,
-    ProviderIngestFinalizedCancellationV1, ProviderIngestFinalizedCompletionV1,
-    ProviderIngestFinalizedCursorV1, ProviderIngestOutbox, ProviderIngestOutboxCountsV1,
-    ProviderIngestOutboxError, ProviderIngestOutboxPolicyV1, ProviderIngestRetryOutcomeV1,
-    ProviderIngestSealedCheckpointRecordV1, ProviderIngestSourceClaimV1,
-    ProviderIngestStatusPageV1, ProviderIngestStatusV1,
+    FinalizedProviderIngestAuthorizationV1, FinalizedProviderIngestMusubiContextV1,
+    PROVIDER_INGEST_OUTBOX_FILE_V1, PROVIDER_INGEST_STATUS_PAGE_MAX_V1,
+    ProviderIngestCancellationReasonV1, ProviderIngestCheckpointExternalErrorV1,
+    ProviderIngestCheckpointProviderBindingV1, ProviderIngestCheckpointProviderQualificationV1,
+    ProviderIngestCheckpointRuntimeV1, ProviderIngestClaimOwnerV1,
+    ProviderIngestCompletionSigningClaimV1, ProviderIngestCompletionSigningContextV1,
+    ProviderIngestCompletionStateV1, ProviderIngestCompletionSubmissionV1,
+    ProviderIngestDeadLetterReasonV1, ProviderIngestDeliveryStateV1, ProviderIngestEnqueueResultV1,
+    ProviderIngestFailureClassV1, ProviderIngestFinalizedCancellationV1,
+    ProviderIngestFinalizedCompletionV1, ProviderIngestFinalizedCursorV1, ProviderIngestOutbox,
+    ProviderIngestOutboxCountsV1, ProviderIngestOutboxError, ProviderIngestOutboxPolicyV1,
+    ProviderIngestRetryOutcomeV1, ProviderIngestSealedCheckpointRecordV1,
+    ProviderIngestSourceClaimV1, ProviderIngestStatusPageV1, ProviderIngestStatusV1,
 };
 pub use provider_ingest_runtime::{
+    PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1,
     ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClockV1,
     ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
     ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerBindingErrorV1,
@@ -164,14 +189,19 @@ pub use provider_ingest_runtime::{
     ProviderIngestCompletionSignerResolutionContextV1,
     ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
     ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
-    ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedLedgerErrorV1,
-    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
+    ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedClaimFactoryV1,
+    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1,
+    ProviderIngestFinalizedMusubiArchiveClaimV1, ProviderIngestFinalizedMusubiCompletionClaimV1,
+    ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
     ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
-    ProviderIngestLocalStorageV1, ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1,
-    ProviderIngestRuntimeProviderQualificationV1, ProviderIngestRuntimeV1,
-    ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1,
-    ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
-    ProviderIngestTransactionObservationV1,
+    ProviderIngestLocalStorageV1, ProviderIngestLocalStoredV1,
+    ProviderIngestMusubiArchiveFetchBindingV1,
+    ProviderIngestMusubiAttestationApprovalRequestErrorV1,
+    ProviderIngestMusubiAttestationApprovalRequestV1, ProviderIngestRuntimeErrorV1,
+    ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeProviderQualificationV1,
+    ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
+    ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
+    ProviderIngestTransactionObservationV1, ProviderIngestVerifiedMusubiBundleReceiptV1,
 };
 use repair_ledger_projection::RepairLedgerTaskProjectionV1;
 /// Outcome returned when recording a PoR verdict.
@@ -508,8 +538,8 @@ use crate::{
     potr::PotrTracker,
     scheduler::{SchedulerAdmissionError, StorageSchedulerConfig, StorageSchedulersRuntime},
     store::{
-        ChunkFileRecord, ChunkRefcountEntry, ChunkRoleMetadata, StorageBackend, StorageError,
-        StoredManifest,
+        AdmittedPayloadReadLeaseV1, ChunkFileRecord, ChunkRefcountEntry, ChunkRoleMetadata,
+        StorageBackend, StorageError, StoredManifest,
     },
     telemetry::{TelemetryAccumulator, TelemetryError},
 };
@@ -4934,6 +4964,23 @@ pub enum NodeStorageError {
     /// Scheduler admission refused work without parking the caller.
     #[error(transparent)]
     Scheduler(#[from] SchedulerAdmissionError),
+}
+
+/// Redacted errors returned by admitted-payload verification lease acquisition.
+///
+/// This boundary deliberately never returns backend errors because those diagnostics can contain
+/// provider-local filesystem paths. Detailed failures are retained only in provider logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum AdmittedPayloadReadLeaseErrorV1 {
+    /// The embedded SoraFS storage subsystem is disabled.
+    #[error("SoraFS storage is disabled for this node")]
+    Disabled,
+    /// No currently admitted payload has the requested canonical manifest digest.
+    #[error("the requested storage-admitted SoraFS payload is unavailable")]
+    NotAdmitted,
+    /// Fail-closed storage state prevented safe lifecycle-lease acquisition.
+    #[error("storage-admitted SoraFS payload verification is temporarily unavailable")]
+    StorageUnavailable,
 }
 
 /// Errors raised by provider-internal finalized-ledger storage ingest.
@@ -16339,6 +16386,7 @@ impl NodeHandle {
     >(
         &self,
         chain_id: ChainId,
+        genesis_block_hash: [u8; 32],
         claim_owner: ProviderIngestClaimOwnerV1,
         policy: ProviderIngestRuntimePolicyV1,
         ledger: Arc<Ledger>,
@@ -16379,6 +16427,7 @@ impl NodeHandle {
         ProviderIngestRuntimeV1::new(
             *provider_id.as_bytes(),
             chain_id,
+            genesis_block_hash,
             claim_owner,
             policy,
             outbox,
@@ -16529,6 +16578,49 @@ impl NodeHandle {
                 Ok(manifest_id)
             }
             Err(err) => Err(NodeStorageError::from(err)),
+        }
+    }
+
+    /// Run trusted local verification against opaque fresh readers for one admitted payload.
+    ///
+    /// `manifest_digest` is resolved only through the authoritative storage index. While `work`
+    /// runs, the manifest lifecycle lease prevents concurrent eviction. Each of up to three calls
+    /// to [`AdmittedPayloadReadLeaseV1::open_reader`] returns an independent forward-only reader at
+    /// byte zero. Every verified chunk read is admitted and accounted through the local fetch
+    /// scheduler, and neither the lease nor its readers expose filesystem paths or can escape the
+    /// callback lifetime.
+    ///
+    /// This boundary is intended for trusted, read-only local verification. To preserve the
+    /// storage lock hierarchy, `work` must use only the supplied lease and readers; it must not
+    /// re-enter any other [`NodeHandle`] storage method before returning.
+    ///
+    /// # Errors
+    ///
+    /// Returns a path-free [`AdmittedPayloadReadLeaseErrorV1`]. Detailed backend diagnostics are
+    /// logged locally and are never exposed to the callback caller.
+    pub fn with_admitted_payload_read_lease<T>(
+        &self,
+        manifest_digest: &[u8; 32],
+        work: impl for<'lease> FnOnce(&AdmittedPayloadReadLeaseV1<'lease>) -> T,
+    ) -> Result<T, AdmittedPayloadReadLeaseErrorV1> {
+        let Some(storage) = self.storage.as_deref() else {
+            return Err(AdmittedPayloadReadLeaseErrorV1::Disabled);
+        };
+        match storage.with_admitted_payload_read_lease_by_digest(
+            manifest_digest,
+            &self.schedulers,
+            work,
+        ) {
+            Ok(Some(result)) => Ok(result),
+            Ok(None) => Err(AdmittedPayloadReadLeaseErrorV1::NotAdmitted),
+            Err(error) => {
+                iroha_logger::warn!(
+                    %error,
+                    manifest_digest = %hex::encode(manifest_digest),
+                    "failed to acquire storage-admitted payload verification lease"
+                );
+                Err(AdmittedPayloadReadLeaseErrorV1::StorageUnavailable)
+            }
         }
     }
 
@@ -16964,6 +17056,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::{
+        io::Read as _,
         str::FromStr,
         sync::{
             Arc, Barrier, Mutex,
@@ -17872,6 +17965,7 @@ mod tests {
             order_id: ReplicationOrderId::new(order_id),
             manifest_digest: ManifestDigest::new(manifest_digest),
             manifest_root_cid,
+            musubi_archive: None,
             issued_by: authority.clone(),
             issued_epoch: order_body.issued_at,
             deadline_epoch: order_body.deadline_at,
@@ -18163,6 +18257,7 @@ mod tests {
             &page.rows[0].state,
             ProviderIngestDeliveryStateV1::LocalStored {
                 manifest_id: stored_manifest_id,
+                musubi_bundle: None,
                 completion: ProviderIngestCompletionStateV1::Ready {
                     attempts: 1,
                     next_attempt_at_ms,
@@ -28840,6 +28935,101 @@ mod tests {
     }
 
     #[test]
+    fn admitted_payload_lease_reads_exact_bytes_without_paths() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let payload = b"opaque lifecycle-leased provider payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let manifest = manifest_builder_for_plan(payload, &plan)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+        let mut payload_reader = payload.as_slice();
+        let manifest_id = handle
+            .ingest_manifest(&manifest, &plan, &mut payload_reader)
+            .expect("ingest admitted payload");
+        let manifest_digest = *handle
+            .manifest_metadata(&manifest_id)
+            .expect("admitted manifest metadata")
+            .manifest_digest();
+
+        let readback = handle
+            .with_admitted_payload_read_lease(&manifest_digest, |lease| {
+                assert_eq!(lease.manifest_digest(), &manifest_digest);
+                assert_eq!(lease.content_length(), payload.len() as u64);
+                assert_eq!(lease.payload_digest(), blake3::hash(payload).as_bytes());
+                let mut reader = lease.open_reader().expect("open admitted payload reader");
+                let mut bytes = Vec::new();
+                reader
+                    .read_to_end(&mut bytes)
+                    .expect("read exact admitted payload");
+                bytes
+            })
+            .expect("acquire admitted payload lease");
+
+        assert_eq!(readback, payload);
+    }
+
+    #[test]
+    fn admitted_payload_lease_opens_repeated_fresh_readers_at_zero() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let payload = b"every verifier pass starts from the first payload byte";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let manifest = manifest_builder_for_plan(payload, &plan)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+        let mut payload_reader = payload.as_slice();
+        let manifest_id = handle
+            .ingest_manifest(&manifest, &plan, &mut payload_reader)
+            .expect("ingest admitted payload");
+        let manifest_digest = *handle
+            .manifest_metadata(&manifest_id)
+            .expect("admitted manifest metadata")
+            .manifest_digest();
+
+        handle
+            .with_admitted_payload_read_lease(&manifest_digest, |lease| {
+                let mut first = lease.open_reader().expect("open first fresh reader");
+                let mut prefix = [0_u8; 5];
+                first.read_exact(&mut prefix).expect("read first prefix");
+                assert_eq!(&prefix, &payload[..prefix.len()]);
+
+                let mut second = lease.open_reader().expect("open second fresh reader");
+                let mut second_bytes = Vec::new();
+                second
+                    .read_to_end(&mut second_bytes)
+                    .expect("read second fresh pass");
+                assert_eq!(second_bytes, payload);
+
+                let mut third = lease.open_reader().expect("open third fresh reader");
+                let mut third_bytes = Vec::new();
+                third
+                    .read_to_end(&mut third_bytes)
+                    .expect("read third fresh pass");
+                assert_eq!(third_bytes, payload);
+                assert!(matches!(
+                    lease.open_reader(),
+                    Err(error) if error.kind() == io::ErrorKind::PermissionDenied
+                ));
+            })
+            .expect("acquire admitted payload lease");
+    }
+
+    #[test]
+    fn admitted_payload_lease_rejects_missing_manifest_digest() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let missing_digest = [0xA5; 32];
+
+        assert!(matches!(
+            handle.with_admitted_payload_read_lease(&missing_digest, |_| ()),
+            Err(AdmittedPayloadReadLeaseErrorV1::NotAdmitted)
+        ));
+    }
+
+    #[test]
     fn node_handle_storage_sample_por() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
@@ -29397,6 +29587,10 @@ mod tests {
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect_err("storage disabled");
         assert!(matches!(err, NodeStorageError::Disabled));
+        assert!(matches!(
+            handle.with_admitted_payload_read_lease(&[0xA5; 32], |_| ()),
+            Err(AdmittedPayloadReadLeaseErrorV1::Disabled)
+        ));
     }
 
     #[derive(Debug)]

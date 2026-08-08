@@ -181,6 +181,14 @@ pub mod asset_definition {
     }
 
     permission! {
+        /// Permission to manage confidential policy and verifier roles for the specified asset definition.
+        pub struct CanManageAssetDefinitionConfidentialPolicy {
+            /// Identifier of the asset definition whose confidential policy may be changed.
+            pub asset_definition: AssetDefinitionId,
+        }
+    }
+
+    permission! {
         /// Permission to register, bind, clear, or replace asset-definition aliases in one scope.
         ///
         /// This capability is intentionally independent from account-alias management.
@@ -242,6 +250,29 @@ pub mod asset_definition {
             assert!(json.contains("usd#banka.paynet"));
             assert!(json.contains("\"dataspace_id\":7"));
             assert!(json.contains("\"asset_definition_id\""));
+        }
+
+        #[test]
+        fn confidential_policy_permission_is_exactly_asset_definition_scoped() {
+            let pkr = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("currency", "paynet").expect("asset domain"),
+                "pkr".parse().expect("asset name"),
+            );
+            let usd = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("currency", "paynet").expect("asset domain"),
+                "usd".parse().expect("asset name"),
+            );
+            let permission = CanManageAssetDefinitionConfidentialPolicy {
+                asset_definition: pkr.clone(),
+            };
+            let json = norito::json::to_json(&permission)
+                .expect("serialize confidential policy permission");
+            let decoded: CanManageAssetDefinitionConfidentialPolicy =
+                norito::json::from_str(&json).expect("deserialize confidential policy permission");
+
+            assert_eq!(decoded, permission);
+            assert_eq!(decoded.asset_definition, pkr);
+            assert_ne!(decoded.asset_definition, usd);
         }
     }
 }

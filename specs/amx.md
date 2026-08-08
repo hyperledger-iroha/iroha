@@ -18,10 +18,10 @@ Key guarantees:
 - AXT proof envelopes bind proof bytes to a dataspace, its active manifest root,
   and the FastPQ V1 verifier metadata before the host caches the verification
   result for the configured slot window.
-- IVM hosts derive per-dataspace AXT policy from the Space Directory: handles must target the lane advertised in the catalog, present the latest manifest root, satisfy expiry_slot, handle_era, and sub_nonce minima, and reject unknown dataspaces with `PermissionDenied` before execution.
+- IVM hosts derive per-dataspace AXT policy and issuer identity from committed Space Directory state. A handle must carry a valid domain-separated V1 signature from the single-key UAID account bound to the active `(dataspace, manifest root)`, target the catalog lane, use the exact active era and exact next sub-nonce, and satisfy expiry. Missing, ambiguous, multisignature, or inconsistent issuer indexes fail closed before FASTPQ verification.
 - Slot expiry uses `nexus.axt.slot_length_ms` (default `1` ms, validated between `1` ms and `600_000` ms) plus the bounded `nexus.axt.max_clock_skew_ms` (default `0` ms, capped by the slot length and `60_000` ms). Hosts compute `current_slot = block.creation_time_ms / slot_length_ms`, apply the skew allowance to proof and handle expiry checks, and reject handles that advertise a larger skew than the configured limit.
 - Proof cache TTL bounds reuse: `nexus.axt.proof_cache_ttl_slots` (default `1`, validated `1`–`64`) limits how long accepted or rejected proofs stay in the host cache; entries drop once the TTL window or the proof’s `expiry_slot` elapses so replay protection stays bounded.
-- Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later) so peer switches do not reopen replay gaps.
+- Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later). A block carries the deterministic post-state policy snapshot; Kura replay installs that snapshot and rebuilds the ledger without advancing counters a second time.
 - Debugging cache status: Torii exposes `/v1/debug/axt/cache` (telemetry/developer gate) to return the current AXT policy snapshot version, the most recent reject (lane/reason/version), cached proofs (dataspace/status/manifest root/slots), and reject hints (`next_min_handle_era`/`next_min_sub_nonce`). Use this endpoint to confirm slot/manifest rotations are reflected in cache state and to refresh handles deterministically during troubleshooting.
 
 ## Slot Timing Model
@@ -88,7 +88,7 @@ evidence.
 
 ### AXT golden fixtures
 
-Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_data_model/tests/fixtures/axt_golden.rs`, with a regeneration helper in `crates/iroha_data_model/tests/axt_policy_vectors.rs` (`print_golden_vectors`). CoreHost consumes the same fixtures in `core_host_enforces_fixture_snapshot_fields` (`crates/ivm/tests/core_host_policy.rs`) to exercise lane binding, manifest root matching, expiry_slot freshness, handle_era/sub_nonce minima, and missing-dataspace rejections.
+Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_data_model/tests/fixtures/axt_golden.rs`, with a regeneration helper in `crates/iroha_data_model/tests/axt_policy_vectors.rs` (`print_golden_vectors`). CoreHost consumes the same fixtures in `core_host_enforces_fixture_snapshot_fields` (`crates/ivm/tests/core_host_policy.rs`) to exercise lane binding, manifest root matching, expiry freshness, exact era/sub-nonce matching, and missing-dataspace rejections.
 - A multi-dataspace JSON fixture (`crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json`) pins the descriptor/touch schema, canonical header-framed Norito bytes for the data-model type, and the Poseidon binding derived from the bare Norito payload (`compute_descriptor_binding`). The `axt_descriptor_fixture` test guards the encoded bytes, and SDKs can use `AxtDescriptorBuilder::builder` plus `TouchManifest::from_read_write` to assemble deterministic samples for docs/SDKs.
 
 ### Lane catalog mapping and manifests
@@ -176,10 +176,12 @@ The canonical data-model types live in
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
 | `committed_amount` / `amount_commitment` | Optional clear or hidden amount binding checked against the spend intent. |
 
-`AssetHandle` separately binds the descriptor digest, target lane, manifest
-root, budget, era, sub-nonce, and expiry slot. The host validates both objects
-against one policy snapshot; no external proof registry lookup is part of the
-V1 host path.
+`AssetHandle` separately binds the ABI version, chain id, dataspace, descriptor
+digest, scope, subject, budget, group, target lane, active manifest root, exact
+era/sub-nonce, expiry, and skew allowance in its issuer signature. The host
+resolves the verification key only from committed Space Directory/UAID state
+and authenticates the handle before any FASTPQ work. No issuer identity carried
+by the handle participates in key selection.
 
 ### Generation and use
 
@@ -221,11 +223,12 @@ AXT handle verification now defaults to the Space Directory snapshot when the ho
 - lane binding: handle `target_lane` must match the Space Directory entry;
 - manifest binding: non-zero `manifest_root` values must match the handle’s `manifest_view_root`;
 - expiry: `current_slot` greater than the handle’s `expiry_slot` is rejected;
-- counters: `handle_era` and `sub_nonce` must be at least the advertised minima;
+- counters: `handle_era` must equal the active manifest era and `sub_nonce` must equal the next committed counter; stale and caller-selected future values are rejected, and advancement uses checked arithmetic;
+- issuer authentication: the signature must bind every V1 policy/network field and verify with the single-key account resolved from the active manifest's committed UAID and dataspace binding;
 - membership: handles for dataspaces absent from the snapshot are denied.
 
 Failures map to `PermissionDenied`, and the CoreHost policy snapshot tests in `crates/ivm/tests/core_host_policy.rs` cover allow/deny cases for each field.
-Block validation also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants (non-zero amounts, scope/subject alignment, and non-zero era/sub_nonce/expiry), aggregates handle budgets per dataspace, and advances `min_handle_era`/`min_sub_nonce` as envelopes commit so replayed sub-nonces are rejected even after Space Directory rebuilds.
+Block validation authenticates unique handles before FASTPQ verification, groups them by their exact V1 issuer/network/policy scope, and reconstructs the committed pre-state counter with checked subtraction from the advertised post-state. It then requires exact ordered counter progression and exact equality with the advertised post-state, with a consensus ceiling of 65,536 authenticated handles per block. It also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants, and aggregates handle budgets per dataspace.
 
 ## Error Catalog
 

@@ -63,13 +63,6 @@
         {
           "Register": {
             "AssetDefinition": {
-              "confidential_policy": {
-                "mode": "TransparentOnly",
-                "pedersen_params_id": null,
-                "pending_transition": null,
-                "poseidon_params_id": null,
-                "vk_set_hash": null
-              },
               "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "logo": null,
               "metadata": {},
@@ -103,13 +96,6 @@
         {
           "Register": {
             "AssetDefinition": {
-              "confidential_policy": {
-                "mode": "TransparentOnly",
-                "pedersen_params_id": null,
-                "pending_transition": null,
-                "poseidon_params_id": null,
-                "vk_set_hash": null
-              },
               "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
               "logo": null,
               "metadata": {},

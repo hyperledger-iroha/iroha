@@ -1543,7 +1543,7 @@ public sealed partial class ToriiClient : IDisposable
     {
         var normalizedBytes = NormalizeNonEmptyBinaryPayload(noritoVersionedBytes, nameof(noritoVersionedBytes));
         using var content = CreateBinaryContent(normalizedBytes, "application/x-norito");
-        using var response = await SendAsync(HttpMethod.Post, "/query", query, content, cancellationToken: cancellationToken);
+        using var response = await SendAsync(HttpMethod.Post, "/v1/query", query, content, cancellationToken: cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
             stream,

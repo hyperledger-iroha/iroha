@@ -1,4 +1,34 @@
 #[test]
+fn public_balance_scope_never_accepts_universal_as_a_partition() {
+    let limits = PrivacyConsensusLimitsV1::taira_default();
+    let universal = AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL);
+    for protocol in [
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+        PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    ] {
+        let mut statement = statement_for(protocol);
+        match &mut statement {
+            PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) => {
+                statement.public_balance_scope = universal;
+            }
+            PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => {
+                statement.public_balance_scope = universal;
+            }
+            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => {
+                statement.public_balance_scope = universal;
+            }
+            _ => unreachable!("test protocol list is closed"),
+        }
+        assert_eq!(
+            statement.validate(&limits),
+            Err(PrivacyStatementValidationError::UniversalPublicBalanceScope),
+            "{protocol:?} accepted the coordinator as a balance partition",
+        );
+    }
+}
+
+#[test]
 fn zk_x509_policy_caps_ordering_and_transition_adversaries_fail_closed() {
     assert_zk_x509_policy_caps_and_ordering();
     assert_zk_x509_trust_anchor_transitions();

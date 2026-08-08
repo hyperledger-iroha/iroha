@@ -272,6 +272,7 @@ fn build_faucet_test_context_with_registration(
         {
             Torii::new(
                 chain_id.clone(),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),
@@ -289,6 +290,7 @@ fn build_faucet_test_context_with_registration(
         {
             Torii::new(
                 chain_id.clone(),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),

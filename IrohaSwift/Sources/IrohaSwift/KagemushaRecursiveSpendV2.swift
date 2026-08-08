@@ -25,7 +25,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
         case let .invalidArchive(field):
             return "Invalid Kagemusha recursive spend Norito archive: \(field)."
         case .nativeBridgeUnavailable:
-            return "The ABI-21 Kagemusha recursive spend bridge is unavailable."
+            return "The ABI-22 Kagemusha recursive spend bridge is unavailable."
         case .proofBackendUnavailable:
             return "Kagemusha recursive spend V4 is unavailable until the ABI-21 proof backend is promoted."
         case .proofWorkerBusy:
@@ -172,7 +172,7 @@ public enum KagemushaRecursiveSpend {
         }
     }
 
-    public static let requiredNativeBridgeAbiVersion: UInt32 = 21
+    public static let requiredNativeBridgeAbiVersion: UInt32 = 22
     /// Mandatory sender-final peer-cash contract advertised by Torii readiness.
     public static let cashHandoffCapabilityV1 = "cash_handoff_v1"
     public static let authorizationPreparationVersionV2: UInt16 = 2
@@ -549,7 +549,7 @@ public enum KagemushaRecursiveSpend {
         )
     }
 
-    /// True when the ABI-21 bridge was compiled with the audited production
+    /// True when the ABI-22 bridge was compiled with the audited production
     /// promotion feature, even if its authenticated artifact set has not been
     /// installed yet. Setup UI uses this non-cached probe to avoid an artifact
     /// bootstrap cycle; value-moving operations still require

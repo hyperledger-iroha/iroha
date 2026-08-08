@@ -884,8 +884,9 @@ windows:
 2. **Reveal window** (`vrf_reveal_deadline_offset` blocks) — validators disclose
    the reveal (`VrfReveal`). The adapter verifies it against the prior commit and
    records the 32-byte reveal. The reveal deadline must be strictly before the
-   epoch boundary, leaving at least one finalized block in which the complete
-   entropy record is immutable pre-state.
+   epoch boundary. Authenticated late reveals remain admissible only through the
+   block immediately preceding the boundary, leaving the complete participation
+   record as immutable pre-state when the boundary candidate is assembled.
 
 The commit/reveal ingestion path is synchronous and deterministic:
 
@@ -907,9 +908,20 @@ When the epoch boundary is reached (block height multiple of
    finalized state and mixes its canonically ordered on-time reveals into the
    immediate next-epoch seed `S_e`.
 2. Freezes that seed in the old-roster-authenticated boundary height context.
-3. Computes penalties (`committed_no_reveal`, `no_participation`) and persists
-   the finalized `VrfEpochRecord` in the boundary block.
+3. Computes the exact `committed_no_reveal` and `no_participation` partitions
+   solely from committed pre-state and persists the finalized `VrfEpochRecord`
+   in the boundary block. New boundary-height observations are rejected, so the
+   proposer cannot rewrite the partition from process-local messages.
 4. Updates `epoch_report::VrfPenaltiesReport`, status counters, and telemetry.
+
+The next block verifies the boundary block's canonical Kura finality artifact
+and revalidates the complete epoch record against its frozen NPoS height
+context. A validator in `committed_no_reveal` has both an independently signed
+commitment and a quorum-certified missing reveal, so consensus derives a
+`VrfJail` action for that validator and a single applied marker. The jail remains
+through the successor epoch so the validator is ineligible at the next election.
+`no_participation` remains operational evidence only: network absence without a
+signed commitment is not attributable and cannot authorize a jail.
 
 The refreshed seed flows back into deterministic collector selection through
 `deterministic_collectors`. Public `/v1/sumeragi/telemetry` reports only
@@ -996,7 +1008,7 @@ and `/v1/sumeragi/telemetry`’s `vrf` section for dashboards.
   either via `/v1/sumeragi/status` or the Norito payload—to confirm validator alignment
   and identify which peer diverged. Hashes are derived from `(chain_id, height, view,
   epoch, ordered_peer_ids)` using Blake2b-256.
-- Late reveals: validators may submit reveals after the configured window (`vrf_reveal_deadline_offset`) to clear penalties. The adapter verifies the reveal against the stored commitment, records it under `late_reveals`, and increments `sumeragi_vrf_reveals_late_total`. Late submissions never remix the epoch seed—only on-time reveals participate in the Blake2b accumulator—but they do remove the validator from the `committed_no_reveal` set. Late entries are persisted in `world.vrf_epochs[*].late_reveals` so operators can audit the height at which the reveal landed.
+- Late reveals: validators may submit reveals after the configured window (`vrf_reveal_deadline_offset`) and before the epoch-boundary block to clear a pending non-reveal. The adapter verifies the reveal against the stored commitment, records it under `late_reveals`, and increments `sumeragi_vrf_reveals_late_total`. Late submissions never remix the epoch seed—only on-time reveals participate in the Blake2b accumulator—but they do remove the validator from the `committed_no_reveal` set before it is sealed. Boundary-height and post-boundary submissions are rejected. Late entries are persisted in `world.vrf_epochs[*].late_reveals` so operators can audit the height at which the reveal landed.
 
 #### VRF alert thresholds
 - Page when `increase(sumeragi_vrf_no_participation_total[epoch_window]) > 0`. Any increment means at least one validator missed both commit and reveal windows for the tracked epoch. Use a window length matching `vrf_commit_deadline_offset + vrf_reveal_deadline_offset` (for the defaults, `epoch_window = 140m` on a one‑second block cadence).

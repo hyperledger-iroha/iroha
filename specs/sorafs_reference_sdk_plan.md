@@ -84,24 +84,24 @@ Python, Swift, Kotlin/JVM, mirrored Java Android, and C# expose the native
 bundle and governance-log-node validation
 surfaces with byte-exact fixture tests checked in. Those source and fixture
 assets do not constitute a native release run: every native-dependent parity
-suite now fails when the ABI-21 bridge or required symbols are unavailable, so
+suite now fails when the ABI-22 bridge or required symbols are unavailable, so
 missing, ignored-local, or stale native artifacts remain an explicit red gate
 until rebuilt from the final source state and accompanied by authenticated
 execution evidence.
 
 Host-native evidence now uses
-`scripts/check_native_sdk_abi21_artifact.py`. For C/JNI, C#, Node, and Python it
+`scripts/check_native_sdk_abi22_artifact.py`. For C/JNI, C#, Node, and Python it
 binds one non-linked artifact's stable byte length and SHA-256 to the exact clean
-Git commit, calls the bridge probe, requires ABI **exactly** 21, and verifies the
+Git commit, calls the bridge probe, requires ABI **exactly** 22, and verifies the
 lane's appeal-finance entrypoint inventory. Canonical evidence is reverified
 after the build and before the native-dependent suite; noncanonical manifests,
-symlinks, hardlinks, byte replacement, source drift, ABI 19/20/22, and missing
+symlinks, hardlinks, byte replacement, source drift, ABI 19/20/21/23, and missing
 symbols fail closed. Node staging, loading, and release-provenance collection
 also reject missing, dirty, or stale build provenance. The Python native lane is
 pinned to Python 3.12 and rejects any skipped reference-validation test.
 Apple/Swift and packaged Android/JNI artifacts remain covered by the separate
 source-sealed `check_mobile_sdk_artifacts.sh` contract, which verifies every
-slice, exact ABI 21, the Android `NativeSignerBridge` JNI contract revision,
+slice, exact ABI 22, the Android `NativeSignerBridge` JNI contract revision 4,
 symbols, hashes, and source identity; they are not represented as host-manifest
 lanes.
 
@@ -111,7 +111,7 @@ artifacts still must be produced and exercised for Linux x86_64, Linux aarch64,
 macOS x86_64, macOS aarch64, and Windows x86_64 before this lane can close.
 
 The C# NuGet source path now consumes exactly those five target-host
-`iroha.native-sdk-abi21-artifact.v1` manifests, maps them to `linux-x64`,
+`iroha.native-sdk-abi22-artifact.v1` manifests, maps them to `linux-x64`,
 `linux-arm64`, `osx-x64`, `osx-arm64`, and `win-x64`, and packages only the
 matching `runtimes/<rid>/native/` libraries. The assembler and pre-pack/project
 gate reject missing or extra targets/files, source-commit drift, noncanonical
@@ -449,14 +449,14 @@ convert decoded or raw Norito payloads into the shared validation functions.
   without network access. JavaScript/TypeScript, Python, Swift, Kotlin/JVM,
   mirrored Java Android, and C# have native wrapper and byte-exact fixture test
   coverage checked in. JavaScript/TypeScript, Swift, Kotlin/JVM, mirrored Java
-  Android, C#, and Python native-dependent tests fail when the exact ABI-21
+  Android, C#, and Python native-dependent tests fail when the exact ABI-22
   bridge or required symbols are absent; a source-contract regression gate pins
   those fail-closed markers, and the Python lane additionally rejects any
   skipped reference test.
   These are source and workflow contracts, not freshness evidence. The
   available Node, Python, C/JNI, Swift, and C# outputs are stale or mixed, so no
   native-dependent suite is qualified. Qualification requires one clean
-  pinned-commit ABI-21 rebuild and skip-free parity replay across the five
+  pinned-commit ABI-22 rebuild and skip-free parity replay across the five
   native release targets.
 - **Release packaging:** `scripts/package_sorafs_validate_release.sh` builds or
   packages `sorafs-validate`, stages `include/sorafs_reference.h`, runs fixture

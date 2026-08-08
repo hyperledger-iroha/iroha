@@ -9,7 +9,7 @@ package org.hyperledger.iroha.sdk.validationfee
 class ValidationFeeConsensusProofBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        private const val REQUIRED_BRIDGE_ABI_VERSION = 21
+        private const val REQUIRED_BRIDGE_ABI_VERSION = 22
         private const val HASH_BYTES = 32
         private const val MAX_PROOF_BYTES = 4 * 1024 * 1024
 

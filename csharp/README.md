@@ -241,7 +241,15 @@ injected transport and cannot be changed after `HttpClient` construction.
   `FindRoles`, `FindRoleIds`, `FindPeers`, `FindActiveTriggerIds`,
   `FindTriggers`, `FindAccountsWithAsset`, `FindPermissionsByAccountId`,
   `FindRolesByAccountId`, `FindBlocks`, `FindBlockHeaders`,
-  `FindProofRecords`, and cursor `Continue(...)`), and typed
+  `FindProofRecords`, and cursor `Continue(...)`); both builders require the
+  exact checksummed genesis-header network id and bind it
+  into every signature together with the authority, current Unix time, a
+  non-zero bounded lifetime, and a fresh 32-byte operating-system random nonce;
+  explicit offline replay contexts receive the same strict validation, and
+  signed query bodies are submitted only once because a lost response may
+  follow successful admission; custom `HttpClient` handlers must therefore
+  disable both automatic redirects and transport retries for these one-shot
+  bodies; typed
   `StreamPipelineEventsAsync(...)` / `StreamProofEventsAsync(...)` plus typed
   explorer block/transaction/instruction SSE projections; raw
   `GetJsonDocumentAsync(...)`, `PostJsonDocumentAsync(...)`, signed-query JSON,
@@ -380,7 +388,7 @@ Broader iterable families beyond the current fast_dsl subset, richer typed event
 The managed SDK exposes the unchanged Kagemusha routes through
 `GetKagemushaReadinessV4Async`, `SubmitKagemushaTopUpV4Async`,
 `SubmitKagemushaRedeemV4Async`, and `GetKagemushaOperationStatusAsync`.
-Readiness accepts bridge ABI 21 and the manifest-V4 Eq/Ep verifier identity;
+Readiness accepts bridge ABI 22 and the manifest-V4 Eq/Ep verifier identity;
 ABI-19 and V3 projections fail instead of being upgraded.
 
 The C# surface is transport-only and does not claim a native prover. Top-up and
@@ -480,7 +488,7 @@ envelopes, submit instructions, intent projections and digests, unsigned
 payloads, versioned signed transactions, and pipeline hashes for all twelve
 rows; `ValidateExact12FixtureBundleV1(...)` accepts only the canonical bundle
 and enforces a 2 MiB input ceiling. Native
-availability requires ABI 21, both compiled-catalog symbols, both exact-12 fixture
+availability requires ABI 22, both compiled-catalog symbols, both exact-12 fixture
 symbols, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form algorithm selectors are absent;
 proofs use protocol-specific typed APIs.
@@ -515,7 +523,7 @@ changes, and whitespace normalization.
 
 `Hyperledger.Iroha.SoraFs.SoraFsReferenceValidators` validates canonical
 `GovernanceDagBlockV1` bytes and signed `GovernanceDagHeadV1` chains through
-`connect_norito_bridge` ABI 21. `ValidateGovernanceDagBlockJson(...)` accepts an
+`connect_norito_bridge` ABI 22. `ValidateGovernanceDagBlockJson(...)` accepts an
 optional expected block CID, while `ValidateGovernanceDagHeadChainJson(...)`
 accepts at most 64 root-to-head `SoraFsGovernanceDagBlockInput` snapshots. Both
 return the native `ValidationOutcomeV1` JSON only after strict UTF-8, exact V1
@@ -776,7 +784,8 @@ var issue = TransactionInstruction.IssueReplicationOrder(
     orderId,
     replicationOrderBytes,
     issuedEpoch: 20,
-    deadlineEpoch: 28);
+    deadlineEpoch: 28,
+    musubiArchiveId: archiveId);
 var complete = TransactionInstruction.CompleteReplicationOrder(
     orderId,
     providerId,
@@ -800,9 +809,12 @@ var expire = TransactionInstruction.ExpireReplicationOrder(
 IDs must be non-zero lowercase 64-hex strings. Issue accepts bytes or canonical
 standard base64, caps the decoded archive at 1 MiB, and validates canonical
 `ReplicationOrderV1` framing, ID binding, target/provider ordering, and
-deadlines. Completion requires the exact six-field authority hard cut, including
-the provider owner, four-part signer-policy chain, assignment revision, and
-finalized anchor. Missing, retired three-field, and alias forms have no overload.
+deadlines. Its fifth field is an optional `ArchiveId`: use `null` for a generic
+order or a canonical archive ID to install the immutable Musubi purpose binding
+atomically with the order. Completion requires the exact six-field authority
+hard cut, including the provider owner, four-part signer-policy chain,
+assignment revision, and finalized anchor. Missing, retired three-field, and
+alias forms have no overload.
 
 ## Asset-lock cancellation
 
@@ -875,9 +887,9 @@ assets:
 
 Build each library on a runner whose Rust host exactly matches its target. Each
 runner must record and reverify the copied release library with
-`scripts/check_native_sdk_abi21_artifact.py --sdk csharp`. Merge the five
+`scripts/check_native_sdk_abi22_artifact.py --sdk csharp`. Merge the five
 uploads into an input root containing exactly
-`<target>/<library>` and `<target>/native-sdk-abi21.json`, then assemble the
+`<target>/<library>` and `<target>/native-sdk-abi22.json`, then assemble the
 pack tree:
 
 ```bash
@@ -895,7 +907,7 @@ dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj \
 ```
 
 Both commands require the same clean Git revision recorded by all five
-canonical ABI-21 manifests. Missing, extra, noncanonical, substituted, or stale
+canonical ABI-22 manifests. Missing, extra, noncanonical, substituted, or stale
 inputs fail before NuGet packing. The project invokes `verify-stage` again
 immediately before `GenerateNuspec`; CI then runs `verify-package` against the
 primary `.nupkg` and exercises that package on all five native hosts. The
@@ -909,7 +921,7 @@ with warnings as errors, and runs managed Ed25519, canonical request, and SCCP
 route checks through the packed NuGet assembly. Set
 `CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER` to the current reviewed RID;
 the guard also verifies the NuGet runtime inventory and requires the packaged
-ABI-21 appeal-finance bridge:
+ABI-22 appeal-finance bridge:
 
 ```bash
 CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER=linux-x64 \

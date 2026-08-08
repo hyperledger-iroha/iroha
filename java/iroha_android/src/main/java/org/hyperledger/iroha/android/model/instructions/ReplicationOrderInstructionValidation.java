@@ -47,6 +47,10 @@ final class ReplicationOrderInstructionValidation {
     return value;
   }
 
+  static String requireMusubiArchiveId(final String value) {
+    return requireDigest(value, "musubiArchiveIdHex");
+  }
+
   static String requireDigest(final String value, final String fieldName) {
     Objects.requireNonNull(value, fieldName);
     if (!value.matches("[0-9a-f]{64}")) {
@@ -69,10 +73,19 @@ final class ReplicationOrderInstructionValidation {
   }
 
   static String encodeOrderId(final byte[] value) {
-    Objects.requireNonNull(value, "orderId");
+    return encodeIdentifier(value, "orderId");
+  }
+
+  static String encodeMusubiArchiveId(final byte[] value) {
+    return encodeIdentifier(value, "musubiArchiveId");
+  }
+
+  private static String encodeIdentifier(final byte[] value, final String fieldName) {
+    Objects.requireNonNull(value, fieldName);
     if (value.length != ORDER_ID_BYTES) {
       throw new IllegalArgumentException(
-          "orderId must contain exactly "
+          fieldName
+              + " must contain exactly "
               + ORDER_ID_BYTES
               + " bytes, found "
               + value.length);
@@ -86,7 +99,7 @@ final class ReplicationOrderInstructionValidation {
       encoded[i * 2 + 1] = HEX[unsigned & 0x0f];
     }
     if (!nonzero) {
-      throw new IllegalArgumentException("orderId must not be the zero identifier");
+      throw new IllegalArgumentException(fieldName + " must not be the zero identifier");
     }
     return new String(encoded);
   }

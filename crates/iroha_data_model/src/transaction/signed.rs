@@ -3317,6 +3317,23 @@ mod tests {
             expected
         );
 
+        let mut changed_scope = payload.clone();
+        mutate_direct_privacy_submission(&mut changed_scope, |submission| {
+            let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+                &mut submission.envelope.statement
+            else {
+                panic!("ZK-ACE fixture statement");
+            };
+            statement.public_balance_scope =
+                crate::asset::AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::new(7));
+        });
+        assert_ne!(
+            changed_scope
+                .privacy_transaction_intent_digest_v1()
+                .expect("exact public balance scope remains bound"),
+            expected
+        );
+
         let mut finalized = payload;
         mutate_direct_privacy_submission(&mut finalized, |submission| {
             submission
@@ -3443,7 +3460,7 @@ mod tests {
             expected
         );
 
-        let independent_mutations: [fn(&mut IrohaIvmPrivateNoteStarkStatementV1); 3] = [
+        let independent_mutations: [fn(&mut IrohaIvmPrivateNoteStarkStatementV1); 4] = [
             |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
                 statement.state_root.0[0] ^= 1;
             },
@@ -3452,6 +3469,10 @@ mod tests {
             },
             |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
                 statement.output_commitments[0].0[0] ^= 1;
+            },
+            |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
+                statement.public_balance_scope =
+                    crate::asset::AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::new(7));
             },
         ];
         for mutate in independent_mutations {

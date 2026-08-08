@@ -10,7 +10,7 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void GovernanceReferenceConstantsMatchNativeAbi()
     {
-        Assert.Equal(21u, SoraFsReferenceValidators.RequiredBridgeAbiVersion);
+        Assert.Equal(22u, SoraFsReferenceValidators.RequiredBridgeAbiVersion);
         Assert.Equal(-114, SoraFsReferenceValidators.BridgeReferenceError);
         Assert.Equal(67_108_864, SoraFsReferenceValidators.MaxInputBytesV1);
         Assert.Equal(1_024, SoraFsReferenceValidators.MaxLabelBytesV1);
@@ -581,10 +581,10 @@ public sealed class SoraFsReferenceValidatorsTests
                 null,
                 0,
                 native));
-        Assert.Contains("ABI 21", abiError.Message, StringComparison.Ordinal);
+        Assert.Contains("ABI 22", abiError.Message, StringComparison.Ordinal);
         Assert.Equal(0, native.BlockCalls);
 
-        native.Abi = 21;
+        native.Abi = 22;
         native.SymbolsAvailable = false;
         var symbolError = Assert.Throws<InvalidOperationException>(() =>
             SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
@@ -718,7 +718,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsFixtureBundleAvailable(),
-            "ABI-21 connect_norito_bridge with fixture-bundle symbol is required.");
+            "ABI-22 connect_norito_bridge with fixture-bundle symbol is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -763,7 +763,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
-            "ABI-21 connect_norito_bridge with orderbook/PDP symbols is required.");
+            "ABI-22 connect_norito_bridge with orderbook/PDP symbols is required.");
 
         var orderbookRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -895,7 +895,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsAppealFinanceAvailable(),
-            "ABI-21 appeal-finance reference bridge is required.");
+            "ABI-22 appeal-finance reference bridge is required.");
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures",
@@ -990,7 +990,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
-            "ABI-21 connect_norito_bridge with orderbook/PDP symbols is required.");
+            "ABI-22 connect_norito_bridge with orderbook/PDP symbols is required.");
         var privateKey = Enumerable.Repeat((byte)0xb7, 32).ToArray();
         var owner = Encoding.UTF8.GetBytes("buyer@sora");
         var orderId = SoraFsReferenceValidators.DeriveOrderbookOrderId(owner, 7);
@@ -1070,7 +1070,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),
-            "ABI-21 connect_norito_bridge with governance reference symbols is required.");
+            "ABI-22 connect_norito_bridge with governance reference symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -1105,7 +1105,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),
-            "ABI-21 connect_norito_bridge with Governance DAG symbols is required.");
+            "ABI-22 connect_norito_bridge with Governance DAG symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -1389,7 +1389,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         private readonly HashSet<IntPtr> allocations = new();
 
-        internal uint Abi { get; set; } = 21;
+        internal uint Abi { get; set; } = 22;
 
         internal Exception? AbiError { get; set; }
 

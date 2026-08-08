@@ -9,34 +9,36 @@
 // TODO: Supply a deployment-qualified runner only after the production boundaries below exist.
 // The stock tree deliberately cannot assemble one from the current SoraFS/Torii primitives:
 //
-// 1. provider adapters must invoke `sorafs_car::musubi::MusubiBundleVerifierV1` before a
-//    runtime-only completion-authority signer produces
-//    `MusubiProviderBundleVerificationAttestationV1`; the signer and those adapters remain to be
-//    implemented, and an ordinary SoraFS storage completion is not that attestation;
-// 2. storage coordination needs its own crash-safe idempotency journal and an authoritative
-//    finalized-chain reader which verifies the exact committed registration transaction and
-//    immutable archive projection before submitting/reconciling pin and replication mutations;
-// 3. readback needs admitted-provider authentication, redirect and DNS-rebinding defenses, and
+// 1. provider ingest durably binds a V4 chain/genesis/archive authorization context, accepts only
+//    monotonic finalized observations over the retained admission cursor, and keeps generic and
+//    Musubi receipt shapes disjoint. The finalized reader can seal the local provider's exact
+//    opaque completed-row claim, and a fresh verifier result can derive an externally inert
+//    approval request. A runtime driver must still perform that fresh verifier pass and submit the
+//    request only to an approval-only HSM/KMS or threshold provider;
+// 2. the approved provider attestation needs its own bounded crash-safe journal and durable handoff
+//    through the archive-manager/publication runtime rather than direct registry mutation;
+// 3. the authenticated provider-attestation inventory/coordinator handoff needs production SoraFS
+//    pin/replication mutation APIs and an authoritative finalized-chain reader which verifies the
+//    exact committed registration transaction and immutable archive projection before submitting
+//    or reconciling those mutations;
+// 4. readback needs admitted-provider authentication, redirect and DNS-rebinding defenses, and
 //    full plan/CAR/bundle verification; and
-// 4. daemon assembly needs non-secret public configuration, runtime credential/signer resolution,
-//    and a private TLS listener constructed around daemon-owned finalized-state/SoraFS handles.
+// 5. deployment assembly needs non-secret public configuration, runtime credential/signer
+//    resolution, and a private TLS listener constructed by this injected factory around the
+//    daemon-owned finalized-state/SoraFS handles.
 //
-// The protocol core, durable clock and service replay journal, and typed supervisor dependency are
-// complete. Until every boundary above is implemented and deployment-qualified, stock `irohad`
-// must keep the routes absent. In particular, do not substitute an in-memory backend, treat a
-// public query response or publisher-supplied bytes as finality evidence, or revive the retired
-// public Torii upload path.
+// The publication protocol core, durable clock and publication-service replay journal, and typed
+// supervisor dependency are complete; the separate provider-attestation journal is not. Until
+// every boundary above is implemented and deployment-qualified, stock `irohad` must keep the
+// routes absent. In particular, do not substitute an in-memory backend, treat a public query
+// response or publisher-supplied bytes as finality evidence, or revive the retired public Torii
+// upload path.
 
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
-};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_core::{queue::Queue, state::State};
 use iroha_data_model::ChainId;
+use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 
 /// Live daemon-owned dependencies made available only after trusted startup replay.
 ///
@@ -63,6 +65,7 @@ impl core::fmt::Debug for MusubiPublicationPrivateServiceContextV1 {
 }
 
 impl MusubiPublicationPrivateServiceContextV1 {
+    /// Capture the exact handles owned by a successfully assembled daemon.
     pub(crate) fn new(
         chain_id: ChainId,
         genesis_block_hash: [u8; 32],
@@ -144,10 +147,7 @@ pub trait MusubiPublicationPrivateServiceFactoryV1: Send + 'static {
     fn build(
         self: Box<Self>,
         context: MusubiPublicationPrivateServiceContextV1,
-    ) -> Result<
-        MusubiPublicationPrivateDeploymentV1,
-        MusubiPublicationPrivateServiceFactoryErrorV1,
-    >;
+    ) -> Result<MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateServiceFactoryErrorV1>;
 }
 
 /// Redacted terminal failure from a deployment-owned private HTTPS ingress.
@@ -264,10 +264,7 @@ pub fn build_and_start_injected_musubi_publication_private_service_v1(
     context: MusubiPublicationPrivateServiceContextV1,
     shutdown: ShutdownSignal,
 ) -> Result<
-    (
-        MusubiPublicationPrivateServiceAvailabilityV1,
-        Option<Child>,
-    ),
+    (MusubiPublicationPrivateServiceAvailabilityV1, Option<Child>),
     MusubiPublicationPrivateServiceFactoryErrorV1,
 > {
     let Some(factory) = factory else {
@@ -406,13 +403,12 @@ mod tests {
 
     #[test]
     fn absent_factory_is_fail_closed_and_starts_no_child() {
-        let (availability, child) =
-            build_and_start_injected_musubi_publication_private_service_v1(
-                None,
-                factory_context(),
-                ShutdownSignal::new(),
-            )
-            .expect("absent factory is not an error");
+        let (availability, child) = build_and_start_injected_musubi_publication_private_service_v1(
+            None,
+            factory_context(),
+            ShutdownSignal::new(),
+        )
+        .expect("absent factory is not an error");
         assert_eq!(
             availability,
             MusubiPublicationPrivateServiceAvailabilityV1::Unavailable
@@ -422,12 +418,15 @@ mod tests {
 
     #[test]
     fn factory_failure_precedes_child_start() {
-        let error = build_and_start_injected_musubi_publication_private_service_v1(
+        let result = build_and_start_injected_musubi_publication_private_service_v1(
             Some(Box::new(FailingFactory)),
             factory_context(),
             ShutdownSignal::new(),
-        )
-        .expect_err("unqualified factory must fail closed");
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("unqualified factory must fail closed"),
+        };
         assert_eq!(
             error,
             MusubiPublicationPrivateServiceFactoryErrorV1::Unqualified
@@ -448,13 +447,12 @@ mod tests {
         };
         let mut supervisor = Supervisor::new();
         let shutdown = supervisor.shutdown_signal();
-        let (availability, child) =
-            build_and_start_injected_musubi_publication_private_service_v1(
-                Some(Box::new(factory)),
-                context,
-                shutdown.clone(),
-            )
-            .expect("qualified factory builds");
+        let (availability, child) = build_and_start_injected_musubi_publication_private_service_v1(
+            Some(Box::new(factory)),
+            context,
+            shutdown.clone(),
+        )
+        .expect("qualified factory builds");
         assert_eq!(
             availability,
             MusubiPublicationPrivateServiceAvailabilityV1::Supervised

@@ -16,6 +16,11 @@ retired. Nodes must refuse launch when legacy Musubi registry records remain;
 operators reset disposable pre-release state explicitly. No compatibility
 decoder or automatic cache deletion is provided.
 
+The replication-order lifecycle tombstone is part of that hard reset.
+First-release `Retired` records retain the exact historical completed-provider
+set; a snapshot containing the earlier key-only retired variant belongs to the
+disposed pre-release domain and must be reset, not decoded or migrated.
+
 ## Identity and namespace binding
 
 A canonical public namespace is registered once as a
@@ -958,11 +963,13 @@ public deployment configuration, and rejects a multisig broker when its
 highest-weight subset within the 64-approval receipt bound cannot meet the
 controller threshold.
 
-Stock `irohad` opens no listener for these routes. A deployment-owned runner
-must assemble the service core, crash-safe journal, concrete HSM/KMS signing
-provider, SoraFS
-backends, and qualified private HTTPS/TLS ingress, then hand that runner to the
-dedicated supervisor adapter. TLS material and backend credentials never enter
+Stock `irohad` opens no listener for these routes. An injecting launcher supplies
+a one-shot deployment factory. After trusted startup replay and SoraFS node
+construction, `irohad` passes that factory the exact chain/genesis identity and
+live finalized-state, transaction-queue, and SoraFS handles. The factory must
+assemble the service core, crash-safe journal, concrete HSM/KMS signing provider,
+SoraFS backends, and qualified private HTTPS/TLS ingress; its runner then joins
+the daemon supervisor. TLS material and backend credentials never enter
 argv, project files, publication journals, Torii, or the daemon-private runtime
 provider broker. Hostname binding to deployment-signed provider adverts and
 the concrete HSM/storage adapters remain deployment qualification gates.
@@ -989,29 +996,130 @@ the exact registered chunker from the commitment, enforces file/chunk/heap and
 decode bounds, and invokes the reusable provider-grade Musubi verifier in
 `sorafs_car::musubi::MusubiBundleVerifierV1`. That verifier validates the
 canonical CAR and plan plus every nested bundle commitment before the service
-calls the admitted seed backend with the verified `CarBuildPlan` and CAR.
+calls the admitted seed backend with the verified `CarBuildPlan` and CAR. Its
+provider-oriented fresh-reader entry point performs three bounded passes: it
+reconstructs the canonical CAR into a sink, verifies the chunk plan and PoR,
+then parses and binds the semantic bundle. Every pass requires exact EOF and is
+independently tied to the same commitment, so truncation, trailing bytes, and
+between-pass substitution fail closed without materializing the CAR. This path
+is for an authenticated extraction or an admitted chunk store; a raw provider
+CAR must still cross the complete canonical-CAR verifier because payload-only
+readers cannot observe noncanonical container headers, indexes, or trailing CAR
+bytes. Both the generic 512 MiB chunk-store admission ceiling and the largest
+normalized-lock decode allocation exceed the complete 64 MiB provider memory
+gate and remain separately documented qualification items.
+The embedded SoraFS node exposes the matching digest-selected read boundary as
+a callback-scoped lifecycle lease. It reveals no storage path, blocks eviction
+for the callback, admits and accounts every verified chunk through the local
+fetch scheduler, caches only the current verified chunk, and permits exactly
+the three byte-zero readers needed by this verifier. The higher-ranked callback
+lifetime prevents either the lease or a reader from escaping. Digest selection
+uses the canonical manifest-map key rather than a manifest scan, acquisition
+errors are path-free, and a reader returns at every chunk boundary so a later
+scheduler or integrity failure cannot discard already-reported bytes. Eviction
+installs a transient exclusive retirement intent that rejects new leases, then
+drops global storage state before waiting for existing lifecycle readers. A
+failed verified chunk is conservatively charged at its admitted length so
+corrupt-read retries cannot refund the byte-rate budget. The callback must use
+only the lease and its readers and must not re-enter other node-storage methods.
+This is a local verification primitive only; it neither issues a provider
+attestation nor turns an ordinary storage completion into one. The
+pre-completion projection prerequisite is implemented:
+`IssueReplicationOrder` can atomically bind an already-registered `ArchiveId`
+and its complete immutable `MusubiArchiveCommitmentV1` before provider
+completion. The consensus lifecycle then advances from pre-location to active
+and finally to a permanent retired tombstone. Snapshot loading revalidates the
+canonical order, pin, archive, complete commitment, bidirectional purpose
+marker, and, for active or retired records, the exact completed-provider set.
+Generic SoraFS orders carry neither the marker nor a Musubi binding.
+
+The durable and runtime-only bindings must not be conflated. The
+provider-indexed archive record binds the archive commitment to chain/genesis
+identity, an exact finalized anchor, and current completion state. The outbox
+authorization separately persists a bounded
+`FinalizedProviderIngestMusubiContextV1` containing chain, genesis, and
+`ArchiveId`; that context participates in the job ID and immutable binding, so
+a generic job cannot be upgraded with an informational Musubi value and a
+Musubi job cannot be downgraded by omitting one. The V5 checkpoint is the sole
+receipt-bearing layout and rejects every other discriminator, including the
+retired V4 layout whose public receipt codec could be used to fabricate
+field-shaped verifier evidence.
+
+The runtime's opaque pre-completion claim binds the configured chain and
+genesis, local provider, finalized archive cursor, replication order,
+`ArchiveId`, and complete commitment. Its factory authenticates the configured
+finalized-ledger implementation boundary, not arbitrary bytes. Production
+wiring gives that capability only to the qualified archive-backed reader. The
+private broker transports only a checked informational projection of the claim
+under the source-fetch operation. Authorization matching is monotonic from the
+retained admission cursor: a later finalized height may refresh the claim or
+receipt, an equal height must reproduce the exact block hash, and a lower height
+or equal-height fork is rejected.
+
+Both existing and newly ingested Musubi payloads are then selected by canonical
+manifest digest, held under the callback-scoped lifecycle lease, reconstructed
+with the exact registered CAR plan, and passed through all three fresh-reader
+verifier passes. The resulting bounded receipt retains chain/genesis/provider,
+the admission cursor, order/manifest/archive/commitment, and the parsed semantic
+release and verification-lock digests. The V5 provider-ingest checkpoint carries
+that receipt through local and finalized states. The public receipt has no
+Norito encode or decode implementation; only a crate-private DTO is persisted
+inside the sealed V5 checkpoint, then revalidated against the retained
+authorization before projection. A restart cannot prepare a
+completion for a Musubi row whose local state lacks the exact receipt. This is
+still pre-completion evidence: it contains no finalized provider-completion row
+and cannot authorize a provider attestation.
+
+Source acquisition also releases every claimed job before reporting a request
+construction failure. A valid local-only, one-replica order with no remote
+sources moves to `RetryScheduled(SourceUnavailable)` without attempting a
+fetch, while any other malformed request shape moves to
+`RetryScheduled(SourceRejected)` before the protocol error is returned. Neither
+path leaves a durable `SourceClaimed` row waiting only for lease expiry.
+
+After the local provider's completion is finalized, the finalized reader can
+seal a distinct opaque `ProviderIngestFinalizedMusubiCompletionClaimV1` only
+from that exact completed order row. It has no public constructor or wire
+codec. The sole public request-minting boundary is
+`AdmittedPayloadReadLeaseV1::verify_completed_musubi_bundle`: it accepts the
+retained authorization, opaque completed claim, and exact reconstruction plan,
+checks them against the lifecycle-leased admitted manifest and payload digest,
+and opens all three verifier readers itself. The raw verifier-evidence
+constructor is crate-private, so evidence retained before completion cannot be
+combined with a later claim by daemon or downstream code. The resulting
+`ProviderIngestMusubiAttestationApprovalRequestV1` binds the unsigned
+attestation payload, completed-claim digest, covering finalized cursor, and
+governed signer policy. It remains nonserializable and externally inert:
+constructing it performs no signing, registration, or runtime handoff.
 
 The remaining deployment dependencies are:
 
-1. have every admitted provider completion adapter invoke the shared
-   provider-grade verifier before issuing its completion-authority attestation;
-   seed ingress already uses that verifier, but storage completion alone never
-   authorizes an attestation;
-2. implement a durable idempotent coordinator which independently retrieves
+1. consume the lifecycle-lease-minted inert approval request from the finalized
+   completion coordinator and request only approvals from an injected HSM/KMS
+   or threshold provider. Storage completion, the
+   pre-completion claim or receipt, and publisher-supplied registration evidence
+   alone never authorize an attestation;
+2. persist approval, retry, and finality state in a separate bounded
+   provider-attestation journal, then durably hand the approved attestation to the
+   archive-manager/publication runtime; providers must not mutate the
+   attestation registry directly;
+3. implement the authenticated provider-attestation inventory/coordinator
+   handoff. The coordinator independently retrieves
    and verifies the exact finalized archive-registration transaction, submits
    or reconciles canonical pin and replication operations, waits for each
    distinct provider completion, and returns the complete bounded provider
    attestations plus authoritative current archive/location state; the publisher
    durably registers those proofs one transaction at a time before the compact
    location CAS;
-3. implement authenticated provider readback with redirect denial, DNS/IP
+4. implement authenticated provider readback with redirect denial, DNS/IP
    pinning, bounded streaming, and invocation of the same shared verifier; and
-4. resolve public policy and identity bindings through `iroha_config`, resolve
+5. resolve public policy and identity bindings through `iroha_config`, resolve
    credentials and signing keys only from deployment runtime providers, then
-   construct a private TLS runner after daemon-owned finalized-state and SoraFS
-   handles are available.
+   use the late-bound deployment factory to construct a private TLS runner from
+   the daemon-owned finalized-state, queue, and SoraFS handles.
 
-`run_with_musubi_publication` is only the supervisor injection boundary; it is
+`run_with_musubi_publication` is only the late-bound factory and supervisor
+injection boundary; it is
 not a production backend or finality adapter. Until the remaining deployment
 dependencies are present and qualified, the stock launch must remain
 `Unavailable`. An

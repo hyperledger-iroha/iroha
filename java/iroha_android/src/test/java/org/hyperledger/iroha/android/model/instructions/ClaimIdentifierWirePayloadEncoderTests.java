@@ -1,9 +1,5 @@
 package org.hyperledger.iroha.android.model.instructions;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
@@ -15,6 +11,7 @@ import org.hyperledger.iroha.android.client.IdentifierResolutionReceipt;
 import org.hyperledger.iroha.android.client.RamLfeOutputOpening;
 import org.hyperledger.iroha.android.client.RamLfeOutputOpeningPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.test.FixtureGeneratorRunner;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -146,7 +143,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
 
   private static void claimIdentifierMatchesRustCanonicalFixture() throws Exception {
     final String rustFramedHex =
-        runFixtureGenerator("claim-identifier")[0].toUpperCase(Locale.ROOT);
+        FixtureGeneratorRunner.run("claim-identifier").get(0).toUpperCase(Locale.ROOT);
     final String liveAccountId = canonicalI105AccountId(PARITY_ACCOUNT_MULTIHASH);
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
@@ -328,63 +325,6 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
     System.arraycopy(headerBytes, 0, out, 0, headerBytes.length);
     System.arraycopy(payload, 0, out, headerBytes.length, payload.length);
     return out;
-  }
-
-  private static String[] runFixtureGenerator(final String subcommand) throws Exception {
-    final File repoRoot = locateRepoRoot();
-    final File targetDir = new File(repoRoot, "target/kotlin-fixture-gen-test");
-    final File binary = new File(targetDir, "debug/kotlin-fixture-gen");
-    if (!binary.exists()) {
-      final ProcessBuilder build =
-          new ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
-              .directory(repoRoot)
-              .redirectErrorStream(true);
-      build.environment().put("CARGO_TARGET_DIR", targetDir.getAbsolutePath());
-      final Process process = build.start();
-      final String output = readStream(process.getInputStream());
-      final int exit = process.waitFor();
-      if (exit != 0) {
-        throw new IllegalStateException("cargo build failed (" + exit + "): " + output);
-      }
-    }
-
-    final Process process =
-        new ProcessBuilder(binary.getAbsolutePath(), subcommand)
-            .directory(repoRoot)
-            .redirectErrorStream(false)
-            .start();
-    final String stdout = readStream(process.getInputStream()).trim();
-    final String stderr = readStream(process.getErrorStream()).trim();
-    final int exit = process.waitFor();
-    if (exit != 0) {
-      throw new IllegalStateException(
-          "kotlin-fixture-gen " + subcommand + " failed (" + exit + "): " + stderr);
-    }
-    if (stdout.isEmpty()) {
-      throw new IllegalStateException("kotlin-fixture-gen " + subcommand + " produced no output");
-    }
-    return stdout.split("\\R");
-  }
-
-  private static String readStream(final InputStream stream) throws IOException {
-    final byte[] buffer = new byte[8192];
-    final StringBuilder out = new StringBuilder();
-    int read;
-    while ((read = stream.read(buffer)) != -1) {
-      out.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
-    }
-    return out.toString();
-  }
-
-  private static File locateRepoRoot() throws IOException {
-    File dir = new File("").getAbsoluteFile();
-    while (!new File(dir, "Cargo.toml").exists()) {
-      dir = dir.getParentFile();
-      if (dir == null) {
-        throw new IOException("Could not locate Iroha repo root from current directory");
-      }
-    }
-    return dir;
   }
 
   private static String canonicalAccountId() {

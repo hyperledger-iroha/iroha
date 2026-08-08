@@ -1,4 +1,5 @@
 chain = "00000000-0000-0000-0000-000000000000"
+network_id = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 torii_url = "http://127.0.0.1:8080/"
 
 [basic_auth]

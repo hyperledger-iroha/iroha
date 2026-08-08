@@ -11738,7 +11738,7 @@ final class ToriiClientTests: XCTestCase {
         {
           "mandatory": false,
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 21,
+          "required_bridge_abi_version": 22,
           "max_hops": 8,
           "ready": true,
           "assets": [],
@@ -11762,7 +11762,7 @@ final class ToriiClientTests: XCTestCase {
         let status = try await makeClient().getOfflineCapability()
         XCTAssertFalse(status.mandatory)
         XCTAssertEqual(status.cashHandoffCapability, "cash_handoff_v1")
-        XCTAssertEqual(status.requiredBridgeAbiVersion, 21)
+        XCTAssertEqual(status.requiredBridgeAbiVersion, 22)
         XCTAssertEqual(status.maxHops, 8)
         XCTAssertTrue(status.ready)
         XCTAssertTrue(status.assets.isEmpty)
@@ -11777,14 +11777,14 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsNonUniversalClaims() async throws {
         let invalidPayloads = [
-            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":20,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":9,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":false,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}"#,
+            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}"#,
         ]
 
         for payload in invalidPayloads {
@@ -11809,7 +11809,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsDuplicateKeysAndInvalidUtf8() async throws {
         let payloads = [
-            Data(#"{"mandatory":false,"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#.utf8),
+            Data(#"{"mandatory":false,"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#.utf8),
             Data([0xff, 0xfe, 0xfd]),
         ]
         for payload in payloads {
@@ -12487,7 +12487,7 @@ final class ToriiClientTests: XCTestCase {
         {
           "mandatory": false,
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 21,
+          "required_bridge_abi_version": 22,
           "max_hops": 8,
           "ready": true,
           "assets": [],

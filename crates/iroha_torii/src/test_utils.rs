@@ -24,7 +24,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, Registrable,
+    ChainId, NetworkId, Registrable,
     account::AccountId,
     block::{
         BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
@@ -46,12 +46,21 @@ use iroha_data_model::{
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
+
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
     governance::CanEnactGovernance,
     smart_contract::{CanInvokeContractEntrypoint, CanRegisterSmartContractCode},
 };
 use nonzero_ext::nonzero;
+
+/// Exact genesis-lineage identity used by [`mk_minimal_root_cfg`].
+#[must_use]
+pub fn signed_query_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"Torii test genesis trust anchor",
+    )))
+}
 
 fn checked_random_keypair(context: &str) -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
@@ -104,7 +113,7 @@ pub fn apply_queued_in_one_block(
         return 0;
     }
 
-    let mut accepted: Vec<_> = guards
+    let accepted: Vec<_> = guards
         .iter()
         .map(|guard| {
             (
@@ -127,11 +136,9 @@ pub fn apply_queued_in_one_block(
         state.install_lane_manifests(&manifests);
     }
 
-    // `BlockBuilder::new` canonicalizes transactions by entrypoint hash. Mirror that order before
-    // constructing the explicit fixture context so every context remains aligned with its block
-    // entrypoint. Supplying a non-empty context also bypasses Core's automatic single-height lane
-    // ownership fixture, which is unsuitable for this helper's multi-block synthetic chains.
-    accepted.sort_unstable_by_key(|(tx, _, _)| tx.hash_as_entrypoint());
+    // Supplying a non-empty context bypasses Core's automatic single-height lane ownership
+    // fixture, which is unsuitable for this helper's multi-block synthetic chains. Preserve the
+    // queue order so every context remains aligned with the corresponding block entrypoint.
     let execution_context = BlockExecutionContextBundle::new(
         accepted
             .iter()
@@ -1312,6 +1319,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
@@ -1467,6 +1476,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,

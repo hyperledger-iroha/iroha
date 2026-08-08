@@ -2115,70 +2115,12 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     );
     let da_hash = HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]));
     header.set_da_commitments_hash(Some(da_hash));
-    let mut envelope = LaneRelayEnvelope::new(header, None, Some(da_hash), settlement, 64)
+    let envelope = LaneRelayEnvelope::new(header, Some(da_hash), settlement, 64)
         .map_err(norito_to_napi)?
         .with_lane_block_descriptor_hash(Some(Hash::new(
             b"iroha-js-lane-relay-fixture-descriptor-v1",
         )))
         .with_manifest_root(Some([0x42; 32]));
-    let validator_key = KeyPair::try_from_seed(
-        b"iroha-js-lane-relay-fixture-validator-v1".to_vec(),
-        Algorithm::BlsNormal,
-    )
-    .map_err(norito_to_napi)?;
-    let validator_set = vec![PeerId::from(validator_key.public_key().clone())];
-    let mode_tag = envelope
-        .lane_finality_qc_mode_tag(PERMISSIONED_TAG)
-        .map_err(norito_to_napi)?;
-    let parent_state_root = Hash::new([0xBA; 4]);
-    let post_state_root = Hash::new([0xBB; 4]);
-    let view = envelope.block_header.view_change_index();
-    let vote = QcVote {
-        phase: CertPhase::Commit,
-        block_hash: envelope.block_header.hash(),
-        parent_state_root,
-        post_state_root,
-        height: envelope.block_header.height().get(),
-        view,
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    let vote_preimage = iroha_core::sumeragi::consensus::vote_preimage(
-        &ChainId::from("iroha-js-lane-relay-fixture-v1"),
-        &mode_tag,
-        &vote,
-    );
-    let signature =
-        Signature::try_new(validator_key.private_key(), &vote_preimage).map_err(norito_to_napi)?;
-    let signature_bytes = signature.payload().to_vec();
-    let aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&[signature_bytes.as_slice()])
-            .map_err(norito_to_napi)?;
-    let qc = Qc {
-        phase: CertPhase::Commit,
-        subject_block_hash: envelope.block_header.hash(),
-        parent_state_root,
-        post_state_root,
-        height: envelope.block_header.height().get(),
-        view,
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag,
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: 1,
-        validator_set,
-        aggregate: QcAggregate {
-            signers_bitmap: vec![0x01],
-            bls_aggregate_signature: aggregate_signature,
-        },
-    };
-    envelope.qc = Some(qc);
     let valid =
         Buffer::from(norito::to_bytes(&envelope).map_err(|err| norito_to_napi(format!("{err}")))?);
 

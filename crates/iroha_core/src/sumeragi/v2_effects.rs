@@ -79,18 +79,18 @@ use std::{
 
 use super::v2_core::{
     CanonicalIdentityProjection, CheckedProductionTransition, EFFECTIVE_LOCK_TRACE_OWNER,
-    EFFECTIVE_LOCK_TRACE_RETIRE, EffectiveLockTraceProjection, EquivocationKind, EventTag,
-    ExactBodyOwnerProjection, ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT,
-    IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT,
-    IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
-    IDENTITY_KIND_CERTIFIED_BODY_REQUEST, IDENTITY_KIND_CONSENSUS_MESSAGE,
-    IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
-    IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_PAYLOAD_MANIFEST,
-    IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
-    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP, ProductionDecisionIdentityProjection,
-    ProductionDecisionRecoveryTraceProjection, ProductionDurableBodyIdentityProjection,
-    ProductionHistoricalBodyPipelineTraceProjection, ProductionQuorumCertificateIdentityProjection,
-    TagProjection, check_production_body_capacity_retirement_effective_lock_transition,
+    EFFECTIVE_LOCK_TRACE_RETIRE, EffectiveLockTraceProjection, EventTag, ExactBodyOwnerProjection,
+    ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+    IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER,
+    IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+    IDENTITY_KIND_CONSENSUS_MESSAGE, IDENTITY_KIND_DURABLE_BODY_FRAME,
+    IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
+    IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
+    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP,
+    ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
+    ProductionDurableBodyIdentityProjection, ProductionHistoricalBodyPipelineTraceProjection,
+    ProductionQuorumCertificateIdentityProjection, TagProjection,
+    check_production_body_capacity_retirement_effective_lock_transition,
     check_production_body_ownership_effective_lock_transition,
     check_production_decision_recovery_transition, check_production_effect_to_candidate_transition,
     check_production_historical_body_pipeline_transition, exact_body_stage_is_owned,
@@ -1490,12 +1490,10 @@ pub(crate) trait V2EffectServices {
         tag: EventTag,
         certificate: wire::TimeoutCertificate,
     ) -> Result<(), Self::Error>;
-    /// Persist or publish equivocation evidence.
+    /// Validate and persist complete authenticated equivocation evidence.
     fn report_equivocation(
         &mut self,
-        offender: PeerId,
-        round: wire::ConsensusRound,
-        kind: EquivocationKind,
+        evidence: wire::SumeragiV2Equivocation,
     ) -> Result<(), Self::Error>;
     /// Persist or publish certified-invalid-body evidence.
     fn report_invalid_certified_body(
@@ -2417,6 +2415,8 @@ enum RestartEffectSource {
     DurableBody,
     /// Durable Decision plus the exact fsynced validation marker.
     DurableDecision,
+    /// Complete authenticated artifacts persisted under a canonical WSV key.
+    DurableAccountabilityEvidence,
     /// Recovered view owns fresh process-local cleanup; old services no longer exist.
     RecoveredView,
     /// Non-progress diagnostic; losing it in a process crash cannot orphan work.
@@ -4802,10 +4802,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             AdapterEffect::ValidateBody { .. } => RestartEffectSource::DurableBody,
             AdapterEffect::Apply { .. } => RestartEffectSource::DurableDecision,
             AdapterEffect::EnterView { .. } => RestartEffectSource::RecoveredView,
-            AdapterEffect::ReportEquivocation { .. }
-            | AdapterEffect::ReportInvalidCertifiedBody { .. } => {
-                RestartEffectSource::DiagnosticOnly
+            AdapterEffect::ReportEquivocation { .. } => {
+                RestartEffectSource::DurableAccountabilityEvidence
             }
+            AdapterEffect::ReportInvalidCertifiedBody { .. } => RestartEffectSource::DiagnosticOnly,
         }
     }
 
@@ -6759,12 +6759,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 certificate,
                 protected_body,
             } => self.install_view(tag, certificate, protected_body, services),
-            AdapterEffect::ReportEquivocation {
-                offender,
-                round,
-                kind,
-            } => services
-                .report_equivocation(offender, round, kind)
+            AdapterEffect::ReportEquivocation { evidence } => services
+                .report_equivocation(*evidence)
                 .map_err(service_error),
             AdapterEffect::ReportInvalidCertifiedBody {
                 subject,
@@ -11363,7 +11359,7 @@ mod tests {
         )>,
         apply_tasks: Vec<ApplyTask>,
         entered_views: Vec<EventTag>,
-        equivocations: Vec<(PeerId, wire::ConsensusRound, EquivocationKind)>,
+        equivocations: Vec<wire::SumeragiV2Equivocation>,
         invalid_bodies: Vec<wire::BlockSubject>,
         rejected_validations: Vec<String>,
         statuses: Vec<EffectExecutorStatus>,
@@ -11670,13 +11666,11 @@ mod tests {
 
         fn report_equivocation(
             &mut self,
-            offender: PeerId,
-            round: wire::ConsensusRound,
-            kind: EquivocationKind,
+            evidence: wire::SumeragiV2Equivocation,
         ) -> Result<(), Self::Error> {
             self.check("equivocation")?;
             self.effect_service_order.push("equivocation");
-            self.equivocations.push((offender, round, kind));
+            self.equivocations.push(evidence);
             Ok(())
         }
 
@@ -11756,10 +11750,10 @@ mod tests {
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1_048_576,
+                    chunk_size_bytes: wire::MAX_DA_CHUNK_SIZE_BYTES,
                     data_shards: 1,
                     parity_shards: 1,
-                    max_payload_size_bytes: 1_048_576,
+                    max_payload_size_bytes: u64::from(wire::MAX_DA_CHUNK_SIZE_BYTES),
                     max_chunk_count: 2,
                 },
                 leader_seed: [0x33; 32],
@@ -11900,10 +11894,10 @@ mod tests {
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1_048_576,
+                    chunk_size_bytes: wire::MAX_DA_CHUNK_SIZE_BYTES,
                     data_shards: 1,
                     parity_shards: 1,
-                    max_payload_size_bytes: 1_048_576,
+                    max_payload_size_bytes: u64::from(wire::MAX_DA_CHUNK_SIZE_BYTES),
                     max_chunk_count: 2,
                 },
                 leader_seed: [0x62; 32],
@@ -12337,6 +12331,18 @@ mod tests {
             execution_commitment: fixture_execution_commitment(),
             signer: 0,
             signature: Vec::new(),
+        }
+    }
+
+    fn equivocation(fixture: &Fixture, signer: wire::ValidatorIndex) -> AdapterEffect {
+        let mut first = vote(fixture);
+        first.signer = signer;
+        first.signature = vec![0xE1];
+        let mut second = first.clone();
+        second.subject.payload_hash = Hash::new(b"conflicting effects fixture subject");
+        second.signature = vec![0xE2];
+        AdapterEffect::ReportEquivocation {
+            evidence: Box::new(wire::SumeragiV2Equivocation::PhaseVote { first, second }),
         }
     }
 
@@ -14931,14 +14937,7 @@ mod tests {
                 },
                 None,
             ),
-            (
-                AdapterEffect::ReportEquivocation {
-                    offender: fixture.context.roster[0].validator.clone(),
-                    round: fixture.manifest.round,
-                    kind: EquivocationKind::Vote,
-                },
-                None,
-            ),
+            (equivocation(&fixture, 0), None),
             (
                 AdapterEffect::ReportInvalidCertifiedBody {
                     subject: fixture.manifest.subject,
@@ -14972,11 +14971,7 @@ mod tests {
                 vec![
                     AdapterEffect::Broadcast(message.clone()),
                     timeout_sign(&fixture, 1),
-                    AdapterEffect::ReportEquivocation {
-                        offender: fixture.context.roster[1].validator.clone(),
-                        round: fixture.manifest.round,
-                        kind: EquivocationKind::Vote,
-                    },
+                    equivocation(&fixture, 1),
                 ],
                 &mut services,
             )
@@ -15056,11 +15051,7 @@ mod tests {
             .consume_effects(
                 vec![
                     timeout_sign(&fixture, 1),
-                    AdapterEffect::ReportEquivocation {
-                        offender: fixture.context.roster[1].validator.clone(),
-                        round: fixture.manifest.round,
-                        kind: EquivocationKind::Vote,
-                    },
+                    equivocation(&fixture, 1),
                     timeout_sign(&fixture, 2),
                 ],
                 &mut services,
@@ -15178,13 +15169,9 @@ mod tests {
                 RestartEffectSource::RecoveredView,
             ),
             (
-                AdapterEffect::ReportEquivocation {
-                    offender: fixture.context.roster[1].validator.clone(),
-                    round: fixture.manifest.round,
-                    kind: EquivocationKind::Vote,
-                },
+                equivocation(&fixture, 1),
                 None,
-                RestartEffectSource::DiagnosticOnly,
+                RestartEffectSource::DurableAccountabilityEvidence,
             ),
             (
                 AdapterEffect::ReportInvalidCertifiedBody {
@@ -18850,11 +18837,7 @@ mod tests {
                         certificate: timeout_certificate(&fixture),
                         protected_body: None,
                     },
-                    AdapterEffect::ReportEquivocation {
-                        offender: fixture.context.roster[1].validator.clone(),
-                        round: fixture.manifest.round,
-                        kind: EquivocationKind::Vote,
-                    },
+                    equivocation(&fixture, 1),
                     AdapterEffect::ReportInvalidCertifiedBody {
                         subject: fixture.manifest.subject,
                         certificate: fixture.qc(wire::GlobalPhase::Prepare),
@@ -21717,14 +21700,7 @@ mod tests {
         let mut services = fixture.services();
         assert_eq!(
             executor
-                .consume_effects(
-                    vec![AdapterEffect::ReportEquivocation {
-                        offender: fixture.context.roster[1].validator.clone(),
-                        round: fixture.manifest.round,
-                        kind: EquivocationKind::Vote,
-                    }],
-                    &mut services,
-                )
+                .consume_effects(vec![equivocation(&fixture, 1)], &mut services,)
                 .expect("dispatch batch and consume its late terminal"),
             1
         );
@@ -23312,10 +23288,10 @@ mod tests {
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1_048_576,
+                chunk_size_bytes: wire::MAX_DA_CHUNK_SIZE_BYTES,
                 data_shards: 1,
                 parity_shards: 1,
-                max_payload_size_bytes: 1_048_576,
+                max_payload_size_bytes: u64::from(wire::MAX_DA_CHUNK_SIZE_BYTES),
                 max_chunk_count: 2,
             },
             leader_seed: [0x44; 32],

@@ -2808,6 +2808,7 @@ impl ChaosState {
                 order_payload: payload,
                 issued_epoch,
                 deadline_epoch,
+                musubi_archive: None,
             })],
             signer: self.treasury.clone(),
             expect_success: true,

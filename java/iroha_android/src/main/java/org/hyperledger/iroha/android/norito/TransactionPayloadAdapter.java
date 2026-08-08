@@ -41,8 +41,8 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /**
  * Norito adapter that mirrors the {@link TransactionPayload} structure used by the Android library.
  * IVM bytecode payloads are encoded directly. Instruction payloads must be provided as wire-framed
- * Norito blobs (wire id + Norito header). Metadata values are encoded as raw JSON literals to match
- * the Rust `Json` wrapper.
+ * Norito blobs (wire id + Norito header). Metadata values use the one canonical JSON spelling
+ * required by the Rust {@code Json} wrapper.
  */
 final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload> {
 
@@ -1738,14 +1738,14 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public void encode(final NoritoEncoder encoder, final MetadataEntry entry) {
       encodeSizedField(encoder, STRING_ADAPTER, entry.key());
-      encodeSizedField(encoder, JSON_VALUE_ADAPTER, entry.value().rawJson());
+      encodeSizedField(encoder, JSON_VALUE_ADAPTER, entry.value().canonicalJson());
     }
 
     @Override
     public MetadataEntry decode(final NoritoDecoder decoder) {
       final String key = decodeSizedField(decoder, STRING_ADAPTER);
       final String value = decodeSizedField(decoder, JSON_VALUE_ADAPTER);
-      return new MetadataEntry(key, JsonValue.raw(value));
+      return new MetadataEntry(key, JsonValue.fromCanonicalWire(value));
     }
   }
 

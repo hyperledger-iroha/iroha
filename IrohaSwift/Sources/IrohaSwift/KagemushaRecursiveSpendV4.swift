@@ -66,7 +66,7 @@ public struct KagemushaRecursiveSpendBundleV4: Equatable, Sendable {
         self.noritoArchive = Data(noritoArchive)
     }
 
-    /// Ask the ABI-21 bridge to validate the opaque proof carrier and return
+    /// Ask the ABI-22 bridge to validate the opaque proof carrier and return
     /// only its wallet-safe public projection.
     public func projectedSummary() throws -> KagemushaRecursiveSpendBundleSummaryV4 {
         guard let archive = try NoritoNativeBridge.shared
@@ -475,7 +475,7 @@ public struct KagemushaOutputMembershipLeafPathsV4: Equatable, Sendable {
     }
 }
 
-/// Exact output-update witness decoded only by the ABI-21 bridge.
+/// Exact output-update witness decoded only by the ABI-22 bridge.
 public struct KagemushaOutputMembershipPathsV4: Equatable, Sendable {
     public let initialRoot: Data
     public let finalRoot: Data
@@ -889,7 +889,7 @@ public struct KagemushaRecursiveSpendPeerSplitChangePreparationV4: Equatable, Se
     }
 }
 
-/// Secret-bearing ABI-21 append input. It encodes the flat V4 bridge carrier,
+/// Secret-bearing ABI-22 append input. It encodes the flat V4 bridge carrier,
 /// not a version wrapper around the frozen request.
 public struct KagemushaRecursiveSpendAppendLocalRequestV4: Equatable, Sendable {
     public let previousInputs: [KagemushaRecursiveSpendAppendInputV4]

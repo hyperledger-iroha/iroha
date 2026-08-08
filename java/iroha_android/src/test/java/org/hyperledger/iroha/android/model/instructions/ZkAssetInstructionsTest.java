@@ -24,7 +24,7 @@ public final class ZkAssetInstructionsTest {
     confidentialEncryptedPayloadMatchesRustWireFixture();
     proofAttachmentValidatesBackendAndJsonShape();
     retiredGenericConfidentialSurfacesAreAbsent();
-    registerZkAssetInstructionValidatesModeAndVerifierIds();
+    registerZkAssetInstructionBuildsVerifierControls();
     nativeSignerZkMethodsRejectBadInputsBeforeNativeDispatch();
     nativeSignerFeePaymentRejectsInvalidBoundsBeforeNativeDispatch();
     nativeSignedTransactionCopiesInputsAndOutputs();
@@ -173,23 +173,32 @@ public final class ZkAssetInstructionsTest {
     }
   }
 
-  private static void registerZkAssetInstructionValidatesModeAndVerifierIds() {
+  private static void registerZkAssetInstructionBuildsVerifierControls() {
     final RegisterZkAssetInstruction instruction =
         RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
-            .setMode(ZkAssetMode.HYBRID)
-            .setAllowShield(true)
-            .setAllowUnshield(false)
+            .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
+            .setShieldVerifyingKey("halo2/ipa:shield-v3")
             .build();
     assert instruction.kind() == InstructionKind.REGISTER;
-    assert "Hybrid".equals(instruction.toArguments().get("mode"));
-    assert "false".equals(instruction.toArguments().get("allow_unshield"));
-    assert ZkAssetMode.HYBRID.bridgeCode() == 0;
-    expectThrows(() -> ZkAssetMode.fromWireName("ZkNative"));
+    assert "halo2/ipa:unshield-v3".equals(instruction.toArguments().get("vk_unshield"));
+    assert "halo2/ipa:shield-v3".equals(instruction.toArguments().get("vk_shield"));
+    expectThrows(
+        () ->
+            RegisterZkAssetInstruction.builder()
+                .setAsset("rose#wonderland")
+                .setShieldVerifyingKey("halo2/ipa:shield-v3")
+                .build());
 
     final LinkedHashMap<String, String> retiredArguments =
         new LinkedHashMap<>(instruction.toArguments());
+    retiredArguments.put("mode", "Hybrid");
+    expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
+    retiredArguments.remove("mode");
     retiredArguments.put("vk_transfer", "halo2/ipa:transfer-v2");
+    expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
+    retiredArguments.remove("vk_transfer");
+    retiredArguments.put("allow_shield", "true");
     expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
   }
 
@@ -248,11 +257,11 @@ public final class ZkAssetInstructionsTest {
 
   private static void nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable()
       throws Exception {
-    assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 21;
-    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 3;
+    assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 22;
+    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 4;
     if (!NativeSignerBridge.isNativeAvailable()) {
       throw new AssertionError(
-          "connect_norito_bridge ABI 21 native-signer contract revision 3 is required");
+          "connect_norito_bridge ABI 22 native-signer contract revision 4 is required");
     }
 
     final byte[] seed = new byte[32];
@@ -275,9 +284,6 @@ public final class ZkAssetInstructionsTest {
     final RegisterZkAssetInstruction register =
         RegisterZkAssetInstruction.builder()
             .setAsset(gasAssetId)
-            .setMode(ZkAssetMode.HYBRID)
-            .setAllowShield(true)
-            .setAllowUnshield(true)
             .build();
 
     assertNativeFeePayment(

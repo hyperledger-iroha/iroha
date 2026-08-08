@@ -140,10 +140,11 @@ use proof_attachment_json::{
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 // Increment whenever any NativeSignerBridge JNI method descriptor changes.
-// The bridge-wide ABI number alone cannot distinguish two ABI-21 artifacts
+// The bridge-wide ABI number alone cannot distinguish two ABI-22 artifacts
 // whose JVM calling conventions differ.
-// Revision 3 retires the generic Unshield signing method entirely.
-const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 3;
+// Revision 4 hard-cuts RegisterZkAsset signing to the asset plus optional
+// unshield and shield verifier bindings.
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 4;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
@@ -271,7 +272,7 @@ const ERR_KAGEMUSHA_BUSY: c_int = -318;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
-const ERR_ZK_ASSET_MODE: c_int = -404;
+const ERR_ZK_ASSET_POLICY: c_int = -404;
 const ERR_CONNECT_ENCODE: c_int = -405;
 const ERR_IDENTIFIER_RECEIPT: c_int = -406;
 const ERR_CONNECT_KEYPAIR: c_int = -407;
@@ -318,7 +319,7 @@ enum BridgeError {
     MultisigSpec,
     IdentifierReceipt,
     VerifyingKeyId,
-    ZkAssetMode,
+    ZkAssetPolicy,
     SecpParse,
     SecpSign,
     SecpVerify,
@@ -373,7 +374,7 @@ impl BridgeError {
             BridgeError::MultisigSpec => ERR_MULTISIG_SPEC,
             BridgeError::IdentifierReceipt => ERR_IDENTIFIER_RECEIPT,
             BridgeError::VerifyingKeyId => ERR_VERIFYING_KEY_ID,
-            BridgeError::ZkAssetMode => ERR_ZK_ASSET_MODE,
+            BridgeError::ZkAssetPolicy => ERR_ZK_ASSET_POLICY,
             BridgeError::SecpParse => ERR_SECP_PARSE,
             BridgeError::SecpSign => ERR_SECP_SIGN,
             BridgeError::SecpVerify => ERR_SECP_VERIFY,
@@ -1293,13 +1294,6 @@ fn parse_nonce(nonce: u32, present: bool) -> BridgeResult<Option<NonZeroU32>> {
     NonZeroU32::new(nonce)
         .map(Some)
         .ok_or(BridgeError::InvalidNonce)
-}
-
-fn parse_zk_asset_mode(code: u8) -> BridgeResult<zk::ZkAssetMode> {
-    match code {
-        0 => Ok(zk::ZkAssetMode::Hybrid),
-        _ => Err(BridgeError::ZkAssetMode),
-    }
 }
 
 fn parse_voting_mode(code: u8) -> BridgeResult<VotingMode> {
@@ -22832,7 +22826,7 @@ mod kagemusha_bridge_tests {
 
     #[test]
     fn bridge_abi_version_advertises_sorafs_order_id_derivation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 21);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 22);
     }
 
     #[test]
@@ -24996,9 +24990,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
     ttl_present: c_uchar,
     asset_definition_ptr: *const c_char,
     asset_definition_len: c_ulong,
-    mode_code: u8,
-    allow_shield: c_uchar,
-    allow_unshield: c_uchar,
     vk_unshield_ptr: *const c_char,
     vk_unshield_len: c_ulong,
     vk_unshield_present: c_uchar,
@@ -25030,26 +25021,19 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
         let authority = parse_account_id(authority_str)?;
         let asset_definition = parse_asset_definition(asset_definition_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let mode = parse_zk_asset_mode(mode_code)?;
         let vk_unshield = unsafe {
             parse_optional_verifying_key_id(vk_unshield_ptr, vk_unshield_len, vk_unshield_present)
         }?;
         let vk_shield = unsafe {
             parse_optional_verifying_key_id(vk_shield_ptr, vk_shield_len, vk_shield_present)
         }?;
-        let allow_shield = allow_shield != 0;
-        let allow_unshield = allow_unshield != 0;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key(key_slice)?;
 
-        let register = zk::RegisterZkAsset::new(
-            asset_definition,
-            mode,
-            allow_shield,
-            allow_unshield,
-            vk_unshield,
-            vk_shield,
-        );
+        let register = zk::RegisterZkAsset::new(asset_definition, vk_unshield, vk_shield);
+        register
+            .validate_verifier_roles()
+            .map_err(|_| BridgeError::ZkAssetPolicy)?;
 
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
@@ -25085,9 +25069,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
     ttl_present: c_uchar,
     asset_definition_ptr: *const c_char,
     asset_definition_len: c_ulong,
-    mode_code: u8,
-    allow_shield: c_uchar,
-    allow_unshield: c_uchar,
     vk_unshield_ptr: *const c_char,
     vk_unshield_len: c_ulong,
     vk_unshield_present: c_uchar,
@@ -25121,26 +25102,19 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
         let authority = parse_account_id(authority_str)?;
         let asset_definition = parse_asset_definition(asset_definition_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let mode = parse_zk_asset_mode(mode_code)?;
         let vk_unshield = unsafe {
             parse_optional_verifying_key_id(vk_unshield_ptr, vk_unshield_len, vk_unshield_present)
         }?;
         let vk_shield = unsafe {
             parse_optional_verifying_key_id(vk_shield_ptr, vk_shield_len, vk_shield_present)
         }?;
-        let allow_shield = allow_shield != 0;
-        let allow_unshield = allow_unshield != 0;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
 
-        let register = zk::RegisterZkAsset::new(
-            asset_definition,
-            mode,
-            allow_shield,
-            allow_unshield,
-            vk_unshield,
-            vk_shield,
-        );
+        let register = zk::RegisterZkAsset::new(asset_definition, vk_unshield, vk_shield);
+        register
+            .validate_verifier_roles()
+            .map_err(|_| BridgeError::ZkAssetPolicy)?;
 
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
@@ -28698,7 +28672,6 @@ mod accel_tests {
         }
 
         assert!(header.contains("connect_norito_encode_register_zk_asset_signed_transaction"));
-        assert!(header.contains("allow_unshield"));
         assert!(header.contains("vk_unshield"));
         assert!(source.contains("build_confidential_unshield_proof_v3_with_paths"));
     }
@@ -31839,11 +31812,6 @@ fn java_algorithm_from_code(algorithm_code: jni::sys::jint) -> Result<Algorithm,
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_zk_asset_mode_from_code(mode_code: jni::sys::jint) -> Result<zk::ZkAssetMode, String> {
-    let checked_code = u8::try_from(mode_code).map_err(|_| "invalid mode".to_owned())?;
-    parse_zk_asset_mode(checked_code).map_err(|_| "invalid mode".to_owned())
-}
-
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -32269,9 +32237,6 @@ fn java_native_encode_register_zk_asset_signed_transaction(
     ttl_ms: jni::sys::jlong,
     ttl_present: jni::sys::jboolean,
     asset: jni::objects::JByteArray<'_>,
-    mode_code: jni::sys::jint,
-    allow_shield: jni::sys::jboolean,
-    allow_unshield: jni::sys::jboolean,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
     vk_shield: jni::objects::JByteArray<'_>,
@@ -32295,7 +32260,6 @@ fn java_native_encode_register_zk_asset_signed_transaction(
         .map_err(|_| "invalid authority".to_owned())?;
         let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
             .map_err(|_| "invalid asset".to_owned())?;
-        let mode = java_zk_asset_mode_from_code(mode_code)?;
         let vk_unshield = java_verifying_key_id(
             java_optional_text_array(
                 env,
@@ -32312,14 +32276,8 @@ fn java_native_encode_register_zk_asset_signed_transaction(
         let private_key = java_private_key(algorithm_code, &private_key, env)?;
         let ttl =
             parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let register = zk::RegisterZkAsset::new(
-            asset_definition,
-            mode,
-            allow_shield != 0,
-            allow_unshield != 0,
-            vk_unshield,
-            vk_shield,
-        );
+        let register = zk::RegisterZkAsset::new(asset_definition, vk_unshield, vk_shield);
+        register.validate_verifier_roles().map_err(str::to_owned)?;
         let fee_payment = java_fee_payment_intent(env, &fee_payment_json)?;
         let (signed_bytes, hash_bytes) =
             encode_asset_transaction_with_nonce_fee_payment_and_metadata(
@@ -36893,7 +36851,7 @@ fn java_kagemusha_project_readiness_v4_fields(
     if readiness.required_bridge_abi_version
         != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
     {
-        return Err("required bridge ABI must be the exact ABI-21 V4 contract".to_owned());
+        return Err("required bridge ABI must be 22 for the ABI-21/V4 contract".to_owned());
     }
     if readiness.max_hops != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2 {
         return Err("maximum hop count does not match the protocol contract".to_owned());
@@ -38129,9 +38087,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     ttl_ms: jni::sys::jlong,
     ttl_present: jni::sys::jboolean,
     asset: jni::objects::JByteArray<'_>,
-    mode_code: jni::sys::jint,
-    allow_shield: jni::sys::jboolean,
-    allow_unshield: jni::sys::jboolean,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
     vk_shield: jni::objects::JByteArray<'_>,
@@ -38149,9 +38104,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         ttl_ms,
         ttl_present,
         asset,
-        mode_code,
-        allow_shield,
-        allow_unshield,
         vk_unshield,
         vk_unshield_present,
         vk_shield,
@@ -38281,9 +38233,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     ttl_ms: jni::sys::jlong,
     ttl_present: jni::sys::jboolean,
     asset: jni::objects::JByteArray<'_>,
-    mode_code: jni::sys::jint,
-    allow_shield: jni::sys::jboolean,
-    allow_unshield: jni::sys::jboolean,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
     vk_shield: jni::objects::JByteArray<'_>,
@@ -38301,9 +38250,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         ttl_ms,
         ttl_present,
         asset,
-        mode_code,
-        allow_shield,
-        allow_unshield,
         vk_unshield,
         vk_unshield_present,
         vk_shield,
@@ -45163,8 +45109,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_signer_jni_contract_revision_is_the_v3_hard_cut() {
-        assert_eq!(native_signer_jni_contract_revision(), 3);
+    fn native_signer_jni_contract_revision_is_the_v4_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 4);
     }
 
     #[test]
@@ -47126,17 +47072,6 @@ mod tests {
             assert!(
                 java_algorithm_from_code(invalid).is_err(),
                 "algorithm code {invalid} must not alias through u8"
-            );
-        }
-
-        assert!(matches!(
-            java_zk_asset_mode_from_code(0),
-            Ok(zk::ZkAssetMode::Hybrid)
-        ));
-        for invalid in [-1, 1, 256, 257] {
-            assert!(
-                java_zk_asset_mode_from_code(invalid).is_err(),
-                "mode code {invalid} must not alias through u8"
             );
         }
     }

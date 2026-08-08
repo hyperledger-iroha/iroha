@@ -7230,13 +7230,6 @@ pub mod isi {
                     "Kagemusha V4 redemption requires configured shielded asset state",
                 )
             })?;
-        if !zk_asset_state.allow_unshield {
-            return Err(labeled_invariant(
-                "unshield_not_permitted",
-                "Kagemusha V4 redemption is not permitted by asset policy",
-            )
-            .into());
-        }
         if zk_asset_state.nullifiers.contains(&input.current_nullifier) {
             return Err(labeled_invariant(
                 "duplicate_nullifier",
@@ -7398,9 +7391,9 @@ pub mod isi {
             && state_transaction.world.asset_total_amount(definition_id)? > Quantity::zero()
         {
             // `apply_policy_if_due` aborts a due ShieldedOnly transition while
-            // transparent supply remains and restores the previous mode.
+            // transparent supply remains. Retain the current mode because an
+            // opened conversion window is irreversible in ABI V1.
             policy.pending_transition = None;
-            policy.mode = transition.previous_mode();
         } else {
             policy = policy.apply_if_due(block_height).0;
         }
@@ -7836,13 +7829,6 @@ pub mod isi {
                         "Kagemusha V4 top-up requires configured confidential asset state",
                     )
                 })?;
-            if !zk_state.allow_shield {
-                return Err(labeled_invariant(
-                    "shield_not_permitted",
-                    "Kagemusha top-up shielding is disabled for this asset",
-                )
-                .into());
-            }
             zk_state
                 .validate_tree_metadata()
                 .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;

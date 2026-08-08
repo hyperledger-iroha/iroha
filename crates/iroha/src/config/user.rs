@@ -19,7 +19,7 @@ use crate::{
     crypto::{KeyPair, PrivateKey, PublicKey},
     data_model::{
         name,
-        prelude::{AccountId, ChainId, DomainId},
+        prelude::{AccountId, ChainId, DomainId, NetworkId},
     },
 };
 
@@ -32,6 +32,8 @@ pub struct Root {
     /// Unique chain identifier.
     #[config(env = "CHAIN")]
     pub chain: ChainId,
+    /// Exact genesis-lineage identity used for signed protocol requests.
+    pub network_id: NetworkId,
     /// Torii API URL.
     #[config(env = "TORII_URL")]
     pub torii_url: WithOrigin<Url>,
@@ -159,6 +161,7 @@ impl Root {
     ) -> ReportResult<(super::Config, MusubiPublication, MusubiFetch), ParseError> {
         let Self {
             chain: chain_id,
+            network_id,
             torii_url,
             basic_auth,
             torii_request_timeout_ms,
@@ -347,6 +350,7 @@ impl Root {
         Ok((
             super::Config {
                 chain: chain_id,
+                network_id,
                 account: account_id,
                 account_chain_discriminant: chain_discriminant.into_value(),
                 key_pair: key_pair.unwrap(),
@@ -642,6 +646,11 @@ mod tests {
                 .expect("derive user-config fixture key");
         Root {
             chain: ChainId::from_str("test-chain").expect("chain id"),
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                crate::data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]),
+            )),
             torii_url: WithOrigin::inline(
                 Url::parse("http://127.0.0.1:8080/torii").expect("valid torii url"),
             ),

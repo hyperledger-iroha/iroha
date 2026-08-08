@@ -137,6 +137,14 @@ def test_asset_definition_registration_uses_transaction_authority_as_owner(
             owning_domain=None,
             balance_scope_policy="Global",
         )
+    with pytest.raises(TypeError, match="confidential_policy"):
+        draft.register_asset_definition(  # type: ignore[call-arg]
+            "definition",
+            owning_domain=None,
+            balance_scope_policy="Global",
+            name="coin",
+            confidential_policy="Convertible",
+        )
     with pytest.raises(ValueError, match="name"):
         draft.register_asset_definition(
             "definition",

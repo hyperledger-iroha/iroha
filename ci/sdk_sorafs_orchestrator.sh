@@ -477,7 +477,7 @@ PY
 run_javascript_parity() {
   local sdk_root="${REPO_ROOT}/javascript/iroha_js"
   local native_artifact="${sdk_root}/native/iroha_js_host.node"
-  local native_manifest="${RUN_DIR}/node-native-abi21.json"
+  local native_manifest="${RUN_DIR}/node-native-abi22.json"
   local node_binary native_target
 
   node_binary="$(command -v node)"
@@ -491,7 +491,7 @@ run_javascript_parity() {
     npm ci
     npm run build:native
   )
-  python3 -I "${REPO_ROOT}/scripts/check_native_sdk_abi21_artifact.py" \
+  python3 -I "${REPO_ROOT}/scripts/check_native_sdk_abi22_artifact.py" \
     record \
     --artifact "${native_artifact}" \
     --manifest "${native_manifest}" \
@@ -499,7 +499,7 @@ run_javascript_parity() {
     --node "${node_binary}" \
     --sdk node \
     --target "${native_target}"
-  python3 -I "${REPO_ROOT}/scripts/check_native_sdk_abi21_artifact.py" \
+  python3 -I "${REPO_ROOT}/scripts/check_native_sdk_abi22_artifact.py" \
     verify \
     --artifact "${native_artifact}" \
     --manifest "${native_manifest}" \

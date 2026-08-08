@@ -16,7 +16,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 /**
- * ABI-21 Kagemusha V4 artifact streaming and capability bridge.
+ * Native bridge ABI 22 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
  *
  * This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
@@ -49,7 +49,7 @@ class KagemushaRecursiveSpendProver private constructor() {
     }
 
     companion object {
-        const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 21
+        const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 22
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
         /** Mandatory sender-final peer-cash handoff/finality contract. */
         const val CASH_HANDOFF_CAPABILITY_V1: String = "cash_handoff_v1"
@@ -3823,7 +3823,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 "cashHandoffCapability must be the exact cash_handoff_v1 contract"
             }
             require(requiredBridgeAbiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
-                "requiredBridgeAbiVersion must be 21"
+                "requiredBridgeAbiVersion must be 22"
             }
             require(maximumHops == MAXIMUM_PEER_HOPS) {
                 "maximumHops must match the cash_handoff_v1 bound"

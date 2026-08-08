@@ -44,7 +44,8 @@ pub mod isi {
         },
         asset_definition::{
             AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
-            CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+            CanManageAssetDefinitionConfidentialPolicy, CanModifyAssetDefinitionMetadata,
+            CanUnregisterAssetDefinition,
         },
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
         executor::CanUpgradeExecutor,
@@ -79,7 +80,6 @@ pub mod isi {
         confidential::ConfidentialStatus,
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         da::pin_intent::DaPinIntentWithLocation,
-        escrow::AssetEscrowStatus,
         events::data::{
             governance::{
                 GovernanceEvent, GovernanceParliamentApprovalRecorded,
@@ -1597,13 +1597,17 @@ pub mod isi {
         profile: SoracloudFheStarkVerifierProfile,
         vk: &VerifyingKeyBox,
     ) -> Result<(), Error> {
-        let payload: crate::zk_stark::StarkFriVerifyingKeyV1 = norito::decode_canonical(&vk.bytes)
-            .map_err(|_| {
-                invalid_smart_contract_parameter(format!(
-                    "{} verifying key has invalid STARK payload",
-                    profile.label
-                ))
-            })?;
+        let payload = crate::zk::validate_stark_fri_verifying_key_v1(
+            vk.backend.as_str(),
+            profile.circuit_id,
+            vk.bytes.as_slice(),
+        )
+        .map_err(|_| {
+            invalid_smart_contract_parameter(format!(
+                "{} verifying key has invalid STARK payload",
+                profile.label
+            ))
+        })?;
         crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
             &payload,
             profile.circuit_id,
@@ -1688,6 +1692,47 @@ pub mod isi {
         Some(format!("{backend}:{trimmed}"))
     }
 
+    fn validate_inline_verifying_key_material(
+        id_backend: &str,
+        circuit_id: &str,
+        backend: BackendTag,
+        vk: &VerifyingKeyBox,
+    ) -> Result<(), Error> {
+        match backend {
+            BackendTag::Halo2IpaPasta => {
+                crate::zk::validate_builtin_halo2_ipa_verifying_key_v1(id_backend, circuit_id, vk)
+                    .map_err(|err| {
+                        invalid_smart_contract_parameter(format!(
+                            "invalid canonical Halo2 IPA verifying key: {err}"
+                        ))
+                    })
+            }
+            BackendTag::Stark => {
+                #[cfg(not(feature = "zk-stark"))]
+                {
+                    let _ = (id_backend, circuit_id, vk);
+                    Err(invalid_smart_contract_parameter(
+                        "verifying key backend Stark is not enabled",
+                    ))
+                }
+                #[cfg(feature = "zk-stark")]
+                {
+                    crate::zk::validate_stark_fri_verifying_key_v1(
+                        id_backend,
+                        circuit_id,
+                        vk.bytes.as_slice(),
+                    )
+                    .map(|_| ())
+                    .map_err(|err| {
+                        invalid_smart_contract_parameter(format!(
+                            "invalid STARK verifying key payload: {err}"
+                        ))
+                    })
+                }
+            }
+        }
+    }
+
     fn validate_open_verify_envelope_metadata(
         label: &str,
         backend: &str,
@@ -1739,6 +1784,7 @@ pub mod isi {
         InstructionExecutionError::InvariantViolation(msg.into())
     }
 
+    #[cfg(test)]
     fn validate_confidential_v2_open_verify_envelope_metadata(
         label: &str,
         attachment: &iroha_data_model::proof::ProofAttachment,
@@ -1833,105 +1879,6 @@ pub mod isi {
                     format!("failed to update canonical confidential tree: {err}").into(),
                 )
             })
-    }
-
-    fn validate_confidential_transfer_v2_public_inputs(
-        asset_definition: &AssetDefinitionId,
-        nullifiers: &[[u8; 32]],
-        output_commitments: &[[u8; 32]],
-        root_hint: Option<[u8; 32]>,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-        state_transaction: &StateTransaction<'_, '_>,
-        vk_record: &VerifyingKeyRecord,
-    ) -> Result<[[u8; 32]; 2], Error> {
-        if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
-            &vk_record.circuit_id,
-        ) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer requires the confidential-transfer-v2 circuit".into(),
-            ));
-        }
-        let vk_box = vk_record.key.as_ref().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "confidential transfer verifying key bytes are missing".into(),
-            )
-        })?;
-        crate::zk::confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(vk_box)
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("invalid confidential-transfer-v2 verifying key: {err}").into(),
-                )
-            })?;
-        if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 requires halo2/ipa backend".into(),
-            ));
-        }
-        validate_confidential_v2_open_verify_envelope_metadata(
-            "confidential transfer v2",
-            attachment,
-            state_transaction,
-            vk_record,
-            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-        )?;
-        if nullifiers.is_empty()
-            || nullifiers.len() > 2
-            || output_commitments.is_empty()
-            || output_commitments.len() > 2
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 requires 1-2 inputs and 1-2 outputs".into(),
-            ));
-        }
-        let (input_commitments, proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag) =
-            crate::zk::confidential_v2::parse_transfer_public_inputs(&attachment.proof.bytes)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid confidential transfer v2 public inputs: {err}").into(),
-                    )
-                })?;
-        let root_hint = root_hint.ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 requires root_hint".into(),
-            )
-        })?;
-        if proof_root != root_hint {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 root_hint mismatch".into(),
-            ));
-        }
-        let zero = [0u8; 32];
-        for index in 0..2 {
-            let expected_nullifier = nullifiers.get(index).copied().unwrap_or(zero);
-            if proof_nullifiers[index] != expected_nullifier {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "confidential transfer v2 nullifier mismatch".into(),
-                ));
-            }
-            let expected_output = output_commitments.get(index).copied().unwrap_or(zero);
-            if proof_outputs[index] != expected_output {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "confidential transfer v2 output commitment mismatch".into(),
-                ));
-            }
-        }
-        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
-            &asset_definition.to_string(),
-        );
-        if asset_tag != expected_asset_tag {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 asset tag mismatch".into(),
-            ));
-        }
-        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
-            state_transaction.chain_id.as_str(),
-        );
-        if chain_tag != expected_chain_tag {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 chain tag mismatch".into(),
-            ));
-        }
-        Ok(input_commitments)
     }
 
     fn extract_vote_public_inputs(
@@ -2984,101 +2931,6 @@ pub mod isi {
                         ),
                     ));
                 }
-                if record.backend == BackendTag::Stark {
-                    #[cfg(not(feature = "zk-stark"))]
-                    {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verifying key backend Stark is not enabled".into(),
-                            ),
-                        ));
-                    }
-
-                    #[cfg(feature = "zk-stark")]
-                    {
-                        use crate::zk_stark::{
-                            STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-                        };
-                        let expected_hash_fn = if id_backend == crate::zk::ZK_BACKEND_STARK_FRI_V1 {
-                            None
-                        } else if id_backend.contains("/sha256-") {
-                            Some(STARK_HASH_SHA256_V1)
-                        } else if id_backend.contains("/poseidon2-") {
-                            Some(STARK_HASH_POSEIDON2_V1)
-                        } else {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "unsupported stark/fri backend variant".into(),
-                                ),
-                            ));
-                        };
-                        let payload: StarkFriVerifyingKeyV1 = norito::decode_canonical(&vk.bytes)
-                            .map_err(|_| {
-                            InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "invalid STARK verifying key payload".into(),
-                                ),
-                            )
-                        })?;
-                        if payload.version != 1 {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "unsupported STARK verifying key payload version".into(),
-                                ),
-                            ));
-                        }
-                        if payload.hash_fn != STARK_HASH_SHA256_V1
-                            && payload.hash_fn != STARK_HASH_POSEIDON2_V1
-                        {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "unsupported STARK verifying key hash_fn".into(),
-                                ),
-                            ));
-                        }
-                        if let Some(expected_hash_fn) = expected_hash_fn {
-                            if payload.hash_fn != expected_hash_fn {
-                                return Err(InstructionExecutionError::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "STARK verifying key hash_fn mismatch".into(),
-                                    ),
-                                ));
-                            }
-                        }
-                        if payload.circuit_id.trim().is_empty() {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "STARK verifying key circuit_id must not be empty".into(),
-                                ),
-                            ));
-                        }
-                        let payload_circuit_id =
-                            normalize_stark_fri_circuit_id(id_backend, &payload.circuit_id)
-                                .ok_or_else(|| {
-                                    InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "invalid STARK verifying key circuit_id".into(),
-                                        ),
-                                    )
-                                })?;
-                        let record_circuit_id =
-                            normalize_stark_fri_circuit_id(id_backend, &record.circuit_id)
-                                .ok_or_else(|| {
-                                    InstructionExecutionError::InvalidParameter(
-                                        InvalidParameterError::SmartContract(
-                                            "invalid verifying key record circuit_id".into(),
-                                        ),
-                                    )
-                                })?;
-                        if payload_circuit_id != record_circuit_id {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "STARK verifying key circuit_id does not match record".into(),
-                                ),
-                            ));
-                        }
-                    }
-                }
             }
             // Ensure entry not present
             if state_transaction.world.verifying_keys.get(&id).is_some() {
@@ -3125,6 +2977,14 @@ pub mod isi {
                         "verifying key gas_schedule_id must be set".into(),
                     ),
                 ));
+            }
+            if let Some(vk) = &record.key {
+                validate_inline_verifying_key_material(
+                    id_backend,
+                    &record.circuit_id,
+                    record.backend,
+                    vk,
+                )?;
             }
             validate_soracloud_fhe_stark_verifying_key_records(&id, &record)?;
             state_transaction
@@ -10142,95 +10002,6 @@ pub mod isi {
                     ),
                 ));
             }
-            if new.backend == BackendTag::Stark {
-                #[cfg(not(feature = "zk-stark"))]
-                {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "verifying key backend Stark is not enabled".into(),
-                        ),
-                    ));
-                }
-
-                #[cfg(feature = "zk-stark")]
-                {
-                    use crate::zk_stark::{
-                        STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-                    };
-                    let expected_hash_fn = if id_backend == crate::zk::ZK_BACKEND_STARK_FRI_V1 {
-                        None
-                    } else if id_backend.contains("/sha256-") {
-                        Some(STARK_HASH_SHA256_V1)
-                    } else if id_backend.contains("/poseidon2-") {
-                        Some(STARK_HASH_POSEIDON2_V1)
-                    } else {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "unsupported stark/fri backend variant".into(),
-                            ),
-                        ));
-                    };
-                    let payload: StarkFriVerifyingKeyV1 = norito::decode_canonical(&vk.bytes)
-                        .map_err(|_| {
-                            InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "invalid STARK verifying key payload".into(),
-                                ),
-                            )
-                        })?;
-                    if payload.version != 1 {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "unsupported STARK verifying key payload version".into(),
-                            ),
-                        ));
-                    }
-                    if payload.hash_fn != STARK_HASH_SHA256_V1
-                        && payload.hash_fn != STARK_HASH_POSEIDON2_V1
-                    {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "unsupported STARK verifying key hash_fn".into(),
-                            ),
-                        ));
-                    }
-                    if let Some(expected_hash_fn) = expected_hash_fn {
-                        if payload.hash_fn != expected_hash_fn {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "STARK verifying key hash_fn mismatch".into(),
-                                ),
-                            ));
-                        }
-                    }
-                    let payload_circuit_id =
-                        normalize_stark_fri_circuit_id(id_backend, &payload.circuit_id)
-                            .ok_or_else(|| {
-                                InstructionExecutionError::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "invalid STARK verifying key circuit_id".into(),
-                                    ),
-                                )
-                            })?;
-                    let record_circuit_id =
-                        normalize_stark_fri_circuit_id(id_backend, &new.circuit_id).ok_or_else(
-                            || {
-                                InstructionExecutionError::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "invalid verifying key record circuit_id".into(),
-                                    ),
-                                )
-                            },
-                        )?;
-                    if payload_circuit_id != record_circuit_id {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "STARK verifying key circuit_id does not match record".into(),
-                            ),
-                        ));
-                    }
-                }
-            }
         }
         let new_key = (new.circuit_id.clone(), new.version);
         if let Some(existing) = state_transaction
@@ -10264,6 +10035,9 @@ pub mod isi {
                     "verifying key gas_schedule_id must be set".into(),
                 ),
             ));
+        }
+        if let Some(vk) = &new.key {
+            validate_inline_verifying_key_material(id_backend, &new.circuit_id, new.backend, vk)?;
         }
         validate_soracloud_fhe_stark_verifying_key_records(id, new)?;
         Ok(())
@@ -14153,80 +13927,8 @@ pub mod isi {
 
     // --- ZK Asset policy & ledger ---
 
-    fn enforce_vk_binding(
-        binding: &crate::state::ZkAssetVerifierBinding,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-    ) -> Result<(), Error> {
-        if attachment.backend.as_str() != binding.id.backend {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "proof backend does not match asset verifying key".into(),
-            ));
-        }
-        if attachment.vk_ref != binding.id {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "verifying key reference mismatch".into(),
-            ));
-        }
-        if let Some(commitment) = attachment.vk_commitment {
-            if commitment != binding.commitment {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verifying key commitment mismatch".into(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn resolve_bound_asset_vk(
-        context: &str,
-        state_transaction: &StateTransaction<'_, '_>,
-        binding: Option<&crate::state::ZkAssetVerifierBinding>,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-    ) -> Result<(iroha_data_model::proof::VerifyingKeyBox, VerifyingKeyRecord), Error> {
-        let binding = binding.ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!("{context} verifying key is not configured").into(),
-            )
-        })?;
-        enforce_vk_binding(binding, attachment)?;
-        let record = state_transaction
-            .world
-            .verifying_keys
-            .get(&binding.id)
-            .cloned()
-            .ok_or_else(|| {
-                FindError::Permission(Box::new(Permission::new(
-                    "VerifyingKeyMissing".into(),
-                    iroha_primitives::json::Json::from(
-                        format!("{}::{}", binding.id.backend, binding.id.name).as_str(),
-                    ),
-                )))
-            })?;
-        if record.status != ConfidentialStatus::Active {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "verifying key is not active".into(),
-            ));
-        }
-        if record.commitment != binding.commitment {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "verifying key commitment mismatch".into(),
-            ));
-        }
-        let vk_box = record.key.clone().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation("verifying key bytes missing".into())
-        })?;
-        if vk_box.backend != attachment.backend {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "verifying key backend mismatch".into(),
-            ));
-        }
-        Ok((vk_box, record))
-    }
-
     #[derive(Clone)]
     struct PolicyMetadataContext {
-        allow_shield: bool,
-        allow_unshield: bool,
         vk_unshield: Option<iroha_data_model::proof::VerifyingKeyId>,
         vk_unshield_commitment: Option<[u8; 32]>,
         vk_shield: Option<iroha_data_model::proof::VerifyingKeyId>,
@@ -14238,16 +13940,12 @@ pub mod isi {
     ) -> PolicyMetadataContext {
         state.map_or(
             PolicyMetadataContext {
-                allow_shield: false,
-                allow_unshield: false,
                 vk_unshield: None,
                 vk_unshield_commitment: None,
                 vk_shield: None,
                 vk_shield_commitment: None,
             },
             |st| PolicyMetadataContext {
-                allow_shield: st.allow_shield,
-                allow_unshield: st.allow_unshield,
                 vk_unshield: st.vk_unshield.as_ref().map(|binding| binding.id.clone()),
                 vk_unshield_commitment: st.vk_unshield.as_ref().map(|binding| binding.commitment),
                 vk_shield: st.vk_shield.as_ref().map(|binding| binding.id.clone()),
@@ -14266,14 +13964,6 @@ pub mod isi {
         policy_map.insert(
             "mode".into(),
             norito::json::native::Value::from(format!("{:?}", policy.mode())),
-        );
-        policy_map.insert(
-            "allow_shield".into(),
-            norito::json::native::Value::from(context.allow_shield),
-        );
-        policy_map.insert(
-            "allow_unshield".into(),
-            norito::json::native::Value::from(context.allow_unshield),
         );
         let vk_to_value =
             |vk: Option<iroha_data_model::proof::VerifyingKeyId>| -> norito::json::native::Value {
@@ -14383,7 +14073,29 @@ pub mod isi {
         let mut aborted = false;
         let pending_transition = working_policy.pending_transition;
         if let Some(transition) = pending_transition {
-            if block_height >= transition.effective_height()
+            let transition_matches_active_mode =
+                transition.previous_mode() == working_policy.mode();
+            let transition_is_supported = matches!(
+                (working_policy.mode(), transition.new_mode()),
+                (
+                    ConfidentialPolicyMode::Convertible,
+                    ConfidentialPolicyMode::ShieldedOnly
+                ) | (
+                    ConfidentialPolicyMode::ShieldedOnly,
+                    ConfidentialPolicyMode::Convertible
+                )
+            );
+            if !transition_matches_active_mode || !transition_is_supported {
+                aborted = true;
+                working_policy.pending_transition = None;
+                iroha_logger::warn!(
+                    asset = %asset_def_id,
+                    current_mode = %working_policy.mode(),
+                    previous_mode = %transition.previous_mode(),
+                    new_mode = %transition.new_mode(),
+                    "discarding confidential policy transition outside the ABI V1 state machine"
+                );
+            } else if block_height >= transition.effective_height()
                 && transition.new_mode() == ConfidentialPolicyMode::ShieldedOnly
             {
                 let transparent_total = state_transaction
@@ -14393,7 +14105,6 @@ pub mod isi {
                 if transparent_total > Quantity::zero() {
                     aborted = true;
                     working_policy.pending_transition = None;
-                    working_policy.mode = transition.previous_mode();
                     iroha_logger::warn!(
                         asset = %asset_def_id,
                         total = %transparent_total,
@@ -14410,6 +14121,14 @@ pub mod isi {
         };
 
         let applied_policy = if did_change {
+            if let Some(transition) = pending_transition {
+                state_transaction
+                    .world
+                    .untrack_confidential_policy_transition(
+                        asset_def_id,
+                        transition.effective_height(),
+                    );
+            }
             {
                 let asset_definition = state_transaction
                     .world
@@ -14434,7 +14153,6 @@ pub mod isi {
     struct PolicyTransitionValidation {
         current_mode: ConfidentialPolicyMode,
         new_mode: ConfidentialPolicyMode,
-        commitments_empty: bool,
         block_height: u64,
         effective_height: u64,
         delay_blocks: u64,
@@ -14444,9 +14162,10 @@ pub mod isi {
 
     fn validate_policy_transition(args: &PolicyTransitionValidation) -> Result<(), Error> {
         ensure_mode_change(args)?;
+        ensure_transition_allowed(args)?;
         let lead_time = ensure_effective_height(args)?;
-        let window_for_shield = ensure_notice_window(args, lead_time)?;
-        ensure_transition_allowed(args, window_for_shield)
+        ensure_notice_window(args, lead_time)?;
+        Ok(())
     }
 
     fn ensure_mode_change(args: &PolicyTransitionValidation) -> Result<(), Error> {
@@ -14484,11 +14203,9 @@ pub mod isi {
     fn ensure_notice_window(
         args: &PolicyTransitionValidation,
         lead_time: u64,
-    ) -> Result<Option<u64>, Error> {
-        if matches!(
-            args.new_mode,
-            ConfidentialPolicyMode::ShieldedOnly | ConfidentialPolicyMode::TransparentOnly
-        ) && args.window_blocks > 0
+    ) -> Result<(), Error> {
+        if args.new_mode == ConfidentialPolicyMode::ShieldedOnly
+            && args.window_blocks > 0
             && lead_time < args.window_blocks
         {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -14527,7 +14244,7 @@ pub mod isi {
                     ),
                 ));
             }
-            Ok(Some(window))
+            Ok(())
         } else {
             if args.requested_window.is_some() {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -14536,43 +14253,92 @@ pub mod isi {
                     ),
                 ));
             }
-            Ok(None)
+            Ok(())
         }
     }
 
-    fn ensure_transition_allowed(
-        args: &PolicyTransitionValidation,
-        window_for_shield: Option<u64>,
-    ) -> Result<(), Error> {
+    fn ensure_transition_allowed(args: &PolicyTransitionValidation) -> Result<(), Error> {
         match (args.current_mode, args.new_mode) {
-            (ConfidentialPolicyMode::TransparentOnly, ConfidentialPolicyMode::Convertible) => {
-                Ok(())
-            }
-            (ConfidentialPolicyMode::TransparentOnly, ConfidentialPolicyMode::ShieldedOnly) => {
-                let _ = window_for_shield;
-                Ok(())
+            (ConfidentialPolicyMode::TransparentOnly, _) => {
+                Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "a TransparentOnly asset must activate confidentiality by registering at least one canonical verifier role"
+                            .into(),
+                    ),
+                ))
             }
             (ConfidentialPolicyMode::Convertible, ConfidentialPolicyMode::ShieldedOnly)
             | (ConfidentialPolicyMode::ShieldedOnly, ConfidentialPolicyMode::Convertible) => Ok(()),
             (
                 ConfidentialPolicyMode::Convertible | ConfidentialPolicyMode::ShieldedOnly,
                 ConfidentialPolicyMode::TransparentOnly,
-            ) => {
-                if args.commitments_empty {
-                    Ok(())
-                } else {
-                    Err(InstructionExecutionError::InvariantViolation(
-                        "cannot transition to TransparentOnly while shielded commitments exist"
-                            .into(),
-                    ))
-                }
-            }
+            ) => Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "confidentiality is irreversible in ABI V1; a confidential asset cannot transition back to TransparentOnly"
+                        .into(),
+                ),
+            )),
             _ => Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "unsupported confidential policy transition".into(),
                 ),
             )),
         }
+    }
+
+    fn ensure_can_modify_confidential_policy(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_def_id: &AssetDefinitionId,
+    ) -> Result<(), Error> {
+        let asset_definition = state_transaction
+            .world
+            .asset_definition(asset_def_id)
+            .map_err(Error::from)?;
+        let asset_definition_owner = asset_definition.owned_by();
+        let required: Permission = CanManageAssetDefinitionConfidentialPolicy {
+            asset_definition: asset_def_id.clone(),
+        }
+        .into();
+        if asset_definition_owner == authority
+            || has_exact_permission(&state_transaction.world, authority, &required)
+        {
+            Ok(())
+        } else {
+            Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: asset-definition owner or exact CanManageAssetDefinitionConfidentialPolicy grant required"
+                    .into(),
+            ))
+        }
+    }
+
+    fn ensure_committed_unshield_binding_is_preserved(
+        existing_state: Option<&crate::state::ZkAssetState>,
+        next_unshield: Option<&crate::state::ZkAssetVerifierBinding>,
+    ) -> Result<(), Error> {
+        let Some(existing_state) = existing_state.filter(|state| !state.commitments.is_empty())
+        else {
+            return Ok(());
+        };
+        let existing_unshield = existing_state.vk_unshield.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "confidential commitments exist without a bound unshield verifier".into(),
+            )
+        })?;
+        let next_unshield = next_unshield.ok_or_else(|| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "vk_unshield cannot be cleared while confidential commitments exist".into(),
+            ))
+        })?;
+        if next_unshield.commitment != existing_unshield.commitment {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "vk_unshield commitment cannot change while confidential commitments exist"
+                        .into(),
+                ),
+            ));
+        }
+        Ok(())
     }
 
     impl Execute for zk::RegisterZkAsset {
@@ -14583,29 +14349,25 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_def_id = self.asset().clone();
-            let asset_definition_owner = state_transaction
+            ensure_can_modify_confidential_policy(authority, state_transaction, &asset_def_id)?;
+            self.validate_verifier_roles().map_err(|message| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    message.into(),
+                ))
+            })?;
+            // Derive the canonical policy from the two verifier roles. Optional
+            // binding presence is the sole enablement signal in ABI V1.
+            let current_policy = *state_transaction
                 .world
                 .asset_definition(&asset_def_id)
                 .map_err(Error::from)?
-                .owned_by()
-                .clone();
-            let required: Permission = CanModifyAssetDefinitionMetadata {
-                asset_definition: asset_def_id.clone(),
-            }
-            .into();
-            if &asset_definition_owner != authority
-                && !has_exact_permission(&state_transaction.world, authority, &required)
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: asset-definition owner or exact CanModifyAssetDefinitionMetadata grant required"
-                        .into(),
-                ));
-            }
-            // Derive canonical confidential policy for asset definition.
-            let policy_mode = if !*self.allow_shield() && !*self.allow_unshield() {
-                ConfidentialPolicyMode::TransparentOnly
-            } else {
-                ConfidentialPolicyMode::Convertible
+                .confidential_policy();
+            let has_confidential_role = self.vk_shield().is_some() || self.vk_unshield().is_some();
+            let policy_mode = match current_policy.mode() {
+                ConfidentialPolicyMode::TransparentOnly if has_confidential_role => {
+                    ConfidentialPolicyMode::Convertible
+                }
+                mode => mode,
             };
             let resolve_binding = |vk: &Option<iroha_data_model::proof::VerifyingKeyId>| -> Result<
                 Option<crate::state::ZkAssetVerifierBinding>,
@@ -14636,6 +14398,15 @@ pub mod isi {
 
             let vk_unshield_binding = resolve_binding(self.vk_unshield())?;
             let vk_shield_binding = resolve_binding(self.vk_shield())?;
+            let existing_state = state_transaction
+                .world
+                .zk_assets
+                .get(&asset_def_id)
+                .cloned();
+            ensure_committed_unshield_binding_is_preserved(
+                existing_state.as_ref(),
+                vk_unshield_binding.as_ref(),
+            )?;
             if let Some(binding) = vk_unshield_binding.as_ref() {
                 let record = state_transaction
                     .world
@@ -14736,11 +14507,6 @@ pub mod isi {
                 derived_tree_profile = Some(profile);
             }
             let derived_tree_profile = derived_tree_profile.unwrap_or_default();
-            let existing_state = state_transaction
-                .world
-                .zk_assets
-                .get(&asset_def_id)
-                .cloned();
             let already_registered = existing_state.is_some();
             let mut st = existing_state.unwrap_or_default();
             st.validate_tree_metadata().map_err(|err| {
@@ -14755,14 +14521,12 @@ pub mod isi {
             }
             st.tree_profile = derived_tree_profile;
 
-            let mut vk_fingerprints: Vec<String> = [
-                self.vk_unshield().clone(),
-                self.vk_shield().clone(),
-            ]
-            .into_iter()
-            .flatten()
-            .map(|vk| format!("{}::{}", vk.backend, vk.name))
-            .collect();
+            let mut vk_fingerprints: Vec<String> =
+                [self.vk_unshield().clone(), self.vk_shield().clone()]
+                    .into_iter()
+                    .flatten()
+                    .map(|vk| format!("{}::{}", vk.backend, vk.name))
+                    .collect();
             vk_fingerprints.sort();
             let vk_set_hash = if vk_fingerprints.is_empty() {
                 None
@@ -14775,7 +14539,7 @@ pub mod isi {
                 vk_set_hash,
                 poseidon_params_id: state_transaction.zk.poseidon_params_id,
                 pedersen_params_id: state_transaction.zk.pedersen_params_id,
-                pending_transition: None,
+                pending_transition: current_policy.pending_transition,
             };
             {
                 let asset_definition = state_transaction
@@ -14785,8 +14549,6 @@ pub mod isi {
                 asset_definition.set_confidential_policy(policy_struct);
             }
             let metadata_context = PolicyMetadataContext {
-                allow_shield: *self.allow_shield(),
-                allow_unshield: *self.allow_unshield(),
                 vk_unshield: self.vk_unshield().clone(),
                 vk_unshield_commitment: vk_unshield_binding
                     .as_ref()
@@ -14801,9 +14563,6 @@ pub mod isi {
                 &metadata_context,
             )?;
             // Persist/Update internal ZK policy state
-            st.mode = *self.mode();
-            st.allow_shield = *self.allow_shield();
-            st.allow_unshield = *self.allow_unshield();
             st.vk_unshield = vk_unshield_binding;
             st.vk_shield = vk_shield_binding;
             state_transaction
@@ -14821,10 +14580,23 @@ pub mod isi {
     impl Execute for zk::ScheduleConfidentialPolicyTransition {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_def_id = self.asset().clone();
+            ensure_can_modify_confidential_policy(authority, state_transaction, &asset_def_id)?;
+            let effective_height = *self.effective_height();
+            let scheduled_at_height = state_transaction
+                .world
+                .confidential_policy_transition_count(effective_height);
+            let maximum = state_transaction.zk.policy_transition_max_per_height;
+            if scheduled_at_height >= maximum.get() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "confidential policy transition limit reached at effective height {effective_height}: scheduled={scheduled_at_height} maximum={maximum}"
+                    )),
+                ));
+            }
             let mut policy = apply_policy_if_due(state_transaction, &asset_def_id)?;
             if policy.pending_transition().is_some() {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -14840,14 +14612,12 @@ pub mod isi {
                         "asset has no confidential state".into(),
                     )
                 })?;
-            let commitments_empty = st.commitments.is_empty();
             let context = metadata_context_from_state(Some(st));
             let validation = PolicyTransitionValidation {
                 current_mode: policy.mode(),
                 new_mode: *self.new_mode(),
-                commitments_empty,
                 block_height: state_transaction.block_height(),
-                effective_height: *self.effective_height(),
+                effective_height,
                 delay_blocks: state_transaction.zk.policy_transition_delay_blocks,
                 window_blocks: state_transaction.zk.policy_transition_window_blocks,
                 requested_window: *self.conversion_window(),
@@ -14855,7 +14625,7 @@ pub mod isi {
             validate_policy_transition(&validation)?;
             let transition = ConfidentialPolicyTransition {
                 new_mode: *self.new_mode(),
-                effective_height: *self.effective_height(),
+                effective_height,
                 previous_mode: policy.mode(),
                 transition_id: *self.transition_id(),
                 conversion_window: *self.conversion_window(),
@@ -14868,6 +14638,9 @@ pub mod isi {
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(policy);
             }
+            state_transaction
+                .world
+                .track_confidential_policy_transition(&asset_def_id, transition.effective_height());
             persist_policy_metadata(state_transaction, &asset_def_id, &policy, &context)?;
             Ok(())
         }
@@ -14876,10 +14649,11 @@ pub mod isi {
     impl Execute for zk::CancelConfidentialPolicyTransition {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_def_id = self.asset().clone();
+            ensure_can_modify_confidential_policy(authority, state_transaction, &asset_def_id)?;
             let mut policy = apply_policy_if_due(state_transaction, &asset_def_id)?;
             let context =
                 metadata_context_from_state(state_transaction.world.zk_assets.get(&asset_def_id));
@@ -14895,6 +14669,9 @@ pub mod isi {
                     ),
                 ));
             }
+            state_transaction
+                .world
+                .untrack_confidential_policy_transition(&asset_def_id, pending.effective_height());
             policy.pending_transition = None;
             {
                 let asset_definition = state_transaction
@@ -16892,8 +16669,8 @@ pub mod isi {
                         format!("verified lane relay FASTPQ verification failed: {err}").into(),
                     )
                 })?;
-            state_transaction
-                .authenticate_finalized_lane_relay(&envelope)
+            let execution_commitment = state_transaction
+                .finalized_lane_relay_execution_commitment(&envelope)
                 .map_err(|err| {
                     InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(format!(
@@ -16901,13 +16678,8 @@ pub mod isi {
                         )),
                     )
                 })?;
-            let qc = envelope.qc.as_ref().ok_or_else(|| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "lane relay finality authentication requires a QC".into(),
-                ))
-            })?;
-            let expected_old_root: [u8; 32] = qc.parent_state_root.into();
-            let expected_new_root: [u8; 32] = qc.post_state_root.into();
+            let expected_old_root: [u8; 32] = execution_commitment.parent_state_root.into();
+            let expected_new_root: [u8; 32] = execution_commitment.post_state_root.into();
             let expected_tx_set_hash: [u8; 32] = lane_finality_statement_hash.into();
             if verified_fastpq.old_root != expected_old_root
                 || verified_fastpq.new_root != expected_new_root
@@ -18312,6 +18084,9 @@ pub mod isi {
         if let Ok(permission) = CanModifyAssetDefinitionMetadata::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
+        if let Ok(permission) = CanManageAssetDefinitionConfidentialPolicy::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
         if let Ok(permission) = CanMintAssetWithDefinition::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
@@ -19689,6 +19464,37 @@ pub mod isi {
         const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-execution-v1";
         const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
         const TEST_OTHER_HALO2_CIRCUIT_ID: &str = "kaigi-roster-v1";
+
+        fn canonical_test_halo2_vk_box() -> VerifyingKeyBox {
+            #[cfg(feature = "zk-halo2-ipa")]
+            {
+                crate::zk::halo2_ipa_ivm_execution_vk_box()
+                    .expect("generate canonical IVM execution verifying key")
+            }
+            #[cfg(not(feature = "zk-halo2-ipa"))]
+            {
+                panic!("canonical Halo2 registry tests require zk-halo2-ipa")
+            }
+        }
+
+        fn test_halo2_vk_record(version: u32, vk_box: VerifyingKeyBox) -> VerifyingKeyRecord {
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                version,
+                TEST_HALO2_CIRCUIT_ID,
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0x51; 32],
+                hash_vk(&vk_box),
+            );
+            record.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32");
+            record.status = ConfidentialStatus::Active;
+            record.key = Some(vk_box);
+            record.gas_schedule_id = Some("halo2_default".to_owned());
+            record
+        }
 
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
             Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
@@ -22218,6 +22024,140 @@ pub mod isi {
         }
 
         #[test]
+        fn confidential_policy_transition_rejects_return_to_transparent_mode() {
+            for current_mode in [
+                ConfidentialPolicyMode::Convertible,
+                ConfidentialPolicyMode::ShieldedOnly,
+            ] {
+                let error = validate_policy_transition(&PolicyTransitionValidation {
+                    current_mode,
+                    new_mode: ConfidentialPolicyMode::TransparentOnly,
+                    block_height: 10,
+                    effective_height: 20,
+                    delay_blocks: 1,
+                    window_blocks: 1,
+                    requested_window: None,
+                })
+                .expect_err("confidential activation must be irreversible in ABI V1");
+                assert!(
+                    format!("{error:?}").contains("confidentiality is irreversible in ABI V1"),
+                    "unexpected policy downgrade rejection: {error:?}"
+                );
+            }
+
+            for new_mode in [
+                ConfidentialPolicyMode::Convertible,
+                ConfidentialPolicyMode::ShieldedOnly,
+            ] {
+                let error = validate_policy_transition(&PolicyTransitionValidation {
+                    current_mode: ConfidentialPolicyMode::TransparentOnly,
+                    new_mode,
+                    block_height: 10,
+                    effective_height: 20,
+                    delay_blocks: 1,
+                    window_blocks: 1,
+                    requested_window: None,
+                })
+                .expect_err("transparent assets must activate through verifier registration");
+                assert!(
+                    format!("{error:?}").contains("registering at least one canonical verifier"),
+                    "unexpected transparent activation rejection: {error:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn register_zk_asset_rejects_shield_without_redemption_verifier() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let domain_id =
+                DomainId::try_new("redeemable", "universal").expect("valid test domain");
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "coin".parse().expect("valid asset name"),
+            );
+            Register::domain(Domain::new(domain_id))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register test domain");
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register asset owner");
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "Redeemable confidential coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register owner-controlled asset definition");
+
+            let error = zk::RegisterZkAsset::new(
+                asset_definition_id.clone(),
+                None,
+                Some(VerifyingKeyId::new("halo2/ipa", "shield")),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("shield-only registration must not admit unredeemable commitments");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("vk_shield requires vk_unshield"),
+            );
+            assert!(stx.world.zk_assets.get(&asset_definition_id).is_none());
+        }
+
+        #[test]
+        fn committed_asset_preserves_unshield_verifier_commitment() {
+            let original_commitment = [0x31; 32];
+            let original = crate::state::ZkAssetVerifierBinding {
+                id: VerifyingKeyId::new("halo2/ipa", "unshield-original"),
+                commitment: original_commitment,
+            };
+            let renamed = crate::state::ZkAssetVerifierBinding {
+                id: VerifyingKeyId::new("halo2/ipa", "unshield-renamed"),
+                commitment: original_commitment,
+            };
+            let changed = crate::state::ZkAssetVerifierBinding {
+                id: VerifyingKeyId::new("halo2/ipa", "unshield-changed"),
+                commitment: [0x32; 32],
+            };
+            let mut state = crate::state::ZkAssetState::default();
+            state.commitments.push([0x41; 32]);
+            state.vk_unshield = Some(original);
+
+            ensure_committed_unshield_binding_is_preserved(Some(&state), Some(&renamed))
+                .expect("a new registry id may select the same unshield verifier commitment");
+
+            let cleared = ensure_committed_unshield_binding_is_preserved(Some(&state), None)
+                .expect_err("committed assets must retain an unshield verifier");
+            assert!(cleared.to_string().contains("cannot be cleared"));
+
+            let replaced =
+                ensure_committed_unshield_binding_is_preserved(Some(&state), Some(&changed))
+                    .expect_err("committed assets must retain the verifier commitment");
+            assert!(replaced.to_string().contains("commitment cannot change"));
+
+            state.commitments.clear();
+            ensure_committed_unshield_binding_is_preserved(Some(&state), None)
+                .expect("an empty commitment tree does not strand funds");
+
+            state.commitments.push([0x42; 32]);
+            state.vk_unshield = None;
+            let corrupted = ensure_committed_unshield_binding_is_preserved(Some(&state), None)
+                .expect_err("persisted committed state without redemption must fail closed");
+            assert!(
+                corrupted
+                    .to_string()
+                    .contains("commitments exist without a bound unshield verifier")
+            );
+        }
+
+        #[test]
         fn register_zk_asset_requires_owner_or_exact_scoped_grant() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -22230,6 +22170,10 @@ pub mod isi {
             let asset_definition_id = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
                 "coin".parse().expect("valid asset name"),
+            );
+            let unrelated_asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "other".parse().expect("valid asset name"),
             );
 
             Register::domain(Domain::new(domain_id))
@@ -22248,22 +22192,23 @@ pub mod isi {
             ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register owner-controlled asset definition");
+            Register::asset_definition(AssetDefinition::numeric(
+                unrelated_asset_definition_id.clone(),
+                "Unrelated coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register unrelated owner-controlled asset definition");
 
-            let registration = zk::RegisterZkAsset::new(
-                asset_definition_id.clone(),
-                zk::ZkAssetMode::Hybrid,
-                true,
-                true,
-                None,
-                None,
-            );
+            let registration = zk::RegisterZkAsset::new(asset_definition_id.clone(), None, None);
             let error = registration
                 .clone()
                 .execute(&BOB_ID, &mut stx)
                 .expect_err("unprivileged non-owner must not configure confidential policy");
             assert!(
                 smart_contract_instruction_error_message(error)
-                    .contains("exact CanModifyAssetDefinitionMetadata grant required")
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
             );
             assert!(stx.world.zk_assets.get(&asset_definition_id).is_none());
             assert_eq!(
@@ -22275,13 +22220,45 @@ pub mod isi {
                 ConfidentialPolicyMode::TransparentOnly
             );
 
-            let delegated: Permission = CanModifyAssetDefinitionMetadata {
+            let metadata_only: Permission = CanModifyAssetDefinitionMetadata {
+                asset_definition: asset_definition_id.clone(),
+            }
+            .into();
+            Grant::account_permission(metadata_only, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant exact scoped metadata permission");
+            let error = registration
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("metadata permission must not configure confidential policy");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+
+            let wrong_scope: Permission = CanManageAssetDefinitionConfidentialPolicy {
+                asset_definition: unrelated_asset_definition_id,
+            }
+            .into();
+            Grant::account_permission(wrong_scope, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant confidential-policy permission for unrelated definition");
+            let error = registration
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("a confidential-policy grant for another asset must fail closed");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+
+            let delegated: Permission = CanManageAssetDefinitionConfidentialPolicy {
                 asset_definition: asset_definition_id.clone(),
             }
             .into();
             Grant::account_permission(delegated, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
-                .expect("grant exact scoped asset-definition permission");
+                .expect("grant exact confidential-policy permission");
             registration
                 .execute(&BOB_ID, &mut stx)
                 .expect("exact scoped delegate may configure confidential policy");
@@ -22291,7 +22268,312 @@ pub mod isi {
                     .expect("asset definition remains")
                     .confidential_policy()
                     .mode(),
-                ConfidentialPolicyMode::Convertible
+                ConfidentialPolicyMode::TransparentOnly
+            );
+
+            let transition = ConfidentialPolicyTransition {
+                new_mode: ConfidentialPolicyMode::ShieldedOnly,
+                effective_height: stx.block_height().saturating_add(10),
+                previous_mode: ConfidentialPolicyMode::Convertible,
+                transition_id: Hash::new(b"registration-must-preserve-policy"),
+                conversion_window: Some(1),
+            };
+            let mut active_policy = *stx
+                .world
+                .asset_definition(&asset_definition_id)
+                .expect("asset definition remains")
+                .confidential_policy();
+            active_policy.mode = ConfidentialPolicyMode::Convertible;
+            active_policy.pending_transition = Some(transition);
+            stx.world
+                .asset_definition_mut(&asset_definition_id)
+                .expect("asset definition remains")
+                .set_confidential_policy(active_policy);
+
+            zk::RegisterZkAsset::new(asset_definition_id.clone(), None, None)
+                .execute(&BOB_ID, &mut stx)
+                .expect("exact scoped delegate may update verifier bindings");
+            let updated_definition = stx
+                .world
+                .asset_definition(&asset_definition_id)
+                .expect("asset definition remains");
+            let updated_policy = updated_definition.confidential_policy();
+            assert_eq!(updated_policy.mode(), ConfidentialPolicyMode::Convertible);
+            assert_eq!(updated_policy.pending_transition(), &Some(transition));
+        }
+
+        #[test]
+        fn confidential_policy_transition_requires_owner_or_exact_scoped_grant() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let domain_id = DomainId::try_new("policy", "universal").expect("valid test domain");
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "coin".parse().expect("valid asset name"),
+            );
+
+            Register::domain(Domain::new(domain_id))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register test domain");
+            for account in [ALICE_ID.clone(), BOB_ID.clone()] {
+                Register::account(Account::new(account))
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("register test account");
+            }
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "Policy coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register owner-controlled asset definition");
+            zk::RegisterZkAsset::new(asset_definition_id.clone(), None, None)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("owner configures confidential policy");
+            let mut policy = *stx
+                .world
+                .asset_definition(&asset_definition_id)
+                .expect("asset definition remains")
+                .confidential_policy();
+            policy.mode = ConfidentialPolicyMode::Convertible;
+            stx.world
+                .asset_definition_mut(&asset_definition_id)
+                .expect("asset definition remains")
+                .set_confidential_policy(policy);
+
+            let conversion_window = stx.zk.policy_transition_window_blocks.max(1);
+            let lead_time = stx
+                .zk
+                .policy_transition_delay_blocks
+                .max(conversion_window)
+                .saturating_add(1);
+            let effective_height = stx.block_height().saturating_add(lead_time);
+            let transition_id = Hash::new(b"owner-scoped-policy-transition");
+            let schedule = zk::ScheduleConfidentialPolicyTransition::new(
+                asset_definition_id.clone(),
+                ConfidentialPolicyMode::ShieldedOnly,
+                effective_height,
+                transition_id,
+                Some(conversion_window),
+            );
+            let error = schedule
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("unprivileged non-owner must not schedule a transition");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+
+            let metadata_only: Permission = CanModifyAssetDefinitionMetadata {
+                asset_definition: asset_definition_id.clone(),
+            }
+            .into();
+            Grant::account_permission(metadata_only, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant exact scoped metadata permission");
+            let error = schedule
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("metadata permission must not schedule a policy transition");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+
+            schedule
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect("asset-definition owner may schedule a transition");
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, asset_definition_id.clone()))
+                    .is_some(),
+                "scheduling must index the asset at its exact effective height"
+            );
+            assert_eq!(
+                stx.world
+                    .confidential_policy_transition_count(effective_height),
+                1
+            );
+            let cancel = zk::CancelConfidentialPolicyTransition::new(
+                asset_definition_id.clone(),
+                transition_id,
+            );
+            let error = cancel
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("unprivileged non-owner must not cancel a transition");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("exact CanManageAssetDefinitionConfidentialPolicy grant required")
+            );
+            cancel
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect("asset-definition owner may cancel a transition");
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, asset_definition_id.clone()))
+                    .is_none(),
+                "cancellation must remove the exact transition key"
+            );
+            assert_eq!(
+                stx.world
+                    .confidential_policy_transition_count(effective_height),
+                0
+            );
+
+            let delegated: Permission = CanManageAssetDefinitionConfidentialPolicy {
+                asset_definition: asset_definition_id.clone(),
+            }
+            .into();
+            Grant::account_permission(delegated, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant exact confidential-policy permission");
+            schedule
+                .execute(&BOB_ID, &mut stx)
+                .expect("exact scoped delegate may schedule a transition");
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, asset_definition_id.clone()))
+                    .is_some(),
+                "delegated scheduling must update the same canonical index"
+            );
+            cancel
+                .execute(&BOB_ID, &mut stx)
+                .expect("exact scoped delegate may cancel a transition");
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, asset_definition_id.clone()))
+                    .is_none(),
+                "delegated cancellation must leave no stale index entry"
+            );
+        }
+
+        #[test]
+        fn confidential_policy_transition_cap_rejects_before_mutation() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.zk.policy_transition_max_per_height =
+                NonZeroU32::new(1).expect("nonzero transition cap");
+            let domain_id =
+                DomainId::try_new("policy-cap", "universal").expect("valid test domain");
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register test domain");
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register owner account");
+
+            let first_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "first".parse().expect("valid asset name"),
+            );
+            let second_id = AssetDefinitionId::derive_from_components(
+                domain_id,
+                "second".parse().expect("valid asset name"),
+            );
+            for asset_id in [&first_id, &second_id] {
+                Register::asset_definition(AssetDefinition::numeric(
+                    asset_id.clone(),
+                    "Policy cap coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register owner-controlled asset definition");
+                zk::RegisterZkAsset::new(asset_id.clone(), None, None)
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("owner configures confidential policy");
+                let mut policy = *stx
+                    .world
+                    .asset_definition(asset_id)
+                    .expect("asset definition remains")
+                    .confidential_policy();
+                policy.mode = ConfidentialPolicyMode::Convertible;
+                stx.world
+                    .asset_definition_mut(asset_id)
+                    .expect("asset definition remains")
+                    .set_confidential_policy(policy);
+            }
+
+            let conversion_window = stx.zk.policy_transition_window_blocks.max(1);
+            let lead_time = stx
+                .zk
+                .policy_transition_delay_blocks
+                .max(conversion_window)
+                .saturating_add(1);
+            let effective_height = stx.block_height().saturating_add(lead_time);
+            zk::ScheduleConfidentialPolicyTransition::new(
+                first_id.clone(),
+                ConfidentialPolicyMode::ShieldedOnly,
+                effective_height,
+                Hash::new(b"policy-cap-first"),
+                Some(conversion_window),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("first transition fills the exact-height capacity");
+
+            let second_policy_before = *stx
+                .world
+                .asset_definition(&second_id)
+                .expect("second definition remains")
+                .confidential_policy();
+            let error = zk::ScheduleConfidentialPolicyTransition::new(
+                second_id.clone(),
+                ConfidentialPolicyMode::ShieldedOnly,
+                effective_height,
+                Hash::new(b"policy-cap-second"),
+                Some(conversion_window),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("second transition at the same height must exceed capacity");
+            assert!(
+                smart_contract_instruction_error_message(error)
+                    .contains("confidential policy transition limit reached")
+            );
+            assert_eq!(
+                stx.world
+                    .confidential_policy_transition_count(effective_height),
+                1
+            );
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, first_id))
+                    .is_some()
+            );
+            assert!(
+                stx.world
+                    .confidential_policy_transition_index
+                    .get(&(effective_height, second_id.clone()))
+                    .is_none()
+            );
+            assert_eq!(
+                stx.world
+                    .asset_definition(&second_id)
+                    .expect("second definition remains")
+                    .confidential_policy(),
+                &second_policy_before,
+                "cap rejection must precede authoritative policy mutation"
             );
         }
 
@@ -24757,7 +25039,6 @@ seiyaku GovernanceLifecycle {
             };
             let base_envelope = iroha_data_model::nexus::LaneRelayEnvelope::new(
                 block_header,
-                None,
                 None,
                 settlement_commitment,
                 0,
@@ -28146,7 +28427,6 @@ seiyaku GovernanceLifecycle {
                 metadata: Metadata::default(),
                 balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
                 owning_domain: None,
-                confidential_policy: AssetConfidentialPolicy::transparent(),
             })
             .execute(&ALICE_ID, &mut stx)
             .expect("register cleanup-domain asset definition");
@@ -33780,6 +34060,258 @@ seiyaku GovernanceLifecycle {
             );
         }
 
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn register_vk_accepts_and_stores_canonical_compiled_halo2_key() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let id = VerifyingKeyId::new("halo2/ipa", "canonical-ivm-vk");
+            let vk_box = canonical_test_halo2_vk_box();
+            let record = test_halo2_vk_record(1, vk_box.clone());
+            let mut stx = state_block.transaction();
+            Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record,
+                    }
+                    .into(),
+                )
+                .expect("canonical compiled Halo2 key must register");
+
+            let stored = stx
+                .world
+                .verifying_keys
+                .get(&id)
+                .expect("validated key must be stored");
+            assert_eq!(
+                stored.key.as_ref().map(|key| key.bytes.as_slice()),
+                Some(vk_box.bytes.as_slice()),
+                "the registry must retain only the bytes that passed typed validation"
+            );
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn register_vk_rejects_parseable_halo2_key_relabelled_as_ivm_execution() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let id = VerifyingKeyId::new("halo2/ipa", "relabelled-demo-vk");
+            let vk_box = crate::zk::relabelled_halo2_ipa_demo_vk_box_for_test()
+                .expect("generate parseable relabelled demo key");
+            let record = test_halo2_vk_record(1, vk_box);
+            let mut stx = state_block.transaction();
+            let error = Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record,
+                    }
+                    .into(),
+                )
+                .expect_err("a parseable key for another constraint system must not register");
+            let message = smart_contract_error_message(error);
+            assert!(
+                message.contains("canonical compiled circuit key"),
+                "unexpected relabelled-key rejection: {message}"
+            );
+            assert!(stx.world.verifying_keys.get(&id).is_none());
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn update_vk_rejects_parseable_halo2_key_relabelled_as_same_circuit() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let id = VerifyingKeyId::new("halo2/ipa", "updated-relabelled-demo-vk");
+            let current = test_halo2_vk_record(1, canonical_test_halo2_vk_box());
+            let mut stx = state_block.transaction();
+            Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record: current.clone(),
+                    }
+                    .into(),
+                )
+                .expect("canonical baseline key must register");
+            stx.apply();
+
+            let relabelled = crate::zk::relabelled_halo2_ipa_demo_vk_box_for_test()
+                .expect("generate parseable relabelled demo key");
+            let replacement = test_halo2_vk_record(2, relabelled);
+            let mut stx = state_block.transaction();
+            let error = Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::UpdateVerifyingKey {
+                        id: id.clone(),
+                        record: replacement,
+                    }
+                    .into(),
+                )
+                .expect_err("update must enforce the same compiled-circuit key identity");
+            let message = smart_contract_error_message(error);
+            assert!(
+                message.contains("canonical compiled circuit key"),
+                "unexpected relabelled update rejection: {message}"
+            );
+            assert_eq!(stx.world.verifying_keys.get(&id), Some(&current));
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn register_vk_rejects_noncanonical_fixed_halo2_parameter_degree() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let id = VerifyingKeyId::new("halo2/ipa", "wrong-fixed-k-vk");
+            let mut vk_box = canonical_test_halo2_vk_box();
+            let ipa_offset = vk_box
+                .bytes
+                .windows(4)
+                .position(|window| window == b"IPAK")
+                .expect("canonical key carries IPAK");
+            vk_box.bytes[ipa_offset + 8..ipa_offset + 12]
+                .copy_from_slice(&(crate::zk::IVM_EXECUTION_V1_IPA_K + 1).to_le_bytes());
+            let record = test_halo2_vk_record(1, vk_box);
+            let mut stx = state_block.transaction();
+            let error = Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record,
+                    }
+                    .into(),
+                )
+                .expect_err("a caller-selected Halo2 domain exponent must not register");
+            let message = smart_contract_error_message(error);
+            assert!(
+                message.contains("fixed Halo2 IPA verifier-key metadata"),
+                "unexpected fixed-k rejection: {message}"
+            );
+            assert!(stx.world.verifying_keys.get(&id).is_none());
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn register_vk_rejects_tiny_stark_key_with_huge_declared_inner_length() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let backend = "stark/fri/sha256-goldilocks";
+            let circuit_id = format!("{backend}:bounded-registry-key");
+            let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: circuit_id.clone(),
+                n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                fold_arity: 2,
+                queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+                merkle_arity: 2,
+                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+            };
+            let mut bytes = norito::encode_canonical(&payload).expect("encode canonical STARK key");
+            let circuit_offset = bytes
+                .windows(circuit_id.len())
+                .position(|window| window == circuit_id.as_bytes())
+                .expect("encoded STARK circuit id");
+            bytes[circuit_offset - 1] = u8::MAX;
+            let vk_box = VerifyingKeyBox::new(backend.to_owned(), bytes);
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                1,
+                circuit_id,
+                None,
+                "test",
+                BackendTag::Stark,
+                "goldilocks",
+                [0x51; 32],
+                hash_vk(&vk_box),
+            );
+            record.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32");
+            record.status = ConfidentialStatus::Active;
+            record.key = Some(vk_box);
+            record.gas_schedule_id = Some("stark_default".to_owned());
+
+            let id = VerifyingKeyId::new(backend, "huge-inner-length-vk");
+            let mut stx = state_block.transaction();
+            let error = Executor::default()
+                .execute_instruction(
+                    &mut stx,
+                    &ALICE_ID.clone(),
+                    verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record,
+                    }
+                    .into(),
+                )
+                .expect_err("a forged inner length must fail before typed key storage");
+            let message = smart_contract_error_message(error);
+            assert!(
+                message.contains("invalid STARK verifying key payload"),
+                "unexpected bounded STARK rejection: {message}"
+            );
+            assert!(stx.world.verifying_keys.get(&id).is_none());
+        }
+
         #[test]
         fn register_vk_requires_gas_schedule() {
             let kura = Kura::blank_kura_for_testing();
@@ -33813,7 +34345,7 @@ seiyaku GovernanceLifecycle {
                 [0x61; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box);
             let instr: InstructionBox =
@@ -35815,7 +36347,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
 
             let id = VerifyingKeyId::new("halo2/ipa", "vk_identity");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![4, 5, 6]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut current = VerifyingKeyRecord::new_with_owner(
                 1,
                 TEST_HALO2_CIRCUIT_ID,
@@ -35826,7 +36358,8 @@ seiyaku GovernanceLifecycle {
                 [0x51; 32],
                 hash_vk(&vk_box),
             );
-            current.vk_len = 3;
+            current.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             current.status = ConfidentialStatus::Active;
             current.key = Some(vk_box);
             current.gas_schedule_id = Some("halo2_default".into());
@@ -35904,7 +36437,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = state_block.transaction();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 TEST_HALO2_CIRCUIT_ID,
@@ -35915,7 +36448,7 @@ seiyaku GovernanceLifecycle {
                 [0x51; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36142,7 +36675,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = state_block.transaction();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 TEST_HALO2_CIRCUIT_ID,
@@ -36153,7 +36686,7 @@ seiyaku GovernanceLifecycle {
                 [0x53; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36177,7 +36710,9 @@ seiyaku GovernanceLifecycle {
                 [0x54; 32],
                 hash_vk(&vk_box),
             );
-            new_rec.vk_len = 4;
+            new_rec.vk_len = u32::try_from(vk_box.bytes.len())
+                .expect("canonical key length fits u32")
+                .saturating_add(1);
             new_rec.status = ConfidentialStatus::Active;
             new_rec.key = Some(vk_box);
             new_rec.gas_schedule_id = Some("halo2_default".into());
@@ -36221,10 +36756,10 @@ seiyaku GovernanceLifecycle {
             let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.into(),
-                n_log2: 4,
-                blowup_log2: 2,
+                n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: 2,
+                queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
             };
@@ -36320,7 +36855,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = block.transaction();
             let circuit = TEST_HALO2_CIRCUIT_ID;
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_live");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![7, 7, 7]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 circuit.to_string(),
@@ -36331,7 +36866,7 @@ seiyaku GovernanceLifecycle {
                 [0x62; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36410,7 +36945,7 @@ seiyaku GovernanceLifecycle {
 
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 4, 3]);
+            let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
@@ -36422,7 +36957,7 @@ seiyaku GovernanceLifecycle {
                 [0x63; 32],
                 vk_commitment,
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box);
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36703,7 +37238,7 @@ seiyaku GovernanceLifecycle {
 
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![6, 6, 6]);
+            let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = vec![1, 2, 3];
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
@@ -36717,7 +37252,7 @@ seiyaku GovernanceLifecycle {
                 public_inputs_schema_hash,
                 vk_commitment,
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box);
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36792,7 +37327,7 @@ seiyaku GovernanceLifecycle {
 
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_invalid_proof");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 9, 9]);
+            let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = vec![1, 2, 3];
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
@@ -36806,7 +37341,7 @@ seiyaku GovernanceLifecycle {
                 public_inputs_schema_hash,
                 vk_commitment,
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -36883,7 +37418,7 @@ seiyaku GovernanceLifecycle {
 
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![7, 7, 1]);
+            let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = vec![1, 2, 3, 4];
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
@@ -36897,7 +37432,7 @@ seiyaku GovernanceLifecycle {
                 public_inputs_schema_hash,
                 vk_commitment,
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());
@@ -37006,7 +37541,7 @@ seiyaku GovernanceLifecycle {
                     "halo2/ipa",
                     format!("vk_invalid_metadata_{suffix}").as_str(),
                 );
-                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![3, 1, 4]);
+                let vk_box = canonical_test_halo2_vk_box();
                 let vk_commitment = hash_vk(&vk_box);
                 let expected_public_inputs = vec![1, 2, 3];
                 let public_inputs_schema_hash: [u8; 32] =
@@ -37302,7 +37837,7 @@ seiyaku GovernanceLifecycle {
             // Register verifying key
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_gas");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![8, 8, 8]);
+            let vk_box = canonical_test_halo2_vk_box();
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 TEST_HALO2_CIRCUIT_ID,
@@ -37313,7 +37848,7 @@ seiyaku GovernanceLifecycle {
                 [0x64; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("halo2_default".into());

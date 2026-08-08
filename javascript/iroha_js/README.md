@@ -154,7 +154,7 @@ The JavaScript package exposes the four stable Kagemusha Torii routes through
 `getOfflineCapability`, `submitKagemushaTopUpV4`,
 `submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
 an asset-neutral protocol capability compiled into every deployment. Discovery
-accepts only the exact `cash_handoff_v1`, bridge ABI 21, eight-hop universal
+accepts only the exact `cash_handoff_v1`, bridge ABI 22, eight-hop universal
 `OfflineStatus` with `mandatory: false`, `ready: true`, and empty asset and
 blocker lists. The deprecated `getKagemushaReadinessV4(asset)` shim ignores its
 selector and sends the same query-free request.
@@ -1390,10 +1390,6 @@ const assetDefinitionAndMintTx = buildRegisterAssetDefinitionAndMintTransaction(
     metadata: { description: "Rose asset" },
     mintable: "Not",
     spec: { scale: 4 },
-    confidentialPolicy: {
-      vk_set_hash: "deadbeef",
-      pending_transition: { stage: "Queued" },
-    },
   },
   mints: [
     {
@@ -2838,7 +2834,7 @@ is also available for explicit lifecycle control.
 Validation-fee authority is ledger-native. Applications obtain bounded policy
 proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
 to an immutable chain/genesis/policy-chain binding and a durable checkpoint.
-The ABI 21 native bridge verifies the Norito proof and returns an immutable
+The ABI 22 native bridge verifies the Norito proof and returns an immutable
 projection; JavaScript never substitutes application-supplied signatures or
 keysets for that trusted boundary. Persist every promoted checkpoint before
 requesting the next page. `catchUpValidationFeeCurrentPolicyProof` is available
@@ -3069,7 +3065,6 @@ const registerTx = buildRegisterZkAssetTransaction({
   feePayment,
   registration: {
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    mode: "Hybrid",
     unshieldVerifyingKey: { backend: "halo2/ipa", name: "vk_unshield" },
   },
   privateKey,
@@ -4325,6 +4320,7 @@ const issue = buildIssueReplicationOrderInstruction({
   orderPayload: replicationOrderBytes.toString("base64"),
   issuedEpoch: 20,
   deadlineEpoch: 28,
+  musubiArchiveId, // omit for an ordinary non-Musubi replication order
 });
 const complete = buildCompleteReplicationOrderInstruction({
   orderId,
@@ -4350,6 +4346,10 @@ const expire = buildExpireReplicationOrderInstruction({
   expirationEpoch: 29,
 });
 ```
+
+Issue instructions always carry the fifth `musubi_archive` option on the wire:
+omitting `musubiArchiveId` encodes `None`, while supplying it binds the order to
+one exact non-zero ArchiveId. The retired four-field wire shape is rejected.
 
 Completion uses the exact six-field hard cut: `order_id`, `provider_id`,
 `completion_epoch`, `expected_authority`, `expected_assignment_revision`, and

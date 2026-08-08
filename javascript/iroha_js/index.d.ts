@@ -15,7 +15,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 21;
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 22;
 export const KAGEMUSHA_MANIFEST_VERSION: 4;
 export const KAGEMUSHA_MAX_HOPS: 8;
 export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY: "cash_handoff_v1";
@@ -63,7 +63,7 @@ export interface KagemushaAuthenticatedArtifactSetV4 {
 export interface OfflineStatus {
   readonly mandatory: false;
   readonly cash_handoff_capability: "cash_handoff_v1";
-  readonly required_bridge_abi_version: 21;
+  readonly required_bridge_abi_version: 22;
   readonly max_hops: 8;
   readonly ready: true;
   readonly assets: readonly [];
@@ -216,7 +216,7 @@ export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 21;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 22;
 
 export interface SignedTransactionResult {
   signedTransaction: Buffer;
@@ -7461,7 +7461,6 @@ interface RegisterAssetDefinitionAndMintInputBase {
     mintable?: string;
     logo?: string | null;
     spec?: object;
-    confidentialPolicy?: object;
     balanceScopePolicy: string;
   };
   metadata?: MetadataLike;
@@ -7681,9 +7680,6 @@ export interface PersistCouncilForEpochInstructionInput {
 
 export interface RegisterZkAssetInstructionInput {
   assetDefinitionId: string;
-  mode?: "Hybrid";
-  allowShield?: boolean;
-  allowUnshield?: boolean;
   unshieldVerifyingKey?: VerifyingKeyIdLike | null;
   shieldVerifyingKey?: VerifyingKeyIdLike | null;
 }
@@ -12623,7 +12619,7 @@ export function signQuotedIvmProvedTransactionPayload(
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "cbsi.mobile-validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 21;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 22;
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
 
 export function normalizeValidationFeeCheckpointV1(
@@ -12911,6 +12907,7 @@ export interface IssueReplicationOrderInstruction {
     order_payload: string;
     issued_epoch: number;
     deadline_epoch: number;
+    musubi_archive: string | null;
   };
 }
 
@@ -12974,6 +12971,7 @@ export function buildIssueReplicationOrderInstruction(options: {
   orderPayload: string;
   issuedEpoch: NumericLike;
   deadlineEpoch: NumericLike;
+  musubiArchiveId?: string | null;
 }): IssueReplicationOrderInstruction;
 
 /**
@@ -13148,8 +13146,6 @@ export function buildRegisterAssetDefinitionInstruction(options: {
   balance_scope_policy?: string;
   /** Immutable ownership intent; null means intentionally unowned global. */
   owningDomain: string | null;
-  confidentialPolicy?: object;
-  confidential_policy?: object;
 }): object;
 
 export function buildGrantAccountPermissionInstruction(options: {

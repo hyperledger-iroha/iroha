@@ -1,23 +1,23 @@
 //! Lane relay envelope for cross-lane commitments (NX-4).
 //!
-//! This carries the lane block header, optional QC and DA digest,
+//! This carries the lane block header, compact global-finality reference and DA digest,
 //! plus the settlement commitment and its hash so the merge ledger can verify
-//! relay payloads deterministically. The optional QC represents a pending
-//! in-memory envelope only; merge admission and contract-visible registration
-//! require a quorum-satisfying QC whose aggregate BLS signature authenticates
-//! against the canonical on-chain lane committee.
+//! relay payloads deterministically. Pending in-memory envelopes omit authority;
+//! authoritative use resolves the compact reference against Kura's verified
+//! Sumeragi-v2 finality artifact and checks the statement inclusion proof.
 
 use core::cmp::Ordering;
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, MerkleProof};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
     asset::AssetDefinitionId,
-    block::{BlockHeader, consensus::LaneBlockCommitment},
-    consensus::Qc,
+    block::{
+        BlockHeader, consensus::LaneBlockCommitment, consensus_v2::finality::V2FinalityArtifact,
+    },
     da::commitment::DaCommitmentBundle,
     nexus::{AxtFastpqBinding, DataSpaceId, FeeSponsorProgramId, LaneId},
     peer::PeerId,
@@ -71,12 +71,13 @@ pub struct LaneRelayEnvelope {
     pub block_height: u64,
     /// Full lane block header being relayed.
     pub block_header: BlockHeader,
-    /// QC attesting to the block header and canonical post-execution effect.
+    /// Compact reference to genuine global finality for this exact effect.
     ///
-    /// `None` is permitted only for pending transport/status. Any persistent
-    /// or merge-authoritative use must require and cryptographically verify it.
+    /// `None` is permitted only for pending transport/status. State resolves a
+    /// present reference through Kura and verifies the proof before persistence.
     #[norito(default)]
-    pub qc: Option<Qc>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub finality_authority: Option<LaneFinalityAuthorityV1>,
     /// Optional hash of the DA commitment bundle for the block payload.
     #[norito(default)]
     pub da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
@@ -105,7 +106,7 @@ pub struct LaneRelayEnvelope {
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
 }
 
-/// Canonical post-execution effect authenticated by a lane-finality QC.
+/// Canonical post-execution effect authenticated by the global CommitQC.
 ///
 /// This statement deliberately excludes the QC and `FastPQ` proof material.
 /// Validators can therefore derive and sign it before either proof is attached,
@@ -142,6 +143,27 @@ pub struct LaneFinalityStatement {
     pub rbc_bytes_total: u64,
 }
 
+/// Bounded reference from one relay effect to immutable Sumeragi-v2 finality.
+///
+/// The full finality artifact remains in Kura. Persisted relay state carries
+/// only its hash, global height, and an `O(log lanes)` inclusion proof.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct LaneFinalityAuthorityV1 {
+    /// Authority format version; exactly one in the first release.
+    pub version: u8,
+    /// Global block height whose CommitQC authenticated the statement tree.
+    pub global_block_height: u64,
+    /// Hash of the exact immutable finality artifact retained by Kura.
+    pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    /// Inclusion proof for the envelope-derived statement.
+    pub statement_proof: MerkleProof<LaneFinalityStatement>,
+}
+
 impl LaneFinalityStatement {
     /// Compute the domain-separated hash signed by the lane-finality committee.
     ///
@@ -154,6 +176,20 @@ impl LaneFinalityStatement {
             LANE_FINALITY_STATEMENT_DOMAIN_V1,
             &bytes,
         ))
+    }
+}
+
+impl PartialOrd for LaneFinalityStatement {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for LaneFinalityStatement {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let lhs = norito::encode_canonical(self).expect("lane finality statement should encode");
+        let rhs = norito::encode_canonical(other).expect("lane finality statement should encode");
+        lhs.cmp(&rhs)
     }
 }
 
@@ -317,8 +353,8 @@ struct LaneRelayMergeHint {
     dataspace_id: DataSpaceId,
     block_height: u64,
     tip_hash: HashOf<BlockHeader>,
-    parent_state_root: Hash,
-    post_state_root: Hash,
+    global_block_height: u64,
+    finality_artifact_hash: HashOf<V2FinalityArtifact>,
     da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
     lane_block_descriptor_hash: Option<Hash>,
     settlement_hash: HashOf<LaneBlockCommitment>,
@@ -509,10 +545,11 @@ impl LaneRelayQuorumContext {
 }
 
 impl LaneRelayEnvelope {
-    /// Domain-separated context tag used for standalone lane-block QC signatures.
+    /// Domain-separated context tag used by standalone lane-block votes.
     ///
-    /// Relay-finality QCs must use [`Self::lane_finality_qc_mode_tag`] instead;
-    /// this context-only tag does not authenticate a post-execution effect.
+    /// This tag identifies the lane-local consensus domain only. It is not
+    /// merge authority; authoritative relay effects are bound by the global
+    /// execution commitment and [`LaneFinalityAuthorityV1`].
     #[must_use]
     pub fn lane_qc_mode_tag_for(
         lane_id: LaneId,
@@ -578,78 +615,6 @@ impl LaneRelayEnvelope {
         self.lane_finality_statement()?.hash()
     }
 
-    /// Build the exact mode tag whose QC signature authenticates this effect.
-    ///
-    /// The returned tag is consumed by the existing QC vote preimage, so every
-    /// aggregate signature commits the canonical statement hash without adding
-    /// a second, potentially divergent signature format.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`LaneRelayError`] when the finality statement is incomplete.
-    pub fn lane_finality_qc_mode_tag(&self, base_mode_tag: &str) -> Result<String, LaneRelayError> {
-        let context_tag =
-            Self::lane_qc_mode_tag_for(self.lane_id, self.dataspace_id, base_mode_tag);
-        let statement_hash = self.lane_finality_statement_hash()?;
-        Ok(format!(
-            "{context_tag}::lane-finality:v1:{}",
-            hex::encode(statement_hash.as_ref())
-        ))
-    }
-
-    /// Parse a canonical lane-finality QC mode tag and return its statement hash.
-    ///
-    /// The parser rejects alternate separators, uppercase hexadecimal, extra
-    /// fields, and context tags for a different lane or dataspace.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LaneRelayError::QcFinalityStatementMismatch`] unless `mode_tag`
-    /// is the one canonical encoding for the supplied context.
-    pub fn parse_lane_finality_qc_mode_tag(
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        base_mode_tag: &str,
-        mode_tag: &str,
-    ) -> Result<Hash, LaneRelayError> {
-        let context_tag = Self::lane_qc_mode_tag_for(lane_id, dataspace_id, base_mode_tag);
-        let prefix = format!("{context_tag}::lane-finality:v1:");
-        let encoded_hash = mode_tag
-            .strip_prefix(&prefix)
-            .ok_or(LaneRelayError::QcFinalityStatementMismatch)?;
-        let is_lower_hex = |byte: u8| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f');
-        if encoded_hash.len() != Hash::LENGTH * 2 || !encoded_hash.bytes().all(is_lower_hex) {
-            return Err(LaneRelayError::QcFinalityStatementMismatch);
-        }
-        encoded_hash
-            .parse::<Hash>()
-            .map_err(|_| LaneRelayError::QcFinalityStatementMismatch)
-    }
-
-    /// Require the attached QC to carry the exact statement-bound mode tag.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LaneRelayError::MissingQc`] if no QC is attached and
-    /// [`LaneRelayError::QcFinalityStatementMismatch`] if its signed tag differs.
-    pub fn verify_lane_finality_qc_mode_tag(
-        &self,
-        base_mode_tag: &str,
-    ) -> Result<(), LaneRelayError> {
-        let qc = self.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
-        let observed = Self::parse_lane_finality_qc_mode_tag(
-            self.lane_id,
-            self.dataspace_id,
-            base_mode_tag,
-            &qc.mode_tag,
-        )?;
-        if observed == self.lane_finality_statement_hash()? {
-            Ok(())
-        } else {
-            Err(LaneRelayError::QcFinalityStatementMismatch)
-        }
-    }
-
     /// Return whether two envelopes describe the exact same finality effect.
     ///
     /// QC aggregation and proof carriers are deliberately ignored: they can be
@@ -657,13 +622,6 @@ impl LaneRelayEnvelope {
     /// fixed `(lane, dataspace, incarnation, height)` coordinate.
     #[must_use]
     pub fn same_finality_effect(&self, other: &Self) -> bool {
-        let same_qc_roots = match (&self.qc, &other.qc) {
-            (Some(left), Some(right)) => {
-                left.parent_state_root == right.parent_state_root
-                    && left.post_state_root == right.post_state_root
-            }
-            _ => true,
-        };
         self.lane_id == other.lane_id
             && self.lane_incarnation == other.lane_incarnation
             && self.dataspace_id == other.dataspace_id
@@ -675,29 +633,23 @@ impl LaneRelayEnvelope {
             && self.settlement_hash == other.settlement_hash
             && self.rbc_bytes_total == other.rbc_bytes_total
             && self.manifest_root == other.manifest_root
-            && same_qc_roots
     }
 
     /// Create an envelope and derive the settlement hash from the payload.
     ///
     /// # Errors
     ///
-    /// Returns [`LaneRelayError::QcSubjectMismatch`] if the optional QC
-    /// does not certify the provided block header, [`LaneRelayError::QcHeightMismatch`]
-    /// when the QC height diverges from the global proposal header,
-    /// [`LaneRelayError::DaCommitmentHashMismatch`] when the DA commitment hash differs from the
+    /// Returns [`LaneRelayError::DaCommitmentHashMismatch`] when the DA commitment hash differs from the
     /// header, or [`LaneRelayError::Encode`]
     /// if hashing the settlement commitment fails.
     pub fn new(
         block_header: BlockHeader,
-        qc: Option<Qc>,
         da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
         settlement_commitment: LaneBlockCommitment,
         rbc_bytes_total: u64,
     ) -> Result<Self, LaneRelayError> {
         let settlement_hash = compute_settlement_hash(&settlement_commitment)?;
         let block_height = settlement_commitment.block_height;
-        let proposal_height = block_header.height().get();
         if block_height == 0 {
             return Err(LaneRelayError::BlockHeightMismatch);
         }
@@ -710,23 +662,6 @@ impl LaneRelayEnvelope {
             return Err(LaneRelayError::ZeroLaneIncarnation);
         }
 
-        if let Some(qc) = qc.as_ref()
-            && qc.subject_block_hash != block_header.hash()
-        {
-            return Err(LaneRelayError::QcSubjectMismatch);
-        }
-        if let Some(qc) = qc.as_ref()
-            && qc.height != proposal_height
-        {
-            return Err(LaneRelayError::QcHeightMismatch);
-        }
-        if let Some(qc) = qc.as_ref()
-            && (qc.phase != crate::block::consensus::CertPhase::Commit
-                || qc.view != block_header.view_change_index())
-        {
-            return Err(LaneRelayError::AggregateSignatureInvalid);
-        }
-
         if block_header.da_commitments_hash() != da_commitment_hash {
             return Err(LaneRelayError::DaCommitmentHashMismatch);
         }
@@ -737,7 +672,7 @@ impl LaneRelayEnvelope {
             dataspace_id: settlement_commitment.dataspace_id,
             block_height,
             block_header,
-            qc,
+            finality_authority: None,
             da_commitment_hash,
             lane_block_descriptor_hash: None,
             settlement_commitment,
@@ -759,17 +694,15 @@ impl LaneRelayEnvelope {
         }
     }
 
-    /// Validate QC subject, DA commitment hash, and settlement hash.
+    /// Validate the DA commitment and settlement shape.
     ///
     /// # Errors
     ///
-    /// Propagates [`LaneRelayError::QcSubjectMismatch`], [`LaneRelayError::QcHeightMismatch`],
-    /// [`LaneRelayError::DaCommitmentHashMismatch`], [`LaneRelayError::SettlementBlockHeightMismatch`],
+    /// Propagates [`LaneRelayError::DaCommitmentHashMismatch`], [`LaneRelayError::SettlementBlockHeightMismatch`],
     /// [`LaneRelayError::SettlementLaneMismatch`],
     /// [`LaneRelayError::SettlementDataspaceMismatch`], or [`LaneRelayError::SettlementHashMismatch`]
     /// when validation fails, and may surface [`LaneRelayError::Encode`] if settlement hashing encounters an encoding error.
     pub fn verify(&self) -> Result<(), LaneRelayError> {
-        let proposal_height = self.block_header.height().get();
         if self.block_height == 0 {
             return Err(LaneRelayError::BlockHeightMismatch);
         }
@@ -787,22 +720,6 @@ impl LaneRelayEnvelope {
         }
         if self.settlement_commitment.dataspace_id != self.dataspace_id {
             return Err(LaneRelayError::SettlementDataspaceMismatch);
-        }
-        if let Some(qc) = self.qc.as_ref()
-            && qc.subject_block_hash != self.block_header.hash()
-        {
-            return Err(LaneRelayError::QcSubjectMismatch);
-        }
-        if let Some(qc) = self.qc.as_ref()
-            && qc.height != proposal_height
-        {
-            return Err(LaneRelayError::QcHeightMismatch);
-        }
-        if let Some(qc) = self.qc.as_ref()
-            && (qc.phase != crate::block::consensus::CertPhase::Commit
-                || qc.view != self.block_header.view_change_index())
-        {
-            return Err(LaneRelayError::AggregateSignatureInvalid);
         }
         if self.block_header.da_commitments_hash() != self.da_commitment_hash {
             return Err(LaneRelayError::DaCommitmentHashMismatch);
@@ -823,17 +740,15 @@ impl LaneRelayEnvelope {
 
     /// Whether this relay carries the structural material required for merge admission.
     ///
-    /// This check does not authenticate the QC signature or the `FastPQ`
-    /// proof. Consensus code must validate both against authoritative state
+    /// This check does not resolve the finality reference or authenticate the
+    /// `FastPQ` proof. Consensus code must validate both against authoritative state
     /// before treating the settlement as merge input.
     #[must_use]
     pub fn has_merge_admission_material(&self) -> bool {
         self.block_height > 0
-            && self.qc.as_ref().is_some_and(|qc| {
-                qc.phase == crate::block::consensus::CertPhase::Commit
-                    && qc.height == self.block_header.height().get()
-                    && qc.view == self.block_header.view_change_index()
-                    && qc.subject_block_hash == self.block_header.hash()
+            && self.finality_authority.as_ref().is_some_and(|authority| {
+                authority.version == 1
+                    && authority.global_block_height == self.block_header.height().get()
             })
             && self.lane_finality_statement().is_ok()
             && self.has_fastpq_proof_material()
@@ -843,20 +758,23 @@ impl LaneRelayEnvelope {
     ///
     /// # Errors
     ///
-    /// Returns [`LaneRelayError::MissingQc`] when the relay has not yet reached lane finality,
+    /// Returns [`LaneRelayError::MissingFinalityAuthority`] when the relay has not yet reached finality,
     /// and [`LaneRelayError::Encode`] if the canonical hint payload cannot be encoded.
     pub fn merge_hint_root(&self) -> Result<Hash, LaneRelayError> {
-        let qc = self.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
+        let authority = self
+            .finality_authority
+            .as_ref()
+            .ok_or(LaneRelayError::MissingFinalityAuthority)?;
         let lane_finality_statement_hash = self.lane_finality_statement_hash()?;
         let hint = LaneRelayMergeHint {
-            version: 3,
+            version: 4,
             lane_id: self.lane_id,
             lane_incarnation: self.lane_incarnation,
             dataspace_id: self.dataspace_id,
             block_height: self.block_height,
             tip_hash: self.block_header.hash(),
-            parent_state_root: qc.parent_state_root,
-            post_state_root: qc.post_state_root,
+            global_block_height: authority.global_block_height,
+            finality_artifact_hash: authority.finality_artifact_hash,
             da_commitment_hash: self.da_commitment_hash,
             lane_block_descriptor_hash: self.lane_block_descriptor_hash,
             settlement_hash: self.settlement_hash,
@@ -868,72 +786,6 @@ impl LaneRelayEnvelope {
             LANE_RELAY_MERGE_HINT_DOMAIN_V1,
             &bytes,
         ))
-    }
-
-    /// Validate the relay envelope against a validator roster and quorum expectation.
-    ///
-    /// # Errors
-    ///
-    /// In addition to the checks performed by [`Self::verify`], this surfaces
-    /// [`LaneRelayError::MissingQc`] when the envelope lacks a QC,
-    /// [`LaneRelayError::InvalidValidatorSet`] for malformed quorum parameters,
-    /// [`LaneRelayError::SignerBitmapLengthMismatch`] when the signer bitmap length does not match the roster size,
-    /// [`LaneRelayError::InvalidSignerIndex`] if the signer bitmap references out-of-range validators,
-    /// [`LaneRelayError::InsufficientQuorum`] when the bitmap does not satisfy the quorum, and
-    /// [`LaneRelayError::AggregateSignatureInvalid`] when the aggregate signature is empty or zeroed.
-    pub fn verify_with_quorum(&self, quorum: LaneRelayQuorumContext) -> Result<(), LaneRelayError> {
-        quorum.ensure_valid()?;
-        self.verify()?;
-
-        let qc = self.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
-        let expected_len = usize::try_from(quorum.validator_count)
-            .unwrap_or(usize::MAX)
-            .div_ceil(8);
-        if qc.aggregate.signers_bitmap.len() != expected_len {
-            return Err(LaneRelayError::SignerBitmapLengthMismatch {
-                expected: expected_len,
-                actual: qc.aggregate.signers_bitmap.len(),
-            });
-        }
-        let mut observed: u32 = 0;
-        for (byte_index, byte) in qc.aggregate.signers_bitmap.iter().enumerate() {
-            if *byte == 0 {
-                continue;
-            }
-            let base = u32::try_from(byte_index).expect("signer bitmap length fits in u32") * 8;
-            for bit in 0..8 {
-                if byte & (1 << bit) == 0 {
-                    continue;
-                }
-                let signer_index = base + bit;
-                if signer_index >= quorum.validator_count {
-                    return Err(LaneRelayError::InvalidSignerIndex {
-                        signer: signer_index,
-                        validator_count: quorum.validator_count,
-                    });
-                }
-                observed = observed.saturating_add(1);
-            }
-        }
-
-        if observed < quorum.min_quorum {
-            return Err(LaneRelayError::InsufficientQuorum {
-                observed,
-                expected: quorum.min_quorum,
-            });
-        }
-
-        if qc.aggregate.bls_aggregate_signature.is_empty()
-            || qc
-                .aggregate
-                .bls_aggregate_signature
-                .iter()
-                .all(|byte| *byte == 0)
-        {
-            return Err(LaneRelayError::AggregateSignatureInvalid);
-        }
-
-        Ok(())
     }
 
     /// Attach the dataspace manifest root to the envelope for gossip/telemetry.
@@ -951,6 +803,41 @@ impl LaneRelayEnvelope {
     ) -> Self {
         self.lane_block_descriptor_hash = lane_block_descriptor_hash;
         self
+    }
+
+    /// Attach compact Kura-backed global finality authority.
+    #[must_use]
+    pub fn with_finality_authority(
+        mut self,
+        finality_authority: Option<LaneFinalityAuthorityV1>,
+    ) -> Self {
+        self.finality_authority = finality_authority;
+        self
+    }
+
+    /// Validate the bounded finality-reference shape without consulting Kura.
+    ///
+    /// Cryptographic verification and statement inclusion are performed by
+    /// consensus state, which owns the immutable artifact store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an authority error when the reference is absent, versioned
+    /// incorrectly, or names a different global height.
+    pub fn validate_finality_authority_ref(&self) -> Result<(), LaneRelayError> {
+        let authority = self
+            .finality_authority
+            .as_ref()
+            .ok_or(LaneRelayError::MissingFinalityAuthority)?;
+        if authority.version != 1 {
+            return Err(LaneRelayError::UnsupportedFinalityAuthorityVersion(
+                authority.version,
+            ));
+        }
+        if authority.global_block_height != self.block_header.height().get() {
+            return Err(LaneRelayError::FinalityAuthorityHeightMismatch);
+        }
+        Ok(())
     }
 
     /// Attach `FastPQ` proof material to the envelope.
@@ -1327,6 +1214,21 @@ pub enum LaneRelayError {
     /// QC mode tag does not authenticate the canonical lane-finality statement.
     #[error("QC does not authenticate the canonical lane finality statement")]
     QcFinalityStatementMismatch,
+    /// Compact global-finality authority is absent.
+    #[error("global finality authority missing for relay envelope")]
+    MissingFinalityAuthority,
+    /// Compact global-finality authority uses an unsupported version.
+    #[error("unsupported lane finality authority version {0}")]
+    UnsupportedFinalityAuthorityVersion(u8),
+    /// Compact authority references a different global block height.
+    #[error("lane finality authority height does not match the relayed global block")]
+    FinalityAuthorityHeightMismatch,
+    /// Referenced immutable finality artifact is unavailable or differs from Kura.
+    #[error("referenced lane finality artifact is unavailable or mismatched")]
+    FinalityArtifactMismatch,
+    /// The envelope-derived statement is not included in the CommitQC manifest.
+    #[error("lane finality statement proof is invalid")]
+    FinalityStatementProofInvalid,
     /// Norito encoding failed while hashing the settlement.
     #[error(transparent)]
     Encode(#[from] norito::core::Error),
@@ -1404,12 +1306,19 @@ impl PartialEq for LaneRelayError {
             | (MissingManifestRoot, MissingManifestRoot)
             | (ZeroManifestRoot, ZeroManifestRoot)
             | (QcFinalityStatementMismatch, QcFinalityStatementMismatch)
+            | (MissingFinalityAuthority, MissingFinalityAuthority)
+            | (FinalityAuthorityHeightMismatch, FinalityAuthorityHeightMismatch)
+            | (FinalityArtifactMismatch, FinalityArtifactMismatch)
+            | (FinalityStatementProofInvalid, FinalityStatementProofInvalid)
             | (MissingQc, MissingQc)
             | (AggregateSignatureInvalid, AggregateSignatureInvalid)
             | (MissingFastpqProof, MissingFastpqProof)
             | (InvalidFastpqProof, InvalidFastpqProof)
             | (Encode(_), Encode(_)) => true,
             (UnknownLane(a_lane), UnknownLane(b_lane)) => a_lane == b_lane,
+            (UnsupportedFinalityAuthorityVersion(a), UnsupportedFinalityAuthorityVersion(b)) => {
+                a == b
+            }
             (UnknownDataspace(a_dataspace), UnknownDataspace(b_dataspace)) => {
                 a_dataspace == b_dataspace
             }
@@ -1552,6 +1461,13 @@ impl LaneRelayError {
             LaneRelayError::MissingManifestRoot => "missing_manifest_root",
             LaneRelayError::ZeroManifestRoot => "zero_manifest_root",
             LaneRelayError::QcFinalityStatementMismatch => "qc_finality_statement_mismatch",
+            LaneRelayError::MissingFinalityAuthority => "missing_finality_authority",
+            LaneRelayError::UnsupportedFinalityAuthorityVersion(_) => {
+                "unsupported_finality_authority_version"
+            }
+            LaneRelayError::FinalityAuthorityHeightMismatch => "finality_authority_height_mismatch",
+            LaneRelayError::FinalityArtifactMismatch => "finality_artifact_mismatch",
+            LaneRelayError::FinalityStatementProofInvalid => "finality_statement_proof_invalid",
             LaneRelayError::InvalidValidatorSet { .. } => "invalid_validator_set",
             LaneRelayError::MissingQc => "missing_qc",
             LaneRelayError::SignerBitmapLengthMismatch { .. } => "signer_bitmap_length_mismatch",
@@ -1570,19 +1486,18 @@ mod tests {
     use std::collections::BTreeSet;
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof};
     use iroha_primitives::numeric::Quantity;
 
     use super::*;
     use crate::{
-        AccountId, PeerId,
+        AccountId,
         block::{
             BlockHeader,
             consensus::{
                 LaneBlockCommitment, NativeAmxReceipt, NexusFeeReceipt, NexusFeeScheduleInputs,
             },
         },
-        consensus::{CertPhase, QcAggregate},
         nexus::FeeDebitSource,
     };
 
@@ -1624,13 +1539,46 @@ mod tests {
         header
     }
 
-    fn build_envelope(height: u64, qc: Option<Qc>) -> LaneRelayEnvelope {
+    fn sample_lane_finality_statement() -> LaneFinalityStatement {
+        let settlement_commitment = sample_commitment(6, 3, 2);
+        let settlement_hash =
+            compute_settlement_hash(&settlement_commitment).expect("sample settlement hashes");
+        LaneFinalityStatement {
+            version: 1,
+            lane_id: settlement_commitment.lane_id,
+            lane_incarnation: settlement_commitment.lane_incarnation,
+            dataspace_id: settlement_commitment.dataspace_id,
+            block_height: settlement_commitment.block_height,
+            block_header_hash: sample_header(6, None).hash(),
+            da_commitment_hash: None,
+            lane_block_descriptor_hash: Hash::new(b"sample-lane-finality-descriptor"),
+            manifest_root: [0x42; 32],
+            settlement_commitment,
+            settlement_hash,
+            rbc_bytes_total: 128,
+        }
+    }
+
+    fn build_envelope(height: u64) -> LaneRelayEnvelope {
         let settlement = sample_commitment(height, 3, 2);
         let header = sample_header(height, None);
-        LaneRelayEnvelope::new(header, qc, None, settlement, 0)
+        LaneRelayEnvelope::new(header, None, settlement, 0)
             .expect("envelope")
             .with_lane_block_descriptor_hash(Some(Hash::new(b"test-lane-block-descriptor")))
             .with_manifest_root(Some([0x42; 32]))
+    }
+
+    fn with_test_authority(
+        envelope: LaneRelayEnvelope,
+        artifact_tag: &'static [u8],
+    ) -> LaneRelayEnvelope {
+        let global_block_height = envelope.block_header.height().get();
+        envelope.with_finality_authority(Some(LaneFinalityAuthorityV1 {
+            version: 1,
+            global_block_height,
+            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(artifact_tag)),
+            statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
+        }))
     }
 
     fn checked_account_id() -> AccountId {
@@ -1644,25 +1592,23 @@ mod tests {
 
     #[test]
     fn fastpq_metadata_status_distinguishes_missing_and_present_metadata() {
-        let pending = build_envelope(6, None);
+        let pending = build_envelope(6);
         assert_eq!(
             pending.fastpq_metadata_status(),
             LaneRelayFastpqMaterialStatus::Missing
         );
         assert!(!pending.has_merge_admission_material());
 
-        let verified = pending.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
-            proof_digest: Hash::new(b"verified-relay-proof"),
-            verified_at_height: 6,
-        }));
+        let verified = with_test_authority(pending, b"test-finality-artifact")
+            .with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+                proof_digest: Hash::new(b"verified-relay-proof"),
+                verified_at_height: 6,
+            }));
         assert_eq!(
             verified.fastpq_metadata_status(),
             LaneRelayFastpqMaterialStatus::Present
         );
-        assert!(
-            !verified.has_merge_admission_material(),
-            "QC is still required for merge"
-        );
+        assert!(verified.has_merge_admission_material());
     }
 
     #[test]
@@ -1693,15 +1639,56 @@ mod tests {
     }
 
     #[test]
-    fn merge_hint_root_binds_qc_state_roots() {
-        let mut qc = qc_with_bitmap(vec![0b0000_0001], 6, vec![0xCC; 48]);
-        qc.parent_state_root = Hash::new(b"parent-a");
-        qc.post_state_root = Hash::new(b"post-a");
-        let envelope = build_envelope(6, Some(qc.clone()));
+    fn lane_finality_statement_order_uses_the_complete_canonical_effect() {
+        let original = sample_lane_finality_statement();
+        let mut conflicting = original.clone();
+        conflicting.settlement_commitment.receipts[0].timestamp_ms =
+            conflicting.settlement_commitment.receipts[0]
+                .timestamp_ms
+                .saturating_add(1);
+        conflicting.settlement_hash = compute_settlement_hash(&conflicting.settlement_commitment)
+            .expect("conflicting settlement hashes");
+
+        assert_eq!(
+            (
+                original.lane_id,
+                original.dataspace_id,
+                original.lane_incarnation,
+                original.block_height,
+            ),
+            (
+                conflicting.lane_id,
+                conflicting.dataspace_id,
+                conflicting.lane_incarnation,
+                conflicting.block_height,
+            ),
+            "the adversarial pair must occupy one semantic finality coordinate"
+        );
+        assert_ne!(original, conflicting);
+        assert_ne!(original.cmp(&conflicting), Ordering::Equal);
+
+        let original_wire =
+            norito::encode_canonical(&original).expect("canonical original statement");
+        let conflicting_wire =
+            norito::encode_canonical(&conflicting).expect("canonical conflicting statement");
+        assert_eq!(
+            original.cmp(&conflicting),
+            original_wire.cmp(&conflicting_wire),
+            "statement ordering must be exactly canonical-wire ordering"
+        );
+        assert_eq!(
+            original.partial_cmp(&conflicting),
+            Some(original.cmp(&conflicting))
+        );
+        assert_eq!(original.cmp(&original.clone()), Ordering::Equal);
+    }
+
+    #[test]
+    fn merge_hint_root_binds_finality_artifact() {
+        let envelope = with_test_authority(build_envelope(6), b"finality-artifact-a");
         let first = envelope.merge_hint_root().expect("merge hint root");
 
-        qc.post_state_root = Hash::new(b"post-b");
-        let changed = build_envelope(6, Some(qc));
+        let changed = with_test_authority(build_envelope(6), b"finality-artifact-b");
         let second = changed.merge_hint_root().expect("changed merge hint root");
 
         assert_ne!(first, second);
@@ -1709,12 +1696,11 @@ mod tests {
 
     #[test]
     fn merge_hint_root_binds_lane_block_descriptor_hash() {
-        let qc = qc_with_bitmap(vec![0b0000_0001], 6, vec![0xCC; 48]);
-        let first = build_envelope(6, Some(qc.clone()))
+        let first = with_test_authority(build_envelope(6), b"finality-artifact")
             .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-a")))
             .merge_hint_root()
             .expect("merge hint root");
-        let second = build_envelope(6, Some(qc))
+        let second = with_test_authority(build_envelope(6), b"finality-artifact")
             .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-b")))
             .merge_hint_root()
             .expect("changed merge hint root");
@@ -1723,90 +1709,8 @@ mod tests {
     }
 
     #[test]
-    fn lane_finality_qc_tag_strictly_binds_the_exact_effect() {
-        let mut envelope = build_envelope(6, None);
-        let tag = envelope
-            .lane_finality_qc_mode_tag("permissioned")
-            .expect("complete lane finality statement");
-        let statement_hash = envelope
-            .lane_finality_statement_hash()
-            .expect("lane finality statement hash");
-        assert_eq!(
-            LaneRelayEnvelope::parse_lane_finality_qc_mode_tag(
-                envelope.lane_id,
-                envelope.dataspace_id,
-                "permissioned",
-                &tag,
-            )
-            .expect("canonical finality tag"),
-            statement_hash
-        );
-
-        let hash_offset = tag
-            .len()
-            .checked_sub(Hash::LENGTH * 2)
-            .expect("finality tag contains a fixed-width hash");
-        let mut uppercase = tag.clone().into_bytes();
-        uppercase[hash_offset] = b'A';
-        let uppercase = String::from_utf8(uppercase).expect("finality tag remains ASCII");
-        assert_eq!(
-            LaneRelayEnvelope::parse_lane_finality_qc_mode_tag(
-                envelope.lane_id,
-                envelope.dataspace_id,
-                "permissioned",
-                &uppercase,
-            ),
-            Err(LaneRelayError::QcFinalityStatementMismatch)
-        );
-        for legacy in [
-            String::new(),
-            LaneRelayEnvelope::lane_qc_mode_tag_for(
-                envelope.lane_id,
-                envelope.dataspace_id,
-                "permissioned",
-            ),
-        ] {
-            assert_eq!(
-                LaneRelayEnvelope::parse_lane_finality_qc_mode_tag(
-                    envelope.lane_id,
-                    envelope.dataspace_id,
-                    "permissioned",
-                    &legacy,
-                ),
-                Err(LaneRelayError::QcFinalityStatementMismatch)
-            );
-        }
-        assert_eq!(
-            LaneRelayEnvelope::parse_lane_finality_qc_mode_tag(
-                envelope.lane_id,
-                envelope.dataspace_id,
-                "permissioned",
-                &format!("{tag}:extra"),
-            ),
-            Err(LaneRelayError::QcFinalityStatementMismatch)
-        );
-
-        let mut qc = qc_with_bitmap(vec![0b0000_0001], 6, vec![0xCC; 48]);
-        qc.mode_tag = tag;
-        envelope.qc = Some(qc);
-        envelope
-            .verify_lane_finality_qc_mode_tag("permissioned")
-            .expect("QC tag authenticates the original effect");
-
-        envelope.settlement_commitment.tx_count =
-            envelope.settlement_commitment.tx_count.saturating_add(1);
-        envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)
-            .expect("mutated settlement remains hashable");
-        assert_eq!(
-            envelope.verify_lane_finality_qc_mode_tag("permissioned"),
-            Err(LaneRelayError::QcFinalityStatementMismatch)
-        );
-    }
-
-    #[test]
     fn relay_consensus_identities_ignore_ambient_layout_flags() {
-        let qc = qc_with_bitmap(vec![0b0000_0001], 8, vec![0xCC; 48]);
-        let envelope = build_envelope(8, Some(qc))
+        let envelope = with_test_authority(build_envelope(8), b"canonical-finality-artifact")
             .with_manifest_root(Some([0x42; 32]))
             .with_lane_block_descriptor_hash(Some(Hash::new(b"canonical-relay-descriptor")));
         let mut ordered_peer = envelope.clone();
@@ -1851,7 +1755,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_settlement_total_mismatch_when_receipts_are_present() {
-        let mut envelope = build_envelope(6, None);
+        let mut envelope = build_envelope(6);
         let one_micro = "0.000001"
             .parse::<Quantity>()
             .expect("valid one-micro settlement quantity");
@@ -1870,7 +1774,7 @@ mod tests {
 
     #[test]
     fn settlement_tx_count_covers_union_of_receipt_sources() {
-        let mut envelope = build_envelope(6, None);
+        let mut envelope = build_envelope(6);
         envelope
             .settlement_commitment
             .nexus_fee_receipts
@@ -1933,7 +1837,7 @@ mod tests {
 
     #[test]
     fn verify_accepts_native_amx_receipt_with_lane_local_height() {
-        let mut envelope = build_envelope(6, None);
+        let mut envelope = build_envelope(6);
         envelope
             .settlement_commitment
             .native_amx_receipts
@@ -1962,7 +1866,7 @@ mod tests {
 
     #[test]
     fn relay_envelope_ref_state_key_is_canonical_and_deterministic() {
-        let relay_ref = build_envelope(7, None).relay_ref();
+        let relay_ref = build_envelope(7).relay_ref();
         let first = relay_ref.relay_state_key();
         let second = relay_ref.relay_state_key();
 
@@ -1980,49 +1884,14 @@ mod tests {
         assert!(incarnation.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 
-    fn qc_with_bitmap(bitmap: Vec<u8>, height: u64, signature: Vec<u8>) -> Qc {
-        let validator_set: Vec<PeerId> = Vec::new();
-        Qc {
-            phase: CertPhase::Commit,
-            subject_block_hash: sample_header(height, None).hash(),
-            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            height,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: crate::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::block::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: 1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: bitmap,
-                bls_aggregate_signature: signature,
-            },
-        }
-    }
-
-    #[test]
-    fn quorum_validation_accepts_sufficient_signers() {
-        let qc = qc_with_bitmap(vec![0b0001_0111], 5, vec![0xCC; 48]);
-        let envelope = build_envelope(5, Some(qc));
-        let quorum = LaneRelayQuorumContext::new(6, 3).expect("quorum");
-
-        envelope
-            .verify_with_quorum(quorum)
-            .expect("quorum validation should pass");
-    }
-
     #[test]
     fn relay_rejects_zero_and_accepts_independent_lane_local_height() {
         let header = sample_header(8, None);
         assert_eq!(
-            LaneRelayEnvelope::new(header, None, None, sample_commitment(0, 3, 2), 0,),
+            LaneRelayEnvelope::new(header, None, sample_commitment(0, 3, 2), 0,),
             Err(LaneRelayError::BlockHeightMismatch)
         );
-        let envelope = LaneRelayEnvelope::new(header, None, None, sample_commitment(9, 3, 2), 0)
+        let envelope = LaneRelayEnvelope::new(header, None, sample_commitment(9, 3, 2), 0)
             .expect("lane-local height is independent of global proposal height");
         envelope
             .verify()
@@ -2030,7 +1899,6 @@ mod tests {
 
         let boundary = LaneRelayEnvelope::new(
             sample_header(1, None),
-            None,
             None,
             sample_commitment(u64::MAX, 3, 2),
             0,
@@ -2042,113 +1910,9 @@ mod tests {
     }
 
     #[test]
-    fn relay_rejects_non_commit_or_wrong_view_qc() {
-        let mut prepare = qc_with_bitmap(vec![0b0000_0001], 8, vec![0xCC; 48]);
-        prepare.phase = CertPhase::Prepare;
-        assert_eq!(
-            LaneRelayEnvelope::new(
-                sample_header(8, None),
-                Some(prepare),
-                None,
-                sample_commitment(8, 3, 2),
-                0,
-            ),
-            Err(LaneRelayError::AggregateSignatureInvalid)
-        );
-
-        let mut wrong_view = qc_with_bitmap(vec![0b0000_0001], 8, vec![0xCC; 48]);
-        wrong_view.view = 1;
-        assert_eq!(
-            LaneRelayEnvelope::new(
-                sample_header(8, None),
-                Some(wrong_view),
-                None,
-                sample_commitment(8, 3, 2),
-                0,
-            ),
-            Err(LaneRelayError::AggregateSignatureInvalid)
-        );
-    }
-
-    #[test]
-    fn quorum_validation_rejects_missing_qc() {
-        let envelope = build_envelope(3, None);
-        let quorum = LaneRelayQuorumContext::new(4, 2).expect("quorum");
-
-        let err = envelope.verify_with_quorum(quorum).expect_err("qc missing");
-        assert_eq!(err, LaneRelayError::MissingQc);
-    }
-
-    #[test]
-    fn quorum_validation_rejects_invalid_signer_index() {
-        let qc = qc_with_bitmap(vec![0b0001_0000], 4, vec![0xAA; 48]); // bit 4 set, count 4 -> out of range
-        let envelope = build_envelope(4, Some(qc));
-        let quorum = LaneRelayQuorumContext::new(4, 2).expect("quorum");
-
-        let err = envelope
-            .verify_with_quorum(quorum)
-            .expect_err("invalid signer");
-        assert_eq!(
-            err,
-            LaneRelayError::InvalidSignerIndex {
-                signer: 4,
-                validator_count: 4
-            }
-        );
-    }
-
-    #[test]
-    fn quorum_validation_rejects_bitmap_length_mismatch() {
-        let qc = qc_with_bitmap(vec![0b0000_0011], 4, vec![0xAA; 48]);
-        let envelope = build_envelope(4, Some(qc));
-        let quorum = LaneRelayQuorumContext::new(9, 3).expect("quorum");
-
-        let err = envelope
-            .verify_with_quorum(quorum)
-            .expect_err("bitmap length mismatch");
-        assert_eq!(
-            err,
-            LaneRelayError::SignerBitmapLengthMismatch {
-                expected: 2,
-                actual: 1
-            }
-        );
-    }
-
-    #[test]
-    fn quorum_validation_rejects_insufficient_quorum() {
-        let qc = qc_with_bitmap(vec![0b0000_0011], 6, vec![0xAA; 48]); // two signers
-        let envelope = build_envelope(6, Some(qc));
-        let quorum = LaneRelayQuorumContext::new(5, 3).expect("quorum");
-
-        let err = envelope
-            .verify_with_quorum(quorum)
-            .expect_err("quorum should fail");
-        assert_eq!(
-            err,
-            LaneRelayError::InsufficientQuorum {
-                observed: 2,
-                expected: 3
-            }
-        );
-    }
-
-    #[test]
-    fn quorum_validation_rejects_zero_signature() {
-        let qc = qc_with_bitmap(vec![0b0000_0111], 7, vec![0; 48]);
-        let envelope = build_envelope(7, Some(qc));
-        let quorum = LaneRelayQuorumContext::new(8, 2).expect("quorum");
-
-        let err = envelope
-            .verify_with_quorum(quorum)
-            .expect_err("zero signature");
-        assert_eq!(err, LaneRelayError::AggregateSignatureInvalid);
-    }
-
-    #[test]
     fn fastpq_proof_material_accepts_external_digest() {
         let envelope =
-            build_envelope(8, None).with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            build_envelope(8).with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
                 proof_digest: Hash::new(b"external-fastpq-proof-payload"),
                 verified_at_height: 8,
             }));
@@ -2161,7 +1925,7 @@ mod tests {
     #[test]
     fn fastpq_proof_material_rejects_stale_verified_height() {
         let envelope =
-            build_envelope(8, None).with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            build_envelope(8).with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
                 proof_digest: Hash::new(b"external-fastpq-proof-payload"),
                 verified_at_height: 7,
             }));
@@ -2174,7 +1938,7 @@ mod tests {
 
     #[test]
     fn lane_relay_fastpq_claim_digest_binds_fee_receipts() {
-        let mut envelope = build_envelope(8, None).with_manifest_root(Some([0x42; 32]));
+        let mut envelope = build_envelope(8).with_manifest_root(Some([0x42; 32]));
         let original = lane_relay_fastpq_claim_digest(&envelope).expect("lane relay claim digest");
 
         envelope
@@ -2217,7 +1981,6 @@ mod tests {
         let mut settlement = sample_commitment(lane_block_height, 3, 2);
         let mut envelope = LaneRelayEnvelope::new(
             sample_header(proposal_height, None),
-            None,
             None,
             settlement.clone(),
             0,
@@ -2262,10 +2025,10 @@ mod tests {
 
     #[test]
     fn lane_relay_fastpq_claim_digest_binds_lane_block_descriptor_hash() {
-        let first = build_envelope(8, None)
+        let first = build_envelope(8)
             .with_manifest_root(Some([0x42; 32]))
             .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-a")));
-        let second = build_envelope(8, None)
+        let second = build_envelope(8)
             .with_manifest_root(Some([0x42; 32]))
             .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-b")));
 
@@ -2428,7 +2191,7 @@ mod tests {
 
     #[test]
     fn evidence_bundle_roundtrip() {
-        let envelope = build_envelope(1, None);
+        let envelope = build_envelope(1);
         let bundle = LaneRelayEvidenceBundle {
             envelope,
             error_label: "example_error".to_string(),

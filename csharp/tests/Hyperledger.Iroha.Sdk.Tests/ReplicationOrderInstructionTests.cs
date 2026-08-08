@@ -8,6 +8,8 @@ public sealed class ReplicationOrderInstructionTests
 {
     private const string OrderId =
         "abababababababababababababababababababababababababababababababab";
+    private const string ArchiveId =
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
     private const string ProviderId =
         "1010101010101010101010101010101010101010101010101010101010101010";
     private const string FixtureAccountId =
@@ -24,7 +26,7 @@ public sealed class ReplicationOrderInstructionTests
         "sorafs_manifest::capacity::ReplicationOrderV1";
 
     [Fact]
-    public void IssueEncodesTheExactFourFieldNativePayload()
+    public void IssueEncodesTheExactFiveFieldNativePayloadWithoutMusubiPurpose()
     {
         Assert.Equal(1_048_576, IssueReplicationOrderInstruction.MaximumOrderPayloadBytesV1);
         var fixture = Fixture();
@@ -54,12 +56,36 @@ public sealed class ReplicationOrderInstructionTests
         Assert.Equal(fixture, orderPayload[sizeof(ulong)..].ToArray());
         Assert.Equal(20ul, BinaryPrimitives.ReadUInt64LittleEndian(fields.ReadField()));
         Assert.Equal(28ul, BinaryPrimitives.ReadUInt64LittleEndian(fields.ReadField()));
+        Assert.Equal(new byte[] { 0 }, fields.ReadField().ToArray());
         fields.RequireEnd();
 
         var copy = instruction.OrderPayload;
         copy[0] ^= 0xff;
         Assert.Equal(fixture, instruction.OrderPayload);
         Assert.NotEmpty(instruction.EncodeInstructionBox(FixtureAccountId));
+    }
+
+    [Fact]
+    public void IssueEncodesMusubiArchivePurposeAsTheFifthField()
+    {
+        var instruction = TransactionInstruction.IssueReplicationOrder(
+            OrderId,
+            Fixture(),
+            issuedEpoch: 20,
+            deadlineEpoch: 28,
+            musubiArchiveId: ArchiveId);
+
+        Assert.Equal(ArchiveId, instruction.MusubiArchiveId);
+        var fields = new FixedFieldReader(
+            instruction.EncodePayload(new TransactionEncodingContext(FixtureAccountId)));
+        _ = fields.ReadField();
+        _ = fields.ReadField();
+        _ = fields.ReadField();
+        _ = fields.ReadField();
+        Assert.Equal(
+            Convert.FromHexString(ArchiveId),
+            ReadOptionalIdentifier(fields.ReadField()));
+        fields.RequireEnd();
     }
 
     [Fact]
@@ -192,6 +218,20 @@ public sealed class ReplicationOrderInstructionTests
                 1,
                 2));
         Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.IssueReplicationOrder(
+                OrderId,
+                fixture,
+                1,
+                2,
+                new string('0', 64)));
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.IssueReplicationOrder(
+                OrderId,
+                fixture,
+                1,
+                2,
+                ArchiveId.ToUpperInvariant()));
+        Assert.Throws<ArgumentException>(() =>
             TransactionInstruction.ExpireReplicationOrder(new string('0', 64), 1));
     }
 
@@ -240,7 +280,7 @@ public sealed class ReplicationOrderInstructionTests
                 "00000042",
                 FixtureAccountId,
                 FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
-            .IssueReplicationOrder(OrderId, Fixture(), 20, 28)
+            .IssueReplicationOrder(OrderId, Fixture(), 20, 28, ArchiveId)
             .CompleteReplicationOrder(
                 OrderId,
                 ProviderId,
@@ -252,7 +292,9 @@ public sealed class ReplicationOrderInstructionTests
 
         Assert.Collection(
             builder.Instructions,
-            instruction => Assert.IsType<IssueReplicationOrderInstruction>(instruction),
+            instruction => Assert.Equal(
+                ArchiveId,
+                Assert.IsType<IssueReplicationOrderInstruction>(instruction).MusubiArchiveId),
             instruction => Assert.IsType<CompleteReplicationOrderInstruction>(instruction),
             instruction => Assert.IsType<ExpireReplicationOrderInstruction>(instruction));
     }
@@ -305,6 +347,16 @@ public sealed class ReplicationOrderInstructionTests
             bytes[index] = item[0];
         }
         array.RequireEnd();
+        some.RequireEnd();
+        return bytes;
+    }
+
+    private static byte[] ReadOptionalIdentifier(ReadOnlySpan<byte> payload)
+    {
+        Assert.False(payload.IsEmpty);
+        Assert.Equal(1, payload[0]);
+        var some = new FixedFieldReader(payload[1..]);
+        var bytes = ReadIdentifier(some.ReadField());
         some.RequireEnd();
         return bytes;
     }

@@ -630,7 +630,7 @@
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
-    async fn torii_proxy_candidate_peers_exclude_sender_and_visited_peers() {
+    async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when_exhausted() {
         let local_keypair =
             checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
         let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
@@ -752,7 +752,7 @@
         assert_eq!(candidates.authoritative_count, 1);
         assert_eq!(
             candidates.peers,
-            vec![ToriiProxyCandidate::P2p(authoritative_peer_id)]
+            vec![ToriiProxyCandidate::P2p(authoritative_peer_id.clone())]
         );
         assert!(
             !candidates
@@ -767,6 +767,107 @@
                 .any(|candidate| candidate.peer_id() == &visited_peer_id)
         );
         assert_eq!(candidates.loop_prevention_drops, 2);
+
+        let local_fanout_request = ToriiProxyRequestV5 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+            request_id: Hash::new(b"local-nexus-fanout-cannot-target-self"),
+            hop_count: 1,
+            max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
+            visited_peer_ids: vec![local_peer_id.clone()],
+            request: ToriiProxyRequestKindV4::ReadFanout(super::torii_read_fanout_request(
+                ToriiReadEndpointV1::AccountGet,
+                ToriiFanoutRouteScopeV1::AllDataspaces,
+                ToriiReadFanoutMergeV1::Account,
+                vec![ALICE_ID.to_string()],
+                None,
+                Vec::new(),
+                ToriiProxyResponseFormatV1::Json,
+            )),
+        };
+        let fanout_candidates = super::torii_proxy_candidate_peer_ids_for_request(
+            app.as_ref(),
+            &local_peer_id,
+            route,
+            None,
+            &local_fanout_request.visited_peer_ids,
+            &local_fanout_request,
+            true,
+        )
+        .expect("ordinary read fanout candidate selection");
+        assert!(
+            fanout_candidates.peers.iter().all(|candidate| {
+                !matches!(candidate, ToriiProxyCandidate::Local(_))
+                    && candidate.peer_id() != &local_peer_id
+            }),
+            "an outbound local Nexus fanout leg must never re-enter local proxy delivery"
+        );
+
+        let exhausted = super::torii_proxy_candidate_peer_ids(
+            app.as_ref(),
+            &local_peer_id,
+            route,
+            None,
+            &[
+                authoritative_peer_id.clone(),
+                sender_peer_id.clone(),
+                visited_peer_id.clone(),
+            ],
+        );
+        assert!(exhausted.peers.is_empty());
+        assert_eq!(exhausted.authoritative_total_count, 3);
+        assert_eq!(exhausted.loop_prevention_drops, 3);
+        assert_eq!(
+            exhausted.unavailable_reason,
+            Some(ToriiProxyUnavailableReason::LoopPreventionExhausted)
+        );
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
+        let local_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0x67,
+                "derive local Nexus fanout peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique local Nexus fanout app")
+            .local_peer_id = Some(local_peer_id.clone());
+        let request = ToriiProxyRequestV5 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+            request_id: Hash::new(b"local-nexus-fanout-terminates"),
+            hop_count: 1,
+            max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
+            visited_peer_ids: vec![local_peer_id.clone()],
+            request: ToriiProxyRequestKindV4::ReadFanout(super::torii_read_fanout_request(
+                ToriiReadEndpointV1::AccountGet,
+                ToriiFanoutRouteScopeV1::TargetAccount {
+                    account_id: ALICE_ID.to_string(),
+                },
+                ToriiReadFanoutMergeV1::Account,
+                vec![ALICE_ID.to_string()],
+                None,
+                Vec::new(),
+                ToriiProxyResponseFormatV1::Json,
+            )),
+        };
+
+        let snapshot = tokio::time::timeout(
+            Duration::from_secs(2),
+            super::execute_torii_proxy_request_locally(
+                &app,
+                local_peer_id,
+                request,
+            ),
+        )
+        .await
+        .expect("local fanout must not recurse until timeout")
+        .expect("local fanout snapshot");
+        assert_eq!(snapshot.status_code, StatusCode::OK.as_u16());
     }
 
     #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]

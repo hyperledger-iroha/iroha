@@ -6866,7 +6866,7 @@ def _offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
         "mandatory": False,
         "cash_handoff_capability": "cash_handoff_v1",
-        "required_bridge_abi_version": 21,
+        "required_bridge_abi_version": 22,
         "max_hops": 8,
         "ready": True,
         "assets": [],
@@ -7226,7 +7226,7 @@ def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
     assert isinstance(capability, OfflineStatus)
     assert capability.mandatory is False
     assert capability.cash_handoff_capability == "cash_handoff_v1"
-    assert capability.required_bridge_abi_version == 21
+    assert capability.required_bridge_abi_version == 22
     assert capability.max_hops == 8
     assert capability.ready is True
     assert capability.assets == ()

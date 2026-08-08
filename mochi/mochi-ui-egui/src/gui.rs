@@ -12778,7 +12778,8 @@ impl ToriiErrorInfoUiExt for ToriiErrorInfo {
             | ToriiErrorKind::InvalidEndpoint
             | ToriiErrorKind::UnsupportedScheme
             | ToriiErrorKind::InvalidHeader
-            | ToriiErrorKind::InvalidWebSocketRequest => Color32::from_gray(150),
+            | ToriiErrorKind::InvalidWebSocketRequest
+            | ToriiErrorKind::SignedQueryContext => Color32::from_gray(150),
         }
     }
 }

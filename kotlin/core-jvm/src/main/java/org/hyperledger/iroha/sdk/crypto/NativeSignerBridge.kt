@@ -9,8 +9,8 @@ import org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruct
 class NativeSignerBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
-        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 3
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 22
+        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 4
         private const val HASH_BYTES = 32
         private val nativeAvailable: Boolean = loadLibrary()
 
@@ -107,9 +107,6 @@ class NativeSignerBridge private constructor() {
                     ttl,
                     hasTtl,
                     assetBytes,
-                    selected.mode.bridgeCode,
-                    selected.allowShield,
-                    selected.allowUnshield,
                     unshieldBytes,
                     selected.unshieldVerifyingKey != null,
                     shieldBytes,
@@ -223,9 +220,6 @@ class NativeSignerBridge private constructor() {
             ttlMs: Long,
             ttlPresent: Boolean,
             asset: ByteArray,
-            modeCode: Int,
-            allowShield: Boolean,
-            allowUnshield: Boolean,
             unshieldVerifyingKey: ByteArray,
             unshieldVerifyingKeyPresent: Boolean,
             shieldVerifyingKey: ByteArray,

@@ -35,7 +35,7 @@ use crate::{
         current_axt_slot_from_block,
     },
 };
-use iroha_crypto::{Hash, HashOf, streaming::TransportCapabilityResolutionSnapshot};
+use iroha_crypto::{Hash, HashOf, PublicKey, streaming::TransportCapabilityResolutionSnapshot};
 #[cfg(not(feature = "fast_dsl"))]
 use iroha_data_model::query::{
     account::prelude::FindAccounts,
@@ -221,6 +221,12 @@ struct CachedProofEntry {
     manifest_root: Option<[u8; 32]>,
     valid: bool,
     status: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AxtIssuerKeyBinding {
+    manifest_root: [u8; 32],
+    public_key: PublicKey,
 }
 
 const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = ivm::gas::HOST_BYTE_GAS_BASE;
@@ -715,6 +721,8 @@ pub struct CoreHostImpl<QS> {
     zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
     // Cached AXT policy snapshot (if available) for telemetry and richer errors.
     axt_policy_snapshot: Option<AxtPolicySnapshot>,
+    // Issuer keys resolved only from committed Space Directory/UAID state.
+    axt_issuer_keys: Arc<BTreeMap<DataSpaceId, AxtIssuerKeyBinding>>,
     // Bounded replay ledger hydrated from WSV.
     axt_replay_ledger: Arc<BTreeMap<AxtHandleReplayKey, AxtReplayRecord>>,
     // Slot for which cached AXT proofs were verified.
@@ -2514,9 +2522,9 @@ impl HostExecutionArtifacts {
     pub(crate) fn record_completed_axt_states(
         tx: &mut StateTransaction<'_, '_>,
         completed_axt: Vec<axt::HostAxtState>,
-    ) {
+    ) -> Result<(), ValidationFail> {
         if completed_axt.is_empty() {
-            return;
+            return Ok(());
         }
         let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
         let commit_height = tx.block_height();
@@ -2525,8 +2533,10 @@ impl HostExecutionArtifacts {
                 &state,
                 lane,
                 commit_height,
-            ));
+            ))
+            .map_err(ValidationFail::InstructionFailed)?;
         }
+        Ok(())
     }
 
     pub(crate) fn apply_to_transaction(
@@ -2640,7 +2650,7 @@ impl HostExecutionArtifacts {
         if self.confidential_gas_delta > 0 {
             tx.record_confidential_gas_delta(self.confidential_gas_delta);
         }
-        Self::record_completed_axt_states(tx, self.completed_axt);
+        Self::record_completed_axt_states(tx, self.completed_axt)?;
         if !self.durable_state_overlay.is_empty() {
             for (path, value) in self.durable_state_overlay {
                 if let Some(authorization) = self
@@ -2850,6 +2860,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
+            axt_issuer_keys: Arc::new(BTreeMap::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
@@ -2978,6 +2989,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
+            axt_issuer_keys: Arc::new(BTreeMap::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
@@ -3060,6 +3072,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_policy_snapshot: None,
+            axt_issuer_keys: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
             last_axt_reject: None,
@@ -3517,6 +3530,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.abort_active_axt_envelope_for_policy_change();
         self.axt_policy = policy;
         self.axt_policy_snapshot = None;
+        self.axt_issuer_keys = Arc::new(BTreeMap::new());
         self.clear_axt_proof_cache();
         self
     }
@@ -3550,8 +3564,49 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.abort_active_axt_envelope_for_policy_change();
         self.axt_policy = Arc::new(policy);
         self.axt_policy_snapshot = Some(snapshot.clone());
+        self.axt_issuer_keys = Arc::new(BTreeMap::new());
         self.clear_axt_proof_cache();
         self.axt_proof_cache_slot = Self::policy_current_slot(snapshot);
+    }
+
+    /// Install an issuer key for an explicitly constructed test policy.
+    ///
+    /// Production hosts obtain this map only through [`Self::hydrate_axt_state`].
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[must_use]
+    pub fn with_axt_issuer_key_for_tests(
+        mut self,
+        dataspace: DataSpaceId,
+        manifest_root: [u8; 32],
+        public_key: PublicKey,
+    ) -> Self {
+        Arc::make_mut(&mut self.axt_issuer_keys).insert(
+            dataspace,
+            AxtIssuerKeyBinding {
+                manifest_root,
+                public_key,
+            },
+        );
+        self
+    }
+
+    /// Install an issuer key into an already constructed test host.
+    ///
+    /// Production hosts obtain this map only through [`Self::hydrate_axt_state`].
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn set_axt_issuer_key_for_tests(
+        &mut self,
+        dataspace: DataSpaceId,
+        manifest_root: [u8; 32],
+        public_key: PublicKey,
+    ) {
+        Arc::make_mut(&mut self.axt_issuer_keys).insert(
+            dataspace,
+            AxtIssuerKeyBinding {
+                manifest_root,
+                public_key,
+            },
+        );
     }
 
     fn clear_axt_proof_cache(&mut self) {
@@ -3722,7 +3777,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         .lifecycle
                         .activated_epoch
                         .unwrap_or(record.manifest.activation_epoch),
-                    min_sub_nonce: 0,
+                    min_sub_nonce: 1,
                     current_slot,
                 };
                 let activated_epoch = record.lifecycle.activated_epoch;
@@ -5304,7 +5359,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 tx.record_confidential_gas_delta(delta);
             }
         }
-        self.flush_completed_axt(tx);
+        self.flush_completed_axt(tx)?;
         self.flush_durable_state(tx)?;
         Ok(queued
             .into_iter()
@@ -6411,10 +6466,30 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 replay_ledger.insert(*key, *entry);
             }
         }
+        let mut issuer_keys = BTreeMap::new();
+        for binding in &snapshot.entries {
+            if binding.policy.manifest_root.iter().all(|byte| *byte == 0) {
+                continue;
+            }
+            if let Ok(public_key) = crate::nexus::space_directory::resolve_axt_issuer_public_key(
+                state.world(),
+                binding.dsid,
+                binding.policy.manifest_root,
+            ) {
+                issuer_keys.insert(
+                    binding.dsid,
+                    AxtIssuerKeyBinding {
+                        manifest_root: binding.policy.manifest_root,
+                        public_key,
+                    },
+                );
+            }
+        }
 
         self.axt_timing = timing;
         self.axt_replay_ledger = Arc::new(replay_ledger);
         self.install_validated_axt_policy_snapshot(&snapshot, policy);
+        self.axt_issuer_keys = Arc::new(issuer_keys);
         self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
         Ok(())
     }
@@ -9450,6 +9525,70 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(gas)
     }
 
+    fn authenticate_axt_handle_usage(
+        &mut self,
+        usage: &axt::HandleUsage,
+    ) -> Result<(), ivm::VMError> {
+        let dsid = usage.intent.asset_dsid;
+        if self.chain_id_bytes.is_empty() {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                Some(usage.handle.target_lane),
+                "AXT issuer authentication requires a canonical chain identifier",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let Some(policy) = self.policy_entry_for(dsid) else {
+            self.record_axt_reject(
+                AxtRejectReason::MissingPolicy,
+                Some(dsid),
+                Some(usage.handle.target_lane),
+                "no policy entry for handle issuer authentication",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        };
+        let Some(issuer) = self.axt_issuer_keys.get(&dsid).cloned() else {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                Some(policy.target_lane),
+                "committed AXT policy has no unambiguous single-key issuer",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        };
+        if issuer.manifest_root != policy.manifest_root {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                Some(policy.target_lane),
+                "cached AXT issuer key does not match the active manifest root",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let model_usage = AxtHandleFragment::try_from(usage).map_err(|error| {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!("failed to canonicalize handle for issuer authentication: {error:?}"),
+            );
+            ivm::VMError::PermissionDenied
+        })?;
+        model_usage
+            .handle
+            .verify_issuer_signature_v1(&self.chain_id_bytes, dsid, &issuer.public_key)
+            .map_err(|_| {
+                self.record_axt_reject(
+                    AxtRejectReason::PolicyDenied,
+                    Some(dsid),
+                    Some(policy.target_lane),
+                    "AXT handle issuer signature is missing or invalid",
+                );
+                ivm::VMError::PermissionDenied
+            })
+    }
+
     #[allow(clippy::too_many_lines)]
     fn enforce_axt_policy(&mut self, usage: &axt::HandleUsage) -> Result<(), ivm::VMError> {
         let dsid = usage.intent.asset_dsid;
@@ -9471,8 +9610,29 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 );
                 return Err(ivm::VMError::PermissionDenied);
             };
-            let policy = &binding.policy;
-            policy_bounds = Some((policy.min_handle_era, policy.min_sub_nonce));
+            let policy = binding.policy;
+            let prior_handle_count = self.axt_state.as_ref().map_or(0_usize, |state| {
+                state
+                    .handles()
+                    .iter()
+                    .filter(|prior| prior.intent.asset_dsid == dsid)
+                    .count()
+            });
+            let expected_sub_nonce = u64::try_from(prior_handle_count)
+                .ok()
+                .and_then(|count| policy.min_sub_nonce.checked_add(count))
+                .ok_or_else(|| {
+                    self.record_axt_reject_detail(
+                        AxtRejectReason::SubNonce,
+                        Some(dsid),
+                        Some(policy.target_lane),
+                        "AXT handle counter is exhausted",
+                        Some(policy.min_handle_era),
+                        Some(policy.min_sub_nonce),
+                    );
+                    ivm::VMError::PermissionDenied
+                })?;
+            policy_bounds = Some((policy.min_handle_era, expected_sub_nonce));
             policy_lane = Some(policy.target_lane);
             record_slot = policy.current_slot;
             let policy_root_zeroed = policy.manifest_root.iter().all(|byte| *byte == 0);
@@ -9513,27 +9673,34 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     Some(policy.min_handle_era),
                     Some(policy.min_sub_nonce),
                 ));
-            } else if usage.handle.handle_era < policy.min_handle_era {
-                rejection = Some((
-                    AxtRejectReason::HandleEra,
-                    format!(
-                        "handle era {} below policy minimum {}",
-                        usage.handle.handle_era, policy.min_handle_era
-                    ),
-                    Some(policy.min_handle_era),
-                    Some(policy.min_sub_nonce),
-                ));
-            } else if usage.handle.sub_nonce < policy.min_sub_nonce {
-                rejection = Some((
-                    AxtRejectReason::SubNonce,
-                    format!(
-                        "handle sub-nonce {} below policy minimum {}",
-                        usage.handle.sub_nonce, policy.min_sub_nonce
-                    ),
-                    Some(policy.min_handle_era),
-                    Some(policy.min_sub_nonce),
-                ));
             } else {
+                let mut working_policy = policy;
+                working_policy.min_sub_nonce = expected_sub_nonce;
+                if let Err(error) = iroha_data_model::nexus::next_axt_handle_sub_nonce(
+                    &working_policy,
+                    &model_usage.handle,
+                ) {
+                    let reason = match error {
+                        iroha_data_model::nexus::AxtHandleSequenceError::EraMismatch { .. } => {
+                            AxtRejectReason::HandleEra
+                        }
+                        iroha_data_model::nexus::AxtHandleSequenceError::SubNonceMismatch {
+                            ..
+                        }
+                        | iroha_data_model::nexus::AxtHandleSequenceError::CounterExhausted => {
+                            AxtRejectReason::SubNonce
+                        }
+                    };
+                    rejection = Some((
+                        reason,
+                        error.to_string(),
+                        Some(policy.min_handle_era),
+                        Some(expected_sub_nonce),
+                    ));
+                }
+            }
+
+            if rejection.is_none() {
                 let requested_skew_ms = usage
                     .handle
                     .max_clock_skew_ms
@@ -9546,7 +9713,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                             requested_skew_ms, self.axt_timing.max_clock_skew_ms
                         ),
                         Some(policy.min_handle_era),
-                        Some(policy.min_sub_nonce),
+                        Some(expected_sub_nonce),
                     ));
                 } else {
                     let expiry_slot = self.axt_expiry_slot_with_skew(
@@ -9561,7 +9728,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                                 policy.current_slot
                             ),
                             Some(policy.min_handle_era),
-                            Some(policy.min_sub_nonce),
+                            Some(expected_sub_nonce),
                         ));
                     }
                 }
@@ -9855,25 +10022,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(ivm::VMError::PermissionDenied);
         }
-        if let Some(blob) = proof.as_ref() {
-            let policy = self.policy_entry_for(intent.asset_dsid).ok_or_else(|| {
-                self.record_axt_reject(
-                    AxtRejectReason::MissingPolicy,
-                    Some(intent.asset_dsid),
-                    Some(handle.target_lane),
-                    "no policy entry for dataspace",
-                );
-                ivm::VMError::PermissionDenied
-            })?;
-            self.validate_axt_proof(intent.asset_dsid, blob, policy)?;
-        }
 
         if let Err(error) = axt::validate_asset_handle(&handle) {
             self.record_axt_reject(
                 AxtRejectReason::PolicyDenied,
                 Some(intent.asset_dsid),
                 Some(handle.target_lane),
-                "handle fields are not canonical or usable",
+                "handle fields are not canonical, authenticated, or usable",
             );
             return Err(error);
         }
@@ -9893,6 +10048,24 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             amount,
             amount_commitment: resolved_amount.amount_commitment,
         };
+        // Capability authentication is deliberately cheaper and earlier than
+        // the attacker-amplifiable FASTPQ verification below.
+        self.authenticate_axt_handle_usage(&usage)?;
+
+        if let Some(blob) = usage.proof.as_ref() {
+            let policy = self
+                .policy_entry_for(usage.intent.asset_dsid)
+                .ok_or_else(|| {
+                    self.record_axt_reject(
+                        AxtRejectReason::MissingPolicy,
+                        Some(usage.intent.asset_dsid),
+                        Some(usage.handle.target_lane),
+                        "no policy entry for dataspace",
+                    );
+                    ivm::VMError::PermissionDenied
+                })?;
+            self.validate_axt_proof(usage.intent.asset_dsid, blob, policy)?;
+        }
         self.enforce_axt_policy(&usage)?;
         let output_count_before = self.instruction_queue_count;
         let output_bytes_before = self.instruction_queue_encoded_bytes;
@@ -10114,10 +10287,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    fn flush_completed_axt(&mut self, tx: &mut StateTransaction<'_, '_>) {
+    fn flush_completed_axt(
+        &mut self,
+        tx: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), ValidationFail> {
         self.amx_budget_violation = None;
         if self.completed_axt.is_empty() {
-            return;
+            return Ok(());
         }
         let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
         let commit_height = tx.block_height();
@@ -10129,8 +10305,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .map(|state| Self::materialize_axt_record(&state, lane, commit_height))
             .collect();
         for envelope in envelopes {
-            tx.record_axt_envelope(envelope);
+            tx.record_axt_envelope(envelope)
+                .map_err(ValidationFail::InstructionFailed)?;
         }
+        Ok(())
     }
 
     /// Execute a closure with a mutable reference to the [`CoreHost`] attached to `vm`.
@@ -12314,7 +12492,7 @@ mod pointer_abi_tests {
     };
     use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
     use iroha_data_model::{
-        events::execute_trigger::ExecuteTriggerEventFilter, proof::ProofAttachment,
+        events::execute_trigger::ExecuteTriggerEventFilter,
         smart_contract::manifest::ContractManifest,
     };
     use iroha_primitives::json::Json;
@@ -13691,6 +13869,7 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -13775,6 +13954,7 @@ seiyaku PrivilegedBinding {
             manifest_view_root: vec![0x11; 31],
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -13858,6 +14038,7 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -14033,6 +14214,7 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -14135,6 +14317,7 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
 
         let mut vm = IVM::new(10_000);
@@ -14679,6 +14862,7 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 60,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -14751,6 +14935,7 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: current_slot + 2,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -14845,6 +15030,7 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: current_slot + 20,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -14946,6 +15132,7 @@ seiyaku PrivilegedBinding {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 10,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,

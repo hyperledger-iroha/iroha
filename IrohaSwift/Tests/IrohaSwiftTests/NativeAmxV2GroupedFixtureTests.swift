@@ -23,7 +23,7 @@ private func requireNativeAmxABI21Bridge() throws {
     )
     #else
     try failRequiredNativeTestCapability(
-        "Native AMX V2 parity requires the ABI-21 NoritoBridge module"
+        "Native AMX V2 parity requires the ABI-22 NoritoBridge module"
     )
     #endif
 }

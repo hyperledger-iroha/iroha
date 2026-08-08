@@ -1162,9 +1162,13 @@
         let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(Hash::new(
             b"Kura top-up fixture executed block wire placeholder",
         ));
-        let commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(&witness, &manifest)
-                .expect("derive top-up execution commitment");
+        let lane_manifest = crate::sumeragi::exec::LaneFinalityManifestV1::empty();
+        let commitment = crate::sumeragi::exec::execution_commitment_from_witness(
+            &witness,
+            &manifest,
+            &lane_manifest,
+        )
+        .expect("derive top-up execution commitment");
         (witness, commitment)
     }
 
@@ -1205,9 +1209,13 @@
         let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(Hash::new(
             b"Kura receiver-only fixture executed block wire placeholder",
         ));
-        let commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(&witness, &manifest)
-                .expect("derive receiver-only execution commitment");
+        let lane_manifest = crate::sumeragi::exec::LaneFinalityManifestV1::empty();
+        let commitment = crate::sumeragi::exec::execution_commitment_from_witness(
+            &witness,
+            &manifest,
+            &lane_manifest,
+        )
+        .expect("derive receiver-only execution commitment");
         (witness, commitment)
     }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for deterministic, fail-closed C# ABI-21 native NuGet packaging."""
+"""Tests for deterministic, fail-closed C# ABI-22 native NuGet packaging."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import check_native_sdk_abi21_artifact as artifact_checker  # noqa: E402
+import check_native_sdk_abi22_artifact as artifact_checker  # noqa: E402
 import package_csharp_native_artifacts as packager  # noqa: E402
 
 
@@ -299,7 +299,7 @@ class CSharpNativePackageTests(unittest.TestCase):
             self.assertIn(row, smoke_job)
             self.assertIn(f"runtimes/{rid}/native/{library_name}", project)
 
-        self.assertEqual(native_job.count("check_native_sdk_abi21_artifact.py"), 2)
+        self.assertEqual(native_job.count("check_native_sdk_abi22_artifact.py"), 2)
         self.assertIn("--sdk csharp", native_job)
         self.assertIn('if [[ "$host_target" != "$target" ]]', native_job)
         self.assertIn('if [[ -e target ]]', native_job)

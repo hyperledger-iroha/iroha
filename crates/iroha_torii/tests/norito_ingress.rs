@@ -690,7 +690,7 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
 {
     use iroha::{client::Client, config::Config};
     use iroha_data_model::{
-        ChainId, account::AccountId, isi::Log, transaction::TransactionBuilder,
+        ChainId, NetworkId, account::AccountId, isi::Log, transaction::TransactionBuilder,
     };
     use iroha_logger::Level;
     use tokio::net::TcpListener;
@@ -713,6 +713,7 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
     let account = AccountId::of(key_pair.public_key().clone());
     let client = Client::new(Config {
         chain: chain.clone(),
+        network_id: NetworkId::from_genesis_hash(harness.cfg.genesis.expected_hash),
         account: account.clone(),
         account_chain_discriminant: iroha_config::parameters::defaults::common::chain_discriminant(
         ),

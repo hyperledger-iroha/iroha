@@ -1161,13 +1161,16 @@ async fn prepare_selectable_musubi_publication(
         .validate()
         .wrap_err("validate selectable Musubi replication order")?;
     let issue_transaction = submitter.build_transaction(
-        [InstructionBox::from(IssueReplicationOrder::new(
-            replication_order,
-            norito::encode_canonical(&canonical_order)
-                .wrap_err("encode selectable Musubi replication order")?,
-            2,
-            MUSUBI_FAULT_RETENTION_EPOCH,
-        ))],
+        [InstructionBox::from(
+            IssueReplicationOrder::new(
+                replication_order,
+                norito::encode_canonical(&canonical_order)
+                    .wrap_err("encode selectable Musubi replication order")?,
+                2,
+                MUSUBI_FAULT_RETENTION_EPOCH,
+            )
+            .for_musubi_archive(commitment.archive_id()),
+        )],
         FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );

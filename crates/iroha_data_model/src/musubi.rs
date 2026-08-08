@@ -79,6 +79,12 @@ pub const MUSUBI_MAX_ARCHIVE_LOCATIONS_V1: usize = 4;
 pub const MUSUBI_MIN_HEALTHY_REPLICAS_V1: u16 = 3;
 /// Maximum providers recorded for one archive location.
 pub const MUSUBI_MAX_LOCATION_PROVIDERS_V1: usize = 64;
+/// Maximum canonical Norito bytes for one replication-order/archive trust binding.
+///
+/// The commitment itself has fixed-size digests and counters plus a chunker handle bounded by
+/// [`MusubiArchiveCommitmentV1::validate`]. This deliberately conservative ceiling keeps decoded
+/// snapshot values bounded if that commitment grows within the first-release schema.
+pub const MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1: usize = 4 * 1024;
 /// Maximum package owners.
 pub const MUSUBI_MAX_PACKAGE_OWNERS_V1: usize = 64;
 /// Maximum canonical Norito bytes for any account identity carried by Musubi V1.
@@ -1736,33 +1742,187 @@ impl MusubiPinLocationReferenceV1 {
     }
 }
 
-/// Fixed-size reverse-index value from one `SoraFS` replication order to one Musubi location.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+/// Immutable consensus binding from one `SoraFS` replication order to a complete Musubi archive.
+///
+/// This binding is installed atomically with the replication order, before any provider
+/// completion or bundle-verification attestation exists. Providers can therefore authenticate the
+/// exact archive commitment without trusting a publisher-supplied location request.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-pub struct MusubiReplicationOrderLocationReferenceV1 {
+pub struct MusubiReplicationOrderArchiveBindingV1 {
     /// Exact replication-order key duplicated for snapshot consistency validation.
     pub replication_order: ReplicationOrderId,
-    /// Uniquely bound Musubi archive location.
-    pub location: MusubiArchiveLocationKeyV1,
-    /// Whether this is the location's current order rather than an immutable reuse tombstone.
-    pub active: bool,
+    /// Exact derived archive identity.
+    pub archive_id: ArchiveId,
+    /// Complete immutable archive commitment copied from authoritative registry state.
+    pub commitment: MusubiArchiveCommitmentV1,
 }
 
-impl MusubiReplicationOrderLocationReferenceV1 {
-    /// Validate non-inert order and location identities.
+impl MusubiReplicationOrderArchiveBindingV1 {
+    /// Construct an immutable replication-order/archive binding.
+    #[must_use]
+    pub const fn new(
+        replication_order: ReplicationOrderId,
+        archive_id: ArchiveId,
+        commitment: MusubiArchiveCommitmentV1,
+    ) -> Self {
+        Self {
+            replication_order,
+            archive_id,
+            commitment,
+        }
+    }
+
+    /// Validate the order identity, complete commitment, derived archive identity, and wire bound.
     ///
     /// # Errors
     ///
-    /// Returns an error if the replication-order digest, archive identity, or location identity
-    /// is zero.
+    /// Returns an error if an identity is inert, the commitment is invalid, its derived identity
+    /// differs, or the canonical binding exceeds the V1 bound.
     pub fn validate(&self) -> Result<(), ParseError> {
-        if digest_is_zero(self.replication_order.as_bytes())
-            || self.location.archive_id.is_zero()
-            || self.location.location_id.is_zero()
+        self.commitment.validate()?;
+        if digest_is_zero(self.replication_order.as_bytes()) || self.archive_id.is_zero() {
+            return Err(ParseError::new(
+                "Musubi replication-order/archive binding contains an inert identity",
+            ));
+        }
+        if self.archive_id != self.commitment.archive_id() {
+            return Err(ParseError::new(
+                "Musubi replication-order/archive binding does not match its commitment",
+            ));
+        }
+        if self.encode().len() > MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1 {
+            return Err(ParseError::new(
+                "Musubi replication-order/archive binding exceeds its canonical byte bound",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Historical location facts retained when a replication order is permanently consumed.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiRetiredReplicationOrderLocationV1 {
+    /// Location identity the order formerly backed.
+    pub location: MusubiArchiveLocationKeyV1,
+    /// Exact completed provider set that justified that historical location admission.
+    pub providers: Vec<ProviderId>,
+}
+
+impl MusubiRetiredReplicationOrderLocationV1 {
+    /// Construct a permanent replication-order location tombstone.
+    #[must_use]
+    pub fn new(location: MusubiArchiveLocationKeyV1, providers: Vec<ProviderId>) -> Self {
+        Self {
+            location,
+            providers,
+        }
+    }
+
+    /// Validate the historical location identity and exact bounded provider set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for inert location/provider identities, an empty or oversized provider
+    /// set, or providers that are not strictly ordered and unique.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.location.archive_id.is_zero() || self.location.location_id.is_zero() {
+            return Err(ParseError::new(
+                "Musubi retired replication-order location identity is inert",
+            ));
+        }
+        if self.providers.is_empty()
+            || self.providers.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
+            || self
+                .providers
+                .iter()
+                .any(|provider| digest_is_zero(provider.as_bytes()))
+            || self.providers.windows(2).any(|pair| pair[0] >= pair[1])
         {
             return Err(ParseError::new(
-                "Musubi replication-order-to-location reverse reference is invalid",
+                "Musubi retired replication-order provider set is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Lifecycle of one immutable replication-order/archive binding.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+pub enum MusubiReplicationOrderLocationLifecycleV1 {
+    /// The order is bound to the archive before any location has been admitted.
+    PreLocation,
+    /// The order is the current replication proof for this location.
+    Active(MusubiArchiveLocationKeyV1),
+    /// The order is permanently consumed with its exact historical provider set.
+    Retired(MusubiRetiredReplicationOrderLocationV1),
+}
+
+/// Canonical consensus projection of a replication-order/archive binding and location lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiReplicationOrderLocationReferenceV1 {
+    /// Immutable order-to-archive trust binding.
+    pub binding: MusubiReplicationOrderArchiveBindingV1,
+    /// Current use of the permanently bound order.
+    pub lifecycle: MusubiReplicationOrderLocationLifecycleV1,
+}
+
+impl MusubiReplicationOrderLocationReferenceV1 {
+    /// Construct a binding before location admission.
+    #[must_use]
+    pub const fn pre_location(binding: MusubiReplicationOrderArchiveBindingV1) -> Self {
+        Self {
+            binding,
+            lifecycle: MusubiReplicationOrderLocationLifecycleV1::PreLocation,
+        }
+    }
+
+    /// Return the active location, if this order currently backs one.
+    #[must_use]
+    pub const fn active_location(&self) -> Option<MusubiArchiveLocationKeyV1> {
+        match &self.lifecycle {
+            MusubiReplicationOrderLocationLifecycleV1::Active(location) => Some(*location),
+            MusubiReplicationOrderLocationLifecycleV1::PreLocation
+            | MusubiReplicationOrderLocationLifecycleV1::Retired(_) => None,
+        }
+    }
+
+    /// Return the consumed location, if this order has become a tombstone.
+    #[must_use]
+    pub const fn retired_location(&self) -> Option<MusubiArchiveLocationKeyV1> {
+        match &self.lifecycle {
+            MusubiReplicationOrderLocationLifecycleV1::Retired(retired) => Some(retired.location),
+            MusubiReplicationOrderLocationLifecycleV1::PreLocation
+            | MusubiReplicationOrderLocationLifecycleV1::Active(_) => None,
+        }
+    }
+
+    /// Validate the immutable trust binding and any location identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the binding is invalid or an active/retired location targets a
+    /// different archive.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.binding.validate()?;
+        let location = match &self.lifecycle {
+            MusubiReplicationOrderLocationLifecycleV1::PreLocation => return Ok(()),
+            MusubiReplicationOrderLocationLifecycleV1::Active(location) => *location,
+            MusubiReplicationOrderLocationLifecycleV1::Retired(retired) => {
+                retired.validate()?;
+                retired.location
+            }
+        };
+        if location.archive_id != self.binding.archive_id || location.location_id.is_zero() {
+            return Err(ParseError::new(
+                "Musubi replication-order lifecycle targets an invalid archive location",
             ));
         }
         Ok(())
@@ -9387,23 +9547,79 @@ mod tests {
     }
 
     #[test]
-    fn sorafs_reverse_reference_keys_are_fixed_and_provider_prefix_bounded() {
-        let location = MusubiArchiveLocationKeyV1::new(
-            ArchiveId::new([7; 32]),
-            MusubiArchiveLocationIdV1::new([8; 32]),
-        );
+    fn sorafs_reverse_references_bind_complete_archives_and_provider_prefixes() {
+        let commitment = archive_commitment();
+        let archive_id = commitment.archive_id();
+        let location =
+            MusubiArchiveLocationKeyV1::new(archive_id, MusubiArchiveLocationIdV1::new([8; 32]));
         let pin = MusubiPinLocationReferenceV1 {
             pin_manifest: ManifestDigest::new([9; 32]),
             location,
             active: true,
         };
-        let order = MusubiReplicationOrderLocationReferenceV1 {
-            replication_order: ReplicationOrderId::new([10; 32]),
-            location,
-            active: false,
+        let binding = MusubiReplicationOrderArchiveBindingV1::new(
+            ReplicationOrderId::new([10; 32]),
+            archive_id,
+            commitment,
+        );
+        assert!(
+            binding.encode().len()
+                <= MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1
+        );
+        let pre_location = MusubiReplicationOrderLocationReferenceV1::pre_location(binding.clone());
+        let active = MusubiReplicationOrderLocationReferenceV1 {
+            binding: binding.clone(),
+            lifecycle: MusubiReplicationOrderLocationLifecycleV1::Active(location),
+        };
+        let retired = MusubiReplicationOrderLocationReferenceV1 {
+            binding: binding.clone(),
+            lifecycle: MusubiReplicationOrderLocationLifecycleV1::Retired(
+                MusubiRetiredReplicationOrderLocationV1::new(
+                    location,
+                    vec![ProviderId::new([11; 32])],
+                ),
+            ),
         };
         pin.validate().expect("valid pin reverse reference");
-        order.validate().expect("valid order reuse tombstone");
+        binding.validate().expect("valid immutable order binding");
+        pre_location.validate().expect("valid pre-location binding");
+        active.validate().expect("valid active order binding");
+        retired.validate().expect("valid order reuse tombstone");
+        assert_eq!(active.active_location(), Some(location));
+        assert_eq!(retired.retired_location(), Some(location));
+
+        let mut empty_retired_providers = retired.clone();
+        let MusubiReplicationOrderLocationLifecycleV1::Retired(retired_history) =
+            &mut empty_retired_providers.lifecycle
+        else {
+            unreachable!("retired fixture lifecycle")
+        };
+        retired_history.providers.clear();
+        assert!(empty_retired_providers.validate().is_err());
+
+        let mut duplicate_retired_providers = retired.clone();
+        let MusubiReplicationOrderLocationLifecycleV1::Retired(retired_history) =
+            &mut duplicate_retired_providers.lifecycle
+        else {
+            unreachable!("retired fixture lifecycle")
+        };
+        retired_history.providers.push(ProviderId::new([11; 32]));
+        assert!(duplicate_retired_providers.validate().is_err());
+
+        let wrong_location = MusubiReplicationOrderLocationReferenceV1 {
+            binding: binding.clone(),
+            lifecycle: MusubiReplicationOrderLocationLifecycleV1::Active(
+                MusubiArchiveLocationKeyV1::new(
+                    ArchiveId::new([0xEE; 32]),
+                    MusubiArchiveLocationIdV1::new([0xEF; 32]),
+                ),
+            ),
+        };
+        assert!(wrong_location.validate().is_err());
+
+        let mut substituted = binding;
+        substituted.archive_id = ArchiveId::new([0xEE; 32]);
+        assert!(substituted.validate().is_err());
 
         let provider = ProviderId::new([11; 32]);
         let range = MusubiProviderLocationKeyV1::provider_range(provider);

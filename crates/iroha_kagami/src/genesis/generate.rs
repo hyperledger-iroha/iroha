@@ -8,7 +8,7 @@ use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
-    asset::{AssetDefinitionAlias, definition::AssetConfidentialPolicy},
+    asset::AssetDefinitionAlias,
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
@@ -445,7 +445,6 @@ fn append_public_xor_binding(
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
-        .confidential_policy(AssetConfidentialPolicy::convertible())
         .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
     }

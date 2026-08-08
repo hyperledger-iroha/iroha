@@ -111,6 +111,7 @@ if state_dir:
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
         f'chain = "{chain_id}"\n'
+        'network_id = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"\n'
         '\n'
         '[account]\n'
         'domain = "universal"\n'

@@ -1298,16 +1298,13 @@ mod tests {
                     == Some(xor_asset_definition_id)
             })
             .expect("public Taira genesis.json must register the canonical xor asset");
-        let confidential_mode = xor_universal
+        let confidential_policy = xor_universal
             .get("Register")
             .and_then(|register| register.get("AssetDefinition"))
-            .and_then(|asset| asset.get("confidential_policy"))
-            .and_then(|policy| policy.get("mode"))
-            .and_then(JsonValue::as_str);
-        assert_eq!(
-            confidential_mode,
-            Some("Convertible"),
-            "public Taira genesis.json must keep xor#universal shield-capable for wallet shielding"
+            .and_then(|asset| asset.get("confidential_policy"));
+        assert!(
+            confidential_policy.is_none(),
+            "asset registration must not bypass canonical confidential verifier activation"
         );
     }
 }

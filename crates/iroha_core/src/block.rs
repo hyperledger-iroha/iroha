@@ -55,6 +55,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashSet},
     hint::black_box,
+    num::NonZeroU64,
     str::FromStr,
     sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
     time::Duration,
@@ -123,6 +124,33 @@ fn ensure_confidential_features_match(
         Ok(())
     } else {
         Err(BlockValidationError::ConfidentialFeaturesMismatch { expected, actual })
+    }
+}
+
+fn validate_external_entrypoint_count(
+    actual: usize,
+    configured_max: NonZeroU64,
+) -> Result<(), BlockValidationError> {
+    let max = usize::try_from(configured_max.get()).unwrap_or(usize::MAX);
+    if actual > max {
+        Err(BlockValidationError::TooManyTransactions { actual, max })
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod external_entrypoint_count_tests {
+    use super::*;
+
+    #[test]
+    fn configured_block_limit_is_enforced_before_expensive_validation() {
+        let max = NonZeroU64::new(1).expect("one is non-zero");
+        assert_eq!(validate_external_entrypoint_count(1, max), Ok(()));
+        assert_eq!(
+            validate_external_entrypoint_count(2, max),
+            Err(BlockValidationError::TooManyTransactions { actual: 2, max: 1 })
+        );
     }
 }
 
@@ -1312,7 +1340,6 @@ fn lane_relay_envelopes_for_block(
                 })?;
             LaneRelayEnvelope::new(
                 *block_header,
-                None,
                 da_commitment_hash,
                 commitment.clone(),
                 rbc_bytes_total,
@@ -2962,6 +2989,13 @@ pub enum BlockValidationError {
     EmptyBlock,
     /// Block contains duplicate transactions
     DuplicateTransactions,
+    /// Block contains too many external entrypoints. Actual: {actual}, maximum: {max}
+    TooManyTransactions {
+        /// Number of externally supplied entrypoints in the block.
+        actual: usize,
+        /// Consensus maximum active for this block.
+        max: usize,
+    },
     /// SCCP commitment root mismatch. Expected: {expected:?}, actual: {actual:?}
     SccpCommitmentRootMismatch {
         /// Root recomputed from committed SCCP message records.
@@ -3333,18 +3367,6 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
 #[derive(Debug, Clone)]
 pub struct BlockBuilder<B>(B);
 
-fn signed_block_entrypoints_are_canonical(block: &SignedBlock) -> bool {
-    let mut previous = None;
-    for entrypoint in block.external_entrypoints_cloned() {
-        let hash = entrypoint.hash();
-        if previous.is_some_and(|previous| previous > hash) {
-            return false;
-        }
-        previous = Some(hash);
-    }
-    true
-}
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn default_test_execution_context(
     transactions: &[AcceptedTransaction<'static>],
@@ -3468,13 +3490,13 @@ mod pending {
     impl BlockBuilder<Pending> {
         const TIME_PADDING: Duration = Duration::from_millis(1);
 
-        /// Create [`Self`]
+        /// Create [`Self`] while preserving the caller's transaction order.
         #[inline]
         pub fn new(transactions: Vec<AcceptedTransaction<'static>>) -> Self {
             Self::new_with_time_source(transactions, TimeSource::new_system())
         }
 
-        /// Create with provided [`TimeSource`] to use for block creation time.
+        /// Create with a provided [`TimeSource`] while preserving transaction order.
         pub fn new_with_time_source(
             transactions: Vec<AcceptedTransaction<'static>>,
             time_source: TimeSource,
@@ -3482,37 +3504,6 @@ mod pending {
             // Empty blocks can be built for tests, but validation rejects them unless they carry
             // entrypoints (external transactions or time triggers) or deterministic artifacts
             // such as DA bundles; consensus should not emit them.
-            let mut transactions: Vec<_> = transactions
-                .into_iter()
-                .enumerate()
-                .map(|(idx, tx)| (tx.hash_as_entrypoint(), idx, tx))
-                .collect();
-            // Canonicalize payload order by (call_hash, original index) so scheduler tie-breaks
-            // remain stable regardless of submission order.
-            transactions.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-
-            Self(Pending {
-                transactions: transactions.into_iter().map(|(_, _, tx)| tx).collect(),
-                time_source,
-            })
-        }
-
-        /// Create [`Self`] while preserving the provided transaction order.
-        ///
-        /// This bypasses call-hash canonicalisation and is intended for
-        /// test harnesses that require strict FIFO semantics.
-        #[cfg(test)]
-        #[inline]
-        pub(crate) fn new_preserve_order(transactions: Vec<AcceptedTransaction<'static>>) -> Self {
-            Self::new_preserve_order_with_time_source(transactions, TimeSource::new_system())
-        }
-
-        /// Create with provided [`TimeSource`] while preserving transaction order.
-        #[cfg(test)]
-        pub(crate) fn new_preserve_order_with_time_source(
-            transactions: Vec<AcceptedTransaction<'static>>,
-            time_source: TimeSource,
-        ) -> Self {
             Self(Pending {
                 transactions,
                 time_source,
@@ -4011,16 +4002,14 @@ mod new {
             .with_instructions([Log::new(Level::INFO, "second".to_owned())])
             .sign(keypair.private_key());
 
-            let mut expected = vec![
-                (tx1.hash_as_entrypoint(), 0usize, tx1.clone()),
-                (tx2.hash_as_entrypoint(), 1usize, tx2.clone()),
-            ];
-            expected.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-            let expected: Vec<_> = expected.into_iter().map(|(_, _, tx)| tx).collect();
-            let accepted = vec![
-                AcceptedTransaction::new_unchecked(Cow::Owned(tx1)),
-                AcceptedTransaction::new_unchecked(Cow::Owned(tx2)),
-            ];
+            let mut submitted = vec![tx1, tx2];
+            submitted.sort_by_key(|tx| core::cmp::Reverse(tx.hash_as_entrypoint()));
+            assert!(submitted[0].hash_as_entrypoint() > submitted[1].hash_as_entrypoint());
+            let expected = submitted.clone();
+            let accepted = submitted
+                .into_iter()
+                .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
+                .collect();
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(1));
             let builder = BlockBuilder::new_with_time_source(accepted, time_source);
@@ -4038,7 +4027,8 @@ mod new {
             );
             assert_eq!(
                 signed_block.external_transactions().collect::<Vec<_>>(),
-                expected.iter().collect::<Vec<_>>()
+                expected.iter().collect::<Vec<_>>(),
+                "block construction must not replace FIFO order with grindable hash priority"
             );
         }
 
@@ -4097,52 +4087,6 @@ mod new {
                 .verify_hash(signer.public_key(), new_block.header().hash())
                 .expect("fallibly signed block signature verifies");
         }
-
-        #[test]
-        fn preserve_order_builder_keeps_submission_sequence() {
-            let chain: ChainId = "new-block-conversion".parse().expect("valid chain id");
-            let (authority, keypair) = gen_account_in("wonderland");
-
-            let tx1 = TransactionBuilder::new(
-                chain.clone(),
-                authority.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "first".to_owned())])
-            .sign(keypair.private_key());
-            let tx2 = TransactionBuilder::new(
-                chain,
-                authority,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "second".to_owned())])
-            .sign(keypair.private_key());
-
-            let expected = vec![tx1.clone(), tx2.clone()];
-            let accepted = vec![
-                AcceptedTransaction::new_unchecked(Cow::Owned(tx1)),
-                AcceptedTransaction::new_unchecked(Cow::Owned(tx2)),
-            ];
-
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(1));
-            let builder = BlockBuilder::new_preserve_order_with_time_source(accepted, time_source);
-            let block_signer = crate::block::checked_keypair();
-
-            let new_block = builder
-                .chain(0, None)
-                .sign(block_signer.private_key())
-                .unpack(|_| {});
-
-            let signed_block: SignedBlock = new_block.into();
-            assert!(
-                signed_block.transactions_vec().is_empty(),
-                "new blocks should not retain the skipped legacy transaction cache"
-            );
-            assert_eq!(
-                signed_block.external_transactions().collect::<Vec<_>>(),
-                expected.iter().collect::<Vec<_>>()
-            );
-        }
     }
 }
 
@@ -4150,7 +4094,6 @@ pub(crate) mod valid {
     use std::{num::NonZeroUsize, time::Instant};
 
     use commit::CommittedBlock;
-    #[cfg(test)]
     use iroha_data_model::nexus::AxtPolicySnapshot;
     #[cfg(test)]
     use iroha_data_model::soracloud::{
@@ -4945,6 +4888,16 @@ pub(crate) mod valid {
         }
     }
 
+    /// Consensus ceiling for issuer-authenticated AXT handles attached to one block.
+    const MAX_AUTHENTICATED_AXT_HANDLES_PER_BLOCK: u64 = 65_536;
+
+    fn reconstruct_axt_start_sub_nonce(
+        advertised_post_sub_nonce: u64,
+        authenticated_handle_count: u64,
+    ) -> Option<u64> {
+        advertised_post_sub_nonce.checked_sub(authenticated_handle_count)
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn validate_axt_envelopes(
         block: &SignedBlock,
@@ -5004,6 +4957,11 @@ pub(crate) mod valid {
             .unwrap_or(0);
         let retention_slots = state_block.nexus.axt.replay_retention_slots.get();
         let mut seen: BTreeSet<AxtHandleReplayKey> = BTreeSet::new();
+        let mut next_sub_nonces: BTreeMap<DataSpaceId, u64> = policies
+            .iter()
+            .map(|(dsid, policy)| (*dsid, policy.min_sub_nonce))
+            .collect();
+        let chain_id_bytes = state_block.chain_id.to_string().into_bytes();
 
         if let Some(envelopes) = block.axt_envelopes() {
             #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -5204,6 +5162,191 @@ pub(crate) mod valid {
                         next_min_sub_nonce,
                     )
                 };
+
+            #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+            struct AxtCounterScope {
+                abi_version: u16,
+                chain_id: Vec<u8>,
+                dataspace: DataSpaceId,
+                manifest_root: [u8; 32],
+                target_lane: LaneId,
+                handle_era: u64,
+                issuer: PublicKey,
+            }
+
+            let mut authenticated_scopes = BTreeMap::<AxtCounterScope, u64>::new();
+            let mut authenticated_handles = BTreeSet::<AxtHandleReplayKey>::new();
+            let mut authenticated_handle_count = 0_u64;
+            for envelope in envelopes {
+                for fragment in &envelope.handles {
+                    let dsid = fragment.intent.asset_dsid;
+                    let policy = policies.get(&dsid).ok_or_else(|| {
+                        make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::MissingPolicy,
+                            "no committed post-state policy for dataspace",
+                            Some(dsid),
+                            None,
+                            None,
+                        )
+                    })?;
+                    if policy.manifest_root != fragment.handle.manifest_view_root
+                        || policy.target_lane != fragment.handle.target_lane
+                    {
+                        return Err(make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::Manifest,
+                            "authenticated handle does not match its committed policy scope",
+                            Some(dsid),
+                            Some(policy.min_handle_era),
+                            Some(policy.min_sub_nonce),
+                        ));
+                    }
+                    if fragment.handle.handle_era != policy.min_handle_era {
+                        return Err(make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::HandleEra,
+                            "authenticated handle does not use the committed manifest era",
+                            Some(dsid),
+                            Some(policy.min_handle_era),
+                            Some(policy.min_sub_nonce),
+                        ));
+                    }
+                    if ivm::axt::validate_model_asset_handle(&fragment.handle).is_err() {
+                        return Err(make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::PolicyDenied,
+                            "handle fields are not canonical, authenticated, or usable",
+                            Some(dsid),
+                            Some(policy.min_handle_era),
+                            Some(policy.min_sub_nonce),
+                        ));
+                    }
+                    let issuer = crate::nexus::space_directory::resolve_axt_issuer_public_key(
+                        state_block.world(),
+                        dsid,
+                        policy.manifest_root,
+                    )
+                    .map_err(|error| {
+                        make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::PolicyDenied,
+                            &format!("failed to resolve committed AXT issuer: {error}"),
+                            Some(dsid),
+                            Some(policy.min_handle_era),
+                            Some(policy.min_sub_nonce),
+                        )
+                    })?;
+                    fragment
+                        .handle
+                        .verify_issuer_signature_v1(&chain_id_bytes, dsid, &issuer)
+                        .map_err(|_| {
+                            make_env_error(
+                                envelope.lane,
+                                AxtRejectReason::PolicyDenied,
+                                "AXT handle issuer signature is missing or invalid",
+                                Some(dsid),
+                                Some(policy.min_handle_era),
+                                Some(policy.min_sub_nonce),
+                            )
+                        })?;
+
+                    let replay_key = AxtHandleReplayKey::from_handle(&fragment.handle);
+                    let record_slot = if policy.current_slot > 0 {
+                        policy.current_slot
+                    } else {
+                        snapshot_slot
+                    };
+                    if let Some(entry) = state_block.world.axt_replay_ledger().get(&replay_key)
+                        && !entry.is_expired(record_slot, retention_slots)
+                    {
+                        return Err(make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::ReplayCache,
+                            "handle replayed in persisted ledger",
+                            Some(dsid),
+                            Some(policy.min_handle_era),
+                            Some(policy.min_sub_nonce),
+                        ));
+                    }
+                    if !authenticated_handles.insert(replay_key) {
+                        return Err(make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::ReplayCache,
+                            "duplicate authenticated handle usage in block",
+                            Some(dsid),
+                            Some(policy.min_handle_era),
+                            Some(policy.min_sub_nonce),
+                        ));
+                    }
+
+                    authenticated_handle_count = authenticated_handle_count
+                        .checked_add(1)
+                        .filter(|count| *count <= MAX_AUTHENTICATED_AXT_HANDLES_PER_BLOCK)
+                        .ok_or_else(|| {
+                            make_env_error(
+                                envelope.lane,
+                                AxtRejectReason::PolicyDenied,
+                                "block exceeds the authenticated AXT handle limit",
+                                Some(dsid),
+                                Some(policy.min_handle_era),
+                                Some(policy.min_sub_nonce),
+                            )
+                        })?;
+                    let scope = AxtCounterScope {
+                        abi_version: 1,
+                        chain_id: chain_id_bytes.clone(),
+                        dataspace: dsid,
+                        manifest_root: policy.manifest_root,
+                        target_lane: policy.target_lane,
+                        handle_era: policy.min_handle_era,
+                        issuer,
+                    };
+                    let count = authenticated_scopes.entry(scope).or_default();
+                    *count = count.checked_add(1).ok_or_else(|| {
+                        make_env_error(
+                            envelope.lane,
+                            AxtRejectReason::SubNonce,
+                            "authenticated AXT handle count overflowed",
+                            Some(dsid),
+                            Some(policy.min_handle_era),
+                            Some(policy.min_sub_nonce),
+                        )
+                    })?;
+                }
+            }
+
+            for (scope, count) in &authenticated_scopes {
+                let policy = policies
+                    .get(&scope.dataspace)
+                    .expect("authenticated AXT scope must retain its policy");
+                let start_sub_nonce =
+                    reconstruct_axt_start_sub_nonce(policy.min_sub_nonce, *count).ok_or_else(
+                        || {
+                            make_axt_error_with(
+                                AxtRejectReason::SubNonce,
+                                "committed AXT post-state counter is smaller than its authenticated handle count",
+                                Some(scope.dataspace),
+                                Some(scope.target_lane),
+                                Some(scope.handle_era),
+                                Some(policy.min_sub_nonce),
+                            )
+                        },
+                    )?;
+                if next_sub_nonces
+                    .insert(scope.dataspace, start_sub_nonce)
+                    .is_some_and(|previous| previous != policy.min_sub_nonce)
+                {
+                    return Err(make_axt_error_with(
+                        AxtRejectReason::PolicyDenied,
+                        "dataspace resolved to more than one authenticated AXT counter scope",
+                        Some(scope.dataspace),
+                        Some(scope.target_lane),
+                        Some(scope.handle_era),
+                        Some(start_sub_nonce),
+                    ));
+                }
+            }
 
             for envelope in envelopes {
                 let envelope_lane = envelope.lane;
@@ -5615,26 +5758,36 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
-                    if fragment.handle.handle_era < policy.min_handle_era {
-                        return Err(make_env_error(
+                    let expected_sub_nonce = *next_sub_nonces
+                        .get(&fragment.intent.asset_dsid)
+                        .expect("every validated policy has a working AXT counter");
+                    let mut working_policy = *policy;
+                    working_policy.min_sub_nonce = expected_sub_nonce;
+                    let next_sub_nonce = iroha_data_model::nexus::next_axt_handle_sub_nonce(
+                        &working_policy,
+                        &fragment.handle,
+                    )
+                    .map_err(|error| {
+                        let reason = match error {
+                            iroha_data_model::nexus::AxtHandleSequenceError::EraMismatch {
+                                ..
+                            } => AxtRejectReason::HandleEra,
+                            iroha_data_model::nexus::AxtHandleSequenceError::SubNonceMismatch {
+                                ..
+                            }
+                            | iroha_data_model::nexus::AxtHandleSequenceError::CounterExhausted => {
+                                AxtRejectReason::SubNonce
+                            }
+                        };
+                        make_env_error(
                             envelope_lane,
-                            AxtRejectReason::HandleEra,
-                            "handle era below policy minimum",
+                            reason,
+                            &error.to_string(),
                             Some(fragment.intent.asset_dsid),
                             Some(policy.min_handle_era),
-                            Some(policy.min_sub_nonce),
-                        ));
-                    }
-                    if fragment.handle.sub_nonce < policy.min_sub_nonce {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::SubNonce,
-                            "handle sub-nonce below policy minimum",
-                            Some(fragment.intent.asset_dsid),
-                            Some(policy.min_handle_era),
-                            Some(policy.min_sub_nonce),
-                        ));
-                    }
+                            Some(expected_sub_nonce),
+                        )
+                    })?;
                     let requested_skew_ms = fragment
                         .handle
                         .max_clock_skew_ms
@@ -5665,6 +5818,49 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
+
+                    if ivm::axt::validate_model_asset_handle(&fragment.handle).is_err() {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "handle fields are not canonical, authenticated, or usable",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    let issuer = crate::nexus::space_directory::resolve_axt_issuer_public_key(
+                        state_block.world(),
+                        fragment.intent.asset_dsid,
+                        policy.manifest_root,
+                    )
+                    .map_err(|error| {
+                        make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            &format!("failed to resolve committed AXT issuer: {error}"),
+                            Some(fragment.intent.asset_dsid),
+                            Some(policy.min_handle_era),
+                            Some(expected_sub_nonce),
+                        )
+                    })?;
+                    fragment
+                        .handle
+                        .verify_issuer_signature_v1(
+                            &chain_id_bytes,
+                            fragment.intent.asset_dsid,
+                            &issuer,
+                        )
+                        .map_err(|_| {
+                            make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::PolicyDenied,
+                                "AXT handle issuer signature is missing or invalid",
+                                Some(fragment.intent.asset_dsid),
+                                Some(policy.min_handle_era),
+                                Some(expected_sub_nonce),
+                            )
+                        })?;
 
                     let replay_key = AxtHandleReplayKey::from_handle(&fragment.handle);
                     if let Some(entry) = state_block.world.axt_replay_ledger().get(&replay_key)
@@ -5826,16 +6022,6 @@ pub(crate) mod valid {
                         }
                     }
 
-                    if ivm::axt::validate_model_asset_handle(&fragment.handle).is_err() {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "handle fields are not canonical or usable",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
                     if ivm::axt::validate_model_remote_spend_intent(&fragment.intent).is_err() {
                         return Err(make_env_error(
                             envelope_lane,
@@ -5856,6 +6042,10 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
+                    *next_sub_nonces
+                        .get_mut(&fragment.intent.asset_dsid)
+                        .expect("every validated policy has a working AXT counter") =
+                        next_sub_nonce;
                 }
 
                 for dsid in &expected_dsids {
@@ -5869,6 +6059,23 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
+                }
+            }
+
+            for (dsid, policy) in &policies {
+                let reconstructed = next_sub_nonces
+                    .get(dsid)
+                    .copied()
+                    .expect("every committed AXT policy has a reconstructed counter");
+                if reconstructed != policy.min_sub_nonce {
+                    return Err(make_axt_error_with(
+                        AxtRejectReason::SubNonce,
+                        "authenticated AXT execution does not equal the committed post-state counter",
+                        Some(*dsid),
+                        Some(policy.target_lane),
+                        Some(policy.min_handle_era),
+                        Some(reconstructed),
+                    ));
                 }
             }
         }
@@ -5946,6 +6153,30 @@ pub(crate) mod valid {
 
         fn clear_signatures_verified(&mut self) {
             self.signatures_verified = false;
+        }
+
+        fn validate_advertised_axt_post_state(
+            advertised: Option<&AxtPolicySnapshot>,
+            computed: &AxtPolicySnapshot,
+        ) -> Result<(), BlockValidationError> {
+            let Some(advertised) = advertised else {
+                return Ok(());
+            };
+            if advertised == computed {
+                return Ok(());
+            }
+            Err(BlockValidationError::AxtEnvelopeValidationFailed(
+                AxtEnvelopeValidationDetails {
+                    message: "advertised AXT post-state policy snapshot does not match deterministic execution"
+                        .to_owned(),
+                    reason: AxtRejectReason::PolicyDenied,
+                    snapshot_version: Some(advertised.version),
+                    dataspace: None,
+                    lane: None,
+                    next_min_handle_era: None,
+                    next_min_sub_nonce: None,
+                },
+            ))
         }
 
         #[cfg(test)]
@@ -6738,10 +6969,6 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) -> Result<Option<[u8; 32]>, BlockValidationError> {
-            assert!(
-                block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
-                "SCCP root probe block payload is not in canonical transaction entrypoint order"
-            );
             Self::validate_staged_merge_reference(&block, state_block)?;
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
@@ -7287,6 +7514,10 @@ pub(crate) mod valid {
             }
 
             let params = state.world().parameters();
+            validate_external_entrypoint_count(
+                block.external_entrypoint_count(),
+                params.block().max_transactions(),
+            )?;
             let max_clock_drift = params.sumeragi().max_clock_drift();
             let tx_params = params.transaction();
 
@@ -9448,6 +9679,13 @@ pub(crate) mod valid {
                 return Ok(());
             }
 
+            let native_amx_ownership_index = bundle
+                .external
+                .iter()
+                .any(|context| context.native_amx_receipt.is_some())
+                .then(|| Self::index_native_amx_coordinator_ownerships(bundle))
+                .transpose()?;
+
             let expected_native_amx_context = validation_profile
                 .v2_context()
                 .map(|context| {
@@ -9551,26 +9789,24 @@ pub(crate) mod valid {
                         let expected_chain_id_hash =
                             Hash::new(chain_id.clone().into_inner().as_bytes());
                         let entrypoint_untyped = Hash::from(context.entrypoint_hash);
-                        let mut matching_ownerships =
-                            bundle.lane_payload_ownerships.iter().filter(|ownership| {
-                                ownership.lane_id == context.lane_id
-                                    && ownership.dataspace_id == context.dataspace_id
-                                    && ownership.proposal_height == receipt.authority_context_height
-                                    && ownership
-                                        .accepted_transaction_hashes
-                                        .iter()
-                                        .any(|hash| *hash == entrypoint_untyped)
-                            });
-                        let Some(coordinator_ownership) = matching_ownerships.next() else {
+                        let ownership_key = (
+                            context.lane_id,
+                            context.dataspace_id,
+                            receipt.authority_context_height,
+                            entrypoint_untyped,
+                        );
+                        let Some(ownership_index) = native_amx_ownership_index
+                            .as_ref()
+                            .expect("native AMX receipt requires a coordinator ownership index")
+                            .get(&ownership_key)
+                            .copied()
+                        else {
                             return Err(Self::execution_context_error(format!(
                                 "native AMX receipt at index {idx} has no coordinator lane ownership"
                             )));
                         };
-                        if matching_ownerships.next().is_some() {
-                            return Err(Self::execution_context_error(format!(
-                                "native AMX receipt at index {idx} matches multiple coordinator lane ownerships"
-                            )));
-                        }
+                        let coordinator_ownership =
+                            &bundle.lane_payload_ownerships[ownership_index];
                         let coordinator_proposal =
                             native_amx_coordinator_proposal_from_ownership(coordinator_ownership)
                                 .map_err(|err| {
@@ -9614,15 +9850,43 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        fn index_native_amx_coordinator_ownerships(
+            bundle: &BlockExecutionContextBundle,
+        ) -> Result<BTreeMap<(LaneId, DataSpaceId, u64, Hash), usize>, BlockValidationError>
+        {
+            let mut index = BTreeMap::new();
+            for (ownership_index, ownership) in bundle.lane_payload_ownerships.iter().enumerate() {
+                for entrypoint_hash in &ownership.accepted_transaction_hashes {
+                    let key = (
+                        ownership.lane_id,
+                        ownership.dataspace_id,
+                        ownership.proposal_height,
+                        *entrypoint_hash,
+                    );
+                    if index.insert(key, ownership_index).is_some() {
+                        return Err(Self::execution_context_error(format!(
+                            "native AMX coordinator ownership index repeats entrypoint hash {entrypoint_hash:?} for lane {} dataspace {} height {}",
+                            ownership.lane_id.as_u32(),
+                            ownership.dataspace_id.as_u64(),
+                            ownership.proposal_height,
+                        )));
+                    }
+                }
+            }
+            Ok(index)
+        }
+
         pub(super) fn validate_native_amx_participant_groups(
             bundle: &BlockExecutionContextBundle,
         ) -> Result<(), BlockValidationError> {
-            type ParticipantGroup = (
-                LaneBlockProposalV1,
-                LaneBlockCommitment,
-                HashOf<LaneBlockCommitment>,
-                Vec<(u64, Hash, [u8; Hash::LENGTH])>,
-            );
+            struct ParticipantGroup {
+                proposal: LaneBlockProposalV1,
+                settlement: LaneBlockCommitment,
+                settlement_hash: HashOf<LaneBlockCommitment>,
+                members: Vec<(u64, Hash, [u8; Hash::LENGTH])>,
+                member_indices: BTreeSet<u64>,
+                member_sources: BTreeSet<[u8; Hash::LENGTH]>,
+            }
 
             // Ordinary single-route blocks have no native-AMX participant
             // groups. Their lane ownership replay material was already
@@ -9638,11 +9902,14 @@ pub(crate) mod valid {
                 return Ok(());
             }
 
-            let coordinator_proposals = bundle
+            let coordinator_proposal_hashes = bundle
                 .lane_payload_ownerships
                 .iter()
-                .map(native_amx_coordinator_proposal_from_ownership)
-                .collect::<std::result::Result<Vec<_>, _>>()
+                .map(|ownership| {
+                    native_amx_coordinator_proposal_from_ownership(ownership)
+                        .map(|proposal| HashOf::<LaneBlockProposalV1>::new(&proposal))
+                })
+                .collect::<std::result::Result<BTreeSet<_>, _>>()
                 .map_err(|error| {
                     Self::execution_context_error(format!(
                         "native AMX executable coordinator inventory is invalid: {error}"
@@ -9684,12 +9951,10 @@ pub(crate) mod valid {
                         descriptor.lane_incarnation,
                         descriptor.lane_block_height,
                     );
-                    if let Some((proposal, settlement, settlement_hash, members)) =
-                        groups.get_mut(&key)
-                    {
-                        if proposal != &leg.participant_proposal
-                            || settlement != &leg.participant_settlement
-                            || *settlement_hash != leg.participant_settlement_hash
+                    if let Some(group) = groups.get_mut(&key) {
+                        if group.proposal != leg.participant_proposal
+                            || group.settlement != leg.participant_settlement
+                            || group.settlement_hash != leg.participant_settlement_hash
                         {
                             return Err(Self::execution_context_error(format!(
                                 "native AMX participant lane {} dataspace {} height {} carries conflicting grouped control evidence",
@@ -9698,9 +9963,9 @@ pub(crate) mod valid {
                                 descriptor.lane_block_height,
                             )));
                         }
-                        if members.iter().any(|(member_index, _, source_id)| {
-                            *member_index == entrypoint_index || *source_id == receipt.source_id
-                        }) {
+                        if !group.member_indices.insert(entrypoint_index)
+                            || !group.member_sources.insert(receipt.source_id)
+                        {
                             return Err(Self::execution_context_error(format!(
                                 "native AMX participant lane {} dataspace {} height {} repeats a grouped block member",
                                 descriptor.lane_id.as_u32(),
@@ -9708,47 +9973,57 @@ pub(crate) mod valid {
                                 descriptor.lane_block_height,
                             )));
                         }
-                        members.push((entrypoint_index, entrypoint_hash, receipt.source_id));
+                        group
+                            .members
+                            .push((entrypoint_index, entrypoint_hash, receipt.source_id));
                     } else {
                         groups.insert(
                             key,
-                            (
-                                leg.participant_proposal.clone(),
-                                leg.participant_settlement.clone(),
-                                leg.participant_settlement_hash,
-                                vec![(entrypoint_index, entrypoint_hash, receipt.source_id)],
-                            ),
+                            ParticipantGroup {
+                                proposal: leg.participant_proposal.clone(),
+                                settlement: leg.participant_settlement.clone(),
+                                settlement_hash: leg.participant_settlement_hash,
+                                members: vec![(
+                                    entrypoint_index,
+                                    entrypoint_hash,
+                                    receipt.source_id,
+                                )],
+                                member_indices: BTreeSet::from([entrypoint_index]),
+                                member_sources: BTreeSet::from([receipt.source_id]),
+                            },
                         );
                     }
                 }
             }
 
-            for (
-                (lane_id, dataspace_id, _, lane_block_height),
-                (proposal, settlement, _, mut members),
-            ) in groups
-            {
-                members.sort_by_key(|(index, _, _)| *index);
-                let member_indices = members
+            for ((lane_id, dataspace_id, _, lane_block_height), mut group) in groups {
+                group.members.sort_by_key(|(index, _, _)| *index);
+                let member_indices = group
+                    .members
                     .iter()
                     .map(|(index, _, _)| *index)
                     .collect::<Vec<_>>();
-                let member_hashes = members.iter().map(|(_, hash, _)| *hash).collect::<Vec<_>>();
-                let member_sources = members
+                let member_hashes = group
+                    .members
+                    .iter()
+                    .map(|(_, hash, _)| *hash)
+                    .collect::<Vec<_>>();
+                let member_sources = group
+                    .members
                     .iter()
                     .map(|(_, _, source_id)| *source_id)
                     .collect::<Vec<_>>();
-                let settlement_sources = settlement
+                let settlement_sources = group
+                    .settlement
                     .receipts
                     .iter()
                     .map(|receipt| receipt.source_id)
                     .collect::<Vec<_>>();
                 let proposal_members_are_exact = member_indices
-                    == proposal.descriptor.accepted_candidate_indices
-                    && member_hashes == proposal.descriptor.accepted_transaction_hashes;
-                let proposal_is_executable_anchor = coordinator_proposals
-                    .iter()
-                    .any(|coordinator| coordinator == &proposal);
+                    == group.proposal.descriptor.accepted_candidate_indices
+                    && member_hashes == group.proposal.descriptor.accepted_transaction_hashes;
+                let proposal_is_executable_anchor = coordinator_proposal_hashes
+                    .contains(&HashOf::<LaneBlockProposalV1>::new(&group.proposal));
                 if member_sources != settlement_sources
                     || (!proposal_members_are_exact && !proposal_is_executable_anchor)
                 {
@@ -9835,9 +10110,7 @@ pub(crate) mod valid {
             match entrypoint {
                 TransactionEntrypoint::External(tx) => Some(tx),
                 TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                    None
-                }
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
             }
         }
 
@@ -10559,7 +10832,8 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
             routed_transactions: &[(HashOf<SignedTransaction>, crate::queue::RoutingDecision)],
             lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-        ) -> Result<Vec<LaneBlockCommitment>, BlockValidationError> {
+        ) -> Result<Vec<iroha_data_model::nexus::LaneFinalityStatement>, BlockValidationError>
+        {
             let mut native_amx_receipts_by_hash = BTreeMap::new();
             if let Some(bundle) = block.execution_context() {
                 for (entrypoint, context) in block
@@ -10864,6 +11138,7 @@ pub(crate) mod valid {
                 })
                 .collect::<Result<Vec<_>, BlockValidationError>>()?;
 
+            let mut lane_finality_statements = Vec::new();
             if !lane_settlement_commitments.is_empty() {
                 crate::sumeragi::status::set_lane_settlement_commitments(
                     lane_settlement_commitments.clone(),
@@ -10886,10 +11161,19 @@ pub(crate) mod valid {
                     &lane_payload_coordinates,
                 )?;
                 attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
+                lane_finality_statements = lane_relay_envelopes
+                    .iter()
+                    .map(LaneRelayEnvelope::lane_finality_statement)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "settled lane finality statement is incomplete: {error}"
+                        ))
+                    })?;
                 crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
             }
 
-            Ok(lane_settlement_commitments)
+            Ok(lane_finality_statements)
         }
 
         fn validate_and_record_entrypoints_sequential(
@@ -10899,6 +11183,7 @@ pub(crate) mod valid {
             entrypoints: Vec<TransactionEntrypoint>,
             sccp_root_validation: SccpRootValidation,
         ) -> Result<(), BlockValidationError> {
+            let advertised_axt_policy_snapshot = block.axt_policy_snapshot().cloned();
             let to_ms = |duration: Duration| -> u64 {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             };
@@ -11036,7 +11321,7 @@ pub(crate) mod valid {
                     routed_transactions.push((tx.hash(), *decision));
                 }
             }
-            Self::finalize_lane_settlement_evidence(
+            let lane_finality_statements = Self::finalize_lane_settlement_evidence(
                 block,
                 state_block,
                 &routed_transactions,
@@ -11092,14 +11377,19 @@ pub(crate) mod valid {
             let axt_envelopes = state_block.drain_axt_envelopes();
             let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
             let axt_policy_snapshot = state_block.axt_policy_snapshot();
+            Self::validate_advertised_axt_post_state(
+                advertised_axt_policy_snapshot.as_ref(),
+                &axt_policy_snapshot,
+            )?;
             let trigger_completions = state_block.world.trigger_completions();
             block
-                .set_transaction_results_with_transcripts(
+                .set_transaction_results_with_transcripts_and_lane_finality(
                     time_trgs,
                     ordered_hashes.as_slice(),
                     ordered_results,
                     fastpq_transcripts,
                     axt_envelopes,
+                    lane_finality_statements,
                     axt_policy_snapshot,
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
@@ -11249,24 +11539,35 @@ pub(crate) mod valid {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             };
             let mut timings = timings;
+            let advertised_axt_policy_snapshot = block.axt_policy_snapshot().cloned();
             if block.has_results() {
-                if let Some(snapshot) = block.axt_policy_snapshot() {
-                    state_block
-                        .install_axt_policy_snapshot(snapshot)
-                        .map_err(|error| {
-                            BlockValidationError::AxtEnvelopeValidationFailed(
-                                AxtEnvelopeValidationDetails {
-                                    message: format!("invalid AXT policy snapshot: {error}"),
-                                    reason: AxtRejectReason::PolicyDenied,
-                                    snapshot_version: Some(snapshot.version),
-                                    dataspace: None,
-                                    lane: None,
-                                    next_min_handle_era: None,
-                                    next_min_sub_nonce: None,
-                                },
-                            )
-                        })?;
-                }
+                let snapshot = advertised_axt_policy_snapshot.as_ref().ok_or_else(|| {
+                    BlockValidationError::AxtEnvelopeValidationFailed(
+                        AxtEnvelopeValidationDetails {
+                            message: "block result is missing its AXT post-state policy snapshot"
+                                .to_owned(),
+                            reason: AxtRejectReason::MissingPolicy,
+                            snapshot_version: None,
+                            dataspace: None,
+                            lane: None,
+                            next_min_handle_era: None,
+                            next_min_sub_nonce: None,
+                        },
+                    )
+                })?;
+                snapshot.validate().map_err(|error| {
+                    BlockValidationError::AxtEnvelopeValidationFailed(
+                        AxtEnvelopeValidationDetails {
+                            message: format!("invalid AXT policy snapshot: {error}"),
+                            reason: AxtRejectReason::PolicyDenied,
+                            snapshot_version: Some(snapshot.version),
+                            dataspace: None,
+                            lane: None,
+                            next_min_handle_era: None,
+                            next_min_sub_nonce: None,
+                        },
+                    )
+                })?;
             }
 
             let height = block.header().height().get();
@@ -13143,7 +13444,7 @@ pub(crate) mod valid {
                 .zip(&routing_decisions)
                 .map(|(prepared, decision)| (prepared.metadata.signed_hash, *decision))
                 .collect::<Vec<_>>();
-            Self::finalize_lane_settlement_evidence(
+            let lane_finality_statements = Self::finalize_lane_settlement_evidence(
                 block,
                 state_block,
                 &routed_transactions,
@@ -15131,18 +15432,23 @@ pub(crate) mod valid {
             let axt_envelopes = state_block.drain_axt_envelopes();
             let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
             let axt_policy_snapshot = state_block.axt_policy_snapshot();
+            Self::validate_advertised_axt_post_state(
+                advertised_axt_policy_snapshot.as_ref(),
+                &axt_policy_snapshot,
+            )?;
             let trigger_completions = state_block.world.trigger_completions();
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), axt_start) {
                 timings.execution_tx_finalize_axt_ms = to_ms(start.elapsed());
             }
             let set_results_start = timings.as_ref().map(|_| Instant::now());
             block
-                .set_transaction_results_with_transcripts(
+                .set_transaction_results_with_transcripts_and_lane_finality(
                     time_trgs,
                     hashes.as_slice(),
                     ordered_results,
                     fastpq_transcripts,
                     axt_envelopes,
+                    lane_finality_statements,
                     axt_policy_snapshot,
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
@@ -15217,10 +15523,6 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<ValidBlock> {
-            assert!(
-                block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
-                "unchecked block payload is not in canonical transaction entrypoint order"
-            );
             Self::validate_staged_merge_reference(&block, state_block)
                 .expect("unchecked certified merge block requires its exact pre-staged sidecar");
             let exec_witness_guard = (!state_block.replay_compatibility)
@@ -15659,7 +15961,8 @@ pub(crate) mod valid {
             merge::MergeQuorumCertificate,
             metadata::Metadata,
             nexus::{
-                DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+                AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceCatalog, DataSpaceId,
+                DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
             },
             parameter::{Parameter, Parameters, system::SumeragiNposParameters},
             prelude::{Account, Domain, PeerId, Register},
@@ -15721,6 +16024,52 @@ pub(crate) mod valid {
         fn checked_da_ack_signature(byte: u8) -> Signature {
             Signature::try_from_bytes(&[byte; 64])
                 .expect("checked core block DA acknowledgement signature fixture")
+        }
+
+        fn axt_post_snapshot(sub_nonce: u64) -> AxtPolicySnapshot {
+            let entries = vec![AxtPolicyBinding {
+                dsid: DataSpaceId::new(7),
+                policy: AxtPolicyEntry {
+                    manifest_root: [0xA7; 32],
+                    target_lane: LaneId::new(2),
+                    min_handle_era: 3,
+                    min_sub_nonce: sub_nonce,
+                    current_slot: 11,
+                },
+            }];
+            AxtPolicySnapshot {
+                version: AxtPolicySnapshot::compute_version(&entries),
+                entries,
+            }
+        }
+
+        #[test]
+        fn advertised_axt_post_state_must_equal_deterministic_execution() {
+            let computed = axt_post_snapshot(4);
+            let forged = axt_post_snapshot(400);
+
+            ValidBlock::validate_advertised_axt_post_state(None, &computed)
+                .expect("locally produced blocks have no advertised pre-result snapshot");
+            ValidBlock::validate_advertised_axt_post_state(Some(&computed), &computed)
+                .expect("the exact deterministic post-state is accepted");
+            assert!(matches!(
+                ValidBlock::validate_advertised_axt_post_state(Some(&forged), &computed),
+                Err(BlockValidationError::AxtEnvelopeValidationFailed(details))
+                    if details.reason == AxtRejectReason::PolicyDenied
+            ));
+        }
+
+        #[test]
+        fn axt_pre_state_counter_reconstruction_is_checked_and_bounded() {
+            assert_eq!(reconstruct_axt_start_sub_nonce(4, 3), Some(1));
+            assert_eq!(reconstruct_axt_start_sub_nonce(2, 3), None);
+            assert_eq!(
+                reconstruct_axt_start_sub_nonce(
+                    MAX_AUTHENTICATED_AXT_HANDLES_PER_BLOCK,
+                    MAX_AUTHENTICATED_AXT_HANDLES_PER_BLOCK,
+                ),
+                Some(0)
+            );
         }
 
         fn raw_block_with_da_sidecars(
@@ -17774,7 +18123,6 @@ pub(crate) mod valid {
                 .cloned()
                 .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
                 .collect::<Vec<_>>();
-            transactions.sort_unstable_by_key(SignedTransaction::hash_as_entrypoint);
             let ownerships = lanes
                 .iter()
                 .zip(&transactions)
@@ -17962,6 +18310,42 @@ pub(crate) mod valid {
             ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
             ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
             ownership
+        }
+
+        #[test]
+        fn native_amx_coordinator_ownership_index_is_unique_and_exact() {
+            let validator = PeerId::new(
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            );
+            let entrypoint_hash = Hash::new(b"native-amx-index-entrypoint");
+            let ownership = sample_lane_payload_ownership_for_context(
+                7,
+                0,
+                LaneId::new(1),
+                DataSpaceId::new(2),
+                Hash::new(b"native-amx-index-incarnation"),
+                vec![0],
+                vec![entrypoint_hash],
+                &[validator],
+            );
+            let bundle = BlockExecutionContextBundle::new(Vec::new())
+                .with_lane_payload_ownerships(vec![ownership.clone()]);
+            let index = ValidBlock::index_native_amx_coordinator_ownerships(&bundle)
+                .expect("one ownership must produce one exact index entry");
+            assert_eq!(
+                index.get(&(LaneId::new(1), DataSpaceId::new(2), 7, entrypoint_hash)),
+                Some(&0)
+            );
+
+            let duplicate_bundle = BlockExecutionContextBundle::new(Vec::new())
+                .with_lane_payload_ownerships(vec![ownership.clone(), ownership]);
+            assert!(matches!(
+                ValidBlock::index_native_amx_coordinator_ownerships(&duplicate_bundle),
+                Err(BlockValidationError::ExecutionContextInvalid(message))
+                    if message.contains("repeats entrypoint hash")
+            ));
         }
 
         #[test]
@@ -18182,23 +18566,10 @@ pub(crate) mod valid {
                 .cloned()
                 .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
                 .collect::<Vec<_>>();
-            let mut canonical_transactions = transactions
-                .iter()
-                .cloned()
-                .enumerate()
-                .map(|(idx, tx)| (tx.hash_as_entrypoint(), idx, tx))
-                .collect::<Vec<_>>();
-            canonical_transactions
-                .sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-            let canonical_transactions = canonical_transactions
-                .into_iter()
-                .map(|(_, _, tx)| tx)
-                .collect::<Vec<_>>();
             let lane_incarnation = state
                 .lane_incarnation(LaneId::SINGLE)
                 .expect("default lane incarnation");
-            let execution_context =
-                context_for(&canonical_transactions, topology.as_ref(), lane_incarnation);
+            let execution_context = context_for(&transactions, topology.as_ref(), lane_incarnation);
             let builder = BlockBuilder::new_with_time_source(accepted, time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
                 .with_execution_context(Some(execution_context));
@@ -23444,6 +23815,13 @@ pub(crate) mod valid {
                 Reason::TransactionValidationFailed
             );
             assert_eq!(
+                map_block_err_to_reason(&BlockValidationError::TooManyTransactions {
+                    actual: 2,
+                    max: 1,
+                }),
+                Reason::TransactionValidationFailed
+            );
+            assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::SignatureVerification(
                     SignatureVerificationError::LeaderMissing
                 )),
@@ -25714,6 +26092,7 @@ mod commit {
                     manifest_view_root: manifest_root,
                     expiry_slot,
                     max_clock_skew_ms: Some(0),
+                    issuer_signature: None,
                 },
                 intent: RemoteSpendIntent {
                     asset_dsid: dsid,
@@ -26100,6 +26479,7 @@ mod commit {
                     manifest_view_root: policy.manifest_root,
                     expiry_slot: 50,
                     max_clock_skew_ms: Some(1_000),
+                    issuer_signature: None,
                 },
                 intent: RemoteSpendIntent {
                     asset_dsid: dsid,
@@ -27957,7 +28337,10 @@ mod event {
         match err {
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
-            BlockValidationError::DuplicateTransactions => Reason::TransactionValidationFailed,
+            BlockValidationError::DuplicateTransactions
+            | BlockValidationError::TooManyTransactions { .. } => {
+                Reason::TransactionValidationFailed
+            }
             BlockValidationError::SccpCommitmentRootMismatch { .. } => {
                 Reason::SccpCommitmentRootMismatch
             }
@@ -30918,8 +31301,8 @@ mod tests {
         assert_eq!(relays.len(), 1);
         let envelope = &relays[0];
         assert!(
-            envelope.qc.is_none(),
-            "block-level commit QC must not be copied into lane relay QC"
+            envelope.finality_authority.is_none(),
+            "execution-stage relay must wait for genuine global finality"
         );
         assert_eq!(envelope.rbc_bytes_total, 2048);
         assert_eq!(envelope.block_height, 3);

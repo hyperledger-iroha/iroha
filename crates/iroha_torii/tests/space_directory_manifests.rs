@@ -205,6 +205,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -222,6 +223,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -521,6 +523,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain-2"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso_rev,
                 cfg_rev.torii.clone(),
                 queue_rev,
@@ -538,6 +541,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain-2"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso_rev,
                 cfg_rev.torii.clone(),
                 queue_rev,
@@ -667,6 +671,7 @@ async fn space_directory_get_routes_reject_invalid_uaid_literals() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -684,6 +689,7 @@ async fn space_directory_get_routes_reject_invalid_uaid_literals() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -819,6 +825,7 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -836,6 +843,7 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -991,6 +999,7 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -1008,6 +1017,7 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -1126,6 +1136,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -1143,6 +1154,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -1781,6 +1793,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),
@@ -1798,6 +1811,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),

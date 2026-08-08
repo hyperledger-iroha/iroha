@@ -202,26 +202,30 @@ public abstract record class TransactionInstruction
         string orderId,
         ReadOnlySpan<byte> orderPayload,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
     {
         return new IssueReplicationOrderInstruction(
             orderId,
             orderPayload,
             issuedEpoch,
-            deadlineEpoch);
+            deadlineEpoch,
+            musubiArchiveId);
     }
 
     public static IssueReplicationOrderInstruction IssueReplicationOrder(
         string orderId,
         string orderPayloadBase64,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
     {
         return new IssueReplicationOrderInstruction(
             orderId,
             orderPayloadBase64,
             issuedEpoch,
-            deadlineEpoch);
+            deadlineEpoch,
+            musubiArchiveId);
     }
 
     public static CompleteReplicationOrderInstruction CompleteReplicationOrder(

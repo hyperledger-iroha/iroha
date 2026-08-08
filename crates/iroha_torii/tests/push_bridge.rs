@@ -99,6 +99,7 @@ fn build_torii(
         .0;
         Torii::new(
             ChainId::from("test-chain"),
+            iroha_torii::test_utils::signed_query_network_id(),
             kiso,
             cfg.torii.clone(),
             queue,
@@ -116,6 +117,7 @@ fn build_torii(
     #[cfg(not(feature = "telemetry"))]
     let torii = Torii::new(
         ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

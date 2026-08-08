@@ -1124,7 +1124,7 @@ fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
 fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     use PrivacyCapabilityArchiveValidationStatusV1 as Status;
 
-    assert_eq!(PRIVACY_BRIDGE_ABI_VERSION_V1, 21);
+    assert_eq!(PRIVACY_BRIDGE_ABI_VERSION_V1, 22);
     assert_eq!(PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1, 256 * 1024);
     assert_eq!(Status::Valid.code(), 0);
     assert_eq!(Status::NullPointer.code(), 1);
@@ -1538,6 +1538,11 @@ fn exact12_checked_in_fixture_bundle_is_canonical_and_current() {
 
     let encoded =
         include_str!("../../../../../fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64");
+    assert_eq!(
+        encoded.bytes().filter(|byte| *byte == b'\n').count(),
+        1,
+        "exact12 base64 fixture must contain exactly one terminal LF",
+    );
     let payload = encoded
         .strip_suffix('\n')
         .expect("exact12 base64 fixture must end with exactly one LF");

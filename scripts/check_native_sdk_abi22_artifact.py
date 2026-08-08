@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record and verify fail-closed ABI-21 native SDK artifact evidence.
+"""Record and verify fail-closed ABI-22 native SDK artifact evidence.
 
 This checker is intentionally host-only.  It authenticates the exact native
 artifact exercised by a Node, Python, C/JNI, or C# test lane, calls that
@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import NoReturn
 
 
-SCHEMA = "iroha.native-sdk-abi21-artifact.v1"
-REQUIRED_BRIDGE_ABI_VERSION = 21
+SCHEMA = "iroha.native-sdk-abi22-artifact.v1"
+REQUIRED_BRIDGE_ABI_VERSION = 22
 MAX_MANIFEST_BYTES = 64 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
@@ -290,7 +290,7 @@ def probe_node_abi(
     *,
     node: str = "node",
 ) -> int:
-    """Load one Node addon and call its exact ABI-21 probe."""
+    """Load one Node addon and call its exact ABI-22 probe."""
 
     source = r"""
 const artifact = process.argv[1];
@@ -327,7 +327,7 @@ def probe_python_abi(
     *,
     python: str = sys.executable,
 ) -> int:
-    """Load one Python extension directly and call its exact ABI-21 probe."""
+    """Load one Python extension directly and call its exact ABI-22 probe."""
 
     source = r"""
 import importlib.machinery
@@ -339,7 +339,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 required = json.loads(sys.argv[2])
 if path.suffix == ".py":
-    name = "_iroha_native_abi21_fixture"
+    name = "_iroha_native_abi22_fixture"
     loader = importlib.machinery.SourceFileLoader(name, str(path))
 else:
     name = "iroha_python._crypto"
@@ -438,7 +438,7 @@ def canonical_manifest_bytes(manifest: Mapping[str, object]) -> bytes:
 
 
 def validate_manifest(value: object) -> dict[str, object]:
-    """Validate the exact ABI-21 artifact evidence schema."""
+    """Validate the exact ABI-22 artifact evidence schema."""
 
     manifest = _plain_object(value, "native artifact manifest")
     expected_keys = {
@@ -618,5 +618,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except ArtifactContractError as error:
-        print(f"native SDK ABI-21 artifact check failed: {error}", file=sys.stderr)
+        print(f"native SDK ABI-22 artifact check failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error

@@ -2508,6 +2508,7 @@ mod tests {
             order_id: ReplicationOrderId::new(order_payload.order_id),
             manifest_digest: ManifestDigest::new([0x55; 32]),
             manifest_root_cid,
+            musubi_archive: None,
             issued_by: issuer.clone(),
             issued_epoch: 10,
             deadline_epoch: 20,

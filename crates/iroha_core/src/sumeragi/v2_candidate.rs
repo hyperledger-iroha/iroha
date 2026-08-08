@@ -14,7 +14,7 @@
 
 use std::{
     collections::{BTreeSet, VecDeque},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     time::Duration,
 };
 
@@ -44,7 +44,7 @@ use super::{
 use crate::{
     block::BlockBuilder,
     queue::{GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan},
-    state::{State, StateReadOnly, compute_confidential_feature_digest},
+    state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
     tx::AcceptedTransaction,
 };
 
@@ -162,7 +162,7 @@ impl<'candidate> CandidateDescriptor<'candidate> {
         self.routing_plan
     }
 
-    /// Canonical entrypoint hash which determines block order.
+    /// Canonical entrypoint hash used to bind routing and execution context.
     pub(crate) const fn entrypoint_hash(self) -> HashOf<TransactionEntrypoint> {
         self.entrypoint_hash
     }
@@ -465,6 +465,10 @@ impl V2CandidateAssembler {
         );
         let mut report = CandidateScanReport::default();
         let state_view = request.state.view();
+        let selection_max = effective_candidate_transaction_limit(
+            self.limits.max_transactions,
+            state_view.world().parameters().block().max_transactions(),
+        );
         let (pending, mut selection_lease) = request
             .queue
             .bounded_pending_snapshot(&state_view, self.limits.max_queue_scan)
@@ -479,11 +483,11 @@ impl V2CandidateAssembler {
             &mut report,
         )?;
         let mut reserve = VecDeque::from(pool);
-        let mut selected = Vec::with_capacity(self.limits.max_transactions.get());
+        let mut selected = Vec::with_capacity(selection_max);
         fill_selection(
             &mut selected,
             &mut reserve,
-            self.limits.max_transactions.get(),
+            selection_max,
             exact_payload_limit,
             &mut report,
         );
@@ -492,10 +496,10 @@ impl V2CandidateAssembler {
         // of the at-most `max_queue_scan` inspected records.
         let max_attempts = self.limits.max_queue_scan.get().saturating_add(1);
         for _ in 0..max_attempts {
-            // Freeze FIFO membership before adopting the same canonical payload
-            // order used by `BlockBuilder`; routing contexts and work receipts
-            // are positional and must be prepared against that exact order.
-            canonicalize_records(&mut selected);
+            // Restore exact FIFO payload order after any unavailable-work removal
+            // and refill. Routing contexts and work receipts are positional and
+            // must be prepared against that exact order.
+            order_records_by_fifo(&mut selected);
             let descriptors = selected
                 .iter()
                 .map(CandidateRecord::descriptor)
@@ -511,7 +515,7 @@ impl V2CandidateAssembler {
                         fill_selection(
                             &mut selected,
                             &mut reserve,
-                            self.limits.max_transactions.get(),
+                            selection_max,
                             exact_payload_limit,
                             &mut report,
                         );
@@ -956,12 +960,21 @@ fn validate_candidate_parent(
     Ok(parent_height)
 }
 
-fn canonicalize_records(records: &mut [CandidateRecord]) {
+fn order_records_by_fifo(records: &mut [CandidateRecord]) {
     records.sort_by(|left, right| {
-        left.entrypoint_hash
-            .cmp(&right.entrypoint_hash)
-            .then_with(|| left.source_ordinal.cmp(&right.source_ordinal))
+        left.source_ordinal
+            .cmp(&right.source_ordinal)
+            .then_with(|| left.entrypoint_hash.cmp(&right.entrypoint_hash))
     });
+}
+
+fn effective_candidate_transaction_limit(
+    configured_max: NonZeroUsize,
+    protocol_max: NonZeroU64,
+) -> usize {
+    configured_max
+        .get()
+        .min(usize::try_from(protocol_max.get()).unwrap_or(usize::MAX))
 }
 
 fn fill_selection(
@@ -1859,7 +1872,19 @@ mod tests {
     }
 
     #[test]
-    fn canonical_order_matches_block_builder_hash_order() {
+    fn candidate_limit_never_exceeds_the_active_protocol_limit() {
+        assert_eq!(
+            effective_candidate_transaction_limit(nonzero(8), nonzero!(3_u64)),
+            3
+        );
+        assert_eq!(
+            effective_candidate_transaction_limit(nonzero(2), nonzero!(3_u64)),
+            2
+        );
+    }
+
+    #[test]
+    fn canonical_order_preserves_fifo_independent_of_entrypoint_hash() {
         let mut records = vec![
             record(1, "third", 2),
             record(3, "first", 0),
@@ -1889,11 +1914,14 @@ mod tests {
         );
         assert!(selected[0].entrypoint_hash > selected[1].entrypoint_hash);
 
-        canonicalize_records(&mut selected);
-        assert!(selected.windows(2).all(|window| {
-            (window[0].entrypoint_hash, window[0].source_ordinal)
-                <= (window[1].entrypoint_hash, window[1].source_ordinal)
-        }));
+        order_records_by_fifo(&mut selected);
+        assert!(
+            selected
+                .windows(2)
+                .all(|window| window[0].source_ordinal < window[1].source_ordinal),
+            "an attacker-controlled entrypoint hash must not buy earlier execution"
+        );
+        assert!(selected[0].entrypoint_hash > selected[1].entrypoint_hash);
     }
 
     #[test]
@@ -2176,7 +2204,7 @@ mod tests {
             record(2, "two", 1),
             record(3, "three", 2),
         ];
-        canonicalize_records(&mut selected);
+        order_records_by_fifo(&mut selected);
         let removed_hash = selected[1].entrypoint_hash;
         let surviving = [selected[0].entrypoint_hash, selected[2].entrypoint_hash];
         let unavailable = CandidateWorkUnavailable::new(BTreeSet::from([1]), "lane pending");

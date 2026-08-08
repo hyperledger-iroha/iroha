@@ -41,12 +41,12 @@ pub(crate) use committee::{
     ValidatorIndex,
 };
 pub(crate) use quorum::{Quorum, QuorumError};
+#[cfg(test)]
+pub(crate) use reducer::StepOutcome;
 pub(crate) use reducer::{
-    BodyState, DurableCommitReceipt, Effect, EquivocationKind, Event, IgnoreReason, Reducer,
+    BodyState, DurableCommitReceipt, Effect, EquivocationEvidence, Event, IgnoreReason, Reducer,
     ReducerError, SignableMessage, StepDisposition,
 };
-#[cfg(test)]
-pub(crate) use reducer::{EquivocationEvidence, StepOutcome};
 pub(crate) use refinement::{
     CanonicalIdentityProjection, EFFECTIVE_LOCK_TRACE_OWNER, EFFECTIVE_LOCK_TRACE_RETIRE,
     EFFECTIVE_LOCK_TRACE_SERVICE, EVENT_PERSISTENCE_FAILED, EffectiveLockTraceProjection,

@@ -966,8 +966,8 @@ def parse_validation_report(payload: bytes) -> dict[str, Any]:
         != GENERATION_MEMORY_ENFORCEMENT_PROFILE
     ):
         raise StageError("candidate generation memory enforcement profile is unsupported")
-    if report["bridge_abi_version"] != 21 or report["artifact_count"] != len(ARTIFACTS):
-        raise StageError("candidate is not the exact ABI-21 eight-artifact profile")
+    if report["bridge_abi_version"] != 22 or report["artifact_count"] != len(ARTIFACTS):
+        raise StageError("candidate is not the exact bridge-ABI-22 eight-artifact profile")
     artifacts = report["artifacts"]
     if not isinstance(artifacts, list) or len(artifacts) != len(ARTIFACTS):
         raise StageError("candidate validation report has the wrong artifact count")
@@ -1737,7 +1737,7 @@ def stage_candidate(candidate_dir: Path, scenario_dir: Path) -> Path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate and stage one source-sealed ABI-21 Android candidate lab"
+        description="Validate and stage one source-sealed bridge-ABI-22 Android candidate lab"
     )
     parser.add_argument("--candidate-dir", type=Path, required=True)
     parser.add_argument("--scenario-seed-dir", type=Path, required=True)

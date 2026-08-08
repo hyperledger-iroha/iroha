@@ -1224,7 +1224,7 @@ mod tests {
         assert_eq!(array(field(&parts.fixture, "capabilities")).len(), 5,);
         assert_eq!(
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            21,
+            22,
         );
     }
 }

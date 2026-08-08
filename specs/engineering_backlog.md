@@ -9571,12 +9571,24 @@ redistributable schemas, and official trust/revocation bundles.
     2026-05-01. Fold it into the next broader `cargo test -p iroha_torii`,
     SDK, workspace test, and workspace clippy corridor when validation budget
     allows.
-- Carry native asset escrow through the remaining Aitai application corridor.
-  - Wire the Sora Aitai application UI/backend onto the native numeric escrow ISIs and proof-carrying anonymous escrow helper surfaces, then subscribe through the numeric and anonymous escrow query/event APIs.
-  - Add app-facing lifecycle events for transparent and shielded offer state changes, and keep any remaining Kotodama wrapper work scoped to app calls that still need contract compatibility.
-  - Add end-to-end UI/client smoke coverage once the Sora Aitai application replaces the old contract escrow account path for both transparent XOR and shielded anonymous-asset offers.
-  - Rerun the full Kotlin, Java Android, and Swift SDK suites after the Aitai app wiring lands and a Java 21 runtime is available in the validation shell.
-  - Keep NFT/RWA escrow and court fee/payout generalization as separate follow-ups; the v1 primitive intentionally resolves only between the escrow seller and accepted buyer.
+- Carry native numeric asset escrow through the remaining Aitai application
+  corridor.
+  - Wire the Sora Aitai application UI/backend onto the
+    authority-authenticated numeric escrow ISIs, then subscribe through the
+    typed numeric escrow query/event APIs.
+  - Add app-facing lifecycle events for transparent offer state changes, and
+    keep any remaining Kotodama wrapper work scoped to app calls that still
+    need contract compatibility.
+  - Add end-to-end UI/client smoke coverage once the Sora Aitai application
+    replaces the old contract escrow account path for transparent XOR offers.
+    Native anonymous escrow is not a first-release surface; any future
+    confidential-commerce protocol requires a separate authority- and
+    settlement-bound design review.
+  - Rerun the full Kotlin, Java Android, and Swift SDK suites after the Aitai app
+    wiring lands and a Java 21 runtime is available in the validation shell.
+  - Keep NFT/RWA escrow and court fee/payout generalization as separate
+    follow-ups; the v1 primitive intentionally resolves only between the escrow
+    seller and accepted buyer.
 - Carry the Soracloud production posture hardening through the operator-host rollout corridor.
   - Local focused, portable QEMU, and prior multi-peer load gates are green as of 2026-04-25; the readiness runner now reports missing operator inventory and missing observability evidence as production blockers. Before public rollout, run the mixed-host Inrou smoke with the real operator inventory, attach the real metrics/status/alert/dashboard evidence, and archive a blocker-free readiness report.
   - The full `irohad` Soracloud binary filter is green as of 2026-05-05 under
@@ -10041,7 +10053,7 @@ redistributable schemas, and official trust/revocation bundles.
     hidden-identifier instructions, consensus-key lifecycle instructions,
     domain-endorsement instructions, verifying-key instructions, Offline
     note instructions, verified Nexus lane-relay/fee-budget instructions,
-    native and anonymous asset escrow lifecycle instructions, Musubi
+    native numeric asset escrow lifecycle instructions, Musubi
     package-registry instructions, smart-contract-code
     manifest/instance/bytecode instructions, the Space Directory manifest
     lifecycle instructions, SoraFS pin/capacity/replication/provider-owner plus
@@ -10274,12 +10286,12 @@ redistributable schemas, and official trust/revocation bundles.
     regressions consume account material;
     core ZK root-hint fixtures now use checked random Ed25519 key generation
     before stale/recent root-window regressions consume account material;
-    core Kagemusha and native anonymous-escrow audit fixtures now use checked
-    random Ed25519 key generation before protocol-bound confidential-state
-    regressions consume account material;
+    core Kagemusha audit fixtures now use checked random Ed25519 key generation
+    before protocol-bound confidential-state regressions consume account
+    material;
     core ZK asset verifier-key enforcement fixtures now use checked random
-    Ed25519 key generation before Kagemusha and native anonymous-escrow VK-role
-    binding regressions consume account material;
+    Ed25519 key generation before Kagemusha top-up/redemption VK-role binding
+    regressions consume account material;
     core fraud monitoring authority and attester fixtures now use checked
     random Ed25519 key generation before admission and attestation regressions
     consume signing material;

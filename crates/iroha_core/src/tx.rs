@@ -60,7 +60,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
-    smartcontracts::{Execute, code, ivm::cache::IvmCache},
+    smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
 
@@ -898,14 +898,14 @@ pub(crate) fn instructions_allow_multisig_envelope_authority(
 
 #[derive(Clone, Copy)]
 enum ConfidentialPolicyAdmissionAction {
-    Transfer,
+    TopUp,
     Redeem,
 }
 
 impl ConfidentialPolicyAdmissionAction {
     const fn label(self) -> &'static str {
         match self {
-            Self::Transfer => "transfer",
+            Self::TopUp => "confidential top-up",
             Self::Redeem => "confidential redemption",
         }
     }
@@ -940,7 +940,10 @@ fn effective_confidential_policy_mode_for_admission(
             .asset_total_amount(asset_def_id)
             .map_err(|err| TransactionRejectionReason::Validation(ValidationFail::from(err)))?;
         if transparent_total > Quantity::zero() {
-            return Ok(transition.previous_mode());
+            // Entering a conversion window enables confidential commitments and
+            // is irreversible in ABI V1. If finalization is blocked by remaining
+            // transparent supply, retain the currently active mode.
+            return Ok(policy.mode());
         }
     }
 
@@ -955,31 +958,24 @@ fn validate_confidential_policy_for_action(
 ) -> Result<(), TransactionRejectionReason> {
     let policy_mode =
         effective_confidential_policy_mode_for_admission(world, asset_def_id, block_height)?;
-    match action {
-        ConfidentialPolicyAdmissionAction::Transfer => {
-            if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
-                Err(confidential_policy_admission_rejection(action))
-            } else {
-                Ok(())
-            }
-        }
-        ConfidentialPolicyAdmissionAction::Redeem => match policy_mode {
-            ConfidentialPolicyMode::TransparentOnly | ConfidentialPolicyMode::ShieldedOnly => {
-                Err(confidential_policy_admission_rejection(action))
-            }
-            ConfidentialPolicyMode::Convertible => {
-                let allowed = world
-                    .zk_assets()
-                    .get(asset_def_id)
-                    .is_some_and(|st| st.allow_unshield);
-                if allowed {
-                    Ok(())
-                } else {
-                    Err(confidential_policy_admission_rejection(action))
-                }
-            }
-        },
+    if confidential_policy_allows_action(policy_mode, action) {
+        Ok(())
+    } else {
+        Err(confidential_policy_admission_rejection(action))
     }
+}
+
+fn confidential_policy_allows_action(
+    policy_mode: ConfidentialPolicyMode,
+    action: ConfidentialPolicyAdmissionAction,
+) -> bool {
+    matches!(
+        (policy_mode, action),
+        (
+            ConfidentialPolicyMode::Convertible,
+            ConfidentialPolicyAdmissionAction::TopUp | ConfidentialPolicyAdmissionAction::Redeem
+        )
+    )
 }
 
 pub(crate) fn validate_confidential_policy_admission_for_world(
@@ -996,7 +992,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
                 world,
                 topup.request.asset.definition(),
                 block_height,
-                ConfidentialPolicyAdmissionAction::Transfer,
+                ConfidentialPolicyAdmissionAction::TopUp,
             )?;
         } else if let Some(redeem) =
             any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>()
@@ -1011,6 +1007,34 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod confidential_policy_admission_tests {
+    use iroha_data_model::asset::definition::ConfidentialPolicyMode;
+
+    use super::{ConfidentialPolicyAdmissionAction, confidential_policy_allows_action};
+
+    #[test]
+    fn kagemusha_value_movement_requires_convertible_policy() {
+        for action in [
+            ConfidentialPolicyAdmissionAction::TopUp,
+            ConfidentialPolicyAdmissionAction::Redeem,
+        ] {
+            assert!(confidential_policy_allows_action(
+                ConfidentialPolicyMode::Convertible,
+                action,
+            ));
+            assert!(!confidential_policy_allows_action(
+                ConfidentialPolicyMode::TransparentOnly,
+                action,
+            ));
+            assert!(!confidential_policy_allows_action(
+                ConfidentialPolicyMode::ShieldedOnly,
+                action,
+            ));
+        }
+    }
 }
 
 fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
@@ -5384,7 +5408,7 @@ pub mod tests {
             SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
         query::store::LiveQueryStore,
-        smartcontracts::ivm::cache::IvmCache,
+        smartcontracts::{Execute, ivm::cache::IvmCache},
         state::{State, StateBlock, StateReadOnly, World},
     };
 
@@ -6737,7 +6761,7 @@ pub mod tests {
         let chain: ChainId = "accepted-into-entrypoint-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain,
+            chain.clone(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6831,7 +6855,7 @@ pub mod tests {
         let chain: ChainId = "single-ed25519-fast-path-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain,
+            chain.clone(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7325,7 +7349,6 @@ pub mod tests {
             .encoded_len(),
             time_expected_len
         );
-
     }
 
     #[test]
@@ -13187,7 +13210,7 @@ pub mod tests {
                         .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
                         .collect::<Vec<_>>()
                 };
-                BlockBuilder::new_preserve_order(transactions)
+                BlockBuilder::new(transactions)
                     .chain(0, self.state.view().latest_block().as_deref())
                     .sign(&GENESIS_ACCOUNT.key)
                     .unpack(|_| {})

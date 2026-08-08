@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     fmt::Write,
     io, mem,
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
@@ -39,9 +39,7 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
-    block::consensus_v2::{
-        ConsensusMode, SnapshotV2BootstrapRecord, finality::verify_validator_power_roster_pops,
-    },
+    block::consensus_v2::{SnapshotV2BootstrapRecord, finality::verify_validator_power_roster_pops},
     block::{
         BlockHeader, SignedBlock,
         consensus::{
@@ -116,9 +114,9 @@ use iroha_data_model::{
         MusubiPinLocationReferenceV1, MusubiProviderBundleAttestationKeyV1,
         MusubiProviderBundleAttestationRecordV1, MusubiProviderBundleAttestationRefV1,
         MusubiProviderLocationKeyV1, MusubiRegistryPolicyV1, MusubiRegistrySnapshotV1,
-        MusubiReleaseIdV1, MusubiReleaseRecordV1, MusubiReplicationOrderLocationReferenceV1,
-        MusubiResolverReleaseRowV1, MusubiStorageAvailabilityV1,
-        musubi_provider_bundle_attestation_set_digest_v1,
+        MusubiReleaseIdV1, MusubiReleaseRecordV1, MusubiReplicationOrderLocationLifecycleV1,
+        MusubiReplicationOrderLocationReferenceV1, MusubiResolverReleaseRowV1,
+        MusubiStorageAvailabilityV1, musubi_provider_bundle_attestation_set_digest_v1,
     },
     name::Name,
     nexus::{
@@ -132,7 +130,7 @@ use iroha_data_model::{
         FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey, FeeSponsorVault,
         FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
-        LaneRelayError, LaneRelayQuorumContext, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardRecord,
+        LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardRecord,
         PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
         UniversalAccountId, VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
@@ -772,6 +770,48 @@ fn retain_until_slot_for_handle(
     expiry_slot.max(retention_cap)
 }
 
+fn advance_axt_policy_for_handle(
+    mut policy: AxtPolicyEntry,
+    handle: &AxtHandleFragment,
+    current_slot: u64,
+) -> Result<AxtPolicyEntry, Error> {
+    let dsid = handle.intent.asset_dsid;
+    if handle.handle.manifest_view_root != policy.manifest_root {
+        return Err(Error::InvariantViolation(
+            format!(
+                "AXT handle for dataspace {} does not match the committed manifest root",
+                dsid.as_u64()
+            )
+            .into(),
+        ));
+    }
+    if handle.handle.target_lane != policy.target_lane {
+        return Err(Error::InvariantViolation(
+            format!(
+                "AXT handle for dataspace {} targets lane {}, expected {}",
+                dsid.as_u64(),
+                handle.handle.target_lane,
+                policy.target_lane
+            )
+            .into(),
+        ));
+    }
+    policy.min_sub_nonce =
+        iroha_data_model::nexus::next_axt_handle_sub_nonce(&policy, &handle.handle).map_err(
+            |error| {
+                Error::InvariantViolation(
+                    format!(
+                        "AXT handle for dataspace {} violates the committed sequence: {error}",
+                        dsid.as_u64()
+                    )
+                    .into(),
+                )
+            },
+        )?;
+    policy.current_slot = current_slot;
+    Ok(policy)
+}
+
 /// Helper utilities for mutating MV cells that store vectors.
 pub trait CellVecExt<T: MvValue> {
     /// Apply a mutation to the vector contents within a transaction boundary.
@@ -1090,6 +1130,12 @@ macro_rules! build_world_block {
             public_lane_reward_claims: $state.public_lane_reward_claims.$method(),
             lane_relay_emergency_validators: $state.lane_relay_emergency_validators.$method(),
             zk_assets: $state.zk_assets.$method(),
+            confidential_policy_transition_index: $state
+                .confidential_policy_transition_index
+                .$method(),
+            confidential_policy_transition_counts: $state
+                .confidential_policy_transition_counts
+                .$method(),
             elections: $state.elections.$method(),
             citizens: $state.citizens.$method(),
             ministry_agenda_proposals: $state.ministry_agenda_proposals.$method(),
@@ -1378,6 +1424,12 @@ macro_rules! build_world_transaction {
             public_lane_reward_claims: $state.public_lane_reward_claims.transaction(),
             lane_relay_emergency_validators: $state.lane_relay_emergency_validators.transaction(),
             zk_assets: $state.zk_assets.transaction(),
+            confidential_policy_transition_index: $state
+                .confidential_policy_transition_index
+                .transaction(),
+            confidential_policy_transition_counts: $state
+                .confidential_policy_transition_counts
+                .transaction(),
             elections: $state.elections.transaction(),
             citizens: $state.citizens.transaction(),
             ministry_agenda_proposals: $state.ministry_agenda_proposals.transaction(),
@@ -1772,6 +1824,10 @@ impl LaneRelayStore {
         &mut self,
         envelope: LaneRelayEnvelope,
     ) -> Result<LaneRelayInsert, LaneRelayError> {
+        // Pending envelopes live only in transport/status. Allowing one into
+        // the authoritative coordinate map would let a first arrival poison
+        // the key before genuine global-finality evidence is available.
+        envelope.validate_finality_authority_ref()?;
         let lane = envelope.lane_id;
         let height = envelope.block_height;
         let key = (
@@ -1786,13 +1842,6 @@ impl LaneRelayStore {
                 return Err(LaneRelayError::ConflictingRelay { lane, height });
             }
 
-            if existing.qc.is_some() && envelope.qc.is_none() {
-                return Ok(LaneRelayInsert::Duplicate);
-            }
-            if existing.qc.is_none() && envelope.qc.is_some() {
-                self.entries.insert(key, envelope);
-                return Ok(LaneRelayInsert::Replaced);
-            }
             if !existing.has_fastpq_proof_material() && envelope.has_fastpq_proof_material() {
                 self.entries.insert(key, envelope);
                 return Ok(LaneRelayInsert::Replaced);
@@ -3575,6 +3624,18 @@ pub enum LaneLifecycleError {
 /// Errors surfaced while installing runtime ZK configuration into committed state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ThisError)]
 pub enum ZkConfigInstallError {
+    /// A restored confidential-policy transition height exceeds the configured cap.
+    #[error(
+        "committed confidential-policy transitions exceed the configured per-height limit: height={effective_height} count={count} maximum={maximum}"
+    )]
+    ConfidentialPolicyTransitionLimitExceeded {
+        /// Effective height whose exact derived count exceeds the candidate limit.
+        effective_height: u64,
+        /// Exact number of committed pending transitions at the height.
+        count: u32,
+        /// Candidate maximum number of transitions at one height.
+        maximum: NonZeroU32,
+    },
     /// Consensus-accounted pending usage has an impossible counter combination.
     #[error("committed SCCP pending outbound usage is structurally invalid: {usage:?}")]
     InvalidSccpPendingUsage {
@@ -4647,6 +4708,12 @@ pub struct World {
     pub(crate) lane_relay_emergency_validators: Storage<LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: Storage<AssetDefinitionId, ZkAssetState>,
+    /// Pending confidential-policy transitions keyed by effective height and definition.
+    #[norito(skip)]
+    pub(crate) confidential_policy_transition_index: Storage<(u64, AssetDefinitionId), ()>,
+    /// Exact pending confidential-policy transition cardinality at each effective height.
+    #[norito(skip)]
+    pub(crate) confidential_policy_transition_counts: Storage<u64, u32>,
     /// Anonymous elections state keyed by election id.
     pub(crate) elections: Storage<String, ElectionState>,
     /// Registered citizens keyed by account id.
@@ -5341,6 +5408,13 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageBlock<'world, AssetDefinitionId, ZkAssetState>,
+    /// Pending confidential-policy transitions keyed by effective height and definition.
+    #[norito(skip)]
+    pub(crate) confidential_policy_transition_index:
+        StorageBlock<'world, (u64, AssetDefinitionId), ()>,
+    /// Exact pending confidential-policy transition cardinality at each effective height.
+    #[norito(skip)]
+    pub(crate) confidential_policy_transition_counts: StorageBlock<'world, u64, u32>,
     /// Anonymous elections state keyed by election id.
     pub(crate) elections: StorageBlock<'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
@@ -5867,6 +5941,8 @@ impl<'world> WorldBlock<'world> {
             public_lane_reward_claims,
             lane_relay_emergency_validators,
             zk_assets,
+            confidential_policy_transition_index,
+            confidential_policy_transition_counts,
             elections,
             citizens,
             ministry_agenda_proposals,
@@ -6583,6 +6659,11 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageTransaction<'block, 'world, AssetDefinitionId, ZkAssetState>,
+    /// Pending confidential-policy transitions keyed by effective height and definition.
+    pub(crate) confidential_policy_transition_index:
+        StorageTransaction<'block, 'world, (u64, AssetDefinitionId), ()>,
+    /// Exact pending confidential-policy transition cardinality at each effective height.
+    pub(crate) confidential_policy_transition_counts: StorageTransaction<'block, 'world, u64, u32>,
     /// Elections state
     pub(crate) elections: StorageTransaction<'block, 'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
@@ -7097,10 +7178,21 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> Option<AssetDefinition> {
         let owner = definition.owned_by().clone();
         let domain_context = definition.owning_domain().clone();
+        let next_transition_height = definition
+            .confidential_policy()
+            .pending_transition()
+            .as_ref()
+            .map(|transition| transition.effective_height());
         let previous = self
             .asset_definitions
             .insert(definition_id.clone(), definition);
         if let Some(previous) = previous.as_ref() {
+            if let Some(transition) = previous.confidential_policy().pending_transition() {
+                self.untrack_confidential_policy_transition(
+                    &definition_id,
+                    transition.effective_height(),
+                );
+            }
             self.untrack_asset_definition_domain(&definition_id);
             self.untrack_asset_definition_owner(&definition_id, previous.owned_by());
         }
@@ -7115,6 +7207,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         self.track_asset_definition_domain(&definition_id);
         self.track_asset_definition_owner(&definition_id, &owner);
+        if let Some(effective_height) = next_transition_height {
+            self.track_confidential_policy_transition(&definition_id, effective_height);
+        }
         previous
     }
 
@@ -7125,11 +7220,79 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> Option<AssetDefinition> {
         let removed = self.asset_definitions.remove(definition_id.clone());
         if let Some(definition) = removed.as_ref() {
+            if let Some(transition) = definition.confidential_policy().pending_transition() {
+                self.untrack_confidential_policy_transition(
+                    definition_id,
+                    transition.effective_height(),
+                );
+            }
             self.untrack_asset_definition_domain(definition_id);
             self.untrack_asset_definition_owner(definition_id, definition.owned_by());
             self.asset_definition_domains.remove(definition_id.clone());
         }
         removed
+    }
+
+    /// Add one pending confidential-policy transition to the exact due-height index.
+    pub(crate) fn track_confidential_policy_transition(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+        effective_height: u64,
+    ) {
+        let key = (effective_height, definition_id.clone());
+        if self
+            .confidential_policy_transition_index
+            .insert(key, ())
+            .is_some()
+        {
+            return;
+        }
+
+        let count = self
+            .confidential_policy_transition_counts
+            .get(&effective_height)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(1)
+            .expect("confidential-policy transition count must not overflow");
+        self.confidential_policy_transition_counts
+            .insert(effective_height, count);
+    }
+
+    /// Remove one pending confidential-policy transition from the exact due-height index.
+    pub(crate) fn untrack_confidential_policy_transition(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+        effective_height: u64,
+    ) {
+        if self
+            .confidential_policy_transition_index
+            .remove((effective_height, definition_id.clone()))
+            .is_none()
+        {
+            return;
+        }
+
+        let count = self
+            .confidential_policy_transition_counts
+            .get(&effective_height)
+            .copied()
+            .expect("tracked confidential-policy transition must have an exact height count");
+        if count == 1 {
+            self.confidential_policy_transition_counts
+                .remove(effective_height);
+        } else {
+            self.confidential_policy_transition_counts
+                .insert(effective_height, count - 1);
+        }
+    }
+
+    /// Return the exact number of pending confidential-policy transitions at a height.
+    pub(crate) fn confidential_policy_transition_count(&self, effective_height: u64) -> u32 {
+        self.confidential_policy_transition_counts
+            .get(&effective_height)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Move an existing asset definition id between owner index buckets.
@@ -8812,12 +8975,6 @@ pub struct ZkAssetState {
     pub tree_frontier: crate::zk::confidential_v2::ConfidentialTreeFrontierV2,
     /// Current root authenticated by the incremental frontier and retained history.
     pub persisted_root: [u8; 32],
-    /// First-release public-plus-confidential asset mode.
-    pub mode: iroha_data_model::isi::zk::ZkAssetMode,
-    /// Whether authenticated public-to-confidential top-ups are permitted.
-    pub allow_shield: bool,
-    /// Whether authenticated confidential-to-public redemption is permitted for this asset.
-    pub allow_unshield: bool,
     /// Append‑only list of note commitments (leaves of the Merkle tree).
     pub commitments: Vec<[u8; 32]>,
     /// Historical Merkle roots for recent states (for light clients/proofs).
@@ -8839,9 +8996,6 @@ impl Default for ZkAssetState {
             tree_profile,
             tree_frontier: [None; crate::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2],
             persisted_root: tree_profile.empty_root(),
-            mode: iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            allow_shield: false,
-            allow_unshield: false,
             commitments: Vec::new(),
             root_history: Vec::new(),
             nullifiers: std::collections::BTreeSet::new(),
@@ -9458,6 +9612,30 @@ mod zk_asset_state_tests {
             .validate_tree_integrity()
             .expect("decoded profile state remains canonical");
 
+        let current_json = norito::json::to_value(&state).expect("encode ZK asset JSON state");
+        for (field, value) in [
+            ("mode", norito::json::Value::String("Hybrid".to_owned())),
+            ("allow_shield", norito::json::Value::Bool(true)),
+            ("allow_unshield", norito::json::Value::Bool(true)),
+        ] {
+            assert!(
+                !current_json
+                    .as_object()
+                    .expect("ZK asset state object")
+                    .contains_key(field),
+                "retired field {field} must not be serialized"
+            );
+            let mut retired_shape = current_json.clone();
+            retired_shape
+                .as_object_mut()
+                .expect("ZK asset state object")
+                .insert(field.to_owned(), value);
+            assert!(
+                norito::json::from_value::<ZkAssetState>(retired_shape).is_err(),
+                "first-release snapshots must reject retired field {field}"
+            );
+        }
+
         let mut missing_profile =
             norito::json::to_value(&state).expect("encode ZK asset JSON state");
         missing_profile
@@ -9538,9 +9716,6 @@ impl json::JsonDeserialize for ZkAssetState {
         let mut tree_profile = None;
         let mut tree_frontier = None;
         let mut persisted_root = None;
-        let mut mode = None;
-        let mut allow_shield = None;
-        let mut allow_unshield = None;
         let mut commitments = None;
         let mut root_history = None;
         let mut nullifiers = None;
@@ -9563,9 +9738,6 @@ impl json::JsonDeserialize for ZkAssetState {
                         })?);
                 }
                 "persisted_root" => persisted_root = Some(visitor.parse_value()?),
-                "mode" => mode = Some(visitor.parse_value()?),
-                "allow_shield" => allow_shield = Some(visitor.parse_value()?),
-                "allow_unshield" => allow_unshield = Some(visitor.parse_value()?),
                 "commitments" => commitments = Some(visitor.parse_value()?),
                 "root_history" => root_history = Some(visitor.parse_value()?),
                 "nullifiers" => nullifiers = Some(visitor.parse_value()?),
@@ -9587,11 +9759,6 @@ impl json::JsonDeserialize for ZkAssetState {
                 .ok_or_else(|| json::MapVisitor::missing_field("tree_frontier"))?,
             persisted_root: persisted_root
                 .ok_or_else(|| json::MapVisitor::missing_field("persisted_root"))?,
-            mode: mode.ok_or_else(|| json::MapVisitor::missing_field("mode"))?,
-            allow_shield: allow_shield
-                .ok_or_else(|| json::MapVisitor::missing_field("allow_shield"))?,
-            allow_unshield: allow_unshield
-                .ok_or_else(|| json::MapVisitor::missing_field("allow_unshield"))?,
             commitments,
             root_history: root_history
                 .ok_or_else(|| json::MapVisitor::missing_field("root_history"))?,
@@ -13253,29 +13420,10 @@ impl<'state> StateBlock<'state> {
         }
     }
 
-    fn apply_axt_envelope(&mut self, envelope: &AxtEnvelopeRecord, current_slot: u64) {
-        for handle in &envelope.handles {
-            let dsid = handle.intent.asset_dsid;
-            let Some(mut policy) = self.world.axt_policies.get(&dsid).copied() else {
-                iroha_logger::warn!(
-                    dataspace_id = dsid.as_u64(),
-                    "AXT envelope applied without cached policy entry; skipping nonce update"
-                );
-                continue;
-            };
-
-            if handle.handle.handle_era > policy.min_handle_era {
-                policy.min_handle_era = handle.handle.handle_era;
-                policy.min_sub_nonce = handle.handle.sub_nonce.saturating_add(1);
-            } else if handle.handle.handle_era == policy.min_handle_era {
-                policy.min_sub_nonce = policy
-                    .min_sub_nonce
-                    .max(handle.handle.sub_nonce.saturating_add(1));
-            }
-            policy.current_slot = current_slot;
-            self.world.axt_policies.insert(dsid, policy);
-        }
-
+    fn record_replayed_axt_envelope(&mut self, envelope: &AxtEnvelopeRecord, current_slot: u64) {
+        // The embedded policy snapshot is the deterministic post-state. Kura
+        // replay installs it before this method, so replay must only rebuild
+        // the replay ledger and must never advance the counter a second time.
         for handle in &envelope.handles {
             let retain_until_slot = retain_until_slot_for_handle(handle, &self.nexus, current_slot);
             let key = AxtHandleReplayKey::from_handle(&handle.handle);
@@ -13406,11 +13554,9 @@ impl<'state> StateBlock<'state> {
             if let Some(prev) = existing.get(&binding.dsid) {
                 if prev.manifest_root == binding.policy.manifest_root
                     && prev.target_lane == binding.policy.target_lane
+                    && prev.min_handle_era == binding.policy.min_handle_era
                 {
-                    binding.policy.min_handle_era =
-                        binding.policy.min_handle_era.max(prev.min_handle_era);
-                    binding.policy.min_sub_nonce =
-                        binding.policy.min_sub_nonce.max(prev.min_sub_nonce);
+                    binding.policy.min_sub_nonce = prev.min_sub_nonce;
                 }
             }
         }
@@ -20096,6 +20242,9 @@ impl World {
         world
             .rebuild_asset_definition_indexes()
             .expect("invalid asset definition domain context in world constructor");
+        world
+            .rebuild_confidential_policy_transition_index()
+            .expect("invalid confidential-policy transition in world constructor");
         world.rebuild_governance_read_indexes();
         world.rebuild_nft_owner_index();
         world.rebuild_rwa_indexes();
@@ -20591,6 +20740,32 @@ impl World {
             })
             .map(|(proposal_id, proposal)| ((proposal.created_height, *proposal_id), ()))
             .collect();
+    }
+
+    fn rebuild_confidential_policy_transition_index(&mut self) -> core::result::Result<(), String> {
+        let mut transitions = BTreeMap::<(u64, AssetDefinitionId), ()>::new();
+        let mut counts = BTreeMap::<u64, u32>::new();
+        for (definition_id, definition) in self.asset_definitions.view().iter() {
+            let policy = definition.confidential_policy();
+            if !policy.pending_transition_is_valid() {
+                return Err(format!(
+                    "asset definition `{definition_id}` has a structurally invalid pending confidential-policy transition"
+                ));
+            }
+            if let Some(transition) = policy.pending_transition() {
+                let effective_height = transition.effective_height();
+                transitions.insert((effective_height, definition_id.clone()), ());
+                let count = counts.entry(effective_height).or_default();
+                *count = count.checked_add(1).ok_or_else(|| {
+                    format!(
+                        "confidential-policy transition count overflows at height {effective_height}"
+                    )
+                })?;
+            }
+        }
+        self.confidential_policy_transition_index = transitions.into_iter().collect();
+        self.confidential_policy_transition_counts = counts.into_iter().collect();
+        Ok(())
     }
 
     fn rebuild_domain_owner_index(&mut self) {
@@ -21119,6 +21294,293 @@ impl World {
             merge_hint_roots: self.merge_hint_roots.view(),
             merge_global_state_root: self.merge_global_state_root.view(),
         }
+    }
+}
+
+#[cfg(test)]
+mod confidential_policy_transition_index_tests {
+    use iroha_data_model::asset::definition::{
+        AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+    };
+    use iroha_test_samples::ALICE_ID;
+
+    use super::*;
+
+    fn definition_with_policy(
+        name: &str,
+        policy: AssetConfidentialPolicy,
+    ) -> (AssetDefinitionId, AssetDefinition) {
+        let domain_id = DomainId::try_new("policy-index", "universal").expect("valid domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            name.parse().expect("valid asset name"),
+        );
+        let mut definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "Policy index coin".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
+        definition.set_confidential_policy(policy);
+        (definition_id, definition)
+    }
+
+    fn policy_with_transition(
+        mode: ConfidentialPolicyMode,
+        new_mode: ConfidentialPolicyMode,
+        effective_height: u64,
+        conversion_window: Option<u64>,
+        transition_seed: &[u8],
+    ) -> AssetConfidentialPolicy {
+        let mut policy = match mode {
+            ConfidentialPolicyMode::TransparentOnly => AssetConfidentialPolicy::transparent(),
+            ConfidentialPolicyMode::Convertible => AssetConfidentialPolicy::convertible(),
+            ConfidentialPolicyMode::ShieldedOnly => AssetConfidentialPolicy::shielded_only(),
+        };
+        policy.pending_transition = Some(ConfidentialPolicyTransition {
+            new_mode,
+            effective_height,
+            previous_mode: mode,
+            transition_id: Hash::new(transition_seed),
+            conversion_window,
+        });
+        policy
+    }
+
+    #[test]
+    fn rebuild_uses_only_authoritative_pending_transitions() {
+        let policy = policy_with_transition(
+            ConfidentialPolicyMode::Convertible,
+            ConfidentialPolicyMode::ShieldedOnly,
+            41,
+            Some(7),
+            b"policy-index-rebuild",
+        );
+        let (definition_id, definition) = definition_with_policy("coin", policy);
+
+        let mut world = World::default();
+        world
+            .asset_definitions
+            .insert(definition_id.clone(), definition);
+        world
+            .confidential_policy_transition_index
+            .insert((99, definition_id.clone()), ());
+        world.confidential_policy_transition_counts.insert(99, 1);
+
+        world
+            .rebuild_confidential_policy_transition_index()
+            .expect("valid authoritative transition rebuilds");
+
+        let transition_index = world.confidential_policy_transition_index.view();
+        assert!(transition_index.get(&(99, definition_id.clone())).is_none());
+        assert_eq!(
+            transition_index.get(&(41, definition_id.clone())),
+            Some(&())
+        );
+        let transition_counts = world.confidential_policy_transition_counts.view();
+        assert!(transition_counts.get(&99).is_none());
+        assert_eq!(transition_counts.get(&41), Some(&1));
+    }
+
+    #[test]
+    fn track_and_untrack_keep_exact_keys_and_counts() {
+        let domain_id = DomainId::try_new("policy-index", "universal").expect("valid domain");
+        let first = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "first".parse().expect("valid asset name"),
+        );
+        let second = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "second".parse().expect("valid asset name"),
+        );
+        let mut world = World::default();
+        let mut block = world.block();
+        let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
+
+        transaction.track_confidential_policy_transition(&first, 41);
+        transaction.track_confidential_policy_transition(&first, 41);
+        transaction.track_confidential_policy_transition(&second, 41);
+        assert_eq!(transaction.confidential_policy_transition_count(41), 2);
+        assert_eq!(
+            transaction
+                .confidential_policy_transition_index
+                .get(&(41, first.clone())),
+            Some(&())
+        );
+        assert_eq!(
+            transaction
+                .confidential_policy_transition_index
+                .get(&(41, second.clone())),
+            Some(&())
+        );
+
+        transaction.untrack_confidential_policy_transition(&first, 41);
+        transaction.untrack_confidential_policy_transition(&first, 41);
+        assert_eq!(transaction.confidential_policy_transition_count(41), 1);
+        transaction.untrack_confidential_policy_transition(&second, 41);
+        assert_eq!(transaction.confidential_policy_transition_count(41), 0);
+        assert!(
+            transaction
+                .confidential_policy_transition_counts
+                .get(&41)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn state_constructor_rejects_invalid_far_future_transition() {
+        let mut policy = AssetConfidentialPolicy::convertible();
+        policy.pending_transition = Some(ConfidentialPolicyTransition {
+            new_mode: ConfidentialPolicyMode::ShieldedOnly,
+            effective_height: u64::MAX,
+            previous_mode: ConfidentialPolicyMode::ShieldedOnly,
+            transition_id: Hash::new(b"invalid-far-future-transition"),
+            conversion_window: Some(1),
+        });
+        let (definition_id, definition) = definition_with_policy("invalid", policy);
+        let mut world = World::default();
+        world
+            .asset_definitions
+            .insert(definition_id.clone(), definition);
+
+        let result = State::try_new(
+            world,
+            Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        );
+        let error = match result {
+            Ok(_) => panic!("invalid far-future transition must fail state restoration"),
+            Err(error) => error,
+        };
+        let message = match error {
+            MergeLedgerCommitError::ExecutionStatePublication(message) => message,
+            other => panic!("unexpected state restoration error: {other}"),
+        };
+        assert!(message.contains(&definition_id.to_string()));
+        assert!(message.contains("structurally invalid pending confidential-policy transition"));
+    }
+
+    #[test]
+    fn zk_install_rejects_restored_height_above_transition_cap() {
+        let first_policy = policy_with_transition(
+            ConfidentialPolicyMode::Convertible,
+            ConfidentialPolicyMode::ShieldedOnly,
+            41,
+            Some(1),
+            b"restored-cap-first",
+        );
+        let second_policy = policy_with_transition(
+            ConfidentialPolicyMode::ShieldedOnly,
+            ConfidentialPolicyMode::Convertible,
+            41,
+            None,
+            b"restored-cap-second",
+        );
+        let (_, first_definition) = definition_with_policy("cap-first", first_policy);
+        let (_, second_definition) = definition_with_policy("cap-second", second_policy);
+        let mut world = World::default();
+        for definition in [first_definition, second_definition] {
+            world
+                .asset_definitions
+                .insert(definition.id().clone(), definition);
+        }
+        let mut state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut candidate = state.zk.clone();
+        candidate.policy_transition_max_per_height =
+            NonZeroU32::new(1).expect("nonzero transition cap");
+
+        assert_eq!(
+            state.set_zk(candidate),
+            Err(
+                ZkConfigInstallError::ConfidentialPolicyTransitionLimitExceeded {
+                    effective_height: 41,
+                    count: 2,
+                    maximum: NonZeroU32::new(1).expect("nonzero transition cap"),
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn block_start_processes_due_transition_but_leaves_future_transition_indexed() {
+        let due_policy = policy_with_transition(
+            ConfidentialPolicyMode::Convertible,
+            ConfidentialPolicyMode::ShieldedOnly,
+            5,
+            Some(1),
+            b"due-policy-transition",
+        );
+        let future_policy = policy_with_transition(
+            ConfidentialPolicyMode::ShieldedOnly,
+            ConfidentialPolicyMode::Convertible,
+            50,
+            None,
+            b"future-policy-transition",
+        );
+        let (due_id, due_definition) = definition_with_policy("due", due_policy);
+        let (future_id, future_definition) = definition_with_policy("future", future_policy);
+        let mut world = World::default();
+        world
+            .asset_definitions
+            .insert(due_id.clone(), due_definition);
+        world
+            .asset_definitions
+            .insert(future_id.clone(), future_definition);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(5).expect("nonzero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        state
+            .block(header)
+            .commit()
+            .expect("commit due-transition block");
+
+        let definitions = state.world.asset_definitions.view();
+        let due = definitions.get(&due_id).expect("due definition remains");
+        assert_eq!(
+            due.confidential_policy().mode(),
+            ConfidentialPolicyMode::ShieldedOnly
+        );
+        assert!(due.confidential_policy().pending_transition().is_none());
+        let future = definitions
+            .get(&future_id)
+            .expect("future definition remains");
+        assert_eq!(
+            future.confidential_policy().mode(),
+            ConfidentialPolicyMode::ShieldedOnly
+        );
+        assert_eq!(
+            future
+                .confidential_policy()
+                .pending_transition()
+                .as_ref()
+                .map(ConfidentialPolicyTransition::effective_height),
+            Some(50)
+        );
+        drop(definitions);
+        let transition_index = state.world.confidential_policy_transition_index.view();
+        assert!(transition_index.get(&(5, due_id)).is_none());
+        assert_eq!(transition_index.get(&(50, future_id)), Some(&()));
+        let transition_counts = state.world.confidential_policy_transition_counts.view();
+        assert!(transition_counts.get(&5).is_none());
+        assert_eq!(transition_counts.get(&50), Some(&1));
     }
 }
 
@@ -24396,6 +24858,8 @@ impl<'world> WorldBlock<'world> {
             public_lane_reward_claims,
             lane_relay_emergency_validators,
             zk_assets,
+            confidential_policy_transition_index,
+            confidential_policy_transition_counts,
             elections,
             citizens,
             ministry_agenda_proposals,
@@ -24548,6 +25012,8 @@ impl<'world> WorldBlock<'world> {
         public_lane_reward_claims.commit();
         lane_relay_emergency_validators.commit();
         zk_assets.commit();
+        confidential_policy_transition_index.commit();
+        confidential_policy_transition_counts.commit();
         elections.commit();
         citizens.commit();
         ministry_agenda_proposals.commit();
@@ -25101,17 +25567,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                             .lifecycle
                             .activated_epoch
                             .unwrap_or(record.manifest.activation_epoch),
-                        min_sub_nonce: 0,
+                        min_sub_nonce: 1,
                         current_slot,
                     };
                     if let Some(existing) = existing_policies.get(dsid) {
                         if existing.manifest_root == entry.manifest_root
                             && existing.target_lane == entry.target_lane
+                            && existing.min_handle_era == entry.min_handle_era
                         {
-                            entry.min_handle_era =
-                                core::cmp::max(entry.min_handle_era, existing.min_handle_era);
-                            entry.min_sub_nonce =
-                                core::cmp::max(entry.min_sub_nonce, existing.min_sub_nonce);
+                            entry.min_sub_nonce = existing.min_sub_nonce;
                         }
                     }
                     let activated_epoch = record.lifecycle.activated_epoch;
@@ -25154,11 +25618,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                             current_slot,
                         };
                         if let Some(existing) = existing_policies.get(dsid) {
-                            if existing.target_lane == entry.target_lane {
-                                entry.min_handle_era =
-                                    entry.min_handle_era.max(existing.min_handle_era);
-                                entry.min_sub_nonce =
-                                    entry.min_sub_nonce.max(existing.min_sub_nonce);
+                            if existing.manifest_root == entry.manifest_root
+                                && existing.target_lane == entry.target_lane
+                                && existing.min_handle_era == entry.min_handle_era
+                            {
+                                entry.min_sub_nonce = existing.min_sub_nonce;
                             }
                         }
                         (entry, None)
@@ -25759,6 +26223,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.zk_assets
     }
 
+    /// Test helper: index a manually seeded confidential-policy transition.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn track_confidential_policy_transition_for_testing(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+        effective_height: u64,
+    ) {
+        self.track_confidential_policy_transition(definition_id, effective_height);
+    }
+
     /// Apply transaction's changes
     #[allow(clippy::too_many_lines)]
     pub fn apply(self) {
@@ -25980,6 +26454,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             zk_assets,
+            confidential_policy_transition_index,
+            confidential_policy_transition_counts,
             elections,
             citizens,
             ministry_agenda_proposals,
@@ -26144,6 +26620,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         repo_agreements_by_counterparty.apply();
         repo_agreements_by_custodian.apply();
         zk_assets.apply();
+        confidential_policy_transition_index.apply();
+        confidential_policy_transition_counts.apply();
         elections.apply();
         citizens.apply();
         ministry_agenda_proposals.apply();
@@ -29344,6 +29822,11 @@ impl State {
         self.world
             .rebuild_vpn_lease_indexes()
             .map_err(|error| format!("failed to rebuild VPN lease indexes: {error}"))?;
+        self.world
+            .rebuild_confidential_policy_transition_index()
+            .map_err(|error| {
+                format!("failed to rebuild confidential-policy transition index: {error}")
+            })?;
         self.world.rebuild_governance_read_indexes();
         // Defer AXT policy refresh until the runtime lane catalog is applied.
         Ok(())
@@ -29534,7 +30017,7 @@ impl State {
         query_handle: LiveQueryStoreHandle,
         exact_durable_height: usize,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
-    ) -> Self {
+    ) -> core::result::Result<Self, MergeLedgerCommitError> {
         world
             .validate_numeric_asset_invariants()
             .expect("initial world contains invalid numeric asset state");
@@ -29809,6 +30292,8 @@ impl State {
                     iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
                 policy_transition_window_blocks:
                     iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+                policy_transition_max_per_height:
+                    iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
                 tree_roots_history_len:
                     iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
                 tree_frontier_checkpoint_interval:
@@ -29995,7 +30480,7 @@ impl State {
             backend.attach_telemetry(telemetry_seed.clone());
         }
         s.rebuild_derived_state_indexes()
-            .expect("initial World derived indexes must be internally consistent");
+            .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
         #[cfg(feature = "telemetry")]
         {
             telemetry_seed.set_musubi_replication_shortfall_releases(
@@ -30059,7 +30544,7 @@ impl State {
         ivm::zk::set_prover_threads(s.pipeline.ivm_prover_threads);
         #[cfg(test)]
         s.restore_commit_roster_history();
-        s
+        Ok(s)
     }
 
     pub(crate) fn reseed_static_lane_incarnations(&mut self) {
@@ -30182,7 +30667,7 @@ impl State {
             exact_durable_height,
             #[cfg(feature = "telemetry")]
             telemetry,
-        );
+        )?;
         s.chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
         s.reseed_static_lane_incarnations();
         if !s.kura.provisional_snapshot_bootstrap_pending() {
@@ -30255,7 +30740,7 @@ impl State {
             exact_durable_height,
             #[cfg(feature = "telemetry")]
             telemetry,
-        );
+        )?;
         s.chain_id = chain_id;
         s.reseed_static_lane_incarnations();
         if !s.kura.provisional_snapshot_bootstrap_pending() {
@@ -31511,17 +31996,12 @@ impl State {
             wtx.apply();
         }
         {
-            let pending_assets: Vec<_> = sb
+            let pending_assets: BTreeSet<_> = sb
                 .world
-                .asset_definitions
+                .confidential_policy_transition_index
                 .iter()
-                .filter_map(|(id, def)| {
-                    if def.confidential_policy().pending_transition().is_some() {
-                        Some(id.clone())
-                    } else {
-                        None
-                    }
-                })
+                .take_while(|(key, _)| key.0 <= now_h)
+                .map(|(key, _)| key.1.clone())
                 .collect();
             if !pending_assets.is_empty() {
                 let mut stx = sb.transaction();
@@ -34525,212 +35005,47 @@ impl State {
         Ok((public_keys, pops))
     }
 
-    fn verify_lane_relay_qc_from_sources(
-        world: &impl WorldReadOnly,
-        chain_id: &iroha_data_model::ChainId,
-        nexus: &iroha_config::parameters::actual::Nexus,
-        envelope: &LaneRelayEnvelope,
-        committee: &[PeerId],
-    ) -> Result<(), LaneRelayError> {
-        let qc = envelope.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
-        if qc.validator_set_hash_version
-            != iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
-            || qc.validator_set_hash != HashOf::new(&qc.validator_set)
-            || qc.validator_set.as_slice() != committee
-        {
-            return Err(LaneRelayError::AggregateSignatureInvalid);
-        }
-        let pinned_committee = match nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .find(|lane| lane.id == envelope.lane_id)
-        {
-            Some(lane) if lane_claims_autoscale_managed(lane) => Some(
-                autoscale_lane_pinned_committee_with_pops(lane)
-                    .ok_or(LaneRelayError::AggregateSignatureInvalid)?,
-            ),
-            _ => None,
-        };
-        let proposal_height = envelope.block_header.height().get();
-        let expected_epoch = crate::sumeragi::epoch_for_height_from_world(world, proposal_height);
-        if qc.epoch != expected_epoch {
-            return Err(LaneRelayError::AggregateSignatureInvalid);
-        }
-        let (public_keys, pops) = Self::lane_relay_qc_signers(
-            world,
-            committee,
-            pinned_committee.as_deref(),
-            &qc.aggregate.signers_bitmap,
-            proposal_height,
-        )?;
-        if public_keys.is_empty() {
-            return Err(LaneRelayError::AggregateSignatureInvalid);
-        }
-        let fallback_mode = if world.sumeragi_npos_parameters().is_some() {
-            ConsensusMode::Npos
-        } else {
-            ConsensusMode::Permissioned
-        };
-        let derived_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
-            world,
-            qc.height,
-            fallback_mode,
-        );
-        let derived_mode_tag = match derived_mode {
-            ConsensusMode::Permissioned => crate::sumeragi::consensus::PERMISSIONED_TAG,
-            ConsensusMode::Npos => crate::sumeragi::consensus::NPOS_TAG,
-        };
-        envelope.verify_lane_finality_qc_mode_tag(derived_mode_tag)?;
-        let vote = crate::sumeragi::consensus::Vote {
-            phase: qc.phase,
-            block_hash: qc.subject_block_hash,
-            parent_state_root: qc.parent_state_root,
-            post_state_root: qc.post_state_root,
-            height: qc.height,
-            view: qc.view,
-            epoch: qc.epoch,
-            chain_order_hash: qc.chain_order_hash,
-            rechain_seq: qc.rechain_seq,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
-        };
-        let preimage =
-            crate::sumeragi::consensus::vote_preimage(chain_id, qc.mode_tag.as_str(), &vote);
-        let key_refs: Vec<&PublicKey> = public_keys.iter().collect();
-        let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
-        iroha_crypto::bls_normal_verify_preaggregated_same_message(
-            &preimage,
-            &qc.aggregate.bls_aggregate_signature,
-            &key_refs,
-            &pop_refs,
-        )
-        .map_err(|_| LaneRelayError::AggregateSignatureInvalid)?;
-        Ok(())
-    }
-
-    /// Authenticate a finalized relay against the canonical lane committee derived from the
-    /// supplied consensus snapshot.
+    /// Resolve compact lane-finality authority through immutable Kura state.
     ///
-    /// The returned label describes an emergency-roster outcome, when committee recovery was
-    /// consulted. Callers may use it for telemetry but must not alter admission from the label.
-    #[allow(clippy::too_many_lines)]
-    fn verify_lane_relay_finality_from_sources(
-        world: &impl WorldReadOnly,
-        chain_id: &iroha_data_model::ChainId,
-        manifest_registry: &LaneManifestRegistry,
-        nexus: &iroha_config::parameters::actual::Nexus,
-        commit_topology: &[PeerId],
+    /// This verifies the genuine global CommitQC and the exact statement leaf;
+    /// no relay-supplied roster, roots, or signature material is authoritative.
+    fn verify_lane_relay_finality_from_kura(
+        kura: &Kura,
         envelope: &LaneRelayEnvelope,
-    ) -> Result<Option<&'static str>, LaneRelayError> {
-        // Pending envelopes are useful for local progress/status, but they are never authority
-        // for persistent settlement state.
-        if envelope.qc.is_none() {
-            return Err(LaneRelayError::MissingQc);
+    ) -> Result<iroha_data_model::block::consensus_v2::ExecutionCommitment, LaneRelayError> {
+        envelope.verify()?;
+        envelope.validate_finality_authority_ref()?;
+        let authority = envelope
+            .finality_authority
+            .as_ref()
+            .ok_or(LaneRelayError::MissingFinalityAuthority)?;
+        let artifact = kura
+            .v2_finality_artifact(authority.global_block_height)
+            .map_err(|_| LaneRelayError::FinalityArtifactMismatch)?
+            .ok_or(LaneRelayError::FinalityArtifactMismatch)?;
+        if HashOf::new(&artifact) != authority.finality_artifact_hash
+            || artifact.height != authority.global_block_height
+            || artifact.subject.block_hash != envelope.block_header.hash()
+            || artifact.block_hash != envelope.block_header.hash()
+            || artifact
+                .validate_for_header(&envelope.block_header)
+                .is_err()
+        {
+            return Err(LaneRelayError::FinalityArtifactMismatch);
         }
-
-        let fault_tolerance = nexus
-            .dataspace_catalog
-            .entries()
-            .iter()
-            .find(|entry| entry.id == envelope.dataspace_id)
-            .map(|entry| entry.fault_tolerance)
-            .ok_or(LaneRelayError::UnknownDataspace(envelope.dataspace_id))?;
-        let committee_size = fault_tolerance
-            .checked_mul(3)
-            .and_then(|value| value.checked_add(1))
-            .ok_or(LaneRelayError::InvalidValidatorSet {
-                validator_count: u32::MAX,
-                min_quorum: 0,
-            })?;
-        let committee_size =
-            usize::try_from(committee_size).map_err(|_| LaneRelayError::InvalidValidatorSet {
-                validator_count: u32::MAX,
-                min_quorum: 0,
-            })?;
-        let proposal_height = envelope.block_header.height().get();
-        let validator_mode = nexus
-            .staking
-            .validator_mode(envelope.lane_id, &nexus.lane_catalog);
-        let base_pool = Self::authoritative_lane_peer_ids_from_sources(
-            world,
-            chain_id,
-            envelope.lane_id,
-            validator_mode,
-            manifest_registry,
-            nexus,
-            commit_topology,
-            proposal_height,
-        );
-        let min_quorum = crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
-        let seed = Self::lane_relay_committee_seed_from_sources(
-            world,
-            chain_id,
-            envelope.dataspace_id,
-            envelope.lane_id,
-            proposal_height,
-        );
-        let (committee, override_outcome) = if base_pool.len() >= committee_size {
-            (
-                Self::lane_relay_committee_from_pool(&base_pool, committee_size, seed)?,
-                None,
-            )
-        } else {
-            let mut outcome = Some("missing");
-            let mut committee = base_pool.clone();
-            if !nexus.lane_relay_emergency.enabled {
-                outcome = Some("disabled");
-            } else if let Some(record) = world
-                .lane_relay_emergency_validators()
-                .get(&envelope.lane_id)
-            {
-                if proposal_height > record.expires_at_height {
-                    outcome = Some("expired");
-                } else {
-                    let base_members: BTreeSet<_> = committee.iter().cloned().collect();
-                    let mut emergency_pool = eligible_lane_relay_emergency_peers(
-                        world,
-                        &record.peers,
-                        commit_topology,
-                        proposal_height,
-                    );
-                    emergency_pool.retain(|peer| !base_members.contains(peer));
-                    let deficit = committee_size.saturating_sub(committee.len());
-                    let fillers =
-                        Self::lane_relay_committee_from_pool(&emergency_pool, deficit, seed)?;
-                    if fillers.len() < deficit {
-                        outcome = Some("insufficient");
-                    } else {
-                        committee.extend(fillers);
-                        outcome = Some("applied");
-                    }
-                }
-            }
-
-            if committee.len() < committee_size {
-                return Err(LaneRelayError::InvalidValidatorSet {
-                    validator_count: u32::try_from(committee.len()).unwrap_or(u32::MAX),
-                    min_quorum: u32::try_from(min_quorum).unwrap_or(u32::MAX),
-                });
-            }
-            (committee, outcome)
-        };
-
-        let validator_count =
-            u32::try_from(committee.len()).map_err(|_| LaneRelayError::InvalidValidatorSet {
-                validator_count: u32::MAX,
-                min_quorum: 0,
-            })?;
-        let committee_quorum =
-            crate::sumeragi::network_topology::commit_quorum_from_len(committee.len());
-        let quorum = LaneRelayQuorumContext::new(
-            validator_count,
-            u32::try_from(committee_quorum).unwrap_or(validator_count),
-        )?;
-        envelope.verify_with_quorum(quorum)?;
-        Self::verify_lane_relay_qc_from_sources(world, chain_id, nexus, envelope, &committee)?;
-        Ok(override_outcome)
+        let commitment = artifact
+            .commit_qc
+            .execution_commitment
+            .lane_finality_manifest
+            .ok_or(LaneRelayError::FinalityStatementProofInvalid)?;
+        let statement = envelope.lane_finality_statement()?;
+        if !authority
+            .statement_proof
+            .verify(&HashOf::new(&statement), &commitment)
+        {
+            return Err(LaneRelayError::FinalityStatementProofInvalid);
+        }
+        Ok(artifact.commit_qc.execution_commitment)
     }
 
     fn verified_lane_relay_state_key(
@@ -34791,6 +35106,7 @@ impl State {
     }
 
     fn verify_lane_relay_fastpq_record_fields(
+        kura: &Kura,
         record: &VerifiedLaneRelayRecord,
         observed_at_height: u64,
     ) -> core::result::Result<(), LaneRelayError> {
@@ -34805,10 +35121,10 @@ impl State {
         if manifest_root.iter().all(|byte| *byte == 0) {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
-        let qc = envelope.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
+        let execution = Self::verify_lane_relay_finality_from_kura(kura, envelope)?;
         let expected_finality_statement_hash = envelope.lane_finality_statement_hash()?;
-        let expected_old_root: [u8; 32] = qc.parent_state_root.into();
-        let expected_new_root: [u8; 32] = qc.post_state_root.into();
+        let expected_old_root: [u8; 32] = execution.parent_state_root.into();
+        let expected_new_root: [u8; 32] = execution.post_state_root.into();
         let expected_tx_set_hash: [u8; 32] = expected_finality_statement_hash.into();
         if record.relay_ref != envelope.relay_ref()
             || record.proof_payload_hash != material.proof_digest
@@ -34847,7 +35163,11 @@ impl State {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
         let observed_at_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
-        Self::verify_lane_relay_fastpq_record_fields(&record, observed_at_height)
+        Self::verify_lane_relay_fastpq_record_fields(
+            self.kura.as_ref(),
+            &record,
+            observed_at_height,
+        )
     }
 
     fn verified_lane_relay_records_from_contract_state(&self) -> Vec<VerifiedLaneRelayRecord> {
@@ -34897,9 +35217,11 @@ impl State {
         let mut hydrated = 0;
         let observed_at_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
         for record in records {
-            if let Err(err) =
-                Self::verify_lane_relay_fastpq_record_fields(&record, observed_at_height)
-            {
+            if let Err(err) = Self::verify_lane_relay_fastpq_record_fields(
+                self.kura.as_ref(),
+                &record,
+                observed_at_height,
+            ) {
                 iroha_logger::warn!(
                     lane_id = %record.relay_ref.lane_id,
                     dataspace_id = %record.relay_ref.dataspace_id,
@@ -34953,6 +35275,16 @@ impl State {
         Ok(self
             .validate_or_record_lane_relay(envelope, true)?
             .expect("persisting relay validation always returns an insertion outcome"))
+    }
+
+    /// Resolve and authenticate the global execution commitment for a relay.
+    ///
+    /// This is a read-only Kura lookup. It does not mutate world state.
+    pub fn authenticated_lane_relay_execution_commitment(
+        &self,
+        envelope: &LaneRelayEnvelope,
+    ) -> Result<iroha_data_model::block::consensus_v2::ExecutionCommitment, LaneRelayError> {
+        Self::verify_lane_relay_finality_from_kura(self.kura.as_ref(), envelope)
     }
 
     /// Fully authenticate a merge-authoritative embedded relay.
@@ -35044,27 +35376,7 @@ impl State {
                 new_height: envelope.block_height,
             });
         }
-        let manifest_registry = self.lane_manifests.read().clone();
-        let commit_topology = self.commit_topology_snapshot();
-        let world = self.world.view();
-        let emergency_override_outcome = Self::verify_lane_relay_finality_from_sources(
-            &world,
-            &self.chain_id,
-            manifest_registry.as_ref(),
-            &nexus,
-            &commit_topology,
-            envelope,
-        )?;
-        #[cfg(feature = "telemetry")]
-        if persist && let Some(outcome) = emergency_override_outcome {
-            self.telemetry.record_lane_relay_emergency_override(
-                envelope.lane_id,
-                envelope.dataspace_id,
-                outcome,
-            );
-        }
-        #[cfg(not(feature = "telemetry"))]
-        let _ = emergency_override_outcome;
+        Self::verify_lane_relay_finality_from_kura(self.kura.as_ref(), envelope)?;
 
         if persist && let Some(error) = self.lane_relays.read().conflicting_existing(envelope) {
             return Err(error);
@@ -44928,16 +45240,18 @@ impl State {
     /// Update zero-knowledge verification settings using loaded configuration.
     ///
     /// The candidate configuration is checked against committed payload-bearing
-    /// SCCP outbox state before either the process-wide gas schedule or this
-    /// state instance is mutated. This is the startup boundary where the actual
-    /// node configuration is available; snapshot decoding intentionally checks
-    /// only configuration-independent SCCP invariants.
+    /// SCCP outbox state and exact confidential-policy transition counts before
+    /// either the process-wide gas schedule or this state instance is mutated.
+    /// This is the startup boundary where the actual node configuration is
+    /// available; snapshot decoding intentionally checks only
+    /// configuration-independent structural invariants.
     ///
     /// # Errors
     ///
     /// Returns an error when committed SCCP pending usage exceeds either
-    /// candidate outbox limit, or when the committed usage counters are
-    /// structurally invalid.
+    /// candidate outbox limit, when the committed usage counters are
+    /// structurally invalid, or when a pending transition height exceeds the
+    /// candidate per-height cap.
     pub fn set_zk(
         &mut self,
         zk: iroha_config::parameters::actual::Zk,
@@ -44951,8 +45265,9 @@ impl State {
     /// Install ZK settings into an isolated, non-running State reconstruction.
     ///
     /// Snapshot publication uses this after decoding a candidate payload. It performs the same
-    /// committed SCCP validation as [`Self::set_zk`] but deliberately does not mutate the
-    /// process-wide confidential-gas schedule.
+    /// committed SCCP and confidential-policy transition validation as
+    /// [`Self::set_zk`] but deliberately does not mutate the process-wide
+    /// confidential-gas schedule.
     pub(crate) fn install_zk_for_isolated_prevalidation(
         &mut self,
         zk: iroha_config::parameters::actual::Zk,
@@ -44979,6 +45294,22 @@ impl State {
                 usage: pending_usage,
                 expected: expected_pending_usage,
             });
+        }
+        for (effective_height, count) in self
+            .world
+            .confidential_policy_transition_counts
+            .view()
+            .iter()
+        {
+            if *count > zk.policy_transition_max_per_height.get() {
+                return Err(
+                    ZkConfigInstallError::ConfidentialPolicyTransitionLimitExceeded {
+                        effective_height: *effective_height,
+                        count: *count,
+                        maximum: zk.policy_transition_max_per_height,
+                    },
+                );
+            }
         }
         validate_sccp_pending_usage_against_config(pending_usage, &zk.sccp)?;
         Ok(())
@@ -48483,6 +48814,8 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
             iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
         policy_transition_window_blocks:
             iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+        policy_transition_max_per_height:
+            iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
         tree_roots_history_len:
             iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
         tree_frontier_checkpoint_interval:
@@ -50088,6 +50421,11 @@ pub fn compute_zk_consensus_policy_hash(
         &mut h,
         "policy_transition_window_blocks",
         zk_config.policy_transition_window_blocks,
+    );
+    zk_policy_put_u32(
+        &mut h,
+        "policy_transition_max_per_height",
+        zk_config.policy_transition_max_per_height.get(),
     );
     zk_policy_put_usize(
         &mut h,
@@ -54054,7 +54392,7 @@ impl<'state> StateBlock<'state> {
         let retention_slots = self.nexus.axt.replay_retention_slots.get();
         self.prune_axt_replay_ledger(current_slot, retention_slots);
         for envelope in envelopes {
-            self.apply_axt_envelope(envelope, current_slot);
+            self.record_replayed_axt_envelope(envelope, current_slot);
         }
     }
 
@@ -61362,10 +61700,18 @@ fn replay_blocks_from_kura_range_inner(
             .map_err(|error| {
                 eyre!("failed to derive replayed block #{height} Native AMX manifest: {error}")
             })?;
+        let lane_finality_manifest =
+            crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
+                valid_block.as_ref(),
+            )
+            .map_err(|error| {
+                eyre!("failed to derive replayed block #{height} lane-finality manifest: {error}")
+            })?;
         let replayed_execution_commitment =
             crate::sumeragi::exec::execution_commitment_from_witness(
                 &witness,
                 &native_amx_manifest,
+                &lane_finality_manifest,
             )
             .map_err(|error| {
                 eyre!("failed to derive replayed block #{height} execution commitment: {error}")
@@ -65335,10 +65681,16 @@ impl StateTransaction<'_, '_> {
     }
 
     /// Record a completed AXT envelope for persistence within the current block.
-    pub fn record_axt_envelope(&mut self, record: AxtEnvelopeRecord) {
-        self.update_axt_policies_from_envelope(&record);
+    ///
+    /// # Errors
+    ///
+    /// Returns an invariant violation when a handle does not match the exact
+    /// committed manifest era and next per-dataspace counter.
+    pub fn record_axt_envelope(&mut self, record: AxtEnvelopeRecord) -> Result<(), Error> {
+        self.update_axt_policies_from_envelope(&record)?;
         self.record_axt_replay_entries(&record);
         self.pending_axt_envelopes.push(record);
+        Ok(())
     }
 
     /// Stage one correlated native independent-batch leg outcome for block persistence.
@@ -65366,49 +65718,58 @@ impl StateTransaction<'_, '_> {
     /// Authenticate a finalized lane relay against this transaction's exact consensus snapshot.
     ///
     /// This is the consensus boundary for contract-visible relay registration. The transaction
-    /// authority transports the proof but does not replace the lane committee's QC authority.
+    /// authority transports the proof but cannot replace Kura's immutable global CommitQC.
     ///
     /// # Errors
     ///
-    /// Returns [`LaneRelayError`] when the envelope has no final QC, lacks quorum, names a
-    /// non-authoritative committee, or carries an invalid aggregate signature.
+    /// Returns [`LaneRelayError`] when the compact artifact reference or exact
+    /// statement inclusion proof is invalid.
     pub(crate) fn authenticate_finalized_lane_relay(
         &self,
         envelope: &LaneRelayEnvelope,
     ) -> Result<(), LaneRelayError> {
-        State::verify_lane_relay_finality_from_sources(
-            &self.world,
-            &self.chain_id,
-            self.lane_manifests.as_ref(),
-            &self.nexus,
-            self.commit_topology().get(),
-            envelope,
-        )
-        .map(|_| ())
+        self.finalized_lane_relay_execution_commitment(envelope)
+            .map(|_| ())
     }
 
-    fn update_axt_policies_from_envelope(&mut self, record: &AxtEnvelopeRecord) {
+    /// Authenticate a relay and return the CommitQC-signed execution roots.
+    pub(crate) fn finalized_lane_relay_execution_commitment(
+        &self,
+        envelope: &LaneRelayEnvelope,
+    ) -> Result<iroha_data_model::block::consensus_v2::ExecutionCommitment, LaneRelayError> {
+        State::verify_lane_relay_finality_from_kura(self.kura, envelope)
+    }
+
+    fn update_axt_policies_from_envelope(
+        &mut self,
+        record: &AxtEnvelopeRecord,
+    ) -> Result<(), Error> {
+        let current_slot = self.axt_current_slot();
+        let mut advanced = BTreeMap::<DataSpaceId, AxtPolicyEntry>::new();
         for handle in &record.handles {
             let dsid = handle.intent.asset_dsid;
-            let Some(mut policy) = self.world.axt_policies.get(&dsid).copied() else {
-                iroha_logger::warn!(
-                    dataspace_id = dsid.as_u64(),
-                    "AXT envelope recorded without cached policy entry; skipping nonce update"
-                );
-                continue;
-            };
-
-            if handle.handle.handle_era > policy.min_handle_era {
-                policy.min_handle_era = handle.handle.handle_era;
-                policy.min_sub_nonce = handle.handle.sub_nonce.saturating_add(1);
-            } else if handle.handle.handle_era == policy.min_handle_era {
-                policy.min_sub_nonce = policy
-                    .min_sub_nonce
-                    .max(handle.handle.sub_nonce.saturating_add(1));
-            }
-            policy.current_slot = self.axt_current_slot();
+            let policy = advanced
+                .get(&dsid)
+                .copied()
+                .or_else(|| self.world.axt_policies.get(&dsid).copied())
+                .ok_or_else(|| {
+                    Error::InvariantViolation(
+                        format!(
+                            "AXT envelope references dataspace {} without a committed policy",
+                            dsid.as_u64()
+                        )
+                        .into(),
+                    )
+                })?;
+            advanced.insert(
+                dsid,
+                advance_axt_policy_for_handle(policy, handle, current_slot)?,
+            );
+        }
+        for (dsid, policy) in advanced {
             self.world.axt_policies.insert(dsid, policy);
         }
+        Ok(())
     }
 
     fn record_axt_replay_entries(&mut self, record: &AxtEnvelopeRecord) {
@@ -68919,8 +69280,12 @@ pub(crate) mod deserialize {
             || path.starts_with("musubi:")
     }
 
-    pub(super) fn validate_musubi_location_reverse_indices(
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn validate_musubi_location_reverse_indices(
+        archives: &Storage<ArchiveId, MusubiArchiveRecordV1>,
         locations: &Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
+        pin_manifests: &Storage<ManifestDigest, PinManifestRecord>,
+        replication_orders: &Storage<ReplicationOrderId, ReplicationOrderRecord>,
         by_pin: &Storage<ManifestDigest, MusubiPinLocationReferenceV1>,
         by_order: &Storage<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>,
         by_provider: &Storage<MusubiProviderLocationKeyV1, ()>,
@@ -68929,10 +69294,39 @@ pub(crate) mod deserialize {
             field: "world.musubi_location_reverse_indices".to_owned(),
             message,
         };
+        let archives = archives.view();
         let locations = locations.view();
+        let pin_manifests = pin_manifests.view();
+        let replication_orders = replication_orders.view();
         let by_pin = by_pin.view();
         let by_order = by_order.view();
         let by_provider = by_provider.view();
+
+        for (order, record) in replication_orders.iter() {
+            let reference = by_order.get(order);
+            match (record.musubi_archive, reference) {
+                (None, None) => {}
+                (Some(archive_id), Some(reference))
+                    if reference.binding.replication_order == *order
+                        && reference.binding.archive_id == archive_id => {}
+                (Some(_), None) => {
+                    return Err(invalid(
+                        "Musubi-purpose replication order is missing its archive binding".into(),
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(invalid(
+                        "generic replication order cannot carry a Musubi archive binding".into(),
+                    ));
+                }
+                (Some(_), Some(_)) => {
+                    return Err(invalid(
+                        "replication-order Musubi purpose does not match its archive binding"
+                            .into(),
+                    ));
+                }
+            }
+        }
 
         for (digest, reference) in by_pin.iter() {
             reference
@@ -68960,21 +69354,117 @@ pub(crate) mod deserialize {
             reference
                 .validate()
                 .map_err(|error| invalid(error.to_string()))?;
-            if order != &reference.replication_order {
+            if order != &reference.binding.replication_order {
                 return Err(invalid(
                     "order reverse-index key does not match its duplicated order identity".into(),
                 ));
             }
-            let target = locations.get(&reference.location).ok_or_else(|| {
-                invalid("order reverse reference targets a missing location".into())
+            let archive = archives
+                .get(&reference.binding.archive_id)
+                .ok_or_else(|| invalid("order binding targets a missing Musubi archive".into()))?;
+            archive
+                .validate()
+                .map_err(|error| invalid(error.to_string()))?;
+            if archive.archive_id != reference.binding.archive_id
+                || archive.commitment != reference.binding.commitment
+            {
+                return Err(invalid(
+                    "order binding does not match the authoritative archive commitment".into(),
+                ));
+            }
+            let order_record = replication_orders.get(order).ok_or_else(|| {
+                invalid("order binding targets a missing replication order".into())
             })?;
-            if reference.active {
-                if target.state == MusubiArchiveLocationStateV1::Retired
-                    || target.replication_order != *order
-                {
-                    return Err(invalid(
-                        "active order reverse reference does not match its current location".into(),
-                    ));
+            if order_record.order_id != *order
+                || order_record.musubi_archive != Some(reference.binding.archive_id)
+                || order_record.manifest_root_cid != archive.commitment.root_cid
+            {
+                return Err(invalid(
+                    "order binding does not match its authoritative replication order".into(),
+                ));
+            }
+            let canonical_order =
+                crate::smartcontracts::isi::sorafs::validate_stored_replication_order(
+                    order_record,
+                    &hex::encode(order.as_bytes()),
+                )
+                .map_err(|error| invalid(error.to_string()))?;
+            let pin = pin_manifests
+                .get(&order_record.manifest_digest)
+                .ok_or_else(|| {
+                    invalid("order binding replication order targets a missing pin manifest".into())
+                })?;
+            if pin.digest != order_record.manifest_digest
+                || pin.root_cid != archive.commitment.root_cid
+                || pin.chunker != archive.commitment.chunker
+                || pin.chunk_digest_sha3_256 != *archive.commitment.chunk_plan_digest.as_bytes()
+                || pin.por_root != *archive.commitment.por_root.as_bytes()
+                || pin.content_length != archive.commitment.content_length
+                || canonical_order.chunking_profile != pin.chunker.to_handle()
+                || canonical_order.target_replicas
+                    < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
+                || canonical_order.target_replicas < pin.policy.min_replicas
+                || pin.policy.min_replicas
+                    < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
+                || order_record.deadline_epoch > pin.policy.retention_epoch
+            {
+                return Err(invalid(
+                    "order binding does not match its immutable pin commitment or retention policy"
+                        .into(),
+                ));
+            }
+            let mut completed_providers = order_record
+                .provider_completions
+                .iter()
+                .map(|completion| completion.provider_id)
+                .collect::<Vec<_>>();
+            completed_providers.sort();
+            match &reference.lifecycle {
+                MusubiReplicationOrderLocationLifecycleV1::PreLocation => {}
+                MusubiReplicationOrderLocationLifecycleV1::Active(location) => {
+                    let target = locations.get(location).ok_or_else(|| {
+                        invalid("active order binding targets a missing location".into())
+                    })?;
+                    if !matches!(
+                        target.state,
+                        MusubiArchiveLocationStateV1::Healthy
+                            | MusubiArchiveLocationStateV1::Degraded
+                    )
+                        || target.archive_id != archive.archive_id
+                        || target.replication_order != *order
+                        || !matches!(
+                            order_record.status,
+                            iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(_)
+                        )
+                        || completed_providers != target.providers
+                    {
+                        return Err(invalid(
+                            "active order binding does not match its completed provider location"
+                                .into(),
+                        ));
+                    }
+                }
+                MusubiReplicationOrderLocationLifecycleV1::Retired(retired) => {
+                    let target = locations.get(&retired.location).ok_or_else(|| {
+                        invalid("retired order binding targets a missing location".into())
+                    })?;
+                    if target.archive_id != archive.archive_id
+                        || (target.state != MusubiArchiveLocationStateV1::Retired
+                            && target.replication_order == *order)
+                        || !matches!(
+                            order_record.status,
+                            iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(_)
+                        )
+                        || completed_providers != retired.providers
+                        || (target.state == MusubiArchiveLocationStateV1::Retired
+                            && target.replication_order == *order
+                            && target.providers != retired.providers)
+                    {
+                        return Err(invalid(
+                            "retired order binding does not match its completed historical location"
+                                .into(),
+                        ));
+                    }
                 }
             }
         }
@@ -69006,7 +69496,7 @@ pub(crate) mod deserialize {
                     .is_some_and(|reference| !reference.active && reference.location == *key)
                     || !by_order
                         .get(&location.replication_order)
-                        .is_some_and(|reference| !reference.active && reference.location == *key)
+                        .is_some_and(|reference| reference.retired_location() == Some(*key))
                 {
                     return Err(invalid(
                         "retired archive location is missing an immutable reuse tombstone".into(),
@@ -69019,7 +69509,7 @@ pub(crate) mod deserialize {
                 .is_some_and(|reference| reference.active && reference.location == *key)
                 || !by_order
                     .get(&location.replication_order)
-                    .is_some_and(|reference| reference.active && reference.location == *key)
+                    .is_some_and(|reference| reference.active_location() == Some(*key))
                 || location.providers.iter().any(|provider| {
                     by_provider
                         .get(&MusubiProviderLocationKeyV1::new(*provider, *key))
@@ -70507,12 +70997,6 @@ pub(crate) mod deserialize {
         let musubi_locations_by_replication_order =
             take_required(&mut map, "musubi_locations_by_replication_order")?;
         let musubi_locations_by_provider = take_required(&mut map, "musubi_locations_by_provider")?;
-        validate_musubi_location_reverse_indices(
-            &musubi_archive_locations,
-            &musubi_locations_by_pin,
-            &musubi_locations_by_replication_order,
-            &musubi_locations_by_provider,
-        )?;
         let musubi_archive_availability = take_required(&mut map, "musubi_archive_availability")?;
         let musubi_archive_reverse_references =
             take_required(&mut map, "musubi_archive_reverse_references")?;
@@ -70620,6 +71104,15 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "lane_relay_emergency_validators")?;
         let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
         let replication_orders = take_optional_default(&mut map, "replication_orders")?;
+        validate_musubi_location_reverse_indices(
+            &musubi_archives,
+            &musubi_archive_locations,
+            &pin_manifests,
+            &replication_orders,
+            &musubi_locations_by_pin,
+            &musubi_locations_by_replication_order,
+            &musubi_locations_by_provider,
+        )?;
         let content_bundles = take_optional_default(&mut map, "content_bundles")?;
         let content_chunks = take_optional_default(&mut map, "content_chunks")?;
         let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
@@ -70844,6 +71337,8 @@ pub(crate) mod deserialize {
             public_lane_reward_claims: Storage::default(),
             lane_relay_emergency_validators,
             zk_assets,
+            confidential_policy_transition_index: Storage::default(),
+            confidential_policy_transition_counts: Storage::default(),
             elections,
             citizens,
             ministry_agenda_proposals,
@@ -70945,6 +71440,12 @@ pub(crate) mod deserialize {
             .rebuild_asset_definition_indexes()
             .map_err(|message| json::Error::InvalidField {
                 field: "asset_definition_domains".into(),
+                message,
+            })?;
+        world
+            .rebuild_confidential_policy_transition_index()
+            .map_err(|message| json::Error::InvalidField {
+                field: "asset_definitions.confidential_policy.pending_transition".into(),
                 message,
             })?;
         world.rebuild_governance_read_indexes();
@@ -71308,6 +71809,8 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
@@ -71707,7 +72210,10 @@ pub(crate) mod deserialize {
 
         fn validate_musubi_publication_snapshot(world: &World) -> Result<(), json::Error> {
             validate_musubi_location_reverse_indices(
+                &world.musubi_archives,
                 &world.musubi_archive_locations,
+                &world.pin_manifests,
+                &world.replication_orders,
                 &world.musubi_locations_by_pin,
                 &world.musubi_locations_by_replication_order,
                 &world.musubi_locations_by_provider,

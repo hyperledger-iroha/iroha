@@ -10,6 +10,7 @@ public sealed class SignedQueryBuilder
 {
     private const byte SignedQueryVersion = 1;
 
+    private readonly byte[] networkIdBytes;
     private ManagedSingularQueryKind? singularQueryKind;
     private string? subjectAccountId;
     private string? dataspaceAlias;
@@ -31,12 +32,16 @@ public sealed class SignedQueryBuilder
     private ulong? dataspaceId;
     private ulong? dataspaceOwnerId;
 
-    public SignedQueryBuilder(string authorityAccountId)
+    public SignedQueryBuilder(string authorityAccountId, string networkId)
     {
         AuthorityAccountId = NormalizeAccountId(authorityAccountId, nameof(authorityAccountId));
+        networkIdBytes = SignedQueryRequestContext.DecodeNetworkId(networkId, nameof(networkId));
+        NetworkId = networkId;
     }
 
     public string AuthorityAccountId { get; }
+
+    public string NetworkId { get; }
 
     public SignedQueryBuilder FindExecutorDataModel()
     {
@@ -191,6 +196,20 @@ public sealed class SignedQueryBuilder
 
     public SignedQueryEnvelope BuildSigned(ReadOnlySpan<byte> privateKeySeed)
     {
+        var (creationTimeMilliseconds, nonce) = SignedQueryRequestContext.CreateFresh();
+        return BuildSigned(
+            privateKeySeed,
+            creationTimeMilliseconds,
+            SignedQueryRequestContext.DefaultTimeToLiveMilliseconds,
+            nonce);
+    }
+
+    public SignedQueryEnvelope BuildSigned(
+        ReadOnlySpan<byte> privateKeySeed,
+        ulong creationTimeMilliseconds,
+        ulong timeToLiveMilliseconds,
+        ReadOnlySpan<byte> nonce)
+    {
         if (!singularQueryKind.HasValue)
         {
             throw new InvalidOperationException("Queries must select a singular request before signing.");
@@ -199,7 +218,11 @@ public sealed class SignedQueryBuilder
         var context = new TransactionEncodingContext(AuthorityAccountId);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
-        var payloadBytes = EncodeQueryRequestWithAuthority(context);
+        var payloadBytes = EncodeQueryRequestWithAuthority(
+            context,
+            creationTimeMilliseconds,
+            timeToLiveMilliseconds,
+            nonce);
         var payloadHash = IrohaHash.Hash(payloadBytes);
         var signatureBytes = Ed25519Signer.Sign(payloadHash, privateKeySeed);
 
@@ -215,12 +238,20 @@ public sealed class SignedQueryBuilder
         return new SignedQueryEnvelope(versionedNoritoBytes, signedQueryBytes, payloadBytes, signatureBytes);
     }
 
-    private byte[] EncodeQueryRequestWithAuthority(TransactionEncodingContext context)
+    private byte[] EncodeQueryRequestWithAuthority(
+        TransactionEncodingContext context,
+        ulong creationTimeMilliseconds,
+        ulong timeToLiveMilliseconds,
+        ReadOnlySpan<byte> nonce)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeAccountId(AuthorityAccountId));
-        writer.WriteField(EncodeQueryRequest(context));
-        return writer.ToArray();
+        return SignedQueryRequestContext.EncodePayload(
+            context,
+            networkIdBytes,
+            AuthorityAccountId,
+            creationTimeMilliseconds,
+            timeToLiveMilliseconds,
+            nonce,
+            EncodeQueryRequest(context));
     }
 
     private byte[] EncodeQueryRequest(TransactionEncodingContext context)

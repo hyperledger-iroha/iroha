@@ -1035,6 +1035,9 @@ pub mod isi {
         if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata::try_from(permission) {
             return &permission.asset_definition == asset_definition_id;
         }
+        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy::try_from(permission) {
+            return &permission.asset_definition == asset_definition_id;
+        }
         if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionAlias::try_from(permission)
             && let iroha_executor_data_model::permission::asset_definition::AssetDefinitionAliasPermissionScope::Alias(alias) = permission.scope
         {
@@ -3648,7 +3651,6 @@ mod tests {
             AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
             AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
         },
-        asset::definition::AssetConfidentialPolicy,
         asset::{
             Asset, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId, AssetId, Mintable,
             NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
@@ -3676,8 +3678,8 @@ mod tests {
         permission::Permission,
         prelude::Domain,
         privacy::{
-            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
-            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyProtocolIdV1,
         },
         role::{Role, RoleId},
         smart_contract::ContractAddress,
@@ -3751,13 +3753,15 @@ mod tests {
                 pool_id: PrivacyPoolIdV1::new([0xD1; 32]),
             }),
         );
-        let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
-            PrivacyOrchardPoolBootstrapDigestV1::new([0xD2; 32]),
+        let bootstrap = iroha_data_model::privacy::PrivacyOrchardPoolBootstrapV1::new(
+            PrivacyPoolIdV1::new([0xD1; 32]),
             asset_definition_id,
             iroha_data_model::asset::AssetBalanceScope::Global,
             reserve_account,
         )
-        .expect("canonical Orchard dependency-guard state");
+        .expect("canonical Orchard dependency-guard bootstrap");
+        let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(bootstrap)
+            .expect("canonical Orchard dependency-guard state");
         let key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
             .expect("canonical Orchard dependency-guard key");
         let record = crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
@@ -10039,7 +10043,6 @@ mod tests {
             metadata,
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10080,7 +10083,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10123,7 +10125,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10196,7 +10197,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10236,7 +10236,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10280,7 +10279,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10324,7 +10322,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: Some(domain_id),
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10368,7 +10365,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
             owning_domain: Some(domain_id),
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10498,7 +10494,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let second = NewAssetDefinition {
             id: id2,
@@ -10511,7 +10506,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10762,7 +10756,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -10820,7 +10813,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -10881,7 +10873,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -10924,7 +10915,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11006,7 +10996,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11097,7 +11086,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11560,7 +11548,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11630,7 +11617,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11673,7 +11659,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -11732,7 +11717,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -11787,7 +11771,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -11844,7 +11827,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -12294,6 +12276,10 @@ mod tests {
             asset_definition: asset_definition_id.clone(),
         }
         .into();
+        let permission_with_confidential_policy: Permission = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy {
+            asset_definition: asset_definition_id.clone(),
+        }
+        .into();
         let permission_with_exact_alias: Permission = CanManageAssetDefinitionAlias {
             scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
                 alias,
@@ -12310,6 +12296,12 @@ mod tests {
         Grant::account_permission(permission_with_definition.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant definition permission to holder");
+        Grant::account_permission(
+            permission_with_confidential_policy.clone(),
+            holder_id.clone(),
+        )
+        .execute(&authority, &mut tx)
+        .expect("grant confidential policy permission to holder");
         Grant::account_permission(permission_with_asset.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant asset permission to holder");
@@ -12324,6 +12316,9 @@ mod tests {
         Grant::role_permission(permission_with_definition.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant definition permission to role");
+        Grant::role_permission(permission_with_confidential_policy.clone(), role_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("grant confidential policy permission to role");
         Grant::role_permission(permission_with_asset.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant asset permission to role");
@@ -12337,6 +12332,7 @@ mod tests {
                 .get(&holder_id)
                 .is_some_and(|perms| {
                     perms.contains(&permission_with_definition)
+                        && perms.contains(&permission_with_confidential_policy)
                         && perms.contains(&permission_with_asset)
                         && perms.contains(&permission_with_exact_alias)
                 }),
@@ -12347,6 +12343,11 @@ mod tests {
             role.permissions()
                 .any(|perm| perm == &permission_with_definition),
             "role should include definition permission before unregister"
+        );
+        assert!(
+            role.permissions()
+                .any(|perm| perm == &permission_with_confidential_policy),
+            "role should include confidential policy permission before unregister"
         );
         assert!(
             role.permissions()
@@ -12369,12 +12370,19 @@ mod tests {
                 .get(&holder_id)
                 .is_some_and(|perms| {
                     perms.contains(&permission_with_definition)
+                        || perms.contains(&permission_with_confidential_policy)
                         || perms.contains(&permission_with_asset)
                         || perms.contains(&permission_with_exact_alias)
                 }),
             "holder permissions should be removed"
         );
         let role = tx.world.roles.get(&role_id).expect("role should exist");
+        assert!(
+            !role
+                .permissions()
+                .any(|perm| perm == &permission_with_confidential_policy),
+            "role confidential policy permission should be removed"
+        );
         assert!(
             !role
                 .permissions()
@@ -12392,6 +12400,12 @@ mod tests {
                 .permissions()
                 .any(|perm| perm == &permission_with_exact_alias),
             "role exact alias permission should be removed"
+        );
+        assert!(
+            !role
+                .permission_epochs()
+                .contains_key(&permission_with_confidential_policy),
+            "confidential policy permission epoch should be pruned"
         );
         assert!(
             !role

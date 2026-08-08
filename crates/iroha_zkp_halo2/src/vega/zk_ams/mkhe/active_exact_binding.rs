@@ -50,16 +50,17 @@
 //! membership proof is simulated.  The integer-only sampler below removes
 //! modulo bias using the standard `2^128 mod width` rejection threshold.
 //!
-//! This is still not a release proof.  Vega Hyrax only direct-opens values and
-//! Vega Spartan is explicitly non-zero-knowledge.  The existing FCMP++
-//! generalized Bulletproof is private to `iroha_core`, uses the Selene/Helios
-//! cycle, and caps its bases at 4,096/2,048 generators.  A new T256 backend,
-//! canonical framing, a complete managed-memory ledger, persistent commitment
-//! storage, and KATs remain absent.  More importantly, split decryption also
-//! needs the same persistent secret commitment but has an approximately
-//! 1,855-bit smudge witness; four scalar-response copies do not fit the proof
-//! ceiling.  No prover, verifier, decoder, manifest bit, or readiness gate is
-//! exposed here, and every operational entry point fails before parsing bytes.
+//! This is still not a release proof.  The native T256 generalized-
+//! Bulletproof backend, its pinned generator basis, and exact chunked
+//! membership evidence now exist and are consumed by the complete CPK
+//! relation.  The six-witness direct-relation wire, its implementation-derived
+//! managed-memory ledger, the full persistent-consumer graph, and an exact
+//! split-decryption cross-commitment relation remain absent.  In particular,
+//! split decryption must bind its approximately 1,855-bit smudge witness to the
+//! same persistent secret commitment without copying four wide scalar
+//! responses beyond the proof ceiling.  No accepting direct-relation prover,
+//! verifier, decoder, manifest bit, or readiness gate is exposed here, and
+//! every operational entry point fails before parsing bytes.
 
 #![allow(dead_code)]
 
@@ -67,6 +68,7 @@ use core::convert::Infallible;
 
 use crate::vega::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+    bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
     sponge::{Keccak256, keccak256},
 };
 
@@ -1778,16 +1780,45 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
     let membership_constraint_sets_exact = true;
     let persistent_graph_specified = true;
 
-    // These are deliberately false until the corresponding production code
-    // and evidence exist.  Algebraic feasibility is not release readiness.
-    let t256_membership_backend_implemented = false;
-    let generator_basis_kat_pinned = false;
+    // The native T256 membership backend and its release generator basis are
+    // now implemented and consumed by the complete CPK relation.  Keep every
+    // downstream direct-relation/runtime/evidence obligation independent:
+    // these two facts alone cannot open an operational path.
+    let t256_membership_backend_implemented = ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1 != [0; 32];
+    let generator_basis_kat_pinned = ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1 != [0; 32];
     let canonical_complete_wire_certified = false;
     let chunked_workspace_certified = false;
     let sampler_wired_to_runtime = false;
     let persistent_graph_wired_to_runtime = false;
     let split_decryption_wide_relation_certified = false;
     let release_kat_pinned = false;
+    let mut blocker_mask = 0_u16;
+    for (complete, blocker) in [
+        (
+            t256_membership_backend_implemented,
+            BLOCKER_T256_MEMBERSHIP_BACKEND_V1,
+        ),
+        (generator_basis_kat_pinned, BLOCKER_GENERATOR_BASIS_KAT_V1),
+        (canonical_complete_wire_certified, BLOCKER_CANONICAL_WIRE_V1),
+        (chunked_workspace_certified, BLOCKER_WORKSPACE_LEDGER_V1),
+        (
+            sampler_wired_to_runtime,
+            BLOCKER_SAMPLER_RUNTIME_INTEGRATION_V1,
+        ),
+        (
+            persistent_graph_wired_to_runtime,
+            BLOCKER_PERSISTENT_GRAPH_RUNTIME_V1,
+        ),
+        (
+            split_decryption_wide_relation_certified,
+            BLOCKER_SPLIT_DECRYPTION_WIDE_RELATION_V1,
+        ),
+        (release_kat_pinned, BLOCKER_RELEASE_KAT_V1),
+    ] {
+        if !complete {
+            blocker_mask |= blocker;
+        }
+    }
     let release_available = exact_common_box_hiding_certified
         && retry_timing_distribution_witness_independent
         && integer_sampler_unbiased
@@ -1853,8 +1884,8 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
         )?,
         governed_workspace_ceiling_bytes: as_u64(GOVERNED_WORKSPACE_CEILING_BYTES_V1)?,
         // A 256-bit membership argument composed at most 48 times loses fewer
-        // than six bits by a union bound.  This is conditional on the absent
-        // backend implementing the stated transcript and knowledge proof.
+        // than six bits by a union bound.  The implemented T256 backend binds
+        // the stated transcript and exact membership relation.
         candidate_membership_union_soundness_bits: 250,
         exact_common_box_hiding_certified,
         retry_timing_distribution_witness_independent,
@@ -1871,12 +1902,41 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
         persistent_graph_wired_to_runtime,
         split_decryption_wide_relation_certified,
         release_kat_pinned,
-        blocker_mask: ALL_RELEASE_BLOCKERS_V1,
+        blocker_mask,
         release_available,
         digest: [0; 32],
     };
     audit.digest = audit_digest(audit);
     Ok(audit)
+}
+
+/// Compact release state consumed by the canonical MKHE readiness compiler.
+///
+/// This does not expose partially verified proof artifacts. It reports only
+/// the digest-bound result of the complete fail-closed audit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ZkAmsMkheActiveExactBindingReleaseStateV1 {
+    /// Exact open-blocker bit set.
+    pub(super) blocker_mask: u16,
+    /// Whether split decryption reuses the exact persistent secret binding.
+    pub(super) split_decryption_wide_relation_certified: bool,
+    /// Whether every exact-binding obligation has closed together.
+    pub(super) release_available: bool,
+    /// Digest of the complete underlying audit.
+    pub(super) audit_digest: [u8; 32],
+}
+
+/// Evaluate the exact-binding proof state for one governed profile.
+pub(super) fn exact_binding_release_state_v1(
+    profile: &BgvProfile,
+) -> Result<ZkAmsMkheActiveExactBindingReleaseStateV1, ZkAmsMkheErrorV1> {
+    let audit = exact_binding_audit_v1(profile)?;
+    Ok(ZkAmsMkheActiveExactBindingReleaseStateV1 {
+        blocker_mask: audit.blocker_mask,
+        split_decryption_wide_relation_certified: audit.split_decryption_wide_relation_certified,
+        release_available: audit.release_available,
+        audit_digest: audit.digest,
+    })
 }
 
 fn sample_exact_uniform_signed_box<R: MaskedRelaxedRandomSourceV1>(
@@ -2324,9 +2384,32 @@ mod tests {
         assert!(audit.fork_difference_invertible_in_every_rns_limb);
         assert!(audit.membership_constraint_sets_exact);
         assert!(audit.persistent_graph_specified);
-        assert_eq!(audit.blocker_mask, 0xff);
+        assert!(audit.t256_membership_backend_implemented);
+        assert!(audit.generator_basis_kat_pinned);
+        assert_eq!(audit.blocker_mask, ALL_RELEASE_BLOCKERS_V1 & !0b11);
         assert!(!audit.release_available);
         assert_ne!(audit.digest, [0; 32]);
+
+        for forged in [
+            ExactBindingAuditV1 {
+                t256_membership_backend_implemented: false,
+                ..audit
+            },
+            ExactBindingAuditV1 {
+                generator_basis_kat_pinned: false,
+                ..audit
+            },
+            ExactBindingAuditV1 {
+                blocker_mask: audit.blocker_mask ^ BLOCKER_CANONICAL_WIRE_V1,
+                ..audit
+            },
+            ExactBindingAuditV1 {
+                release_available: true,
+                ..audit
+            },
+        ] {
+            assert_ne!(audit_digest(forged), audit.digest);
+        }
     }
 
     #[test]
@@ -3140,8 +3223,8 @@ mod tests {
         let profile = release_profile_v1();
         let audit = exact_binding_audit_v1(&profile).unwrap();
         assert!(!audit.split_decryption_wide_relation_certified);
-        assert!(!audit.t256_membership_backend_implemented);
-        assert!(!audit.generator_basis_kat_pinned);
+        assert!(audit.t256_membership_backend_implemented);
+        assert!(audit.generator_basis_kat_pinned);
         assert!(!audit.canonical_complete_wire_certified);
         assert!(!audit.sampler_wired_to_runtime);
         assert!(!audit.persistent_graph_wired_to_runtime);

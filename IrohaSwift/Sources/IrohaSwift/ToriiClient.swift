@@ -11180,7 +11180,7 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
             throw DecodingError.dataCorruptedError(
                 forKey: .requiredBridgeAbiVersion,
                 in: container,
-                debugDescription: "required_bridge_abi_version must be 21"
+                debugDescription: "required_bridge_abi_version must be 22"
             )
         }
         guard decodedMaxHops == KagemushaRecursiveSpend.maximumPeerHops else {

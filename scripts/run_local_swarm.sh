@@ -407,6 +407,7 @@ EOF
 write_client_config() {
   cat > "$BASE/client.toml" <<EOF
 chain = "00000000-0000-0000-0000-000000000000"
+network_id = "$GENESIS_EXPECTED_HASH"
 torii_url = "http://127.0.0.1:${APIS[0]}/"
 
 [basic_auth]

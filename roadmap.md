@@ -5,6 +5,19 @@ Last updated: 2026-08-03
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Exact network identity completion
+
+The signed-query boundary now uses the exact genesis-derived `NetworkId`,
+mandatory signed freshness, fail-closed replay admission, and one-shot HTTP
+dispatch. Complete DAT-17 by replacing label-derived security domains in
+ordinary transactions, peer authentication, consensus artifacts, snapshots,
+Kura/block-sync recovery, proof/nullifier domains, and every corresponding SDK
+wire format. Use an explicit genesis-only transaction domain to avoid a
+genesis-hash self-reference; first-release decoders do not retain the old
+label-only layout. The coordinated release lane must also run focused Rust and
+four-peer cross-genesis tests and regenerate the affected OpenAPI/schema
+artifacts.
+
 ## VPN MCP and Torii content audit closeout
 
 - Run the focused locked/offline Torii tests for the exact inner-target MCP
@@ -57,6 +70,31 @@ activation interval and canonical block anchors, and rollback/replay uses the
 ordinary MV state lifecycle. The stale Kotodama/IVM references to the retired
 generic confidential instructions are removed; the final focused Core
 test-target build remains part of the coordinated validation lane.
+The custom daemon launch path is now late-bound: a one-shot factory receives
+the exact live chain/genesis, state, queue, and SoraFS handles after trusted
+startup replay, while stock `irohad` remains fail-closed. The provider-grade
+bundle verifier also has a fresh-reader three-pass path that avoids CAR
+materialization and rejects pass substitution and non-exact EOF. Its largest
+generic chunk-store and Norito verification-lock decode allocations still need
+reduction or measured qualification before claiming the 64 MiB provider-memory
+gate. Payload-only verification is deliberately limited to authenticated
+extractions or admitted chunk storage; raw provider CARs still require the full
+canonical-container boundary.
+The embedded SoraFS node now also exposes a digest-selected, callback-scoped
+payload lease with exactly three scheduled fresh readers and eviction safety;
+lookup is keyed rather than scanned, acquisition failures are redacted, and
+chunk-boundary short reads preserve `Read` semantics when a later chunk fails.
+An exclusive transient retirement intent prevents steady new leases from
+starving eviction, and verified-read failures retain their admitted byte charge.
+Completed provider-ingest and post-completion claim/request primitives are
+recorded in `status.md`. The completed claim is now accepted only by the
+lifecycle-leased fresh-reader verifier, and its raw verifier-evidence request
+constructor is crate-private. The outstanding provider-attestation gate is to
+submit the resulting externally inert request to an approval-only HSM/KMS or
+threshold signer, persist the result in a separate bounded attestation journal,
+and hand its canonical provider inventory to the archive-manager/publication
+coordinator.
+The provider must not mutate the attestation registry directly.
 Remaining release gates, in order, are:
 
 - Finish focused validation of the occurrence-bound targeted resolver,
@@ -140,13 +178,19 @@ Remaining release gates, in order, are:
   validator for that backend's future daemon reader, without exposing a route
   or duplicating revision-activation rules. The latest exact archive query can
   reproduce the immutable registration projection without a historical mutable
-  WSV. Same-ID renewal follows the current finalized pin, order, epochs, and
-  exact provider evidence. Exercise the real fee-quote/submission transport and crash
+  WSV. Complete the provider-attestation driver around the implemented opaque
+  completed-row claim and inert approval request: rerun the verifier, obtain
+  approval-only signatures, commit the result to a separate bounded attestation
+  journal, and pass the canonical provider inventory through the authenticated
+  archive-manager/coordinator boundary without direct registry mutation.
+  Same-ID renewal follows the current finalized pin, order, epochs, and exact
+  provider evidence. Exercise the real fee-quote/submission transport and crash
   boundaries before send, after registry commit, after authoritative-record
   persistence, after coordinator response, and after location commit, including
   concurrent resumes and receipt expiry.
 
-- Supply and qualify the deployment-owned private HTTPS/TLS runner, concrete
+- Supply and qualify the deployment-owned private HTTPS/TLS runner and its
+  implementation of the completed late-bound factory, concrete
   HSM/KMS or threshold implementations of the completed publisher-request and
   receipt-approval provider boundaries, and assemble the completed bounded
   durable Unix replay journal with deployment-selected operation,
@@ -265,13 +309,19 @@ identity leg before closing UNM-14.
 The H21/H22/H25/H26 confidential-ledger source and SDK hard cut is implemented.
 The first-release registry contains no generic `Shield`, `ZkTransfer`, or
 `Unshield` instruction, compatibility discriminant, relay, IVM bridge, CLI, or
-SDK transaction builder. Kagemusha top-up/redemption owns public settlement and
-its escrow/anchor conservation checks; native anonymous escrow consumes the
-underlying transfer circuit only through a sealed purpose-bound internal path.
+SDK transaction builder. Native anonymous escrow and the authority-free
+`PrivateKaigi` entrypoint are removed rather than retained as specialized
+wrappers. Kagemusha top-up/redemption owns public settlement and its
+escrow/anchor conservation checks; the transfer-v2 verifier is a
+protocol-global recursive-proof component and has no public dispatch path.
 Each asset persists the sole first-release Poseidon tree profile with
 fail-closed retained-root/checkpoint validation and atomic incremental batch
-append. Generated Android instruction, builder, manifest, metadata, and
-hash-tree artifacts now describe the 110-entry release schema. Focused
+append. `RegisterZkAsset` contains only `asset`, `vk_unshield`, and `vk_shield`;
+optional key presence enables those two protocol roles, with no registration
+mode, enablement booleans, or asset-bound transfer verifier. The generic
+producerless confidential event/filter surface is also absent. Generated
+Android instruction, builder, manifest, metadata, and hash-tree artifacts must
+be regenerated from this final release schema. Focused
 data-model, Core, IVM, bridge, fixture, and cross-SDK execution remains required
 before these audit items can close; physical Kagemusha recursion also remains
 blocked on a clean SSH-signed source seal and reviewed external inputs.
@@ -645,7 +695,7 @@ Torii verifies every returned signature before releasing a token. Focused
 Cargo/workspace validation and reviewed reference-HSM deployment evidence
 remain open.
 
-The mandatory SoraFS ABI-21 Python native reference lane is now pinned to exact
+The mandatory SoraFS ABI-22 Python native reference lane is now pinned to exact
 Python 3.12. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed, and
 the runner rejects any tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or
 `.dll`, activates its selected virtual environment, covers the
@@ -657,7 +707,7 @@ appeal-finance `CancelAssetLock` files are mandatory. Available native outputs
 are stale or mixed and no native-dependent SDK suite is qualified. Clean native
 rebuilds, unskipped fixture replay, and source-bound provenance across all five
 release targets remain open. Kotlin/JVM and mirrored Java Android now require
-both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 1 before
+both exact bridge ABI 22 and `NativeSignerBridge` JNI contract revision 4 before
 making any native signer call; the Android artifact gate requires both
 revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
 package qualification. The separate SoraFS pin-register SDK workflow, runner,
@@ -870,7 +920,7 @@ native bridges and runtimes available.
   divergence.
 - Re-run the complete Swift package suite with a bridge artifact accepted by
   the active Swift compiler. Keep Kagemusha native-canonical bytes and bridge
-  ABI 21 unchanged while platform delivery adapters converge on the shared
+  ABI 22 unchanged while platform delivery adapters converge on the shared
   peer-message core. Do not add a backend endpoint or backend reconciliation
   fallback to close a device-only evidence gap.
 
@@ -909,7 +959,7 @@ Neither extension may be implemented as a sender fallback or an unscoped
 aggregate balance check.
 
 Kagemusha transport and proof admission are fail-closed for the first release.
-It is the only offline-spend protocol. Exact bridge ABI 21 and governed schema
+It is the only offline-spend protocol. Exact bridge ABI 22 and governed schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4` are the current
 artifact and readiness contract, not a runtime product selector. Runtime,
 wallet, and readiness surfaces remain selector-free. Each authenticated V4
@@ -919,7 +969,7 @@ final-key selector-zero bootstrap witness for each parity. Bounded circuit
 parameters are authenticated inline in the two profiles rather than represented
 as additional streamed artifacts.
 The unreleased recursive state boundary carrier remains V2 without changing
-bridge ABI 21 or manifest V4, while its nested compact profile is V5. The
+bridge ABI 22 or manifest V4, while its nested compact profile is V5. The
 boundary is the complete 138-limb canonical state, including the public
 append-only `next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 66
 field elements.
@@ -2691,7 +2741,7 @@ excluded from the first release.
   data-model, bridge, Torii, CLI, SDK, mobile, packaging, and documentation
   surface must expose exact readiness only, with no runtime product, version,
   or compatibility selector. The current artifact/readiness contract is exact
-  bridge ABI 21 and manifest V4 with exactly eight external Eq/Ep artifacts;
+  bridge ABI 22 and manifest V4 with exactly eight external Eq/Ep artifacts;
   bounded circuit parameters remain authenticated inline. Versioned type names
   are internal wire and artifact schemas, not selectable products.
   Proof-gated init, append, verify, top-up, redeem, and change are selected by
@@ -7657,7 +7707,7 @@ excluded from the first release.
   payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
-  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 21
+	  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 22
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
   Java Android, and Swift SDK wrappers. `sorafs_node` now also exports the
   durable `HedgingBillingService`, and standard `irohad` can supervise it under
@@ -14824,9 +14874,10 @@ excluded from the first release.
 	  Payload validation is not value or settlement authorization: generic
 	  `zk::Shield`, `zk::ZkTransfer`, and `zk::Unshield` instructions and their
 	  CLI/native/SDK transaction encoders are removed. Public settlement now
-	  requires the proof-bound Kagemusha V4 top-up/redemption paths; native
-	  anonymous escrow applies its transfer circuit only behind an exact typed
-	  lifecycle capability. The standalone CLI envelope utility retains the same
+	  requires the proof-bound Kagemusha V4 top-up/redemption paths. The
+	  transfer-v2 relation is retained only as a protocol-global Kagemusha
+	  recursive-proof component, with no public instruction or anonymous-escrow
+	  lifecycle wrapper. The standalone CLI envelope utility retains the same
 	  structural payload preflight.
   Standalone ML-KEM public-key validation, secret-key validation,
   encapsulation, and decapsulation now reject all-zero public keys, all-zero
@@ -16454,7 +16505,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   variables, then available `python3.11`/Homebrew Python 3.11 candidates before
   falling back to `python3` for the existing fail-closed version check, with
   override and resolver drift pinned by negative controls. The mandatory SoraFS
-  ABI-21 native reference and pin-register SDK lanes are separately pinned to
+	  ABI-22 native reference and pin-register SDK lanes are separately pinned to
   exact Python 3.12; their runners must activate and report their 3.12 venvs
   before any native build or pytest execution. Pin-register dependencies must
   come only from `requirements-ci.lock` under
@@ -19055,9 +19106,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   matched adversarial coverage for blank circuit ids, empty or oversized public
   inputs, empty proof bytes, auxiliary metadata, verifier-key hashes, and active
   circuit indexes. ZK-ACE authorized-transfer admission runs it before
-  public-input decoding or STARK wrapper checks. Anonymous escrow close
-  prechecks validate the confidential-transfer-v2 proof
-  envelope before trusting parsed input commitments. IVM-proved overlay
+  public-input decoding or STARK wrapper checks. IVM-proved overlay
   admission now reuses the shared envelope validator with node and
   verifier-record proof-byte bounds before semantic replay or verifier dispatch.
   IVM host registered-key verify syscalls also run the same shared validator
@@ -19145,7 +19194,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   `zk-trace/mock-proof` artifacts while the real transparent IVM trace prover
   remains future work.
   Kagemusha is the single mode-free offline-cash protocol. Its current artifact
-  and readiness contract is exact bridge ABI 21 with authenticated manifest V4
+	  and readiness contract is exact bridge ABI 22 with authenticated manifest V4
   artifacts: exactly eight external Eq/Ep roles with circuit parameters inline.
   Versioned type names are internal wire and artifact schema identifiers only.
   Runtime, SDK, CLI,

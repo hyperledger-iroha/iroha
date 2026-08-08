@@ -7541,7 +7541,7 @@ impl Client {
             != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
         {
             return Err(eyre!(
-                "offline capability response does not advertise native bridge ABI 21"
+                "offline capability response does not advertise native bridge ABI 22"
             ));
         }
         if status.max_hops != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
@@ -8296,7 +8296,7 @@ mod offline_client_tests {
 
         assert!(!result.mandatory);
         assert_eq!(result.cash_handoff_capability, "cash_handoff_v1");
-        assert_eq!(result.required_bridge_abi_version, 21);
+        assert_eq!(result.required_bridge_abi_version, 22);
         assert_eq!(result.max_hops, 8);
         assert!(result.ready);
         assert!(result.assets.is_empty());
@@ -9034,6 +9034,7 @@ mod evidence_http_tests {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let config = Config {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id: test_network_id(),
             key_pair,
             account: account_id,
             account_chain_discriminant:
@@ -12523,15 +12524,27 @@ fn unwrap_final_tx_confirmation_error(err: eyre::Report) -> eyre::Report {
     }
 }
 
-/// Iroha client
+#[cfg(test)]
+pub(crate) fn test_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xA5; Hash::LENGTH],
+        )),
+    )
+}
+
+/// Iroha client.
+///
+/// Main entry point used by external applications to communicate with an Iroha
+/// peer. The client is lightweight and holds only configuration data needed to
+/// build and sign transactions.
 #[derive(Clone, Display)]
 #[display("{}@{torii_url}", key_pair.public_key())]
-/// Main entry point used by external applications to communicate with an Iroha
-/// peer.  The client is lightweight and holds only configuration data needed
-/// to build and sign transactions.
 pub struct Client {
     /// Unique id of the blockchain. Used for simple replay attack protection.
     pub chain: ChainId,
+    /// Exact genesis-lineage identity used for signed query domain separation.
+    pub network_id: NetworkId,
     /// Url for accessing Iroha node
     pub torii_url: Url,
     /// Accounts keypair
@@ -12593,6 +12606,7 @@ impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
             .field("chain", &self.chain)
+            .field("network_id", &self.network_id)
             .field("torii_url", &self.torii_url)
             .field("public_key", &self.key_pair.public_key())
             .field("transaction_ttl", &self.transaction_ttl)
@@ -12638,6 +12652,7 @@ impl Client {
     pub fn with_headers(
         Config {
             chain,
+            network_id,
             account,
             account_chain_discriminant: _account_chain_discriminant,
             torii_api_url,
@@ -12671,6 +12686,7 @@ impl Client {
 
         Self {
             chain,
+            network_id,
             torii_url: torii_api_url,
             key_pair,
             transaction_ttl: Some(transaction_ttl),
@@ -27146,15 +27162,8 @@ mod tests {
             0,
         );
         block_header.set_da_commitments_hash(da_hash);
-        let commit_qc = sample_commit_qc(&block_header);
-        let relay_envelope = LaneRelayEnvelope::new(
-            block_header,
-            Some(commit_qc),
-            da_hash,
-            settlement.clone(),
-            256,
-        )
-        .expect("construct lane relay envelope");
+        let relay_envelope = LaneRelayEnvelope::new(block_header, da_hash, settlement.clone(), 256)
+            .expect("construct lane relay envelope");
         let status = SumeragiDiagnosticsStatus {
             pipeline_execution: SumeragiPipelineExecutionStatus::default(),
             tx_queue_depth: 7,
@@ -27212,13 +27221,14 @@ mod tests {
             timestamp_ms,
             0,
         );
-        LaneRelayEnvelope::new(block_header, None, None, settlement, 0).expect("lane relay")
+        LaneRelayEnvelope::new(block_header, None, settlement, 0).expect("lane relay")
     }
 
     fn config_factory() -> Config {
         let (account_id, key_pair) = gen_account_in("wonderland");
         Config {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id: test_network_id(),
             key_pair,
             account: account_id,
             account_chain_discriminant:

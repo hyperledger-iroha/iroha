@@ -2476,11 +2476,6 @@ mod tests {
             CommittedTxPredicate::TsIn(Vec::new()),
             CommittedTxPredicate::TsNin(vec![1, 1]),
             CommittedTxPredicate::TsIn((0..=MAX_COMMITTED_TX_MEMBERSHIP_VALUES as u64).collect()),
-            CommittedTxPredicate::MetadataEq {
-                key: "topic".parse().expect("metadata key"),
-                value: Json::from_raw_json("{ \"value\": true }".into())
-                    .expect("valid noncanonical JSON fixture"),
-            },
             too_deep,
         ];
         let fail_closed =

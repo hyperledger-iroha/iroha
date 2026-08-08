@@ -55,6 +55,7 @@ if IROHA_PYTHON_ADDRESS.exists():
 
 
 DEFAULT_CHAIN_ID = taira_constants.CHAIN_ID
+DEFAULT_NETWORK_ID = taira_constants.NETWORK_ID
 DEFAULT_CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 DEFAULT_DOMAIN = "universal"
 DEFAULT_ALIAS_PREFIX = "taira-rollout-canary"
@@ -377,6 +378,7 @@ def load_existing_config(path: Path) -> dict[str, Any] | None:
     basic_auth = data.get("basic_auth")
     return {
         "chain": data.get("chain") or DEFAULT_CHAIN_ID,
+        "network_id": data.get("network_id") or DEFAULT_NETWORK_ID,
         "domain": normalize_domain(account.get("domain")),
         "account_id": account_id.strip() if isinstance(account_id, str) else None,
         "public_key": public_key,
@@ -949,6 +951,7 @@ def write_config(
     path: Path,
     *,
     chain: str,
+    network_id: str,
     torii_root: str,
     domain: str,
     account_id: str,
@@ -963,6 +966,7 @@ def write_config(
     lines = [
         "# Auto-generated runtime-only rollout canary config.",
         f'chain = "{chain}"',
+        f'network_id = "{network_id}"',
         f'torii_url = "{torii_root.rstrip("/")}/"',
     ]
 
@@ -1032,6 +1036,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Chain id written into the generated config (default: {DEFAULT_CHAIN_ID})",
     )
     parser.add_argument(
+        "--network-id",
+        default=DEFAULT_NETWORK_ID,
+        help=(
+            "Exact genesis-header network id written into the generated config "
+            f"(default: {DEFAULT_NETWORK_ID})"
+        ),
+    )
+    parser.add_argument(
         "--chain-discriminant",
         type=int,
         default=DEFAULT_CHAIN_DISCRIMINANT,
@@ -1091,6 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
         basic_auth = None
         nonce = False
         chain = args.chain_id
+        network_id = args.network_id
         chain_discriminant = args.chain_discriminant
         domain = normalize_domain(args.domain)
     else:
@@ -1103,6 +1116,7 @@ def main(argv: list[str] | None = None) -> int:
         # Reuse the generated key material, but honor the current runtime arguments so a
         # redeployed network can refresh chain/domain settings without forcing a new signer.
         chain = args.chain_id
+        network_id = args.network_id
         chain_discriminant = int(args.chain_discriminant)
         domain = normalize_domain(args.domain)
 
@@ -1171,6 +1185,7 @@ def main(argv: list[str] | None = None) -> int:
     write_config(
         output_config,
         chain=chain,
+        network_id=network_id,
         torii_root=args.torii_root,
         domain=domain,
         account_id=account_id,

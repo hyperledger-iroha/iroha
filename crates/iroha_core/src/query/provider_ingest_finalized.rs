@@ -13,6 +13,12 @@
 //! current-head fallback or inferred historical coverage exists. Runtime
 //! credentials, grants, endpoints, private keys, and payload bytes are absent
 //! from every public and durable type.
+//!
+//! First-release records always encode the optional consensus Musubi archive
+//! binding, including an explicit `None` for generic orders. Pre-release
+//! archive bytes that lack that field also use a retired state-root domain and
+//! cannot pass canonical decode/validation; operators must reset that
+//! disposable archive namespace rather than migrate it.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -31,6 +37,7 @@ use std::io::Write as _;
 use iroha_data_model::{
     ChainId,
     account::AccountId,
+    musubi::MusubiReplicationOrderArchiveBindingV1,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -74,7 +81,8 @@ const RETENTION_CHECKPOINT_BYTES_DIGEST_DOMAIN_V1: &[u8] =
 const RETENTION_APPROVAL_REVISION_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.provider-ingest.finalized-archive-retention-approval.v1\0";
 const RETENTION_APPROVAL_NAMESPACE_V1: [u8; 32] = *b"sorafs.pi.archive.retention.v1.0";
-const STATE_ROOT_DOMAIN_V1: &[u8] = b"iroha.sorafs.provider-ingest.finalized-provider-state.v1\0";
+const STATE_ROOT_DOMAIN_V1: &[u8] =
+    b"iroha.sorafs.provider-ingest.finalized-provider-state.first-release.v1\0";
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const RETENTION_APPROVAL_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
 const MAX_DECODE_NESTING_DEPTH: usize = 128;
@@ -345,6 +353,9 @@ pub struct ProviderIngestFinalizedArchivedOrderV1 {
     pub pin_manifest: PinManifestRecord,
     /// Chain-authoritative replication-order record.
     pub replication_order: ReplicationOrderRecord,
+    /// Consensus-authenticated Musubi archive binding, absent for generic
+    /// non-Musubi replication orders.
+    pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
 }
 
 impl ProviderIngestFinalizedArchivedOrderV1 {
@@ -404,6 +415,7 @@ impl ProviderIngestFinalizedProjectionV1 {
             (
                 &PinManifestRecord,
                 &ReplicationOrderRecord,
+                &Option<MusubiReplicationOrderArchiveBindingV1>,
                 BTreeSet<ProviderId>,
             ),
         > = BTreeMap::new();
@@ -477,13 +489,15 @@ impl ProviderIngestFinalizedProjectionV1 {
                         entry.insert((
                             &archived.pin_manifest,
                             &archived.replication_order,
+                            &archived.musubi_archive,
                             assigned,
                         ));
                     }
                     std::collections::btree_map::Entry::Occupied(mut entry) => {
-                        let (pin, order, assigned) = entry.get_mut();
+                        let (pin, order, musubi_archive, assigned) = entry.get_mut();
                         if *pin != &archived.pin_manifest
                             || *order != &archived.replication_order
+                            || *musubi_archive != &archived.musubi_archive
                             || !assigned.insert(provider.provider_id)
                         {
                             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
@@ -494,7 +508,7 @@ impl ProviderIngestFinalizedProjectionV1 {
                 }
             }
         }
-        for (order_id, (_, order, projected_providers)) in orders_by_id {
+        for (order_id, (_, order, _, projected_providers)) in orders_by_id {
             let decoded = validated_replication_order_from_record(&order_id, order)?;
             let assigned = decoded
                 .assignments
@@ -530,6 +544,9 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
     pub pin_manifest: PinManifestRecord,
     /// Chain-authoritative replication order.
     pub replication_order: ReplicationOrderRecord,
+    /// Consensus-authenticated Musubi archive binding, absent for generic
+    /// non-Musubi replication orders.
+    pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
     /// Current authoritative completion epoch, when completion is admissible.
     pub completion_epoch: Option<u64>,
 }
@@ -2550,6 +2567,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 finalized_at_unix_ms: key.finalized_at_unix_ms,
                 pin_manifest: order.pin_manifest.clone(),
                 replication_order: order.replication_order.clone(),
+                musubi_archive: order.musubi_archive.clone(),
                 completion_epoch,
             }
         }));
@@ -2716,9 +2734,54 @@ fn capture_projection(
                 reason: "replication order and pin manifest bindings differ",
             });
         }
+        let musubi_archive = match (
+            order_record.musubi_archive,
+            world.musubi_locations_by_replication_order().get(order_id),
+        ) {
+            (None, None) => None,
+            (Some(archive_id), Some(reference)) => {
+                reference.validate().map_err(|_| {
+                    ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi replication-order/archive binding is noncanonical",
+                    }
+                })?;
+                if reference.binding.replication_order != *order_id
+                    || reference.binding.archive_id != archive_id
+                {
+                    return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi replication-order purpose and projected archive binding disagree",
+                    });
+                }
+                let archive = world
+                    .musubi_archives()
+                    .get(&reference.binding.archive_id)
+                    .ok_or(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi archive binding targets a missing archive",
+                    })?;
+                archive.validate().map_err(|_| {
+                    ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi archive binding targets a noncanonical archive",
+                    }
+                })?;
+                if archive.archive_id != reference.binding.archive_id
+                    || archive.commitment != reference.binding.commitment
+                {
+                    return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "Musubi archive binding differs from authoritative registry state",
+                    });
+                }
+                Some(reference.binding.clone())
+            }
+            (None, Some(_)) | (Some(_), None) => {
+                return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                    reason: "Musubi replication-order purpose and projected archive binding disagree",
+                });
+            }
+        };
         let archived = ProviderIngestFinalizedArchivedOrderV1 {
             pin_manifest: pin,
             replication_order: order_record.clone(),
+            musubi_archive,
         };
         for assignment in &decoded.assignments {
             let provider_id = ProviderId::new(assignment.provider_id);
@@ -2865,6 +2928,38 @@ fn validate_archived_order(
         return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
             reason: "provider, order, and pin-manifest bindings are inconsistent",
         });
+    }
+    match (
+        archived.replication_order.musubi_archive,
+        &archived.musubi_archive,
+    ) {
+        (None, None) => {}
+        (Some(archive_id), Some(binding)) => {
+            binding.validate().map_err(|_| {
+                ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                    reason: "Musubi replication-order/archive binding is noncanonical",
+                }
+            })?;
+            let commitment = &binding.commitment;
+            if binding.replication_order != archived.replication_order.order_id
+                || binding.archive_id != archive_id
+                || commitment.root_cid != archived.pin_manifest.root_cid
+                || commitment.chunker != archived.pin_manifest.chunker
+                || commitment.chunk_plan_digest.as_bytes()
+                    != &archived.pin_manifest.chunk_digest_sha3_256
+                || commitment.por_root.as_bytes() != &archived.pin_manifest.por_root
+                || commitment.content_length != archived.pin_manifest.content_length
+            {
+                return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                    reason: "Musubi archive binding differs from its replication-order purpose or pin commitment",
+                });
+            }
+        }
+        (None, Some(_)) | (Some(_), None) => {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                reason: "Musubi replication-order purpose and projected archive binding disagree",
+            });
+        }
     }
     validate_pin_manifest_lifecycle(&archived.pin_manifest)?;
     if matches!(
@@ -3345,6 +3440,8 @@ fn validate_order_transition(
         || previous_record.issued_by != current_record.issued_by
         || previous_record.issued_epoch != current_record.issued_epoch
         || previous_record.deadline_epoch != current_record.deadline_epoch
+        || previous_record.musubi_archive != current_record.musubi_archive
+        || previous.musubi_archive != current.musubi_archive
         || !pin_manifest_immutable_fields_match(&previous.pin_manifest, &current.pin_manifest)
     {
         return Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution {
@@ -7184,6 +7281,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
+        musubi::{MusubiArchiveCommitmentV1, MusubiContentDigestV1},
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinPolicy, PinStatus,
             ProviderIngestCompletionAuthorityV1, ReplicationOrderCompletionRecord,
@@ -7304,6 +7402,7 @@ mod tests {
                 order_id: ReplicationOrderId::new(order_id),
                 manifest_digest: digest,
                 manifest_root_cid: root,
+                musubi_archive: None,
                 issued_by: account(1),
                 issued_epoch: 1,
                 deadline_epoch: 1_000,
@@ -7312,6 +7411,7 @@ mod tests {
                 provider_completions: Vec::new(),
                 status: ReplicationOrderStatus::Pending,
             },
+            musubi_archive: None,
         }
     }
 
@@ -7344,6 +7444,31 @@ mod tests {
         }
     }
 
+    fn bind_musubi_archive(archived: &mut ProviderIngestFinalizedArchivedOrderV1, seed: u8) {
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: archived.pin_manifest.root_cid.clone(),
+            chunker: archived.pin_manifest.chunker.clone(),
+            chunk_plan_digest: MusubiContentDigestV1::new(
+                archived.pin_manifest.chunk_digest_sha3_256,
+            ),
+            por_root: MusubiContentDigestV1::new(archived.pin_manifest.por_root),
+            content_length: archived.pin_manifest.content_length,
+            car_digest: MusubiContentDigestV1::new([seed; 32]),
+            car_size: archived.pin_manifest.content_length.saturating_add(1_024),
+            bundle_digest: MusubiContentDigestV1::new([seed.wrapping_add(1); 32]),
+            source_tree_digest: MusubiContentDigestV1::new([seed.wrapping_add(2); 32]),
+            descriptor_digest: MusubiContentDigestV1::new([seed.wrapping_add(3); 32]),
+            file_count: 1,
+            chunk_count: 1,
+        };
+        archived.replication_order.musubi_archive = Some(commitment.archive_id());
+        archived.musubi_archive = Some(MusubiReplicationOrderArchiveBindingV1::new(
+            archived.replication_order.order_id,
+            commitment.archive_id(),
+            commitment,
+        ));
+    }
+
     #[test]
     fn complete_namespace_empty_check_rejects_any_record() {
         let directory = physical_tempdir().expect("create archive directory");
@@ -7353,6 +7478,150 @@ mod tests {
         assert!(archive.is_empty().expect("inspect empty archive"));
         archive.insert(projection(1)).expect("insert projection");
         assert!(!archive.is_empty().expect("inspect populated archive"));
+    }
+
+    #[test]
+    fn pre_release_archive_state_root_is_not_accepted_by_first_release_layout() {
+        let projection = projection(7);
+        let pre_release_root = canonical_domain_digest(
+            b"iroha.sorafs.provider-ingest.finalized-provider-state.v1\0",
+            &projection.providers,
+        )
+        .expect("pre-release root fixture");
+        let first_release_root =
+            provider_state_root(&projection.providers).expect("first-release root");
+        assert_ne!(pre_release_root, first_release_root);
+
+        let directory = physical_tempdir().expect("archive record directory");
+        let path = directory.path().join("pre-release-root-record.norito");
+        let record = ProviderIngestFinalizedArchiveRecordV1::try_new(
+            ProviderIngestFinalizedArchiveRecordMaterialV1 {
+                version: ARCHIVE_VERSION_V1,
+                key: projection.key.clone(),
+                predecessor: None,
+                deltas: build_provider_deltas(None, &projection),
+                provider_state_root: pre_release_root,
+            },
+        )
+        .expect("pre-release state root still forms a self-consistent outer record");
+        let bytes = encode_bounded_record(&record, bounds()).expect("encode record fixture");
+        fs::write(&path, &bytes).expect("write record fixture");
+        let mut index = ArchiveIndexV1::default();
+        index.by_height.insert(
+            (projection.key.chain_id.clone(), projection.key.height),
+            ArchiveRecordEntryV1 {
+                record,
+                path,
+                canonical_bytes: bounded_bytes_len(&bytes),
+            },
+        );
+        assert!(matches!(
+            reconstruct_projection(&index, &projection.key, bounds()),
+            Err(ProviderIngestFinalizedArchiveErrorV1::ProviderStateRootMismatch)
+        ));
+    }
+
+    #[test]
+    fn first_projection_rejects_conflicting_provider_archive_bindings_for_one_order() {
+        let mut projection = projection(7);
+        let shared_order = ReplicationOrderId::new([0xA1; 32]);
+        for provider in &mut projection.providers {
+            if let Some(archived) = provider
+                .orders
+                .iter_mut()
+                .find(|archived| archived.order_id() == shared_order)
+            {
+                let seed = if provider.provider_id == PROVIDER_A {
+                    0x81
+                } else {
+                    0x82
+                };
+                bind_musubi_archive(archived, seed);
+            }
+        }
+
+        assert!(matches!(
+            projection.validate(bounds()),
+            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                reason: "one order has conflicting provider projections"
+            })
+        ));
+    }
+
+    #[test]
+    fn archive_preserves_musubi_binding_and_rejects_late_or_substituted_binding() {
+        let directory = physical_tempdir().expect("archive tempdir");
+        let archive =
+            ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
+                .expect("open archive");
+        let mut first = projection(7);
+        for provider in &mut first.providers {
+            for archived in &mut provider.orders {
+                if archived.order_id() == ReplicationOrderId::new([0xA1; 32]) {
+                    bind_musubi_archive(archived, 0x81);
+                }
+            }
+        }
+        archive
+            .insert(first.clone())
+            .expect("insert bound projection");
+        let page = archive
+            .read_provider_page(&first.key, PROVIDER_A, None, 1)
+            .expect("read exact provider page");
+        let binding = page.rows[0]
+            .musubi_archive
+            .as_ref()
+            .expect("preserve finalized Musubi binding");
+        assert_eq!(
+            binding.replication_order,
+            page.rows[0].replication_order.order_id
+        );
+
+        let mut removed = advance_projection(&first, 8);
+        for provider in &mut removed.providers {
+            for archived in &mut provider.orders {
+                if archived.order_id() == ReplicationOrderId::new([0xA1; 32]) {
+                    archived.musubi_archive = None;
+                    archived.replication_order.musubi_archive = None;
+                }
+            }
+        }
+        assert!(matches!(
+            archive.insert(removed),
+            Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })
+        ));
+
+        let mut substituted = advance_projection(&first, 8);
+        for provider in &mut substituted.providers {
+            for archived in &mut provider.orders {
+                if archived.order_id() == ReplicationOrderId::new([0xA1; 32]) {
+                    let binding = archived.musubi_archive.as_mut().expect("bound order");
+                    binding.commitment.car_digest = MusubiContentDigestV1::new([0xF1; 32]);
+                    binding.archive_id = binding.commitment.archive_id();
+                    archived.replication_order.musubi_archive = Some(binding.archive_id);
+                }
+            }
+        }
+        assert!(matches!(
+            archive.insert(substituted),
+            Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })
+        ));
+
+        let mut mismatched = projection(9);
+        for provider in &mut mismatched.providers {
+            for archived in &mut provider.orders {
+                if archived.order_id() == ReplicationOrderId::new([0xA1; 32]) {
+                    bind_musubi_archive(archived, 0x82);
+                    let binding = archived.musubi_archive.as_mut().expect("bound order");
+                    binding.commitment.content_length += 1;
+                    binding.archive_id = binding.commitment.archive_id();
+                }
+            }
+        }
+        assert!(matches!(
+            mismatched.validate(bounds()),
+            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
+        ));
     }
 
     fn advance_projection(

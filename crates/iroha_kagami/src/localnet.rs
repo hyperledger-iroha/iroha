@@ -1570,6 +1570,7 @@ fn generate_localnet_with_line<T: Write>(
         opts.base_api_port,
         &hosts.public,
         &chain_id,
+        genesis_expected_hash,
         chain_discriminant,
         &client_identity,
     )?;
@@ -3424,10 +3425,7 @@ fn append_localnet_alias_fee_bootstrap(
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
-        .with_metadata(Metadata::default())
-        .confidential_policy(
-            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-        );
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
     }
     builder = builder.append_instruction(Mint::asset_quantity(
@@ -3796,10 +3794,7 @@ fn append_localnet_npos_bootstrap_for_services(
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
-        .with_metadata(Metadata::default())
-        .confidential_policy(
-            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-        );
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(fee_asset_id.clone());
     }
@@ -3813,9 +3808,6 @@ fn append_localnet_npos_bootstrap_for_services(
     if !registrations.zk_assets.contains(&fee_asset_id) {
         builder = builder.append_instruction(iroha_data_model::isi::zk::RegisterZkAsset::new(
             fee_asset_id.clone(),
-            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            true,
-            true,
             Some(fee_vk_unshield_id),
             None,
         ));
@@ -4998,6 +4990,7 @@ fn write_client_config(
     base_api_port: u16,
     torii_host: &CanonicalHost,
     chain_id: &str,
+    genesis_expected_hash: HashOf<BlockHeader>,
     chain_discriminant: Option<u16>,
     client: &LocalnetClientIdentity,
 ) -> Result<()> {
@@ -5007,9 +5000,14 @@ fn write_client_config(
     let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
         format!("chain_discriminant = {value}\n")
     });
+    let network_id = norito::literal::format(
+        "hash",
+        &genesis_expected_hash.to_string().to_ascii_uppercase(),
+    );
     let rendered = format!(
         concat!(
             "chain = \"{chain}\"\n",
+            "network_id = \"{network_id}\"\n",
             "torii_url = \"http://{torii_host}:{torii_port}/\"\n",
             "\n",
             "[transaction]\n",
@@ -5028,6 +5026,7 @@ fn write_client_config(
             "web_login = \"mad_hatter\"\n",
         ),
         chain = chain_id,
+        network_id = network_id,
         torii_port = base_api_port,
         torii_host = torii_host,
         ttl_ms = LOCALNET_CLIENT_TTL_MS,
@@ -8725,6 +8724,7 @@ mod tests {
             8080,
             &host,
             DEFAULT_CHAIN_ID,
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH])),
             None,
             &localnet_client_identity(None, false).expect("default client"),
         )
@@ -8733,6 +8733,13 @@ mod tests {
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("private_key = \"802620"));
         let value: toml::Value = toml::from_str(&contents).expect("parse client config");
+        let network_id = value
+            .get("network_id")
+            .and_then(toml::Value::as_str)
+            .expect("network id")
+            .parse::<NetworkId>()
+            .expect("canonical network id");
+        assert_eq!(network_id.as_bytes(), &[0x42; Hash::LENGTH]);
         assert_eq!(
             value
                 .get("torii_url")
@@ -8764,6 +8771,7 @@ mod tests {
             8080,
             &host,
             DEFAULT_CHAIN_ID,
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH])),
             Some(369),
             &localnet_client_identity(None, false).expect("default client"),
         )
@@ -9092,13 +9100,9 @@ mod tests {
             Some(u64::from(LOCALNET_FEE_ASSET_SCALE)),
             "generated fee asset must use nano-XOR scale for fees and SNS charges"
         );
-        assert_eq!(
-            fee_asset
-                .get("confidential_policy")
-                .and_then(|policy| policy.get("mode"))
-                .and_then(json::Value::as_str),
-            Some("Convertible"),
-            "generated fee asset must stay shield-capable for TAIRA wallet flows"
+        assert!(
+            fee_asset.get("confidential_policy").is_none(),
+            "asset registration must not bypass canonical confidential verifier activation"
         );
 
         let unshield_vk_id = localnet_fee_vk_unshield_id();
@@ -9186,6 +9190,7 @@ mod tests {
             8080,
             &host,
             DEFAULT_CHAIN_ID,
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH])),
             None,
             &localnet_client_identity(None, false).expect("default client"),
         )

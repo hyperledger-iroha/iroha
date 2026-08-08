@@ -24,10 +24,16 @@ from release_artifact_contract import (
     scan_inventory_paths,
     stable_read_path,
 )
-from taira_rollout_admission import MACOS_RECEIPT_SCHEMA, MACOS_RECEIPT_SCHEMA_VERSION
+from taira_rollout_admission import (
+    MACOS_RECEIPT_SCHEMA,
+    MACOS_RECEIPT_SCHEMA_VERSION,
+    PRIVACY_PROTOCOL_RECEIPT_SCHEMA,
+    PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION,
+)
 
 HANDOFF_MANIFEST = "handoff-inventory-v1.json"
 RECEIPT_NAME = "four-peer-receipt-v2.json"
+PRIVACY_PROTOCOL_RECEIPT_NAME = "privacy-protocol-four-peer-receipt-v1.json"
 SOURCE_IDENTITY_NAME = "taira-source-identity-v1.json"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
@@ -189,12 +195,23 @@ def _canonical_payload(
     return value, payload
 
 
-def close_handoff(receipt: Path, source_identity: Path, output: Path) -> dict[str, object]:
+def close_handoff(
+    receipt: Path,
+    privacy_protocol_receipt: Path,
+    source_identity: Path,
+    output: Path,
+) -> dict[str, object]:
     receipt_value, receipt_payload = _canonical_payload(
         receipt, "qualification receipt", 4 * 1024 * 1024, compact=False
     )
     identity_value, identity_payload = _canonical_payload(
         source_identity, "source identity", 1024 * 1024, compact=True
+    )
+    privacy_value, privacy_payload = _canonical_payload(
+        privacy_protocol_receipt,
+        "privacy protocol four-peer receipt",
+        4 * 1024 * 1024,
+        compact=False,
     )
     source = identity_value.get("source")
     if (
@@ -232,6 +249,20 @@ def close_handoff(receipt: Path, source_identity: Path, output: Path) -> dict[st
     ):
         raise QualificationHandoffError(
             "qualification receipt is not bound to the exact source identity and handoff"
+        )
+    privacy_candidate = privacy_value.get("candidate")
+    if (
+        privacy_value.get("schema") != PRIVACY_PROTOCOL_RECEIPT_SCHEMA
+        or privacy_value.get("schema_version")
+        != PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION
+        or not isinstance(privacy_candidate, dict)
+        or privacy_candidate.get("source") != source
+        or privacy_candidate.get("validator_binary_sha256")
+        != receipt_value.get("validator_binary_sha256")
+        or SHA256_RE.fullmatch(str(privacy_value.get("receipt_id", ""))) is None
+    ):
+        raise QualificationHandoffError(
+            "privacy protocol receipt is not bound to the exact source and validator"
         )
     output = create_fresh_directory(output, mode=0o700)
     directory_flags = (
@@ -272,6 +303,7 @@ def close_handoff(receipt: Path, source_identity: Path, output: Path) -> dict[st
             )
         parent_after_create = os.fstat(parent_fd)
         payloads = {
+            PRIVACY_PROTOCOL_RECEIPT_NAME: privacy_payload,
             RECEIPT_NAME: receipt_payload,
             SOURCE_IDENTITY_NAME: identity_payload,
         }
@@ -366,6 +398,9 @@ def close_handoff(receipt: Path, source_identity: Path, output: Path) -> dict[st
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument(
+        "--privacy-protocol-receipt", type=Path, required=True
+    )
     parser.add_argument("--source-identity", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args(argv)
@@ -374,7 +409,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        result = close_handoff(args.receipt, args.source_identity, args.output)
+        result = close_handoff(
+            args.receipt,
+            args.privacy_protocol_receipt,
+            args.source_identity,
+            args.output,
+        )
     except (OSError, ReleaseArtifactError, QualificationHandoffError) as exc:
         print(f"Taira qualification handoff refused: {exc}", file=sys.stderr)
         return 1

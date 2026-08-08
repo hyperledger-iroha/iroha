@@ -80,6 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         order_payload,
         issued_epoch: 20,
         deadline_epoch: 28,
+        musubi_archive: None,
     }
     .execute(&alice(), &mut tx)?;
 

@@ -1509,9 +1509,10 @@ pub mod sorafs {
                 /// Canonical reserve for terminal evidence other than `completed_by`.
                 ///
                 /// This includes the bounded manifest identifier, completion
-                /// epoch, committed hash, finalized cursor, enum tag, and
+                /// epoch, committed hash, finalized cursor, enum tag, the
+                /// bounded pre-completion Musubi verification receipt, and
                 /// length framing for the largest `FinalizedCompleted` variant.
-                pub const TERMINAL_OUTCOME_FIXED_CANONICAL_RESERVE_BYTES_V1: u64 = 2 * 1024;
+                pub const TERMINAL_OUTCOME_FIXED_CANONICAL_RESERVE_BYTES_V1: u64 = 12 * 1024;
                 /// Canonical entry/container framing reserved around terminal fields.
                 pub const TERMINAL_ENTRY_CANONICAL_FRAMING_RESERVE_BYTES_V1: u64 = 2 * 1024;
                 /// Canonical bytes reserved for one payload-free terminal entry.
@@ -2763,10 +2764,32 @@ pub mod torii {
 
     /// Transport-specific defaults (Norito-RPC, future streaming surfaces, etc.).
     pub mod transport {
+        use iroha_config_base::util::Bytes;
+        use nonzero_ext::nonzero;
+        use std::num::NonZeroUsize;
+
         /// Explicit trusted proxy hosts whose appended `X-Forwarded-For` chain
         /// is used to derive the canonical remote IP.
         pub fn trusted_proxy_cidrs() -> Vec<String> {
             Vec::new()
+        }
+
+        /// HTTP/1 server socket and parser limits.
+        pub mod http {
+            use super::*;
+
+            /// Maximum accepted TCP connections retained by Torii.
+            pub const MAX_CONNECTIONS: NonZeroUsize = nonzero!(1024usize);
+            /// Maximum accepted TCP connections retained for one source IP.
+            pub const MAX_CONNECTIONS_PER_IP: NonZeroUsize = nonzero!(64usize);
+            /// Absolute deadline for reading one HTTP/1 request head.
+            pub const HEADER_READ_TIMEOUT_MS: u64 = 10_000;
+            /// Maximum duration without socket write progress.
+            pub const WRITE_TIMEOUT_MS: u64 = 30_000;
+            /// Maximum number of HTTP/1 headers accepted in one request.
+            pub const MAX_HEADERS: NonZeroUsize = nonzero!(100usize);
+            /// Maximum HTTP/1 parser buffer, including the request head.
+            pub const MAX_HEADER_BYTES: Bytes<u64> = Bytes(64 * 1024);
         }
 
         /// Norito-RPC transport defaults surfaced via `torii.transport.norito_rpc`.
@@ -4525,6 +4548,8 @@ pub mod confidential {
     pub const POLICY_TRANSITION_DELAY_BLOCKS: u64 = 100;
     /// Grace window around policy activation for conversions.
     pub const POLICY_TRANSITION_WINDOW_BLOCKS: u64 = 200;
+    /// Maximum confidential-policy transitions that may share one effective height.
+    pub const POLICY_TRANSITION_MAX_PER_HEIGHT: NonZeroU32 = nonzero!(256_u32);
     /// Non-zero commitment tree root history length retained.
     pub const TREE_ROOTS_HISTORY_LEN: NonZeroUsize = nonzero!(10_000_usize);
     /// Commitment tree frontier checkpoint interval.

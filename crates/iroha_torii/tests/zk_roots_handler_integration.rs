@@ -98,6 +98,8 @@ fn zk_config_with_tree_roots_history_len(
             iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
         policy_transition_window_blocks:
             iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+        policy_transition_max_per_height:
+            iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
         tree_roots_history_len,
         tree_frontier_checkpoint_interval:
             iroha_config::parameters::defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
@@ -155,15 +157,8 @@ fn seeded_zk_roots_state(
             Register::asset_definition(definition).into(),
             Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone()))
                 .into(),
-            iroha_data_model::isi::zk::RegisterZkAsset::new(
-                asset_def_id.clone(),
-                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-                true,
-                true,
-                None,
-                None,
-            )
-            .into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None)
+                .into(),
         ];
         for instr in init_instrs {
             stx.world

@@ -1,178 +1,101 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import java.util.concurrent.Executors
+
 /**
- * Runs the Rust `kotlin-fixture-gen` binary and returns its stdout lines.
+ * Runs an explicitly supplied Rust `kotlin-fixture-gen` executable.
  *
- * The binary lives at `tools/kotlin-fixture-gen/` in the Iroha repo root.
- * Set `IROHA_KOTLIN_FIXTURE_GEN_BIN` to use a prebuilt executable instead of
- * invoking Cargo. Relative override paths are resolved from the repository
- * root, and the override must name an executable file.
- *
- * Without a prebuilt override, this helper builds the generator once per
- * resolved target directory in each test JVM. It uses `${CARGO:-cargo}`, honors
- * `CARGO_TARGET_DIR` (falling back to `target/kotlin-fixture-gen-test`), always
- * passes `--locked --jobs 1`, and honors `CARGO_NET_OFFLINE=true` or `1`.
- * `IROHA_KOTLIN_FIXTURE_GEN_LOCKFILE_PATH` may select an existing absolute
- * lockfile path for Cargo's unstable `--lockfile-path` option.
+ * Set `IROHA_KOTLIN_FIXTURE_GEN_BIN` to an existing executable file. Relative
+ * paths are resolved from the Iroha repository root. The parity tests never
+ * invoke Cargo or build the generator themselves.
  */
 internal object FixtureGeneratorRunner {
-    private val buildLock = Any()
-    private val builtTargetDirectories = mutableSetOf<String>()
+    internal const val BINARY_ENVIRONMENT_VARIABLE = "IROHA_KOTLIN_FIXTURE_GEN_BIN"
 
     fun run(subcommand: String): List<String> {
         val repoRoot = locateRepoRoot()
-        val configuration = configurationFor(repoRoot, System.getenv())
-        val binary = when (configuration) {
-            is FixtureGeneratorConfiguration.Prebuilt -> {
-                requireExecutable(
-                    configuration.binary,
-                    "IROHA_KOTLIN_FIXTURE_GEN_BIN",
-                )
-                configuration.binary
-            }
-            is FixtureGeneratorConfiguration.CargoBuild -> {
-                ensureCargoBuild(repoRoot, configuration)
-                configuration.binary
-            }
-        }
-        val process = ProcessBuilder(binary.absolutePath, subcommand)
+        val binary = executableFor(repoRoot, System.getenv())
+        val process = ProcessBuilder(commandFor(binary, subcommand))
             .directory(repoRoot)
             .redirectErrorStream(false)
             .start()
-        val stdout = process.inputStream.bufferedReader().readText().trim()
-        val exitCode = process.waitFor()
-        require(exitCode == 0) { "kotlin-fixture-gen $subcommand failed (exit $exitCode)" }
-        require(stdout.isNotBlank()) { "kotlin-fixture-gen $subcommand produced empty output" }
-        return stdout.lines()
+
+        val readers = Executors.newFixedThreadPool(2)
+        val stdout = readers.submit<String> {
+            process.inputStream.bufferedReader().use { it.readText() }
+        }
+        val stderr = readers.submit<String> {
+            process.errorStream.bufferedReader().use { it.readText() }
+        }
+        return try {
+            val exitCode = process.waitFor()
+            outputLines(subcommand, exitCode, stdout.get(), stderr.get())
+        } catch (error: InterruptedException) {
+            process.destroyForcibly()
+            Thread.currentThread().interrupt()
+            throw error
+        } finally {
+            readers.shutdownNow()
+        }
     }
 
-    /**
-     * Resolves the runner configuration without reading the filesystem or
-     * starting a process. Kept internal so its environment policy can be unit
-     * tested without Cargo.
-     */
-    internal fun configurationFor(
+    /** Resolves and validates the sole fixture-generator configuration. */
+    internal fun executableFor(
         repoRoot: java.io.File,
         environment: Map<String, String>,
-    ): FixtureGeneratorConfiguration {
-        val configuredBinary = environment["IROHA_KOTLIN_FIXTURE_GEN_BIN"]
-            ?.takeUnless { it.isBlank() }
-        if (configuredBinary != null) {
-            return FixtureGeneratorConfiguration.Prebuilt(
-                resolvePathAgainstRepoRoot(repoRoot, configuredBinary),
+    ): java.io.File {
+        val configuredPath = environment[BINARY_ENVIRONMENT_VARIABLE]
+            ?: throw IllegalArgumentException(
+                "$BINARY_ENVIRONMENT_VARIABLE must be set to the kotlin-fixture-gen executable",
             )
+        require(configuredPath.isNotBlank()) {
+            "$BINARY_ENVIRONMENT_VARIABLE must not be blank"
         }
 
-        val targetDirectory = environment["CARGO_TARGET_DIR"]
-            ?.takeUnless { it.isBlank() }
-            ?.let { resolvePathAgainstRepoRoot(repoRoot, it) }
-            ?: java.io.File(repoRoot, "target/kotlin-fixture-gen-test").absoluteFile
-        val cargo = environment["CARGO"]?.takeUnless { it.isEmpty() } ?: "cargo"
-        val offline = when (val configuredOffline = environment["CARGO_NET_OFFLINE"]) {
-            null, "" -> false
-            "true", "1" -> true
-            else -> error(
-                "CARGO_NET_OFFLINE must be `true` or `1` when set; was `$configuredOffline`",
-            )
-        }
-        val lockfilePath = environment["IROHA_KOTLIN_FIXTURE_GEN_LOCKFILE_PATH"]
-            ?.takeUnless { it.isBlank() }
-            ?.let { configuredPath ->
-                val lockfile = java.io.File(configuredPath)
-                require(lockfile.isAbsolute) {
-                    "IROHA_KOTLIN_FIXTURE_GEN_LOCKFILE_PATH must be an absolute path: $configuredPath"
-                }
-                lockfile.absoluteFile
-            }
-
-        return FixtureGeneratorConfiguration.CargoBuild(
-            cargo = cargo,
-            targetDirectory = targetDirectory,
-            offline = offline,
-            lockfilePath = lockfilePath,
-        )
-    }
-
-    private fun ensureCargoBuild(
-        repoRoot: java.io.File,
-        configuration: FixtureGeneratorConfiguration.CargoBuild,
-    ) {
-        synchronized(buildLock) {
-            val targetKey = configuration.targetDirectory.absolutePath
-            if (targetKey !in builtTargetDirectories ||
-                !configuration.binary.isFile ||
-                !configuration.binary.canExecute()
-            ) {
-                withCargoBuildLock(configuration.targetDirectory) {
-                    validateLockfilePath(configuration.lockfilePath)
-                    // Always ask Cargo to refresh the generator once per test JVM.
-                    // Merely finding a previous binary can otherwise compare the SDK
-                    // against stale Rust wire types after an ABI cutover.
-                    buildFixtureGenerator(repoRoot, configuration)
-                    requireExecutable(configuration.binary, "cargo build output")
-                    builtTargetDirectories += targetKey
-                }
-            }
-        }
-    }
-
-    private fun withCargoBuildLock(targetDirectory: java.io.File, action: () -> Unit) {
-        val lockFile = java.io.File(targetDirectory, ".kotlin-fixture-gen.lock")
-        lockFile.parentFile.mkdirs()
-        java.io.RandomAccessFile(lockFile, "rw").channel.use { channel ->
-            channel.lock().use {
-                action()
-            }
-        }
-    }
-
-    private fun buildFixtureGenerator(
-        repoRoot: java.io.File,
-        configuration: FixtureGeneratorConfiguration.CargoBuild,
-    ) {
-        val build = ProcessBuilder(configuration.command())
-            .directory(repoRoot)
-            .apply {
-                environment()["CARGO_TARGET_DIR"] = configuration.targetDirectory.absolutePath
-            }
-            .redirectErrorStream(true)
-            .start()
-        val buildOutput = build.inputStream.bufferedReader().readText()
-        val buildExit = build.waitFor()
-        require(buildExit == 0) {
-            "cargo build failed (exit $buildExit): $buildOutput"
-        }
-    }
-
-    internal fun cargoBuildCommand(): List<String> =
-        listOf("cargo", "build", "--locked", "--offline", "-p", "kotlin-fixture-gen")
-
-    private fun validateLockfilePath(lockfilePath: java.io.File?) {
-        if (lockfilePath != null) {
-            require(lockfilePath.isFile) {
-                "IROHA_KOTLIN_FIXTURE_GEN_LOCKFILE_PATH must name an existing regular file: " +
-                    lockfilePath.absolutePath
-            }
-        }
-    }
-
-    private fun requireExecutable(binary: java.io.File, source: String) {
+        val binary = resolvePathAgainstRepoRoot(repoRoot, configuredPath)
         require(binary.isFile) {
-            "$source does not point to a regular kotlin-fixture-gen file: ${binary.absolutePath}"
+            "$BINARY_ENVIRONMENT_VARIABLE must name an existing regular file: ${binary.absolutePath}"
         }
         require(binary.canExecute()) {
-            "$source is not executable: ${binary.absolutePath}"
+            "$BINARY_ENVIRONMENT_VARIABLE is not executable: ${binary.absolutePath}"
         }
+        return binary
     }
 
-    private fun resolvePathAgainstRepoRoot(repoRoot: java.io.File, configuredPath: String): java.io.File {
+    /** Returns the complete process command; no build command is synthesized. */
+    internal fun commandFor(binary: java.io.File, subcommand: String): List<String> {
+        require(subcommand.isNotBlank()) { "fixture-generator subcommand must not be blank" }
+        return listOf(binary.absolutePath, subcommand)
+    }
+
+    /** Keeps diagnostics out of fixture rows and exposes them only on failure. */
+    internal fun outputLines(
+        subcommand: String,
+        exitCode: Int,
+        stdout: String,
+        stderr: String,
+    ): List<String> {
+        val output = stdout.trim()
+        val diagnostic = stderr.trim()
+        require(exitCode == 0) {
+            val suffix = diagnostic.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
+            "kotlin-fixture-gen $subcommand failed (exit $exitCode)$suffix"
+        }
+        require(output.isNotBlank()) { "kotlin-fixture-gen $subcommand produced empty output" }
+        return output.lines()
+    }
+
+    private fun resolvePathAgainstRepoRoot(
+        repoRoot: java.io.File,
+        configuredPath: String,
+    ): java.io.File {
         val path = java.io.File(configuredPath)
         return (if (path.isAbsolute) path else java.io.File(repoRoot, configuredPath)).absoluteFile
     }
 
     private fun locateRepoRoot(): java.io.File {
         var dir = java.io.File("").absoluteFile
-        while (!java.io.File(dir, "Cargo.toml").exists()) {
+        while (!java.io.File(dir, "Cargo.toml").isFile) {
             dir = dir.parentFile
                 ?: error("Could not locate Iroha repo root (Cargo.toml) from CWD")
         }
@@ -191,42 +114,4 @@ internal object FixtureGeneratorRunner {
 
     fun bytesToHex(bytes: ByteArray): String =
         bytes.joinToString("") { "%02x".format(it) }
-}
-
-/** Test-only configuration for [FixtureGeneratorRunner]. */
-internal sealed class FixtureGeneratorConfiguration {
-    /** A caller-supplied executable; Cargo must not be invoked. */
-    internal class Prebuilt(
-        val binary: java.io.File,
-    ) : FixtureGeneratorConfiguration()
-
-    /** Cargo invocation and output location for a locally built generator. */
-    internal class CargoBuild(
-        private val cargo: String,
-        val targetDirectory: java.io.File,
-        private val offline: Boolean,
-        val lockfilePath: java.io.File?,
-    ) : FixtureGeneratorConfiguration() {
-        val binary: java.io.File = java.io.File(targetDirectory, "debug/kotlin-fixture-gen")
-
-        /** Returns the deterministic Cargo command for this configuration. */
-        fun command(): List<String> = buildList {
-            add(cargo)
-            add("build")
-            add("-p")
-            add("kotlin-fixture-gen")
-            add("--locked")
-            add("--jobs")
-            add("1")
-            if (offline) {
-                add("--offline")
-            }
-            if (lockfilePath != null) {
-                add("-Z")
-                add("unstable-options")
-                add("--lockfile-path")
-                add(lockfilePath.absolutePath)
-            }
-        }
-    }
 }

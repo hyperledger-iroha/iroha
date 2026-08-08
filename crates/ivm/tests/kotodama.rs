@@ -2890,6 +2890,7 @@ fn raw_axt_intrinsics_are_rejected() {
         manifest_view_root: vec![0; 32],
         expiry_slot: 42,
         max_clock_skew_ms: Some(5),
+        issuer_signature: Some(iroha_crypto::Signature::from_bytes(&[1_u8; 64])),
     };
     let proof = axt::ProofBlob {
         payload: vec![1, 2, 3, 4],

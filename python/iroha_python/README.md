@@ -130,6 +130,17 @@ request/build/verify dispatcher and no legacy algorithm alias.
 non-finite numbers, aliases, reordered or duplicate rows, normalized labels,
 and malformed nested policy or profile data.
 
+Reserve-backed ZK-ACE, Orchard, and private-IVM actions always bind one exact
+transparent balance bucket. The direct
+`TransactionDraft.sign_privacy_zk_ace_transfer_action_v1` call requires the
+keyword `public_balance_scope`; Orchard and private-IVM owner-bundle public JSON
+requires the field with the same name. Its only accepted spellings are
+`"global"` and `"dataspace:<id>"`, where `<id>` is a canonical positive decimal
+`u64`. Dataspace zero is the universal coordinator route and is never a balance
+partition. Whitespace, case variants, leading zeroes, aliases, and unknown JSON
+fields fail before proving. Native build and authenticated inspection results
+return `public_balance_scope` in that same canonical spelling.
+
 ### Exact12 typed fixture bundles
 
 `PrivacyExact12FixtureCodecV1` is the native-independent strict codec for
@@ -303,7 +314,6 @@ client.register_zk_asset_and_wait(
     fee_payment=register_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
-    vk_transfer="halo2/ipa:vk_transfer",
     vk_unshield="halo2/ipa:vk_unshield",
 )
 ```
@@ -311,9 +321,9 @@ client.register_zk_asset_and_wait(
 The first-release SDK exposes no generic confidential transfer or withdrawal
 instruction. Public-to-confidential ingress and public redemption use the
 proof-bound Kagemusha V4 top-up/redemption protocol so escrow provenance and
-drawdown remain inseparable from settlement. `vk_transfer` is retained only for
-the native anonymous-escrow engine, and `vk_unshield` names the Kagemusha
-redemption verifier.
+drawdown remain inseparable from settlement. Asset registration binds only the
+optional shield and unshield verifier roles; Kagemusha owns its global
+transfer-v2 verifier independently.
 
 ## Dataspace lifecycle helpers
 
@@ -1757,7 +1767,7 @@ Connect frame encoding and crypto helpers require the compiled
 directory before running tests that exercise Connect payloads.
 
 From the repository root, the SoraFS V1 native parity lane uses exact Python
-3.12 and rebuilds the ABI-21 extension from the current clean source revision:
+3.12 and rebuilds the ABI-22 extension from the current clean source revision:
 
 ```bash
 SORAFS_PYTHON_SDK_PYTHON_BIN=/path/to/python3.12 \
@@ -1895,7 +1905,7 @@ The workflow now:
 
 1. Builds exactly one wheel candidate with `python -m build` and seals and structurally preflights it before installation.
 2. Installs the wheel into a fresh virtualenv, authenticates the complete installed package and native-extension provenance against that seal, and rejects path or file aliases.
-3. Requires the installed native extension to expose bridge ABI 21 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
+3. Requires the installed native extension to expose bridge ABI 22 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
 4. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
 
 The smoke harness accepts no signing, provenance, key, or manifest-output
@@ -2003,6 +2013,7 @@ issue = IssueReplicationOrderInstruction(
     base64.b64encode(replication_order_bytes).decode("ascii"),
     issued_epoch=20,
     deadline_epoch=28,
+    musubi_archive=archive_id,  # omit for an ordinary non-Musubi order
 )
 complete = CompleteReplicationOrderInstruction(
     order_id,
@@ -2028,13 +2039,16 @@ expire = ExpireReplicationOrderInstruction(order_id, expiration_epoch=29)
 
 IDs are exact non-zero lowercase 64-hex strings. Issue validates bounded,
 canonical base64/Norito framing plus the embedded order ID, target, provider
-ordering, and deadline. Completion always requires the exact six-field hard cut:
+ordering, and deadline. Its fifth `musubi_archive` option is always present in
+the typed payload: `None` selects an ordinary order, while a non-zero ArchiveId
+creates the immutable Musubi purpose binding. The retired four-field shape is
+rejected. Completion always requires the exact six-field hard cut:
 `order_id`, `provider_id`, `completion_epoch`, `expected_authority`,
 `expected_assignment_revision`, and `finalized_anchor`. The authority retains
 the provider owner and four-part signer-policy chain; legacy, missing, and
-unknown fields fail decoding. Call `.to_payload()` for exact Rust/Norito JSON
-or `.to_instruction()` after rebuilding the native extension from the same
-source revision.
+unknown fields fail decoding. Call `.to_payload()` for the schema-closed SDK
+JSON model or `.to_instruction()` for canonical Norito after rebuilding the
+native extension from the same source revision.
 
 ## Configuration & overrides
 

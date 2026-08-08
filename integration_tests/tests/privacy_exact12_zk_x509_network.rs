@@ -1246,6 +1246,9 @@ async fn zk_x509_governance_and_unreleased_actions_fail_closed_across_four_peer_
             "all validators retain fail-closed ZK-X509 state after restart probes",
         )
         .await?;
+        println!(
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_zk_x509_network::zk_x509_governance_and_unreleased_actions_fail_closed_across_four_peer_restart:passed"
+        );
         Ok(())
     }
     .await;

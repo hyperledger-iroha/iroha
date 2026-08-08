@@ -75,7 +75,8 @@ use iroha_executor_data_model::permission::{
     },
     asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
-        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+        CanManageAssetDefinitionConfidentialPolicy, CanModifyAssetDefinitionMetadata,
+        CanUnregisterAssetDefinition,
     },
     nexus::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
@@ -5249,6 +5250,11 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
             .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
             .ok()
             .is_some(),
+        "CanManageAssetDefinitionConfidentialPolicy" => permission
+            .payload()
+            .try_into_any_norito::<CanManageAssetDefinitionConfidentialPolicy>()
+            .ok()
+            .is_some(),
         "CanManageAssetDefinitionAlias" => permission
             .payload()
             .try_into_any_norito::<CanManageAssetDefinitionAlias>()
@@ -5364,6 +5370,19 @@ fn dataspace_scoped_permission_target(
             "CanModifyAssetDefinitionMetadata" => permission
                 .payload()
                 .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }),
+            "CanManageAssetDefinitionConfidentialPolicy" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAssetDefinitionConfidentialPolicy>()
                 .ok()
                 .and_then(|token| {
                     asset_definition_dataspace_target(
@@ -5573,6 +5592,20 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
             "CanModifyAssetDefinitionMetadata" => permission
                 .payload()
                 .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
+            "CanManageAssetDefinitionConfidentialPolicy" => permission
+                .payload()
+                .try_into_any_norito::<CanManageAssetDefinitionConfidentialPolicy>()
                 .ok()
                 .and_then(|token| {
                     asset_definition_dataspace_target_with_world(
@@ -6903,12 +6936,6 @@ fn matches_box_variant(matcher: &str, base: &str, variant: &str) -> bool {
     matches_label(matcher, base) || matches_label(matcher, variant)
 }
 
-fn matches_zk_instruction_label(matcher: &str, variant: &str) -> bool {
-    matches_label(matcher, "zk")
-        || matches_label(matcher, variant)
-        || matches_label(matcher, &format!("zk::{variant}"))
-}
-
 fn matches_label(matcher: &str, label: &str) -> bool {
     label == matcher || eq_ignoring_underscores(label, matcher)
 }
@@ -7597,9 +7624,7 @@ mod tests {
         Encode, IntoKeyValue,
         account::{AccountAddress, AccountAliasDomain},
         alias_setup::{AccountAliasName, ResolvedAccountAliasV1},
-        asset::{
-            AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy,
-        },
+        asset::{AssetDefinitionAlias, Mintable, NewAssetDefinition},
         isi::{
             alias_setup::CompareAndSetPrimaryAccountAlias,
             prelude::{Mint, Register, Transfer},
@@ -12437,7 +12462,6 @@ mod tests {
             owning_domain: Some(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
             ),
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -12488,7 +12512,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -12539,7 +12562,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -12594,7 +12616,6 @@ mod tests {
             owning_domain: Some(
                 DomainId::try_new("cash", "universal").expect("asset definition domain"),
             ),
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -12644,7 +12665,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -12707,7 +12727,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let aed = NewAssetDefinition {
             id: aed_id,
@@ -12720,7 +12739,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let tx = sample_transaction(
             &sender_id,
@@ -13699,14 +13717,7 @@ mod tests {
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
 
-        let instruction = InstructionBox::from(RegisterZkAsset::new(
-            asset_definition,
-            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            true,
-            true,
-            None,
-            None,
-        ));
+        let instruction = InstructionBox::from(RegisterZkAsset::new(asset_definition, None, None));
         let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
         assert_eq!(
             router
@@ -15182,6 +15193,82 @@ mod tests {
             router
                 .try_route_with_view(&tx, &state.view())
                 .expect("stored alias definition metadata permission route must resolve"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn confidential_policy_permission_uses_exact_asset_definition_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                CanManageAssetDefinitionConfidentialPolicy {
+                    asset_definition: asset_definition.clone(),
+                },
+                bob_id,
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "pkr".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("confidential-policy permission alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("exact confidential-policy permission route must resolve"),
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }

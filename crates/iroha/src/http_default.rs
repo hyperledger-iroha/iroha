@@ -390,13 +390,18 @@ pub type AsyncWebSocketStream =
 
 fn http_client() -> &'static BlockingClient {
     static CLIENT: OnceLock<BlockingClient> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        BlockingClient::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .expect("Failed to build blocking HTTP client")
-    })
+    CLIENT.get_or_init(build_http_client)
+}
+
+fn build_http_client() -> BlockingClient {
+    BlockingClient::builder()
+        // This transport carries one-shot signed requests. Following a redirect
+        // could replay a body after the original endpoint already admitted it.
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .expect("Failed to build blocking HTTP client")
 }
 
 struct ClientResponse {
@@ -535,9 +540,75 @@ impl TryFrom<ClientResponse> for Response<Bytes> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        io::{ErrorKind, Read, Write},
+        net::TcpListener,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use super::*;
+
+    #[test]
+    fn owned_http_client_does_not_follow_redirects() {
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").expect("redirect listener");
+        let redirect_addr = redirect_listener.local_addr().expect("redirect address");
+        let target_listener = TcpListener::bind("127.0.0.1:0").expect("target listener");
+        let target_addr = target_listener.local_addr().expect("target address");
+        target_listener
+            .set_nonblocking(true)
+            .expect("nonblocking target listener");
+
+        let redirect_server = thread::spawn(move || {
+            let (mut stream, _) = redirect_listener.accept().expect("redirect request");
+            let mut request = [0_u8; 1024];
+            let request_len = stream.read(&mut request).expect("read redirect request");
+            assert!(request_len > 0, "redirect request must not be empty");
+            write!(
+                stream,
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_addr}/target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .expect("write redirect response");
+        });
+
+        let target_server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(750);
+            loop {
+                match target_listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut request = [0_u8; 1024];
+                        let request_len =
+                            stream.read(&mut request).expect("read redirected request");
+                        assert!(request_len > 0, "redirected request must not be empty");
+                        stream
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            )
+                            .expect("write target response");
+                        return true;
+                    }
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return false;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("target listener failed: {error}"),
+                }
+            }
+        });
+
+        let response = build_http_client()
+            .post(format!("http://{redirect_addr}/query"))
+            .body(vec![0x01, 0x02, 0x03])
+            .send()
+            .expect("redirect response");
+
+        redirect_server.join().expect("redirect server");
+        let followed = target_server.join().expect("target server");
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        assert!(!followed, "one-shot request body must not be redirected");
+    }
 
     #[test]
     fn send_is_safe_inside_tokio_runtime_multi_thread() {

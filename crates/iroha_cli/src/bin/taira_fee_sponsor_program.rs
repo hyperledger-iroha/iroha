@@ -12,7 +12,7 @@ use iroha::{
     config::{self, AnonymityPolicy, Config},
     crypto::{ExposedPrivateKey, KeyPair},
     data_model::{
-        ChainId,
+        ChainId, NetworkId,
         account::{AccountAddress, AccountId},
         isi::{
             InstructionBox,
@@ -81,10 +81,13 @@ fn string_at<'a>(table: &'a toml::value::Table, key: &str) -> Result<&'a str> {
         .ok_or_else(|| eyre::eyre!("missing `{key}`"))
 }
 
-fn taira_profile_signer(path: &Path) -> Result<(String, String)> {
+fn taira_profile_signer(path: &Path) -> Result<(String, String, NetworkId)> {
     let raw = std::fs::read_to_string(path)
         .wrap_err_with(|| format!("read Taira profile {}", path.display()))?;
     let value = toml::from_str::<Value>(&raw).wrap_err("parse Taira profile TOML")?;
+    let network_id = string_at(table(&value, "genesis")?, "expected_hash")?
+        .parse::<NetworkId>()
+        .wrap_err("parse genesis.expected_hash as exact network id")?;
     let torii = table(&value, "torii")?;
     let onboarding_value = torii.get("account_onboarding").ok_or_else(|| {
         eyre::eyre!("missing structurally enabled [torii.account_onboarding] table")
@@ -119,7 +122,7 @@ fn taira_profile_signer(path: &Path) -> Result<(String, String)> {
         bail!("onboarding signer file must contain one exact private key literal");
     }
     let private_key = private_key.to_owned();
-    Ok((authority, private_key))
+    Ok((authority, private_key, network_id))
 }
 
 fn parse_taira_account(account: &str, discriminant: u16) -> Result<AccountId> {
@@ -200,7 +203,8 @@ fn main() -> Result<()> {
     if args.fund_amount.is_zero() {
         bail!("--fund-amount must be positive");
     }
-    let (profile_account, profile_private_key) = taira_profile_signer(&args.profile_config)?;
+    let (profile_account, profile_private_key, network_id) =
+        taira_profile_signer(&args.profile_config)?;
     let profile_account = parse_taira_account(&profile_account, args.chain_discriminant)?;
     let private_key = profile_private_key
         .parse::<ExposedPrivateKey>()
@@ -254,6 +258,7 @@ fn main() -> Result<()> {
 
     let client = Client::new(Config {
         chain: args.chain_id,
+        network_id,
         account: signer,
         account_chain_discriminant: args.chain_discriminant,
         key_pair,
@@ -411,6 +416,9 @@ mod tests {
 [torii.account_onboarding]
 authority = "canonical-account"
 private_key_file = "onboarding-signer.key"
+
+[genesis]
+expected_hash = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 "#,
         )
         .expect("write structural profile");
@@ -419,7 +427,10 @@ private_key_file = "onboarding-signer.key"
             taira_profile_signer(&profile_path).expect("read file-backed signer"),
             (
                 "canonical-account".to_owned(),
-                "private-key-literal".to_owned()
+                "private-key-literal".to_owned(),
+                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                    .parse()
+                    .expect("network id")
             )
         );
     }
@@ -435,6 +446,9 @@ private_key_file = "onboarding-signer.key"
 authority = "canonical-account"
 private_key = "must-not-be-read"
 private_key_file = "unused.key"
+
+[genesis]
+expected_hash = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 "#,
         )
         .expect("write legacy profile");

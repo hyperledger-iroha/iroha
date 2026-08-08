@@ -662,18 +662,11 @@ const REGISTER_ASSET = {
       spec: { scale: null },
       balance_scope_policy: "Global",
       owning_domain: null,
-      confidential_policy: {
-        mode: "TransparentOnly",
-        vk_set_hash: null,
-        poseidon_params_id: null,
-        pedersen_params_id: null,
-        pending_transition: null,
-      },
     },
   },
 };
 
-const REGISTER_ASSET_WITH_POLICY = {
+const REGISTER_ASSET_WITH_OPTIONAL_FIELDS = {
   Register: {
     AssetDefinition: {
       id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
@@ -688,21 +681,6 @@ const REGISTER_ASSET_WITH_POLICY = {
       spec: { scale: 2 },
       balance_scope_policy: "DataspaceRestricted",
       owning_domain: "settlement.main",
-      confidential_policy: {
-        mode: "Convertible",
-        vk_set_hash:
-          "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
-        poseidon_params_id: 7,
-        pedersen_params_id: 3,
-        pending_transition: {
-          new_mode: "ShieldedOnly",
-          effective_height: 64,
-          previous_mode: "Convertible",
-          transition_id:
-            "hash:5555555555555555555555555555555555555555555555555555555555555555#2B05",
-          conversion_window: 5,
-        },
-      },
     },
   },
 };
@@ -821,19 +799,19 @@ baseTest("pure JS Norito codec supports asset definition registration without na
   });
 });
 
-baseTest("pure JS Norito asset definition codec preserves policy fields", () => {
+baseTest("pure JS Norito asset definition codec preserves optional registration fields", () => {
   withMissingNativeBinding(() => {
-    const encoded = noritoEncodeInstruction(REGISTER_ASSET_WITH_POLICY);
+    const encoded = noritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS);
     const decoded = noritoDecodeInstruction(encoded);
-    assert.deepEqual(decoded, REGISTER_ASSET_WITH_POLICY);
+    assert.deepEqual(decoded, REGISTER_ASSET_WITH_OPTIONAL_FIELDS);
   });
 });
 
 test("native Norito decoder accepts pure JS asset definition frames", () => {
   const encoded = withMissingNativeBinding(() =>
-    noritoEncodeInstruction(REGISTER_ASSET_WITH_POLICY),
+    noritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS),
   );
-  assert.deepEqual(noritoDecodeInstruction(encoded), REGISTER_ASSET_WITH_POLICY);
+  assert.deepEqual(noritoDecodeInstruction(encoded), REGISTER_ASSET_WITH_OPTIONAL_FIELDS);
 });
 
 baseTest("pure JS Norito asset definition codec rejects adversarial fields", () => {
@@ -873,13 +851,10 @@ baseTest("pure JS Norito asset definition codec rejects adversarial fields", () 
       () =>
         noritoEncodeInstruction(
           withAssetPatch({
-            confidential_policy: {
-              ...REGISTER_ASSET.Register.AssetDefinition.confidential_policy,
-              mode: "Mixed",
-            },
+            confidential_policy: { mode: "Convertible" },
           }),
         ),
-      /TransparentOnly, ShieldedOnly, or Convertible/,
+      /cannot carry confidential policy/,
     );
     assert.throws(
       () => noritoEncodeInstruction(withAssetPatch({ logo: "https://example.invalid/logo.png" })),

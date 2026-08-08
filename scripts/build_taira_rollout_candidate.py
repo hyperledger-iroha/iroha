@@ -364,6 +364,10 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
         args.linux_authority_dir, "Linux authority directory", directory=True
     )
     receipt_path = _canonical_path(args.macos_receipt, "macOS receipt")
+    privacy_protocol_receipt_path = _canonical_path(
+        args.privacy_protocol_receipt,
+        "privacy protocol four-peer receipt",
+    )
     verifier = _canonical_path(
         args.release_manifest_verifier, "native release-manifest verifier"
     )
@@ -387,6 +391,18 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
             expected_receipt_id=receipt_id,
             consumed_receipt_ids=set(),
             now_unix=now_unix,
+        )
+        privacy_protocol_receipt_object = _load_canonical_object(
+            privacy_protocol_receipt_path,
+            "privacy protocol four-peer receipt",
+        )
+        privacy_protocol_receipt_id = _sha256(
+            privacy_protocol_receipt_object.get("receipt_id"),
+            "privacy protocol receipt ID",
+        )
+        _, privacy_protocol_receipt_payload = stable_read_path(
+            privacy_protocol_receipt_path,
+            max_size=admission.MAX_JSON_BYTES,
         )
 
         authority_rows = _authority_members(linux_authority)
@@ -449,9 +465,25 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
                 trusted_signing_fingerprint=signer_fingerprint,
                 native_verifier_sha256=verifier_sha,
             )
+            admission._validate_privacy_protocol_receipt(
+                privacy_protocol_receipt_payload,
+                expected_source=source,
+                expected_validator_binary_sha256=str(
+                    receipt_object["validator_binary_sha256"]
+                ),
+                expected_linux_release_archive_sha256=linux_info.sha256,
+                expected_exact12_matrix_sha256=str(
+                    nested["exact12_matrix_sha256"]
+                ),
+                expected_receipt_id=privacy_protocol_receipt_id,
+                now_unix=now_unix,
+            )
 
         linux_relative = f"linux/{linux_archive.name}"
         receipt_relative = admission.MACOS_RECEIPT_PATH
+        privacy_protocol_receipt_relative = (
+            admission.PRIVACY_PROTOCOL_RECEIPT_PATH
+        )
         members = [
             *authority_rows,
             PayloadMember(
@@ -473,6 +505,13 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
                 receipt_path.name,
                 receipt_relative,
                 stable_hash_path(receipt_path),
+                0o600,
+            ),
+            PayloadMember(
+                privacy_protocol_receipt_path.parent,
+                privacy_protocol_receipt_path.name,
+                privacy_protocol_receipt_relative,
+                stable_hash_path(privacy_protocol_receipt_path),
                 0o600,
             ),
         ]
@@ -504,6 +543,12 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
                 "macos_arm64": {
                     "arch": "arm64",
                     "os": "macos",
+                    "privacy_protocol_receipt_id": (
+                        privacy_protocol_receipt_id
+                    ),
+                    "privacy_protocol_receipt_path": (
+                        privacy_protocol_receipt_relative
+                    ),
                     "receipt_id": receipt_id,
                     "receipt_path": receipt_relative,
                 },
@@ -587,6 +632,7 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
             "authority_dir": str(authority_dir),
             "authority_manifest_sha256": signing["manifest_sha256"],
             "receipt_id": receipt_object["receipt_id"],
+            "privacy_protocol_receipt_id": privacy_protocol_receipt_id,
             "controller_digest": controller_digest,
             "source": source.as_dict(),
             "verified": verified["verified"],
@@ -798,6 +844,9 @@ def _build_parser() -> argparse.ArgumentParser:
     assemble.add_argument("--linux-archive", type=Path, required=True)
     assemble.add_argument("--linux-authority-dir", type=Path, required=True)
     assemble.add_argument("--macos-receipt", type=Path, required=True)
+    assemble.add_argument(
+        "--privacy-protocol-receipt", type=Path, required=True
+    )
     assemble.add_argument("--expected-receipt-id", required=True)
     assemble.add_argument("--controller-manifest", type=Path, required=True)
     assemble.add_argument("--controller-digest", required=True)

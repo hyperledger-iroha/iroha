@@ -1092,9 +1092,7 @@ mod tests {
                 active.clone(),
                 source.clone(),
                 destination.clone(),
-                AssetBalanceScope::Dataspace(
-                    iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-                ),
+                AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL,),
                 1,
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::UniversalDataspaceScope)
@@ -1312,6 +1310,10 @@ mod tests {
         let mut wrong_epoch = statement.clone();
         wrong_epoch.authorization_epoch += 1;
         adversarial_inputs.push(ZkAcePrivacyPublicInputsV1::new(wrong_epoch, genesis_hash));
+        let mut wrong_scope = statement.clone();
+        wrong_scope.public_balance_scope =
+            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7));
+        adversarial_inputs.push(ZkAcePrivacyPublicInputsV1::new(wrong_scope, genesis_hash));
         adversarial_inputs.push(ZkAcePrivacyPublicInputsV1::new(
             statement.clone(),
             [0x78; 32],

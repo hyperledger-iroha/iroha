@@ -196,10 +196,7 @@ use axum::{
     Router,
     body::{Body, Bytes},
     debug_handler,
-    extract::{
-        DefaultBodyLimit, Extension, Query, State, WebSocketUpgrade,
-        connect_info::IntoMakeServiceWithConnectInfo,
-    },
+    extract::{DefaultBodyLimit, Extension, Query, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, Method as HttpMethod, Request, StatusCode, header::HeaderName},
     middleware::Next,
     response::{IntoResponse, Json, Response},
@@ -225,7 +222,10 @@ use iroha_config::{
     base::{WithOrigin, util::Bytes as ConfigBytes},
     client_api::ConfigUpdateDTO,
     parameters::{
-        actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile, Torii as Config},
+        actual::{
+            NoritoRpcStage, NoritoRpcTransport, TelemetryProfile, Torii as Config,
+            ToriiHttpTransport,
+        },
         defaults,
     },
 };
@@ -278,6 +278,7 @@ use iroha_crypto::{
     ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, SignatureOf,
     blake2::{Blake2b512, digest::Digest},
 };
+use iroha_data_model::NetworkId;
 use iroha_data_model::alias::{AliasRecord, AliasTarget};
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
@@ -358,14 +359,15 @@ use norito::json::{JsonDeserialize, JsonSerialize};
 use sorafs_manifest::provider_advert::CapabilityType;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{
-    net::TcpListener,
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::{TcpListener, TcpStream},
     sync::{RwLock, watch},
+    task::{JoinError, JoinSet},
+    time::Sleep,
 };
 use tower::ServiceExt as _;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utils::extractors::JsonOrNoritoVersioned;
-
-// Bring connect-info make service into scope for axum 0.8 serve path
 
 const TORII_TCP_LISTEN_BACKLOG: i32 = 1024;
 
@@ -415,13 +417,419 @@ async fn bind_torii_tcp_listener(address: SocketAddr) -> std::io::Result<TcpList
     }
 }
 
+#[derive(Debug)]
+struct SocketAdmissionState {
+    active: usize,
+    active_by_ip: HashMap<IpAddr, usize>,
+}
+
+/// Listener-level connection admission enforced before any HTTP parsing.
+#[derive(Debug)]
+struct SocketAdmission {
+    max_connections: usize,
+    max_connections_per_ip: usize,
+    state: parking_lot::Mutex<SocketAdmissionState>,
+}
+
+impl SocketAdmission {
+    fn new(max_connections: NonZeroUsize, max_connections_per_ip: NonZeroUsize) -> Arc<Self> {
+        Arc::new(Self {
+            max_connections: max_connections.get(),
+            max_connections_per_ip: max_connections_per_ip.get(),
+            state: parking_lot::Mutex::new(SocketAdmissionState {
+                active: 0,
+                active_by_ip: HashMap::new(),
+            }),
+        })
+    }
+
+    fn try_acquire(self: &Arc<Self>, remote_ip: IpAddr) -> Option<SocketPermit> {
+        let remote_ip = canonical_socket_ip(remote_ip);
+        let mut state = self.state.lock();
+        let active_for_ip = state.active_by_ip.get(&remote_ip).copied().unwrap_or(0);
+        if state.active >= self.max_connections || active_for_ip >= self.max_connections_per_ip {
+            return None;
+        }
+
+        state.active = state
+            .active
+            .checked_add(1)
+            .expect("Torii active socket count overflow");
+        state.active_by_ip.insert(
+            remote_ip,
+            active_for_ip
+                .checked_add(1)
+                .expect("Torii per-IP socket count overflow"),
+        );
+        drop(state);
+
+        Some(SocketPermit {
+            admission: Arc::clone(self),
+            remote_ip,
+        })
+    }
+}
+
+fn canonical_socket_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(ip) => IpAddr::V4(ip),
+        IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(IpAddr::V6(ip), IpAddr::V4),
+    }
+}
+
+#[derive(Debug)]
+struct SocketPermit {
+    admission: Arc<SocketAdmission>,
+    remote_ip: IpAddr,
+}
+
+impl Drop for SocketPermit {
+    fn drop(&mut self) {
+        let mut state = self.admission.state.lock();
+        state.active = state
+            .active
+            .checked_sub(1)
+            .expect("Torii socket permit released more than once");
+        let active_for_ip = state
+            .active_by_ip
+            .get_mut(&self.remote_ip)
+            .expect("Torii socket permit source IP missing from admission state");
+        *active_for_ip = active_for_ip
+            .checked_sub(1)
+            .expect("Torii per-IP socket permit released more than once");
+        if *active_for_ip == 0 {
+            state.active_by_ip.remove(&self.remote_ip);
+        }
+    }
+}
+
+/// Tokio I/O wrapper that terminates a connection when socket writes stop making progress.
+struct WriteTimeoutIo<T, L = ()> {
+    inner: T,
+    write_timeout: Duration,
+    pending_write_timeout: Option<std::pin::Pin<Box<Sleep>>>,
+    _lease: L,
+}
+
+impl<T> WriteTimeoutIo<T> {
+    #[cfg(test)]
+    fn new(inner: T, write_timeout: Duration) -> Self {
+        Self::with_lease(inner, write_timeout, ())
+    }
+}
+
+impl<T, L> WriteTimeoutIo<T, L> {
+    fn with_lease(inner: T, write_timeout: Duration, lease: L) -> Self {
+        Self {
+            inner,
+            write_timeout,
+            pending_write_timeout: None,
+            _lease: lease,
+        }
+    }
+
+    fn clear_write_timeout(&mut self) {
+        self.pending_write_timeout = None;
+    }
+
+    fn poll_write_timeout(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let timeout = self
+            .pending_write_timeout
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(self.write_timeout)));
+        if core::future::Future::poll(timeout.as_mut(), cx).is_ready() {
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Torii socket write made no progress before the configured deadline",
+            )));
+        }
+        std::task::Poll::Pending
+    }
+}
+
+impl<T, L> AsyncRead for WriteTimeoutIo<T, L>
+where
+    T: AsyncRead + Unpin,
+    L: Unpin,
+{
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        std::pin::Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
+
+impl<T, L> AsyncWrite for WriteTimeoutIo<T, L>
+where
+    T: AsyncWrite + Unpin,
+    L: Unpin,
+{
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_write(cx, buf) {
+            std::task::Poll::Ready(result) => {
+                this.clear_write_timeout();
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Pending => match this.poll_write_timeout(cx) {
+                std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(error)),
+                std::task::Poll::Ready(Ok(())) | std::task::Poll::Pending => {
+                    std::task::Poll::Pending
+                }
+            },
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_flush(cx) {
+            std::task::Poll::Ready(result) => {
+                this.clear_write_timeout();
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Pending => this.poll_write_timeout(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_shutdown(cx) {
+            std::task::Poll::Ready(result) => {
+                this.clear_write_timeout();
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Pending => this.poll_write_timeout(cx),
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_write_vectored(cx, bufs) {
+            std::task::Poll::Ready(result) => {
+                this.clear_write_timeout();
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Pending => match this.poll_write_timeout(cx) {
+                std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(error)),
+                std::task::Poll::Ready(Ok(())) | std::task::Poll::Pending => {
+                    std::task::Poll::Pending
+                }
+            },
+        }
+    }
+}
+
+fn validate_http_transport_config(config: ToriiHttpTransport) -> std::io::Result<usize> {
+    if config.max_connections_per_ip > config.max_connections {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii max_connections_per_ip exceeds max_connections",
+        ));
+    }
+    if config.header_read_timeout.is_zero() || config.write_timeout.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii HTTP timeouts must be non-zero",
+        ));
+    }
+    if config.max_headers.get() > 1024 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii max_headers exceeds 1024",
+        ));
+    }
+    let max_header_bytes = usize::try_from(config.max_header_bytes.get()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii max_header_bytes does not fit this platform",
+        )
+    })?;
+    if !(8 * 1024..=1024 * 1024).contains(&max_header_bytes) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii max_header_bytes is outside 8192..=1048576",
+        ));
+    }
+    Ok(max_header_bytes)
+}
+
+async fn serve_torii_http_connection(
+    stream: TcpStream,
+    remote: std::net::SocketAddr,
+    permit: SocketPermit,
+    router: Router,
+    config: ToriiHttpTransport,
+    shutdown_signal: ShutdownSignal,
+    max_header_bytes: usize,
+) -> Result<(), hyper::Error> {
+    let io = hyper_util::rt::TokioIo::new(WriteTimeoutIo::with_lease(
+        stream,
+        config.write_timeout,
+        permit,
+    ));
+    let service = hyper::service::service_fn(move |request: Request<hyper::body::Incoming>| {
+        let router = router.clone();
+        async move {
+            let mut request = request.map(Body::new);
+            request
+                .extensions_mut()
+                .insert(axum::extract::ConnectInfo(remote));
+            router.oneshot(request).await
+        }
+    });
+
+    let mut http = hyper::server::conn::http1::Builder::new();
+    http.timer(hyper_util::rt::TokioTimer::new())
+        .header_read_timeout(config.header_read_timeout)
+        .max_headers(config.max_headers.get())
+        .max_buf_size(max_header_bytes);
+    let connection = http.serve_connection(io, service).with_upgrades();
+    tokio::pin!(connection);
+
+    tokio::select! {
+        result = connection.as_mut() => result,
+        () = shutdown_signal.receive() => {
+            connection.as_mut().graceful_shutdown();
+            connection.await
+        }
+    }
+}
+
+fn observe_torii_connection_completion(
+    completion: Result<(std::net::SocketAddr, Result<(), hyper::Error>), JoinError>,
+) -> std::io::Result<()> {
+    match completion {
+        Ok((remote, Ok(()))) => {
+            iroha_logger::trace!(%remote, "Torii HTTP connection closed");
+            Ok(())
+        }
+        Ok((remote, Err(error))) => {
+            // Malformed, timed-out, and reset connections are isolated to the
+            // attacker-controlled socket and must not terminate the listener.
+            iroha_logger::debug!(%remote, ?error, "Torii HTTP connection terminated");
+            Ok(())
+        }
+        Err(error) => Err(std::io::Error::other(format!(
+            "Torii HTTP connection task failed: {error}"
+        ))),
+    }
+}
+
+async fn serve_torii_http(
+    listener: TcpListener,
+    router: Router,
+    config: ToriiHttpTransport,
+    shutdown_signal: ShutdownSignal,
+) -> std::io::Result<()> {
+    let max_header_bytes = validate_http_transport_config(config)?;
+    let admission = SocketAdmission::new(config.max_connections, config.max_connections_per_ip);
+    let mut connections = JoinSet::new();
+
+    enum ServerEvent {
+        Shutdown,
+        Accepted(std::io::Result<(TcpStream, std::net::SocketAddr)>),
+        ConnectionFinished(
+            Option<Result<(std::net::SocketAddr, Result<(), hyper::Error>), JoinError>>,
+        ),
+    }
+
+    loop {
+        let has_connections = !connections.is_empty();
+        let event = tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => ServerEvent::Shutdown,
+            completion = connections.join_next(), if has_connections => {
+                ServerEvent::ConnectionFinished(completion)
+            }
+            accepted = listener.accept() => ServerEvent::Accepted(accepted),
+        };
+
+        match event {
+            ServerEvent::Shutdown => break,
+            ServerEvent::ConnectionFinished(Some(completion)) => {
+                observe_torii_connection_completion(completion)?;
+            }
+            ServerEvent::ConnectionFinished(None) => {}
+            ServerEvent::Accepted(Ok((stream, remote))) => {
+                let Some(permit) = admission.try_acquire(remote.ip()) else {
+                    iroha_logger::debug!(%remote, "Torii rejected TCP connection at listener capacity");
+                    drop(stream);
+                    continue;
+                };
+                let router = router.clone();
+                let connection_shutdown = shutdown_signal.clone();
+                connections.spawn(async move {
+                    let result = serve_torii_http_connection(
+                        stream,
+                        remote,
+                        permit,
+                        router,
+                        config,
+                        connection_shutdown,
+                        max_header_bytes,
+                    )
+                    .await;
+                    (remote, result)
+                });
+            }
+            ServerEvent::Accepted(Err(error)) => {
+                iroha_logger::warn!(?error, "Torii TCP accept failed; retrying");
+                tokio::select! {
+                    () = shutdown_signal.receive() => break,
+                    () = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
+            }
+        }
+    }
+
+    drop(listener);
+    while let Some(completion) = connections.join_next().await {
+        observe_torii_connection_completion(completion)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tcp_listener_bind_tests {
-    use std::net::{Ipv4Addr, SocketAddr as StdSocketAddr, SocketAddrV4};
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr, SocketAddrV4},
+        num::NonZeroUsize,
+        time::Duration,
+    };
 
+    use axum::{Router, routing::get};
+    use iroha_config::parameters::actual::ToriiHttpTransport;
+    use iroha_futures::supervisor::ShutdownSignal;
     use iroha_primitives::addr::SocketAddr;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
 
-    use super::bind_torii_tcp_listener;
+    use super::{SocketAdmission, WriteTimeoutIo, bind_torii_tcp_listener, serve_torii_http};
 
     #[tokio::test(flavor = "current_thread")]
     async fn torii_reusable_tcp_listener_binds_loopback() {
@@ -454,6 +862,110 @@ mod tcp_listener_bind_tests {
             .expect_err("active listener must not be shadowed by reusable bind");
 
         assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+    }
+
+    #[test]
+    fn socket_admission_enforces_global_and_canonical_source_limits() {
+        let admission = SocketAdmission::new(
+            NonZeroUsize::new(2).expect("non-zero global limit"),
+            NonZeroUsize::new(1).expect("non-zero per-IP limit"),
+        );
+        let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let mapped_loopback = IpAddr::V6(Ipv4Addr::LOCALHOST.to_ipv6_mapped());
+        let other = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
+
+        let loopback_permit = admission
+            .try_acquire(loopback)
+            .expect("first source socket is admitted");
+        assert!(
+            admission.try_acquire(mapped_loopback).is_none(),
+            "IPv4-mapped IPv6 must share the IPv4 source limit"
+        );
+        let other_permit = admission
+            .try_acquire(other)
+            .expect("second source socket is admitted");
+        assert!(
+            admission
+                .try_acquire(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)))
+                .is_none(),
+            "global socket limit must apply across source IPs"
+        );
+
+        drop(loopback_permit);
+        let replacement = admission
+            .try_acquire(mapped_loopback)
+            .expect("dropping a permit immediately releases both counters");
+        drop(replacement);
+        drop(other_permit);
+
+        let state = admission.state.lock();
+        assert_eq!(state.active, 0);
+        assert!(state.active_by_ip.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_socket_write_hits_progress_deadline() {
+        let (writer, _unread_peer) = tokio::io::duplex(1);
+        let mut writer = WriteTimeoutIo::new(writer, Duration::from_millis(20));
+
+        let error = writer
+            .write_all(&[0xA5, 0x5A])
+            .await
+            .expect_err("an unread full socket must hit the write-progress deadline");
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn partial_http_head_is_closed_at_listener_deadline() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("test listener should bind");
+        let address = listener.local_addr().expect("test listener address");
+        let mut config = ToriiHttpTransport::default();
+        config.header_read_timeout = Duration::from_millis(25);
+        config.write_timeout = Duration::from_millis(100);
+        let shutdown = ShutdownSignal::new();
+        let server_shutdown = shutdown.clone();
+        let server = tokio::spawn(async move {
+            serve_torii_http(
+                listener,
+                Router::new().route("/", get(|| async { "ok" })),
+                config,
+                server_shutdown,
+            )
+            .await
+        });
+
+        let mut client = TcpStream::connect(address)
+            .await
+            .expect("test client should connect");
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost:")
+            .await
+            .expect("partial request head should reach Torii");
+        let mut response = Vec::new();
+        let read_result =
+            tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut response))
+                .await
+                .expect("partial request head must not retain a socket past its deadline");
+        if let Err(error) = read_result {
+            assert!(
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::BrokenPipe
+                ),
+                "unexpected read failure after header timeout: {error}"
+            );
+        }
+
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("Torii test server should stop")
+            .expect("Torii test task should not panic")
+            .expect("Torii test server should exit cleanly");
     }
 }
 use crate::iso20022_bridge::{
@@ -536,7 +1048,6 @@ pub use gov::{
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
 pub use limits::RateLimiter as BenchRateLimiter;
-pub use routing::QueryOptions;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
 pub use routing::handle_get_proof_tags;
@@ -576,6 +1087,7 @@ pub use routing::{
     handle_v1_asset_holders_query as handle_v1_asset_holders_query_for_bench,
     handle_v1_contracts_activity_get as handle_v1_contracts_activity_get_for_bench,
 };
+pub use routing::{QueryOptions, SignedQueryAdmission};
 #[cfg(feature = "telemetry")]
 pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
@@ -1967,11 +2479,59 @@ fn local_read_fanout_coordinator_enabled() -> bool {
         })
 }
 
+#[cfg(test)]
+pub(crate) fn signed_query_test_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xA5; Hash::LENGTH],
+        )),
+    )
+}
+
+#[cfg(test)]
+fn signed_query_test_admission() -> Arc<routing::SignedQueryAdmission> {
+    Arc::new(
+        routing::SignedQueryAdmission::new(
+            signed_query_test_network_id(),
+            Duration::from_secs(1),
+            Duration::from_secs(120),
+            NonZeroUsize::new(1_024).expect("nonzero signed-query test replay capacity"),
+        )
+        .expect("valid signed-query test admission"),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn authorize_query_for_test(
+    request: iroha_data_model::query::QueryRequest,
+    authority: iroha_data_model::account::AccountId,
+) -> iroha_data_model::query::QueryRequestWithAuthority {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
+    let creation_time_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("test clock follows Unix epoch")
+        .as_millis()
+        .try_into()
+        .expect("test query creation time fits u64");
+    let mut nonce = [0_u8; 32];
+    nonce[24..].copy_from_slice(&NEXT_NONCE.fetch_add(1, Ordering::Relaxed).to_be_bytes());
+    request.with_authority(
+        signed_query_test_network_id(),
+        authority,
+        creation_time_ms,
+        NonZeroU64::new(100_000).expect("nonzero signed-query test TTL"),
+        nonce,
+    )
+}
+
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
     events: EventsSender,
     kura: Arc<Kura>,
     chain_id: Arc<ChainId>,
+    signed_query_admission: Arc<routing::SignedQueryAdmission>,
     #[cfg(feature = "app_api")]
     transaction_max_content_len: usize,
     transaction_ingress_compute_inflight: Arc<tokio::sync::Semaphore>,
@@ -11312,7 +11872,8 @@ async fn handler_proofs_query(
 
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-        let verified = routing::verify_signed_query_request(signed)?;
+        let verified =
+            routing::verify_signed_query_request(signed, app.signed_query_admission.as_ref())?;
         let query_response =
             execute_admitted_signed_query_with_opts(&app, verified, QueryOptions::default())
                 .await?;
@@ -11324,7 +11885,8 @@ async fn handler_proofs_query(
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/proofs/query", enforce).await?;
 
     let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-    let verified = routing::verify_signed_query_request(signed)?;
+    let verified =
+        routing::verify_signed_query_request(signed, app.signed_query_admission.as_ref())?;
     let query_response =
         execute_admitted_signed_query_with_opts(&app, verified, QueryOptions::default()).await?;
     Ok(crate::utils::respond_with_format(query_response, format))
@@ -12447,7 +13009,7 @@ mod universal_offline_capability_tests {
         let capability = universal_offline_capability_status();
         assert!(!capability.mandatory);
         assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
-        assert_eq!(capability.required_bridge_abi_version, 21);
+        assert_eq!(capability.required_bridge_abi_version, 22);
         assert_eq!(capability.max_hops, 8);
         assert!(capability.ready);
         assert!(capability.assets.is_empty());
@@ -23099,6 +23661,7 @@ fn canonicalize_query_batch_box(
 fn decode_verified_proxy_signed_query(
     query_bytes: &[u8],
     request_kind: &'static str,
+    admission: &routing::SignedQueryAdmission,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority, Response> {
     let query =
         <SignedQuery as iroha_version::codec::DecodeVersioned>::decode_all_versioned(query_bytes)
@@ -23109,7 +23672,7 @@ fn decode_verified_proxy_signed_query(
                 format!("failed to decode exact {request_kind} signed query: {error}"),
             )
         })?;
-    routing::verify_signed_query_request(query).map_err(IntoResponse::into_response)
+    routing::verify_signed_query_request(query, admission).map_err(IntoResponse::into_response)
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -23215,6 +23778,10 @@ async fn execute_torii_verified_query_exhaustive_locally(
     admit_signed_query_authority(app.as_ref(), &authority)
         .await
         .map_err(IntoResponse::into_response)?;
+    let network_id = request.network_id;
+    let creation_time_ms = request.creation_time_ms;
+    let time_to_live_ms = request.time_to_live_ms;
+    let nonce = request.nonce;
     let mut current_request = request;
     let mut accumulated_batch: Option<iroha_data_model::query::QueryOutputBatchBox> = None;
 
@@ -23261,7 +23828,11 @@ async fn execute_torii_verified_query_exhaustive_locally(
 
                 if let Some(cursor) = continue_cursor {
                     current_request = iroha_data_model::query::QueryRequestWithAuthority {
+                        network_id,
                         authority: authority.clone(),
+                        creation_time_ms,
+                        time_to_live_ms,
+                        nonce,
                         request: iroha_data_model::query::QueryRequest::Continue(cursor),
                     };
                     continue;
@@ -23555,7 +24126,11 @@ async fn execute_torii_signed_query_fanout_proxy_request(
     query_bytes: Vec<u8>,
     response_format: ToriiProxyResponseFormatV1,
 ) -> Response {
-    let request = match decode_verified_proxy_signed_query(&query_bytes, "Nexus fanout") {
+    let request = match decode_verified_proxy_signed_query(
+        &query_bytes,
+        "Nexus fanout",
+        app.signed_query_admission.as_ref(),
+    ) {
         Ok(request) => request,
         Err(response) => return response,
     };
@@ -25964,6 +26539,16 @@ fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV4) -> &'static 
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_request_carries_one_shot_signed_query(request: &ToriiProxyRequestKindV4) -> bool {
+    matches!(
+        request,
+        ToriiProxyRequestKindV4::SignedQuery { .. }
+            | ToriiProxyRequestKindV4::SignedQueryRouteScan { .. }
+            | ToriiProxyRequestKindV4::SignedQueryFanout { .. }
+    )
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_runtime_timing(block_cadence: Duration) -> (Duration, Duration) {
     let maximum_carrier_wait = DEFAULT_ROUTE_TIMEOUT.saturating_sub(
         DEFAULT_ROUTE_TIMEOUT
@@ -26347,8 +26932,16 @@ async fn execute_torii_proxy_request_locally(
     let max_body_bytes = torii_proxy_response_body_limit(app.as_ref(), &request.request);
     let strict_queue_plan_synced = queue_plan_synced_entrypoint_hash(&request.request).is_some();
     let request_id = request.request_id.clone();
-    let response =
-        execute_incoming_torii_proxy_request(app, request, Some(local_peer_id.clone())).await;
+    // Local delivery may execute a Nexus fanout whose remote legs re-enter the
+    // ordinary proxy candidate pipeline. Hop history and candidate filtering
+    // bound that recursion at runtime; erase this one recursive future edge so
+    // the compiler does not need to construct an infinitely sized future.
+    let response = Box::pin(execute_incoming_torii_proxy_request(
+        app,
+        request,
+        Some(local_peer_id.clone()),
+    ))
+    .await;
     let snapshot = response_to_torii_proxy_snapshot(response, max_body_bytes).await;
     if strict_queue_plan_synced {
         validate_queue_plan_synced_snapshot_bounds(&snapshot).map_err(|error| {
@@ -26622,6 +27215,76 @@ where
         }
     };
     let queue_plan_synced = queue_plan_synced_expectation.is_some();
+
+    if torii_proxy_request_carries_one_shot_signed_query(&request.request) {
+        let mut last_pre_dispatch_error = None;
+        for candidate in candidate_peers {
+            let peer_id = candidate.peer_id().clone();
+            let transport = candidate.transport_label();
+            match execute(candidate, request.clone()).await {
+                Ok(snapshot) => {
+                    // A complete response, including an explicit rejection, proves that this
+                    // exact nonce-bearing request reached an authority. Return it verbatim:
+                    // retrying the body would violate one-shot admission semantics.
+                    let mut response = torii_proxy_snapshot_to_response(snapshot);
+                    insert_route_transport_header(&mut response, transport);
+                    complete_request(request_id).await;
+                    return response;
+                }
+                Err(ToriiProxyAttemptError::DefinitelyNotDispatched(reason)) => {
+                    iroha_logger::warn!(
+                        peer_id = %peer_id,
+                        transport,
+                        reason,
+                        "signed-query proxy attempt failed before dispatch; trying the next authority"
+                    );
+                    last_pre_dispatch_error = Some(reason);
+                }
+                Err(ToriiProxyAttemptError::DispatchedWithoutResponse(reason)) => {
+                    iroha_logger::warn!(
+                        peer_id = %peer_id,
+                        transport,
+                        reason,
+                        "signed-query proxy dispatch outcome is unknown; refusing to resend the exact request"
+                    );
+                    let mut response = torii_proxy_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "signed_query_outcome_unknown",
+                        format!(
+                            "signed query may have reached authority `{peer_id}` via {transport}; \
+                             the exact nonce-bearing request was not retried: {reason}"
+                        ),
+                    );
+                    insert_route_transport_header(&mut response, transport);
+                    complete_request(request_id).await;
+                    return response;
+                }
+            }
+        }
+
+        complete_request(request_id).await;
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            last_pre_dispatch_error.map_or_else(
+                || {
+                    format!(
+                        "no authoritative peers are available for one-shot signed query lane {} dataspace {}",
+                        routing_decision.lane_id.as_u32(),
+                        routing_decision.dataspace_id.as_u64()
+                    )
+                },
+                |reason| {
+                    format!(
+                        "every signed-query authority failed before dispatch for lane {} dataspace {}: {reason}",
+                        routing_decision.lane_id.as_u32(),
+                        routing_decision.dataspace_id.as_u64()
+                    )
+                },
+            ),
+        );
+    }
+
     let mut durable_attestations = BTreeMap::<u16, QueuePlanAdmissionAttestationV2>::new();
     let mut last_retryable: Option<Response> = None;
     let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
@@ -30719,7 +31382,11 @@ async fn execute_incoming_torii_proxy_request(
             query_bytes,
             expected_route,
             response_format,
-        } => match decode_verified_proxy_signed_query(&query_bytes, "proxied") {
+        } => match decode_verified_proxy_signed_query(
+            &query_bytes,
+            "proxied",
+            app.signed_query_admission.as_ref(),
+        ) {
             Ok(verified_query) => {
                 let scope = signed_query_scope_for_app(app.as_ref(), &verified_query);
                 match torii_authorized_signed_query_routes(app.as_ref(), &verified_query, &scope) {
@@ -30775,7 +31442,11 @@ async fn execute_incoming_torii_proxy_request(
             query_bytes,
             expected_route,
             response_format,
-        } => match decode_verified_proxy_signed_query(&query_bytes, "proxied route-scan") {
+        } => match decode_verified_proxy_signed_query(
+            &query_bytes,
+            "proxied route-scan",
+            app.signed_query_admission.as_ref(),
+        ) {
             Ok(request) => {
                 if let Err(response) =
                     reject_proxy_client_continuation(&request, "signed route scan")
@@ -41771,7 +42442,8 @@ async fn handler_signed_query(
     }
 
     let query_bytes = iroha_version::codec::EncodeVersioned::encode_versioned(&query_request);
-    let verified_query = routing::verify_signed_query_request(query_request)?;
+    let verified_query =
+        routing::verify_signed_query_request(query_request, app.signed_query_admission.as_ref())?;
     let query_scope = signed_query_scope_for_app(app.as_ref(), &verified_query);
     let authorized_routes =
         match torii_authorized_signed_query_routes(app.as_ref(), &verified_query, &query_scope) {
@@ -47833,6 +48505,7 @@ mod musubi_search_initialization_tests {
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
+    signed_query_admission: Arc<routing::SignedQueryAdmission>,
     kiso: KisoHandle,
     queue: Arc<Queue>,
     pipeline_status_cache: Arc<PipelineStatusCache>,
@@ -47915,6 +48588,7 @@ pub struct Torii {
     content_config: iroha_config::parameters::actual::Content,
     preauth_gate: Arc<limits::PreAuthGate>,
     fee_policy: FeePolicy,
+    http_transport: ToriiHttpTransport,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
     mcp: iroha_config::parameters::actual::ToriiMcp,
     cors: iroha_config::parameters::actual::ToriiCors,
@@ -53059,6 +53733,7 @@ impl Torii {
     /// Construct `Torii` with runtime telemetry configuration.
     pub fn new(
         chain_id: ChainId,
+        network_id: NetworkId,
         kiso: KisoHandle,
         config: Config,
         queue: Arc<Queue>,
@@ -53083,6 +53758,7 @@ impl Torii {
         };
         Self::new_with_handle(
             chain_id,
+            network_id,
             kiso,
             config,
             queue,
@@ -53103,6 +53779,7 @@ impl Torii {
     /// Construct `Torii` when telemetry support is disabled.
     pub fn new(
         chain_id: ChainId,
+        network_id: NetworkId,
         kiso: KisoHandle,
         config: Config,
         queue: Arc<Queue>,
@@ -53115,6 +53792,7 @@ impl Torii {
     ) -> Self {
         Self::new_with_handle(
             chain_id,
+            network_id,
             kiso,
             config,
             queue,
@@ -53140,6 +53818,7 @@ impl Torii {
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_handle(
         chain_id: ChainId,
+        network_id: NetworkId,
         kiso: KisoHandle,
         config: Config,
         queue: Arc<Queue>,
@@ -53318,6 +53997,15 @@ impl Torii {
             &config.app_api,
         ))
         .expect("validated Torii app-auth replay window");
+        let signed_query_admission = Arc::new(
+            routing::SignedQueryAdmission::new(
+                network_id,
+                config.app_api.request_signature_max_clock_skew,
+                config.app_api.request_signature_nonce_ttl,
+                config.app_api.request_signature_replay_cache_capacity,
+            )
+            .expect("validated Torii signed-query replay window"),
+        );
         #[cfg(feature = "app_api")]
         crate::data_dir::set_base_dir(config.data_dir.clone());
         #[cfg(feature = "push")]
@@ -54387,6 +55075,7 @@ impl Torii {
         )));
         Self {
             chain_id: Arc::new(chain_id),
+            signed_query_admission,
             kiso,
             queue,
             pipeline_status_cache,
@@ -54478,6 +55167,7 @@ impl Torii {
             .max(1),
             preauth_gate,
             fee_policy,
+            http_transport: config.transport.http,
             norito_rpc: config.transport.norito_rpc.clone(),
             mcp: config.mcp,
             cors: config.cors,
@@ -54863,6 +55553,7 @@ impl Torii {
             events: self.events.clone(),
             kura: self.kura.clone(),
             chain_id: self.chain_id.clone(),
+            signed_query_admission: self.signed_query_admission.clone(),
             #[cfg(feature = "app_api")]
             transaction_max_content_len: self
                 .transaction_max_content_len
@@ -55627,14 +56318,15 @@ impl Torii {
         }
         #[cfg(not(feature = "app_api"))]
         drop(app_state);
-        let make = api_router.into_make_service_with_connect_info::<std::net::SocketAddr>();
 
         iroha_logger::info!(addr = %torii_address, "Torii bound and listening");
 
-        let graceful_shutdown_signal = shutdown_signal.clone();
-        let server = axum::serve(listener, make).with_graceful_shutdown(async move {
-            graceful_shutdown_signal.receive().await;
-        });
+        let server = serve_torii_http(
+            listener,
+            api_router,
+            self.http_transport,
+            shutdown_signal.clone(),
+        );
         #[cfg(feature = "app_api")]
         let server_result = supervise_evidence_viewer_compaction_worker(
             shutdown_signal,

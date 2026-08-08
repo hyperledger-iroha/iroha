@@ -131,6 +131,7 @@ fn make_handle(
         manifest_view_root: manifest_root.to_vec(),
         expiry_slot,
         max_clock_skew_ms: Some(0),
+        issuer_signature: Some(iroha_crypto::Signature::from_bytes(&[1_u8; 64])),
     }
 }
 
@@ -230,7 +231,7 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 42, 10);
+    let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 1, 10);
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
     let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &handle_bytes);
     let manifest = TouchManifest {
@@ -469,7 +470,7 @@ fn core_host_enforces_space_directory_policy_on_handles() {
     );
 
     // Lane/manifest match → allowed.
-    let handle = make_handle(binding, LaneId::new(2), [1; 32], 2, 2, 10);
+    let handle = make_handle(binding, LaneId::new(2), [1; 32], 1, 1, 10);
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
     let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &handle_bytes);
     let intent = RemoteSpendIntent {
@@ -492,7 +493,7 @@ fn core_host_enforces_space_directory_policy_on_handles() {
     );
 
     // Lane mismatch → denied.
-    let bad_handle = make_handle(binding, LaneId::new(3), [1; 32], 2, 3, 10);
+    let bad_handle = make_handle(binding, LaneId::new(3), [1; 32], 1, 1, 10);
     let bad_handle_ptr = store_tlv(
         &mut vm,
         PointerType::AssetHandle,
@@ -556,6 +557,7 @@ fn convert_handle(model: &model::AssetHandle) -> AssetHandle {
         manifest_view_root: model.manifest_view_root.to_vec(),
         expiry_slot: model.expiry_slot,
         max_clock_skew_ms: model.max_clock_skew_ms,
+        issuer_signature: model.issuer_signature.clone(),
     }
 }
 
@@ -672,10 +674,20 @@ fn core_host_policy_snapshot_rejects_policy_mismatches() {
     });
     assert!(matches!(low_handle_era, Err(VMError::PermissionDenied)));
 
+    let future_handle_era = run_policy_snapshot_case(&snapshot, dsid, |handle| {
+        handle.handle_era = 6;
+    });
+    assert!(matches!(future_handle_era, Err(VMError::PermissionDenied)));
+
     let low_sub_nonce = run_policy_snapshot_case(&snapshot, dsid, |handle| {
         handle.sub_nonce = 8;
     });
     assert!(matches!(low_sub_nonce, Err(VMError::PermissionDenied)));
+
+    let future_sub_nonce = run_policy_snapshot_case(&snapshot, dsid, |handle| {
+        handle.sub_nonce = 10;
+    });
+    assert!(matches!(future_sub_nonce, Err(VMError::PermissionDenied)));
 }
 
 #[test]
@@ -968,7 +980,7 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
     );
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 2, 8);
+    let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 1, 8);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {

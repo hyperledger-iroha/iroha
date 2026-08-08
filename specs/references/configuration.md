@@ -53,6 +53,13 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   ignores any attacker-selected prefix before the first untrusted address,
   rejects malformed or longer-than-32-hop chains, and never accepts the
   internal `x-iroha-remote-addr` header from the network.
+- `[torii.transport.http]`: HTTP/1 socket and request-head limits enforced
+  before request middleware. `max_connections` defaults to `1024`, while
+  `max_connections_per_ip` defaults to `64` and cannot exceed the global
+  limit. `header_read_timeout_ms` and `write_timeout_ms` default to `10000`
+  and `30000` and must be non-zero. `max_headers` defaults to `100` and is
+  capped at `1024`; `max_header_bytes` defaults to `65536` and must remain in
+  the inclusive `8192..=1048576` range.
 - `torii.preauth_allow_cidrs`: Explicit source hosts that bypass the
   pre-authentication resource gate. It accepts only IPv4 `/32` and IPv6 `/128`
   entries, plus `127.0.0.0/8` as the local-host loopback range; broad remote

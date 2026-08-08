@@ -10,6 +10,8 @@ public sealed class SignedQueryBuilderTests
 {
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+    private const string FixtureNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    private const string AlternateNetworkId = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     private const string FixtureContractCodeHash = "0x00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEE00";
     private const string FixtureProofHash = "0x111122223333444455556666777788889999AAAABBBBCCCCDDDDEEEEFFFF0000";
@@ -21,7 +23,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesFindParametersQuery()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindParameters()
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -37,7 +39,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesFindAbiVersionQuery()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindAbiVersion()
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -51,7 +53,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesFindExecutorDataModelQuery()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindExecutorDataModel()
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -65,7 +67,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void SignedQueryEnvelopeDefensivelyCopiesBytes()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindParameters()
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -196,7 +198,7 @@ public sealed class SignedQueryBuilderTests
     [InlineData("n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     public void ConstructorRejectsNonExactAuthority(string authorityAccountId)
     {
-        Assert.Throws<ArgumentException>(() => new SignedQueryBuilder(authorityAccountId));
+        Assert.Throws<ArgumentException>(() => new SignedQueryBuilder(authorityAccountId, FixtureNetworkId));
     }
 
     [Fact]
@@ -204,7 +206,53 @@ public sealed class SignedQueryBuilderTests
     {
         AssertArgumentException(
             "authorityAccountId",
-            () => new SignedQueryBuilder(FixtureAccountId.Insert(8, " ")));
+            () => new SignedQueryBuilder(FixtureAccountId.Insert(8, " "), FixtureNetworkId));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149")]
+    [InlineData("hash:32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149#A2F0")]
+    [InlineData("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#0000")]
+    public void ConstructorRejectsNonCanonicalNetworkId(string networkId)
+    {
+        AssertArgumentException(
+            "networkId",
+            () => new SignedQueryBuilder(FixtureAccountId, networkId));
+    }
+
+    [Fact]
+    public void BuildSignedRejectsInvalidReplayContext()
+    {
+        var seed = Convert.FromHexString(FixtureSeedHex);
+        var builder = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindParameters();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            builder.BuildSigned(seed, 1_000, 0, Enumerable.Repeat((byte)0x5A, 32).ToArray()));
+        AssertArgumentException(
+            "nonce",
+            () => builder.BuildSigned(seed, 1_000, 10_000, new byte[32]));
+        AssertArgumentException(
+            "nonce",
+            () => builder.BuildSigned(seed, 1_000, 10_000, new byte[31]));
+    }
+
+    [Fact]
+    public void NetworkIdentityIsBoundIntoPayloadAndSignature()
+    {
+        var seed = Convert.FromHexString(FixtureSeedHex);
+        var nonce = Enumerable.Repeat((byte)0x5A, 32).ToArray();
+        var first = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+            .FindParameters()
+            .BuildSigned(seed, 1_000, 10_000, nonce);
+        var second = new SignedQueryBuilder(FixtureAccountId, AlternateNetworkId)
+            .FindParameters()
+            .BuildSigned(seed, 1_000, 10_000, nonce);
+
+        Assert.False(first.PayloadBytes.SequenceEqual(second.PayloadBytes));
+        Assert.False(first.SignatureBytes.SequenceEqual(second.SignatureBytes));
+        AssertSignatureVerifies(first);
+        AssertSignatureVerifies(second);
     }
 
     [Fact]
@@ -212,43 +260,43 @@ public sealed class SignedQueryBuilderTests
     {
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(" " + FixtureAccountId);
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId(" " + FixtureAccountId);
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId("merchant@sora");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId("merchant@sora");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindAssetById(" " + FixtureAssetDefinitionId, FixtureAccountId);
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById(" " + FixtureAssetDefinitionId, FixtureAccountId);
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindAssetById(
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById(
                 FixtureAssetDefinitionId,
                 "n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindAssetById(
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById(
                 FixtureAssetDefinitionId,
                 "0x0a00012022d3c25e96fa1178ae08b3d30081a31a0d09e8f7321b1e015140cd37b332109ca");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindDomainEndorsements("banka ");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsements("banka ");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindDomainCommittee("committee-7\u0000");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainCommittee("committee-7\u0000");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByAlias(" manifest-root");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByAlias(" manifest-root");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByTicket(FixtureStorageTicket + " ");
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByTicket(FixtureStorageTicket + " ");
         });
     }
 
@@ -257,49 +305,49 @@ public sealed class SignedQueryBuilderTests
     {
         AssertArgumentException(
             "accountId",
-            () => new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(FixtureAccountId.Insert(8, " ")));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId(FixtureAccountId.Insert(8, " ")));
         AssertArgumentException(
             "assetDefinitionId",
-            () => new SignedQueryBuilder(FixtureAccountId).FindAssetById("asset def", FixtureAccountId));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById("asset def", FixtureAccountId));
         AssertArgumentException(
             "accountId",
-            () => new SignedQueryBuilder(FixtureAccountId).FindAssetById(
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetById(
                 FixtureAssetDefinitionId,
                 FixtureAccountId.Insert(8, "\t")));
         AssertArgumentException(
             "codeHash",
-            () => new SignedQueryBuilder(FixtureAccountId).FindContractManifestByCodeHash(
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindContractManifestByCodeHash(
                 FixtureContractCodeHash.Insert(10, " ")));
         AssertArgumentException(
             "pepperId",
-            () => new SignedQueryBuilder(FixtureAccountId).FindTwitterBindingByHash("pepper v1", FixtureTwitterDigest));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindTwitterBindingByHash("pepper v1", FixtureTwitterDigest));
         AssertArgumentException(
             "digestHex",
-            () => new SignedQueryBuilder(FixtureAccountId).FindTwitterBindingByHash(
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindTwitterBindingByHash(
                 "pepper-v1",
                 FixtureTwitterDigest.Insert(10, " ")));
         AssertArgumentException(
             "domainId",
-            () => new SignedQueryBuilder(FixtureAccountId).FindDomainEndorsements("ban ka"));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsements("ban ka"));
         AssertArgumentException(
             "domainId",
-            () => new SignedQueryBuilder(FixtureAccountId).FindDomainEndorsementPolicy("ban ka"));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsementPolicy("ban ka"));
         AssertArgumentException(
             "committeeId",
-            () => new SignedQueryBuilder(FixtureAccountId).FindDomainCommittee("committee 7"));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainCommittee("committee 7"));
         AssertArgumentException(
             "storageTicket",
-            () => new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByTicket(FixtureStorageTicket.Insert(12, " ")));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByTicket(FixtureStorageTicket.Insert(12, " ")));
         AssertArgumentException(
             "manifestDigest",
-            () => new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByManifest(
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByManifest(
                 FixtureManifestDigest.Insert(12, "\u00A0")));
         AssertArgumentException(
             "alias",
-            () => new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByAlias("manifest root"));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDaPinIntentByAlias("manifest root"));
         AssertArgumentException(
             "providerId",
-            () => new SignedQueryBuilder(FixtureAccountId).FindSorafsProviderOwner(FixtureProviderId.Insert(12, " ")));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindSorafsProviderOwner(FixtureProviderId.Insert(12, " ")));
     }
 
     [Theory]
@@ -314,13 +362,13 @@ public sealed class SignedQueryBuilderTests
     {
         AssertArgumentException("dataspace", () =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId(
                 FixtureAccountId,
                 dataspace: filter);
         });
         AssertArgumentException("domain", () =>
         {
-            new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(
+            new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAliasesByAccountId(
                 FixtureAccountId,
                 domain: filter);
         });
@@ -329,7 +377,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesFindAliasesByAccountIdWithFilters()
     {
-        var envelope = new SignedQueryBuilder(FixtureAccountId)
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindAliasesByAccountId(FixtureAccountId, dataspace: "paynet", domain: "banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -350,7 +398,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesAssetLookupQueries()
     {
-        var assetEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var assetEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindAssetById(FixtureAssetDefinitionId, FixtureAccountId, dataspaceId: 9)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -366,7 +414,7 @@ public sealed class SignedQueryBuilderTests
         var dataspacePayload = ReadField(scopeBytes[4..], out _);
         Assert.Equal(9ul, BinaryPrimitives.ReadUInt64LittleEndian(dataspacePayload));
 
-        var definitionEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var definitionEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindAssetDefinitionById(FixtureAssetDefinitionId)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -383,7 +431,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesContractManifestAndDataspaceOwnerQueries()
     {
-        var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindContractManifestByCodeHash(FixtureContractCodeHash)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -395,7 +443,7 @@ public sealed class SignedQueryBuilderTests
         expectedHashBytes[^1] |= 0x01;
         Assert.Equal(expectedHashBytes, manifestHashBytes);
 
-        var dataspaceEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var dataspaceEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDataspaceNameOwnerById(42)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -412,7 +460,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesDomainEndorsementQueries()
     {
-        var endorsementsEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var endorsementsEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDomainEndorsements("banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (endorsementsDiscriminant, endorsementsPayload) = ReadSingularQuery(endorsementsEnvelope);
@@ -421,7 +469,7 @@ public sealed class SignedQueryBuilderTests
         var endorsementsDomain = ReadNoritoString(ReadField(endorsementsStruct, out _));
         Assert.Equal("banka", endorsementsDomain);
 
-        var policyEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var policyEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDomainEndorsementPolicy("banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (policyDiscriminant, policyPayload) = ReadSingularQuery(policyEnvelope);
@@ -430,7 +478,7 @@ public sealed class SignedQueryBuilderTests
         var policyDomain = ReadNoritoString(ReadField(policyStruct, out _));
         Assert.Equal("banka", policyDomain);
 
-        var committeeEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var committeeEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDomainCommittee("committee-7")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (committeeDiscriminant, committeePayload) = ReadSingularQuery(committeeEnvelope);
@@ -447,7 +495,7 @@ public sealed class SignedQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesProofAndTwitterBindingQueries()
     {
-        var proofEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var proofEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindProofRecordById("halo2/ipa", FixtureProofHash)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (proofDiscriminant, proofPayload) = ReadSingularQuery(proofEnvelope);
@@ -458,7 +506,7 @@ public sealed class SignedQueryBuilderTests
         Assert.Equal("halo2/ipa", proofBackend);
         Assert.Equal(Convert.FromHexString(FixtureProofHash[2..]), proofHash);
 
-        var twitterEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var twitterEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindTwitterBindingByHash("pepper-v1", FixtureTwitterDigest)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (twitterDiscriminant, twitterPayload) = ReadSingularQuery(twitterEnvelope);
@@ -492,7 +540,7 @@ public sealed class SignedQueryBuilderTests
         })
         {
             Assert.Throws<ArgumentException>(
-                () => new SignedQueryBuilder(FixtureAccountId).FindProofRecordById(backend, validHash));
+                () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindProofRecordById(backend, validHash));
         }
 
         foreach (var proofHash in new[]
@@ -509,14 +557,14 @@ public sealed class SignedQueryBuilderTests
         })
         {
             Assert.Throws<ArgumentException>(
-                () => new SignedQueryBuilder(FixtureAccountId).FindProofRecordById("halo2/ipa", proofHash));
+                () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindProofRecordById("halo2/ipa", proofHash));
         }
     }
 
     [Fact]
     public void BuildSignedEncodesDaPinAndSorafsQueries()
     {
-        var ticketEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var ticketEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDaPinIntentByTicket(FixtureStorageTicket)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (ticketDiscriminant, ticketPayload) = ReadSingularQuery(ticketEnvelope);
@@ -524,7 +572,7 @@ public sealed class SignedQueryBuilderTests
         var ticketStruct = ReadField(ticketPayload, out _);
         Assert.Equal(Convert.FromHexString(FixtureStorageTicket[2..]), ReadField(ticketStruct, out _));
 
-        var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDaPinIntentByManifest(FixtureManifestDigest)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (manifestDiscriminant, manifestPayload) = ReadSingularQuery(manifestEnvelope);
@@ -532,7 +580,7 @@ public sealed class SignedQueryBuilderTests
         var manifestStruct = ReadField(manifestPayload, out _);
         Assert.Equal(Convert.FromHexString(FixtureManifestDigest[2..]), ReadField(manifestStruct, out _));
 
-        var aliasEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var aliasEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDaPinIntentByAlias("manifest-root")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (aliasDiscriminant, aliasPayload) = ReadSingularQuery(aliasEnvelope);
@@ -540,7 +588,7 @@ public sealed class SignedQueryBuilderTests
         var aliasStruct = ReadField(aliasPayload, out _);
         Assert.Equal("manifest-root", ReadNoritoString(ReadField(aliasStruct, out _)));
 
-        var laneEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var laneEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDaPinIntentByLaneEpochSequence(7, 11, 13)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (laneDiscriminant, lanePayload) = ReadSingularQuery(laneEnvelope);
@@ -553,7 +601,7 @@ public sealed class SignedQueryBuilderTests
         Assert.Equal(11ul, BinaryPrimitives.ReadUInt64LittleEndian(epoch));
         Assert.Equal(13ul, BinaryPrimitives.ReadUInt64LittleEndian(sequence));
 
-        var providerEnvelope = new SignedQueryBuilder(FixtureAccountId)
+        var providerEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindSorafsProviderOwner(FixtureProviderId)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (providerDiscriminant, providerPayload) = ReadSingularQuery(providerEnvelope);
@@ -619,15 +667,39 @@ public sealed class SignedQueryBuilderTests
 
     private static (uint SingularDiscriminant, byte[] SingularPayload) ReadSingularQuery(SignedQueryEnvelope envelope)
     {
-        var authorityField = ReadField(envelope.PayloadBytes, out var offsetAfterAuthority);
-        var requestField = ReadField(envelope.PayloadBytes[offsetAfterAuthority..], out _);
-
-        Assert.NotEmpty(authorityField);
+        var requestField = ReadContextBoundRequest(envelope);
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(requestField[..4]));
 
         var singularField = ReadField(requestField[4..], out _);
         var discriminant = BinaryPrimitives.ReadUInt32LittleEndian(singularField[..4]);
         return (discriminant, singularField[4..].ToArray());
+    }
+
+    private static byte[] ReadContextBoundRequest(SignedQueryEnvelope envelope)
+    {
+        var payload = envelope.PayloadBytes.AsSpan();
+        var offset = 0;
+        var networkId = ReadField(payload[offset..], out var consumed);
+        offset += consumed;
+        var authority = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+        var creationTime = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+        var timeToLive = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+        var nonce = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+        var request = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+
+        Assert.Equal(payload.Length, offset);
+        Assert.Equal(Convert.FromHexString(FixtureNetworkId.Substring(5, 64)), networkId);
+        Assert.NotEmpty(authority);
+        Assert.True(BinaryPrimitives.ReadUInt64LittleEndian(creationTime) > 0);
+        Assert.Equal(100_000ul, BinaryPrimitives.ReadUInt64LittleEndian(timeToLive));
+        Assert.Equal(32, nonce.Length);
+        Assert.Contains(nonce, static value => value != 0);
+        return request;
     }
 
     private static byte[] ReadField(ReadOnlySpan<byte> bytes, out int consumed)

@@ -1540,7 +1540,7 @@ fn offline_readiness_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 21 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material."
+            "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 22 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material."
                 .to_owned(),
         ),
     );
@@ -40876,7 +40876,7 @@ mod tests {
             ),
             ("OfflineRedemptionIntent", "parent_peer_hop_count", (0, 8)),
             ("OfflineBranchPath", "depth", (0, 64)),
-            ("OfflineReadiness", "required_bridge_abi_version", (21, 21)),
+            ("OfflineReadiness", "required_bridge_abi_version", (22, 22)),
             ("OfflineReadiness", "max_hops", (8, 8)),
             (
                 "OfflineAuthenticatedArtifactSet",

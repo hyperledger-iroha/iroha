@@ -1734,6 +1734,16 @@ fn minimal_config_snapshot() {
                 },
                 transport: ToriiTransport {
                     trusted_proxy_cidrs: [],
+                    http: ToriiHttpTransport {
+                        max_connections: 1024,
+                        max_connections_per_ip: 64,
+                        header_read_timeout: 10s,
+                        write_timeout: 30s,
+                        max_headers: 100,
+                        max_header_bytes: Bytes(
+                            65536,
+                        ),
+                    },
                     norito_rpc: NoritoRpcTransport {
                         enabled: true,
                         require_mtls: false,
@@ -2712,6 +2722,7 @@ fn minimal_config_snapshot() {
                 reorg_depth_bound: 10000,
                 policy_transition_delay_blocks: 100,
                 policy_transition_window_blocks: 200,
+                policy_transition_max_per_height: 256,
                 tree_roots_history_len: 10000,
                 tree_frontier_checkpoint_interval: 100,
                 registry_max_vk_entries: 64,
@@ -3104,6 +3115,7 @@ fn minimal_config_snapshot() {
                 reorg_depth_bound: 10000,
                 policy_transition_delay_blocks: 100,
                 policy_transition_window_blocks: 200,
+                policy_transition_max_per_height: 256,
                 tree_roots_history_len: 10000,
                 tree_frontier_checkpoint_interval: 100,
                 registry_max_vk_entries: 64,

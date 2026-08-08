@@ -96,6 +96,7 @@ fn sample_handle(binding: AxtBinding) -> AssetHandle {
         manifest_view_root: [0x22; 32],
         expiry_slot: 77,
         max_clock_skew_ms: Some(15),
+        issuer_signature: None,
     }
 }
 

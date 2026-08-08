@@ -1832,6 +1832,7 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     };
     let torii = Torii::new_with_handle(
         chain_id,
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         Arc::clone(&queue),

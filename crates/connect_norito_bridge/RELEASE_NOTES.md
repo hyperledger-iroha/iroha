@@ -1,17 +1,19 @@
 # NoritoBridge XCFramework Artifacts
 
-Current source ABI: 21. ABI 14 added
+Current source ABI: 22. ABI 14 added
 `connect_norito_encode_transfer_instruction_box` for native multisig proposal
 instruction boxes; later additive revisions include the native Kagemusha V2
 surfaces and the bounded SoraFS Governance DAG block/head-chain reference
-validators consumed by the C# SDK. The ABI-21 Kotlin/JVM and Java/Android
+validators consumed by the C# SDK. The ABI-22 Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface additionally requires native-signer JNI contract
-revision 3. Revision 3 seals the removal of generic `Shield`, `ZkTransfer`, and
-`Unshield` transaction encoders from the C and JNI surfaces. The bridge retains
-the specialized Kagemusha proof and settlement helpers, along with
-`RegisterZkAsset` policy fields such as `allow_unshield` and `vk_unshield`. The
-JNI contract revision is checked separately so an older ABI-21 artifact fails
-closed instead of exposing the retired transaction surface.
+revision 4. Revision 4 seals the removal of generic `Shield`, `ZkTransfer`, and
+`Unshield` transaction encoders plus native anonymous-escrow and authority-free
+Kaigi helpers from the C and JNI surfaces. The bridge retains specialized
+Kagemusha proof and settlement helpers. `RegisterZkAsset` now carries exactly
+`asset`, `vk_unshield`, and `vk_shield`; optional key presence enables each
+settlement role, with no mode, boolean enablement, or asset-bound transfer-key
+field. The JNI contract revision is checked separately so an older ABI-22
+artifact fails closed instead of exposing a retired transaction surface.
 
 The exact-12 privacy KAT ABI is compiled through the narrow
 `iroha_data_model/privacy-exact12-conformance` feature. Shipping bridge builds
@@ -25,7 +27,7 @@ fresh authoritative `PrivacyCapabilitySnapshotV1` from live Torii before
 submitting a privacy proof.
 
 The archive checksums below are historical and do not establish a current
-ABI-21/revision-3 artifact. Regenerate, verify, and republish the bridge
+ABI-22/revision-4 artifact. Regenerate, verify, and republish the bridge
 artifacts before cutting an SDK release that depends on the current source
 surface.
 

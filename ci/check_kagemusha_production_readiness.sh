@@ -372,7 +372,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         model,
         MODEL,
         errors,
-        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21",
+        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22",
         '"kagemusha.offline.recursive_spend.artifact_manifest.v4"',
         '"iroha.reviewed-source-closure.v1"',
         "reviewed_source_closure_descriptor_sha256",
@@ -431,7 +431,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         texts[PRIVACY_PROTOCOL],
         PRIVACY_PROTOCOL,
         errors,
-        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
+        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;",
     )
     require(
         texts[BRIDGE],
@@ -472,7 +472,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         texts[HEADER],
         HEADER,
         errors,
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION 21",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION 22",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
         "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
         "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
@@ -922,7 +922,7 @@ def promotion_errors() -> list[str]:
             continue
         if manifest.get("schema") != "kagemusha.offline.recursive_spend.artifact_manifest.v4":
             errors.append(f"{directory.name}: manifest schema is not V4")
-        if manifest.get("bridge_abi_version") != 21 or manifest.get("source_repo_dirty") is not False:
+        if manifest.get("bridge_abi_version") != 22 or manifest.get("source_repo_dirty") is not False:
             errors.append(f"{directory.name}: ABI/source-tree promotion binding is invalid")
         if source_identity is not None and (
             manifest.get("source_commit") != source_identity.get("source_commit")
@@ -1041,14 +1041,14 @@ if self_test:
         WORKFLOW: read(WORKFLOW, []),
     }
     mutated = baseline[MODEL].replace(
+        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22",
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21",
-        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 19",
     )
     if not static_errors({MODEL: mutated}):
         errors.append("self-test failed to reject ABI-19 substitution")
     shared_bridge_abi_drift = baseline[PRIVACY_PROTOCOL].replace(
+        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;",
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
-        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 20;",
         1,
     )
     if not static_errors({PRIVACY_PROTOCOL: shared_bridge_abi_drift}):

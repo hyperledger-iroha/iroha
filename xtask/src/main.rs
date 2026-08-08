@@ -14287,6 +14287,7 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
 
     let torii = iroha_torii::Torii::new_with_handle(
         cfg.common.chain.clone(),
+        iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
         kiso,
         cfg.torii.clone(),
         queue,

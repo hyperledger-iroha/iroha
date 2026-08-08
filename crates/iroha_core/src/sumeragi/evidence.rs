@@ -167,7 +167,9 @@ fn canonicalize_evidence(ev: &Evidence) -> Evidence {
     }
 }
 
-fn canonicalize_v2_conflict(
+/// Return an exact v2 conflict with its signed artifacts in canonical wire order.
+#[must_use]
+pub(crate) fn canonicalize_v2_conflict(
     conflict: &wire_v2::SumeragiV2Equivocation,
 ) -> wire_v2::SumeragiV2Equivocation {
     use norito::codec::Encode;
@@ -609,7 +611,6 @@ pub fn persist_record(
 /// trusted context store. They are copied into the record only after the full
 /// pair passes structural, roster, PoP, and individual-signature validation.
 /// A canonical WSV key makes exact replay and swapped-pair replay idempotent.
-#[cfg(test)]
 pub(crate) fn persist_sumeragi_v2_equivocation(
     state: &State,
     context: &wire_v2::HeightContext,
@@ -2217,6 +2218,24 @@ mod tests {
         assert_eq!(records.iter().count(), 1);
         let (_, record) = records.iter().next().expect("stored v2 evidence");
         assert_eq!(record.evidence.kind, EvidenceKind::SumeragiV2Equivocation);
+    }
+
+    #[test]
+    fn sumeragi_v2_equivocation_persistence_rejects_invalid_artifacts() {
+        let fixture = V2EvidenceFixture::new();
+        let mut forged = fixture.vote(1, wire_v2::GlobalPhase::Prepare, fixture.subject(0x84));
+        forged.signature[0] ^= 0x80;
+        let conflict = wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first: fixture.vote(1, wire_v2::GlobalPhase::Prepare, fixture.subject(0x83)),
+            second: forged,
+        };
+        let state = test_state();
+
+        assert_eq!(
+            persist_sumeragi_v2_equivocation(&state, &fixture.context, &fixture.proofs, conflict,),
+            Err(EvidenceValidationError::V2SignatureInvalid)
+        );
+        assert_eq!(state.world.consensus_evidence.view().iter().count(), 0);
     }
 
     #[test]

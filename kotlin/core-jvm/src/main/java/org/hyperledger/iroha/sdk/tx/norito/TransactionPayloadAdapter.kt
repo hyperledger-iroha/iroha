@@ -900,13 +900,13 @@ internal class TransactionPayloadAdapter private constructor(
     private class MetadataEntryAdapter : TypeAdapter<MetadataEntry> {
         override fun encode(encoder: NoritoEncoder, value: MetadataEntry) {
             encodeSizedField(encoder, STRING_ADAPTER, value.key)
-            encodeSizedField(encoder, JSON_VALUE_ADAPTER, value.value.rawJson)
+            encodeSizedField(encoder, JSON_VALUE_ADAPTER, value.value.canonicalJson)
         }
 
         override fun decode(decoder: NoritoDecoder): MetadataEntry {
             val key = decodeSizedField(decoder, STRING_ADAPTER)
             val raw = decodeSizedField(decoder, JSON_VALUE_ADAPTER)
-            return MetadataEntry(key, JsonValue.raw(raw))
+            return MetadataEntry(key, JsonValue.fromCanonicalWire(raw))
         }
     }
 

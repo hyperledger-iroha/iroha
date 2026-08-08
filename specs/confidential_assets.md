@@ -46,32 +46,43 @@ authorization to append a commitment.
 - Non-validator observers may set `assume_valid = true`; they blindly apply confidential deltas but do not influence consensus safety.
 
 ## Asset Policies
-- Each asset definition carries an `AssetConfidentialPolicy` set by the creator or via governance:
+- Each registered asset definition carries runtime `AssetConfidentialPolicy` state. Public asset registration always creates `TransparentOnly`; only verifier-backed `RegisterZkAsset` execution and validated policy-transition instructions may change it:
   - `TransparentOnly`: default mode; only transparent instructions (`MintAsset`, `TransferAsset`, etc.) are permitted and shielded operations are rejected.
   - `ShieldedOnly`: confidential movement remains available, but the
     proof-bound Kagemusha public redemption path is forbidden so balances do
     not surface publicly.
   - `Convertible`: holders may move value between transparent and shielded representations using the on/off-ramp instructions below.
 - Policies follow a constrained FSM to prevent stranding funds:
-  - `TransparentOnly → Convertible` (immediate enablement of shielded pool).
-  - `TransparentOnly → ShieldedOnly` (requires pending transition and conversion window).
+  - `TransparentOnly → Convertible` occurs only when `RegisterZkAsset`
+    installs at least one canonical Kagemusha verifier binding.
   - `Convertible → ShieldedOnly` (enforced minimum delay).
-  - `ShieldedOnly → Convertible` (migration plan required so shielded notes remain spendable).
-  - `ShieldedOnly → TransparentOnly` is disallowed once the append-only
-    confidential commitment log is non-empty. V1 has no compatibility
-    migration that erases prior commitments.
-- Governance instructions set `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` via the `ScheduleConfidentialPolicyTransition` ISI and may abort scheduled changes with `CancelConfidentialPolicyTransition`. Mempool validation ensures no transaction straddles the transition height and inclusion fails deterministically if a policy check would change mid-block.
-- Pending transitions are applied automatically when a new block opens: once the block height enters the conversion window (for `ShieldedOnly` upgrades) or reaches the programmed `effective_height`, the runtime updates `AssetConfidentialPolicy`, refreshes `zk.policy` metadata, and clears the pending entry. If transparent supply remains when a `ShieldedOnly` transition matures, the runtime aborts the change and logs a warning, leaving the previous mode intact.
-- Config knobs `policy_transition_delay_blocks` and `policy_transition_window_blocks` enforce minimum notice and grace periods to let wallets convert notes around the switch.
+  - `ShieldedOnly → Convertible` re-enables proof-bound public redemption.
+  - `Convertible` or `ShieldedOnly` can never return to `TransparentOnly` in
+    ABI V1, even when the commitment log is empty. Registration, scheduled
+    activation, read-only effective-mode projection, and due-transition
+    application all preserve this invariant.
+- The asset-definition owner, or an account with the exact scoped
+  `CanManageAssetDefinitionConfidentialPolicy` grant, may register verifier
+  bindings or schedule/cancel policy transitions. The generic
+  `CanModifyAssetDefinitionMetadata` grant does not authorize these operations.
+  Core enforces this before any policy state is applied, independently of the
+  executor admission layer.
+- Governance instructions set `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` via the `ScheduleConfidentialPolicyTransition` ISI and may abort scheduled changes with `CancelConfidentialPolicyTransition`. Scheduling is valid only between `Convertible` and `ShieldedOnly`; a `TransparentOnly` asset must activate through verifier registration. Mempool validation ensures no transaction straddles the transition height and inclusion fails deterministically if a policy check would change mid-block.
+- Pending transitions are applied automatically when a new block opens. A derived, snapshot-rebuilt index stores one exact `(effective_height, asset_definition_id)` key per transition plus an exact count per height, so scheduling and cancellation remain logarithmic and block opening is proportional to transitions that are due rather than to the total number of asset definitions. Scheduling, cancellation, application, asset replacement, and unregistration update both derived stores atomically with authoritative policy state. Snapshot and startup reconstruction reject a malformed pending transition immediately, even when its advertised height is far in the future. At the programmed `effective_height`, the runtime updates `AssetConfidentialPolicy`, refreshes `zk.policy` metadata, and clears the pending entry. If transparent supply remains when a `ShieldedOnly` transition matures, the runtime clears the transition, logs a warning, and retains the currently active mode. It never restores an earlier transparent mode after a conversion window has opened.
+- Config knobs `policy_transition_delay_blocks` and `policy_transition_window_blocks` enforce minimum notice and grace periods to let wallets convert notes around the switch. `policy_transition_max_per_height` limits deterministic start-of-block work and rejects a schedule before any policy mutation when the target height is full.
 - `pending_transition.transition_id` doubles as an audit handle; governance must quote it when finalising or cancelling transitions so operators can correlate on/off-ramp reports.
-- `policy_transition_window_blocks` defaults to 720 (≈12 hours at 60 s block time). Nodes clamp governance requests that attempt shorter notice.
+- `policy_transition_window_blocks` defaults to 200 blocks, and `policy_transition_max_per_height` defaults to 256. Nodes reject governance requests that attempt shorter notice or exceed the exact-height capacity.
 - Genesis manifests and CLI flows surface current and pending policies. Admission logic reads the policy at execution time to confirm each confidential instruction is authorised.
-- The policy fields historically named `allow_shield` and `vk_shield` are
-  first-release Kagemusha top-up controls only. `vk_shield` must resolve to the
-  canonical Kagemusha top-up circuit and public-input schema. `allow_unshield`
-  and `vk_unshield` gate Kagemusha redemption, while `vk_transfer` is consumed
-  only by the native anonymous-escrow engine. No generic commitment-ingress,
-  confidential-transfer, or public-withdrawal instruction exists.
+- The optional `vk_shield` binding enables first-release Kagemusha top-up only
+  and must resolve to the canonical top-up circuit and public-input schema.
+  It may be configured only when `vk_unshield` is also configured, so every
+  note that can enter has a proof-bound redemption path. After the first
+  commitment is appended, registration cannot clear or change the unshield
+  verifier commitment. Governance may rotate its identifier only to an active
+  canonical registry record with the same commitment. Asset registration has
+  no transfer-verifier role; Kagemusha selects its global transfer-v2 verifier
+  independently. No generic commitment-ingress, confidential-transfer, or
+  public-withdrawal instruction exists.
 - Migration checklist — see “Migration sequencing” below for the staged upgrade plan that Milestone M0 tracks.
 
 #### Monitoring transitions via Torii
@@ -117,26 +128,33 @@ scheduled the `pending_transition` field is `null`.
 
 ### Policy state machine
 
-| Current mode       | Next mode        | Prerequisites                                                                 | Effective-height handling                                                                                         | Notes                                                                                     |
-|--------------------|------------------|-------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
-| TransparentOnly    | Convertible      | Governance has activated verifier/parameter registry entries. Submit `ScheduleConfidentialPolicyTransition` with `effective_height ≥ current_height + policy_transition_delay_blocks`. | Transition executes exactly at `effective_height`; shielded pool becomes available immediately.                   | Default path for enabling confidentiality while keeping transparent flows.               |
-| TransparentOnly    | ShieldedOnly     | Same as above, plus `policy_transition_window_blocks ≥ 1`.                                                         | Runtime auto-enters `Convertible` at `effective_height - policy_transition_window_blocks`; flips to `ShieldedOnly` at `effective_height`. | Provides deterministic conversion window before transparent instructions are disabled.   |
-| Convertible        | ShieldedOnly     | Scheduled transition with `effective_height ≥ current_height + policy_transition_delay_blocks`. Governance SHOULD certify (`transparent_supply == 0`) via audit metadata; runtime enforces this at cut-over. | Identical window semantics as above. If the transparent supply is non-zero at `effective_height`, the transition aborts with `PolicyTransitionPrerequisiteFailed`. | Locks the asset into fully confidential circulation.                                     |
-| ShieldedOnly       | Convertible      | Scheduled transition with the required lead time.                                                                  | State flips at `effective_height`; proof-bound Kagemusha redemption becomes available while existing notes remain valid. | Used for maintenance windows or auditor reviews.                                          |
-| ShieldedOnly       | TransparentOnly  | The persisted confidential commitment log must be empty when the transition is scheduled.                           | State flips at `effective_height`; confidential movement and redemption then reject under `TransparentOnly`.        | No emergency-unshield compatibility path exists in the first release.                     |
-| Any                | Same as current  | `CancelConfidentialPolicyTransition` clears pending change.                                                        | `pending_transition` removed immediately.                                                                          | Maintains status quo; shown for completeness.                                             |
+| Current mode | Next mode | Prerequisites | Effective-height handling | Notes |
+|---|---|---|---|---|
+| `TransparentOnly` | `Convertible` | Call `RegisterZkAsset` with at least one active canonical `vk_shield` or `vk_unshield` binding. | Activation is immediate; this is not a scheduled transition. | Confidential activation is irreversible in ABI V1. |
+| `Convertible` | `ShieldedOnly` | Schedule with the required lead time and conversion window. Transparent supply must be zero at cut-over. | On success the policy becomes `ShieldedOnly`. If transparent supply remains, the pending transition is cleared and the current `Convertible` mode is retained. | Disables public redemption without invalidating confidential notes. |
+| `ShieldedOnly` | `Convertible` | Schedule with the required lead time. | State flips at `effective_height`; proof-bound Kagemusha redemption becomes available again. | Existing notes and verifier bindings remain valid. |
+| Either confidential mode | Same as current | Cancel the exact pending `transition_id`. | The pending entry is removed immediately. | Cancellation never restores `TransparentOnly`. |
 
-Transitions not listed above are rejected during governance submission. Runtime checks the prerequisites right before applying a scheduled transition; failing preconditions pushes the asset back to its previous mode and emits `PolicyTransitionPrerequisiteFailed` via telemetry and block events.
+All other mode changes are rejected. In particular, scheduling cannot activate a
+`TransparentOnly` asset, and neither registration nor a scheduled transition can
+disable confidentiality after activation.
 
 ### Migration sequencing
 
-2. **Stage the transition:** Submit `ScheduleConfidentialPolicyTransition` with an `effective_height` that respects `policy_transition_delay_blocks`. When moving toward `ShieldedOnly`, specify a conversion window (`window ≥ policy_transition_window_blocks`).
+1. **Activate verifier roles:** Register the active canonical Kagemusha verifier bindings. The first non-empty binding set moves a `TransparentOnly` asset to `Convertible` immediately.
+2. **Stage a confidential-mode transition:** Submit `ScheduleConfidentialPolicyTransition` with an `effective_height` that respects `policy_transition_delay_blocks`. When moving toward `ShieldedOnly`, specify a conversion window (`window ≥ policy_transition_window_blocks`).
 3. **Publish operator guidance:** Record the returned `transition_id` and circulate an on/off-ramp runbook. Wallets and auditors subscribe to `/v1/confidential/assets/{id}/transitions` to learn the window open height.
-4. **Window enforcement:** When the window opens, the runtime switches the policy to `Convertible`, emits `PolicyTransitionWindowOpened { transition_id }`, and begins rejecting conflicting governance requests.
-5. **Finalize or abort:** At `effective_height`, the runtime verifies the transition prerequisites (zero transparent supply, no emergency withdrawals, etc.). Success flips the policy to the requested mode; failure emits `PolicyTransitionPrerequisiteFailed`, clears the pending transition, and leaves the policy unchanged.
-6. **Schema upgrades:** After a successful transition, governance bumps the asset schema version (e.g., `asset_definition.v2`) and CLI tooling requires `confidential_policy` when serialising manifests. Genesis upgrade docs instruct operators to add policy settings and registry fingerprints before restarting validators.
+4. **Window enforcement:** The asset remains `Convertible` throughout the notice window so holders can complete public redemption before cut-over.
+5. **Finalize or abort:** At `effective_height`, the runtime verifies zero transparent supply. Success flips the policy to `ShieldedOnly`; failure logs the prerequisite error, clears the pending transition, and leaves the current confidential mode unchanged.
+6. **Persist the canonical state:** After a successful transition, operators archive the
+   verifier registrations, `RegisterZkAsset` instruction, transition receipt, and resulting
+   policy fingerprint. Asset-registration manifests never carry `confidential_policy` state.
 
-New networks that start with confidentiality enabled encode the desired policy directly in genesis. They still follow the checklist above when changing modes post-launch so that conversion windows remain deterministic and wallets have time to adjust.
+New networks that start with confidentiality enabled register each asset transparently, then
+include active canonical verifying-key records followed by `RegisterZkAsset` in genesis. The
+runtime derives the initial confidential policy only after validating those bindings. Networks
+still follow the checklist above when changing modes post-launch so conversion windows remain
+deterministic and wallets have time to adjust.
 
 ### Norito manifest versioning & activation
 
@@ -161,7 +179,7 @@ New networks that start with confidentiality enabled encode the desired policy d
   - `WITHDRAW { vk_id, withdraw_height }` for emergency shutdown; affected assets freeze confidential spending after the withdraw height until new entries activate.
 - Genesis manifests auto-emit a `confidential_registry_root` custom parameter whose `vk_set_hash` matches the active entries; validation cross-checks this digest against local registry state before a node can join consensus.
 - Registering or updating a verifier requires a `gas_schedule_id`; verification enforces that the registry entry is `Active`, present in the `(circuit_id, version)` index, and that Halo2 proofs provide an `OpenVerifyEnvelope` whose `circuit_id`, `vk_hash`, and `public_inputs_schema_hash` match the registry record. Registry, proof-attachment admission, checked verifier guardrails, and IVM host verifier snapshots reject explicit trusted-setup labels such as Groth16, Halo2/BN254, Halo2/BLS12, and Halo2/KZG; the admitted production verifier families are transparent Halo2 IPA over Pasta and STARK/FRI.
-- Confidential-transfer-v2 transfer and unshield admission requires canonical Halo2 IPA `OpenVerifyEnvelope` metadata before public inputs are parsed: backend tag, circuit id, public-input schema bytes, verifier-key hash, empty auxiliary bytes, and active `(circuit_id, version)` registry mapping must match the asset-bound verifier. The shared Halo2 IPA backend verifier also rejects non-empty auxiliary bytes, zero or mismatched `vk_hash` values, and mismatched `ProofBox.backend` labels before proof verification. The lightweight preverify/dedup path applies the same envelope-metadata guard for recognized proof envelopes before cache insertion and leaves Groth16, Halo2/BN254, and Halo2/KZG labels unsupported, so malformed failed preverify attempts cannot occupy the key for a later valid proof; checked verifier guardrails reject those labels before backend dispatch as well. Anonymous escrow close prechecks apply the same canonical confidential-transfer-v2 envelope guard before trusting parsed input commitments from the proof.
+- Kagemusha transfer-v2 and redemption proof admission requires canonical Halo2 IPA `OpenVerifyEnvelope` metadata before public inputs are parsed: backend tag, circuit id, public-input schema bytes, verifier-key hash, empty auxiliary bytes, and active `(circuit_id, version)` registry mapping must match the protocol-global transfer role or the asset-bound redemption role as appropriate. The shared Halo2 IPA backend verifier also rejects non-empty auxiliary bytes, zero or mismatched `vk_hash` values, and mismatched `ProofBox.backend` labels before proof verification. The lightweight preverify/dedup path applies the same envelope-metadata guard for recognized proof envelopes before cache insertion and leaves Groth16, Halo2/BN254, and Halo2/KZG labels unsupported, so malformed failed preverify attempts cannot occupy the key for a later valid proof; checked verifier guardrails reject those labels before backend dispatch as well.
 - The inner Halo2/IPA binary envelope treats its redundant public-input count and byte length as one canonical shape: every input is exactly 32 bytes and decoding requires `pi_len == n_pi * 32` before slicing or allocating public-input storage. Aligned shorter or longer declarations and misaligned lengths are rejected; they are never reinterpreted as the magic-disjoint `ZK1\0` TLV layout.
 
 ### Proving Keys
@@ -175,7 +193,7 @@ New networks that start with confidentiality enabled encode the desired policy d
 - Each registered asset persists `ConfidentialTreeProfile::PoseidonPastaV1` in
   `ZkAssetState`. This fixed-depth Pasta Poseidon profile is the only
   first-release tree construction. `RegisterZkAsset` validates every configured
-  Kagemusha top-up, transfer, and unshield verifier against it; key rotation may retain
+  Kagemusha top-up and unshield verifier against it; key rotation may retain
   the profile, but no populated asset can switch profiles.
 - All Kagemusha top-up, transfer, and unshield-change append paths use the same
   profile-aware batch operation. `ZkAssetState` persists a fixed 16-slot
@@ -217,14 +235,12 @@ plan.
 
 ### Protocol-private transfer and redemption proofs
 
-The confidential transfer and unshield circuits remain reusable cryptographic
-components, but their proof envelopes are not executable instructions. The
-native anonymous-escrow engine invokes confidential transfer verification
-through a sealed, single-use internal path bound to one escrow operation and
-its exact purpose. Funding cannot consume an active escrow commitment; closing
-must consume exactly the stored custody commitment. Kagemusha redemption owns
-the unshield verifier and couples every successful proof to anchor drawdown and
-an equal debit from the deterministic offline escrow before public credit.
+The confidential transfer and redemption circuits remain reusable cryptographic
+components, but their proof envelopes are not executable instructions.
+Transfer-v2 is selected only as a protocol-global component of the typed
+Kagemusha recursive proof. Kagemusha redemption owns the asset-bound redemption
+verifier and couples every successful proof to anchor drawdown and an equal
+debit from deterministic offline escrow before public credit.
 
 This separation is a consensus invariant. A proof that is sound for the note
 tree does not by itself authorize settlement against a particular backing
@@ -233,35 +249,35 @@ CLI command, or SDK transaction builder may expose either circuit directly.
 
 ## Ledger Flow
 1. **TopUpKagemushaRecursiveV4 { request }**
-   - Requires `Convertible` policy and `allow_shield`; the latter means only
-     authenticated Kagemusha top-up admission. Runtime validates the payer and
-     device authorization, active release, exact scale and amount, fresh note,
-     authoritative roots and leaf index, canonical `vk_shield`, and top-up proof.
+   - Requires `Convertible` policy and an asset-bound canonical `vk_shield`.
+     Runtime validates the payer and device authorization, active release,
+     exact scale and amount, fresh note, authoritative roots and leaf index,
+     verifier binding, and top-up proof.
    - Public funds move into operation-bound escrow and the proof-bound note is
      appended atomically. Any failed check leaves both balances and the tree unchanged.
 2. **RedeemKagemushaRecursiveV4 { request }**
    - Requires the authenticated Kagemusha device/release path and
-     `allow_unshield`. The proof binds the note spend and public amount; Core
-     atomically consumes nullifiers, draws down the originating anchors, debits
-     offline escrow, and credits the designated public account.
+     an asset-bound canonical `vk_unshield`. The proof binds the note spend and
+     public amount; Core atomically consumes nullifiers, draws down the
+     originating anchors, debits offline escrow, and credits the designated
+     public account.
    - A proof failure, stale/replayed request, insufficient backing, or anchor
      mismatch leaves the nullifier set, tree, escrow, and public balance unchanged.
-3. **Native anonymous-escrow instructions**
-   - Open/release/cancel/resolve requests carry their proof through the typed
-     escrow ISI. Core verifies the exact operation purpose and applies the
-     private transfer internally; callers cannot submit the underlying transfer
-     as a standalone instruction or use it to cross settlement domains.
-
 ## Data Model Additions
 - `ConfidentialConfig` (new config section) with enablement flag, `assume_valid`, gas/limit knobs, anchor window, verifier backend.
 - `ConfidentialNote`, `ConfidentialTransfer`, and `ConfidentialMint` Norito schemas with explicit version byte (`CONFIDENTIAL_ASSET_V1 = 0x01`).
 - `ConfidentialEncryptedPayload` wraps AEAD memo bytes with `{ version, ephemeral_pubkey, nonce, ciphertext }`, defaulting to `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` for the XChaCha20-Poly1305 layout.
 - Canonical positive key-derivation vectors for nonzero spend keys live in `specs/confidential_key_vectors.json`; both the CLI and Torii endpoint regress against these fixtures. Wallet-facing derivatives and negative all-zero spend-key admission coverage for the spend/nullifier/viewing ladder are published in `fixtures/confidential/keyset_derivation_v1.json` and exercised by the Rust + Swift SDK tests to guarantee cross-language parity.
-- `asset::AssetDefinition` gains `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`.
+- Registered `asset::AssetDefinition` state contains
+  `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash,
+  poseidon_params_id, pedersen_params_id, pending_transition }`. The public
+  `NewAssetDefinition` registration payload deliberately omits this field and
+  always builds `TransparentOnly` state with no pending transition;
+  `RegisterZkAsset` is the only confidential activation path.
 - `ZkAssetState` persists the sole first-release tree profile, an exact
   fixed-size incremental frontier, its current root, and the `(backend, name,
-  commitment)` bindings for Kagemusha top-up/redemption and native
-  anonymous-escrow transfer verifiers.
+  commitment)` bindings for Kagemusha top-up/redemption. The global Kagemusha
+  transfer-v2 verifier is not stored as an asset binding.
   The frontier and root are required first-release snapshot fields; there is no
   legacy reconstruction fallback. Execution rejects proofs whose referenced
   verifying key fails to match the registered commitment, whose proof envelope
@@ -405,6 +421,7 @@ lockstep.
   reorg_depth_bound = 10000
   policy_transition_delay_blocks = 100
   policy_transition_window_blocks = 200
+  policy_transition_max_per_height = 256
   tree_roots_history_len = 10000
   tree_frontier_checkpoint_interval = 100
   registry_max_vk_entries = 64
@@ -479,8 +496,8 @@ Each phase updates roadmap milestones and associated tests to maintain determini
 
 Encrypted payload v1 ships with canonical fixtures so every SDK produces the
 same Norito memo envelope. Transaction parity is exercised by the dedicated
-Kagemusha and native anonymous-escrow suites; there is deliberately no generic
-confidential wallet-flow fixture or encoder:
+Kagemusha suite; there is deliberately no generic confidential wallet-flow
+fixture or encoder:
 
 ```bash
 # Rust memo-envelope parity
@@ -490,24 +507,24 @@ cargo test -p iroha_data_model --test confidential_encrypted_payload_vectors
 cd IrohaSwift && swift test --filter ConfidentialEncryptedPayloadTests
 ```
 
-The release-surface guards reject all three retired type names and their wire
-fingerprints while retaining the specialized Kagemusha and anonymous-escrow
+The release-surface guards reject the retired generic and anonymous-escrow type
+names and wire fingerprints while retaining the specialized Kagemusha
 instructions. Updating the encrypted-payload fixture without bumping its format
 version fails parity suites, keeping the SDKs and Rust codec in lock-step.
 
 #### Wallet and SDK builders
 
-SDKs expose authenticated Kagemusha V4 top-up/redemption and typed native
-anonymous-escrow workflows. They do not expose generic `Shield`, `ZkTransfer`,
-or `Unshield` requests or native encoders. SDK manifests and generated
+SDKs expose authenticated Kagemusha V4 top-up/redemption. They do not expose
+generic `Shield`, `ZkTransfer`, `Unshield`, or native anonymous-escrow requests
+or encoders. SDK manifests and generated
 instruction catalogs must omit all three retired data-model types and their
 wire fingerprints.
 
-`allow_shield`/`vk_shield`, `allow_unshield`/`vk_unshield`, and `vk_transfer`
-remain in asset registration only with their narrow protocol roles described
-above. Wallet implementations must build and sign the complete specialized
-request; a proof envelope, amount, nullifier list, or opaque commitment is never
-sufficient authority on its own.
+`vk_shield` and `vk_unshield` are optional asset-registration bindings whose
+presence enables only their narrow protocol roles described above. There is no
+asset-bound transfer verifier. Wallet implementations must build and sign
+the complete specialized request; a proof envelope, amount, nullifier list, or
+opaque commitment is never sufficient authority on its own.
 
 ### Telemetry & Monitoring (Phase M2)
 

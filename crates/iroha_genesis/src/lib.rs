@@ -1902,15 +1902,9 @@ pub mod genesis_instructions_json {
                 DomainId::try_new("zk", "universal").expect("domain"),
                 "xor".parse().expect("asset name"),
             );
-            let instruction =
-                InstructionBox::from(iroha_data_model::isi::zk::RegisterZkAsset::new(
-                    asset_definition_id,
-                    iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-                    true,
-                    true,
-                    None,
-                    None,
-                ));
+            let instruction = InstructionBox::from(
+                iroha_data_model::isi::zk::RegisterZkAsset::new(asset_definition_id, None, None),
+            );
 
             let value = instruction_value(&instruction);
             assert!(

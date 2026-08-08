@@ -1909,6 +1909,10 @@ mod tests {
             let account = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
+                network_id:
+                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                        .parse()
+                        .expect("network id"),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),

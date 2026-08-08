@@ -12,7 +12,6 @@ import pytest
 import requests
 
 import iroha_python.client as client_module
-
 from iroha_python import (
     CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
     AccountAsset,
@@ -54,6 +53,7 @@ from iroha_python.tx import (
     _normalize_rwa_quantity_fields,
     _normalize_u128_quantity,
     _require_canonical_positive_u128_literal,
+    _require_canonical_public_balance_scope,
 )
 
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
@@ -2740,7 +2740,6 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
     instructions = [
         Instruction.register_zk_asset(
             asset_definition_id,
-            vk_transfer="halo2/ipa:vk_transfer",
             vk_unshield={"backend": "halo2/ipa", "name": "vk_unshield"},
         ),
         Instruction.verify_proof(proof),
@@ -2817,6 +2816,137 @@ def test_native_privacy_bundle_actions_reject_nonempty_drafts(method_name: str) 
             public_action_json=b"{}",
             canonical_genesis_hash=b"\x01" * 32,
         )
+
+
+@pytest.mark.parametrize(
+    "scope",
+    ("global", "dataspace:1", "dataspace:18446744073709551615"),
+)
+def test_zk_ace_public_balance_scope_is_validated_and_forwarded_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str,
+) -> None:
+    sentinel = object()
+    captured: dict[str, object] = {}
+
+    class Builder:
+        def sign_privacy_zk_ace_transfer_action_v1(self, *args: object, **kwargs: object) -> object:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return sentinel
+
+    monkeypatch.setattr(TransactionDraft, "to_builder", lambda self: Builder())
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account_address(0x73),
+            fee_payment=FEE_PAYMENT,
+        )
+    )
+    result = draft.sign_privacy_zk_ace_transfer_action_v1(
+        b"private-key",
+        canonical_genesis_hash=b"\x01" * 32,
+        canonical_policy_archive=b"policy",
+        source_account_id="source",
+        destination_account_id="destination",
+        amount="1",
+        public_balance_scope=scope,
+        identity_root=b"\x02" * 32,
+        identity_blinding=b"\x03" * 32,
+        replay_secret=b"\x04" * 32,
+    )
+
+    assert result is sentinel
+    assert captured["kwargs"] == {"public_balance_scope": scope}
+
+
+def test_zk_ace_public_balance_scope_keyword_is_required() -> None:
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account_address(0x73),
+            fee_payment=FEE_PAYMENT,
+        )
+    )
+    with pytest.raises(TypeError, match="public_balance_scope"):
+        draft.sign_privacy_zk_ace_transfer_action_v1(
+            b"private-key",
+            canonical_genesis_hash=b"\x01" * 32,
+            canonical_policy_archive=b"policy",
+            source_account_id="source",
+            destination_account_id="destination",
+            amount="1",
+            identity_root=b"\x02" * 32,
+            identity_blinding=b"\x03" * 32,
+            replay_secret=b"\x04" * 32,
+        )
+
+
+def test_native_zk_ace_public_balance_scope_is_keyword_only() -> None:
+    builder = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account_address(0x73),
+            fee_payment=FEE_PAYMENT,
+        )
+    ).to_builder()
+    positional = (
+        b"private-key",
+        b"genesis",
+        b"policy",
+        "source",
+        "destination",
+        "1",
+        b"root",
+        b"blinding",
+        b"replay",
+    )
+
+    with pytest.raises(TypeError, match="public_balance_scope"):
+        builder.sign_privacy_zk_ace_transfer_action_v1(*positional)
+    with pytest.raises(TypeError):
+        builder.sign_privacy_zk_ace_transfer_action_v1(*positional, "global")
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    (
+        "",
+        "Global",
+        "GLOBAL",
+        " global",
+        "global ",
+        "universal",
+        "dataspace:",
+        "dataspace:0",
+        "dataspace:00",
+        "dataspace:01",
+        "dataspace:+1",
+        "dataspace:-1",
+        "dataspace: 1",
+        "dataspace:1 ",
+        "dataspace:１",
+        "dataspace:18446744073709551616",
+        "dataspace:999999999999999999999",
+        "dataspace:universal",
+    ),
+)
+def test_public_balance_scope_rejects_aliases_padding_and_numeric_adversaries(
+    hostile: str,
+) -> None:
+    with pytest.raises(ValueError, match="public_balance_scope"):
+        _require_canonical_public_balance_scope(hostile)
+
+
+@pytest.mark.parametrize("hostile", (None, 1, True, b"global"))
+def test_public_balance_scope_rejects_non_strings(hostile: object) -> None:
+    with pytest.raises(TypeError, match="public_balance_scope"):
+        _require_canonical_public_balance_scope(hostile)
+
+
+def test_public_balance_scope_rejects_oversize_decimal_before_integer_conversion() -> None:
+    with pytest.raises(ValueError, match="public_balance_scope"):
+        _require_canonical_public_balance_scope("dataspace:" + "9" * 4096)
 
 
 def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
@@ -3140,10 +3270,13 @@ def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
 def test_zk_registration_helper_rejects_adversarial_inputs() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
 
-    with pytest.raises(ValueError, match="invalid ZK asset mode"):
-        Instruction.register_zk_asset(asset_definition_id, mode="../../Hybrid")
-    with pytest.raises(ValueError, match="backend:name"):
-        Instruction.register_zk_asset(asset_definition_id, vk_transfer="halo2/ipa")
+    with pytest.raises(TypeError, match="unexpected keyword argument 'mode'"):
+        Instruction.register_zk_asset(asset_definition_id, mode="Hybrid")
+    with pytest.raises(ValueError, match="vk_shield requires vk_unshield"):
+        Instruction.register_zk_asset(
+            asset_definition_id,
+            vk_shield={"backend": "halo2/ipa", "name": "vk_shield"},
+        )
 
 
 def test_zk_client_helpers_build_transaction_drafts() -> None:
@@ -3165,7 +3298,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         asset_definition_id=asset_definition_id,
-        vk_transfer="halo2/ipa:vk_transfer",
         vk_unshield="halo2/ipa:vk_unshield",
         transaction_metadata={"purpose": "zk-register"},
         wait=False,

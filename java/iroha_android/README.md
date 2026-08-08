@@ -253,8 +253,14 @@ shared fixture parity, Kotlin dependency wiring, manifest contract, and Android
 adapters:
 
 ```bash
+export IROHA_KOTLIN_FIXTURE_GEN_BIN=/absolute/path/to/kotlin-fixture-gen
 ./gradlew :core:check :android:testDebugUnitTest
 ```
+
+The parity runner requires that single explicit executable and never invokes
+Cargo. A relative path is resolved from the Iroha repository root; unset,
+blank, missing, non-file, and non-executable values fail before a fixture
+process starts.
 
 For a fast portable peer-only iteration, use:
 
@@ -367,7 +373,7 @@ network prefix stay aligned with `specs/sns/address_display_guidelines.md`.
 ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
 native signer method; confidential movement uses the typed Kagemusha lifecycle.
 The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
-requires native bridge ABI 21, streams the eight authenticated V4 proof artifacts into an atomic
+requires native bridge ABI 22, streams the eight authenticated V4 proof artifacts into an atomic
 generation install, and exposes typed `initSpendV4`, `appendSpendV4`, `verifySpendV4`, and
 `buildRedeemV4` calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
 `u128` atomic units exactly at the authoritative asset scale and never rounds. The standalone

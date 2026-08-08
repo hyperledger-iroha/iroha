@@ -25,7 +25,7 @@ import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
-/** Source-level contract checks for the typed ABI-21 Kagemusha V4 lifecycle bridge. */
+/** Source-level checks for the ABI-22 bridge carrying the Kagemusha ABI-21/V4 lifecycle. */
 public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
     heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting();
@@ -122,14 +122,14 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void exactAbiIsRequired() {
-    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(21);
+    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(22);
     assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(20);
     assert KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 21, () -> true);
+        () -> {}, () -> 22, () -> true);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 21, () -> false);
+        () -> {}, () -> 22, () -> false);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 21, () -> true);
+        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 22, () -> true);
     assert KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
         () -> { throw new IllegalArgumentException("production artifact validation"); });
     assert !KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
@@ -189,7 +189,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void artifactContractIsFixed() {
-    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 21;
+    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 22;
     assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 8;
     assert KagemushaRecursiveSpendProver.MAX_ARTIFACT_CHUNK_BYTES == 1024 * 1024;
     try {
@@ -1338,7 +1338,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void requireNativeArtifactStreaming() {
     if (!KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()) {
       throw new AssertionError(
-          "A freshly built connect_norito_bridge ABI 21 artifact-streaming library is required");
+          "A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required");
     }
   }
 
@@ -1479,7 +1479,7 @@ public final class KagemushaRecursiveSpendProverTest {
         client.getOfflineCapability().join();
     assert !status.mandatory();
     assert status.cashHandoffCapability().equals("cash_handoff_v1");
-    assert status.requiredBridgeAbiVersion() == 21;
+    assert status.requiredBridgeAbiVersion() == 22;
     assert status.maximumHops() == 8;
     assert status.ready();
     assert status.assets().isEmpty();
@@ -1531,7 +1531,7 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static String universalOfflineCapabilityJson() {
     return "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\","
-        + "\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,"
+        + "\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,"
         + "\"assets\":[],\"blockers\":[]}";
   }
 
@@ -1541,14 +1541,14 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static void offlineCapabilityRejectsBackendReadinessClaims() {
     final List<String> invalidPayloads = Arrays.asList(
-        "{\"mandatory\":true,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v2\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":20,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":9,\"ready\":true,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":false,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[{}],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[{\"code\":\"unexpected\",\"message\":\"unexpected\"}]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[],\"future\":true}");
+        "{\"mandatory\":true,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v2\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":9,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":false,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[{}],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[{\"code\":\"unexpected\",\"message\":\"unexpected\"}]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[],\"future\":true}");
     for (final String payload : invalidPayloads) {
       final KagemushaRecursiveSpendProver.ToriiClient client =
           KagemushaRecursiveSpendProver.newToriiClient(

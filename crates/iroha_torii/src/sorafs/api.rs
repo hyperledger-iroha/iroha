@@ -33521,6 +33521,10 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
             StatusCode::NOT_FOUND,
             format!("manifest {manifest_id} not found"),
         ),
+        StorageBackendError::ManifestRetirementInProgress { manifest_id } => json_error(
+            StatusCode::CONFLICT,
+            format!("manifest {manifest_id} retirement is already in progress"),
+        ),
         StorageBackendError::ChunkNotFound {
             manifest_id,
             digest_hex,
@@ -33677,6 +33681,15 @@ mod storage_backend_error_tests {
         });
         let response = storage_backend_error(err);
         assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn concurrent_manifest_retirement_maps_to_conflict() {
+        let err = StorageBackendError::ManifestRetirementInProgress {
+            manifest_id: "deadbeef".to_owned(),
+        };
+        let response = storage_backend_error(err);
+        assert_eq!(response.status(), super::StatusCode::CONFLICT);
     }
 
     #[test]
@@ -47691,6 +47704,7 @@ mod advert_tests {
                     order_id: completed_met_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid: manifest_root_cid.clone(),
+                    musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 10,
                     deadline_epoch: 16,
@@ -47719,6 +47733,7 @@ mod advert_tests {
                     order_id: expired_missed_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid: manifest_root_cid.clone(),
+                    musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 20,
                     deadline_epoch: 25,
@@ -47744,6 +47759,7 @@ mod advert_tests {
                     order_id: pending_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid: manifest_root_cid.clone(),
+                    musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 40,
                     deadline_epoch: 55,
@@ -47769,6 +47785,7 @@ mod advert_tests {
                     order_id: expired_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid: manifest_root_cid.clone(),
+                    musubi_archive: None,
                     issued_by: issuer,
                     issued_epoch: 50,
                     deadline_epoch: 60,
@@ -48020,6 +48037,7 @@ mod advert_tests {
                     order_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid,
+                    musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 8,
                     deadline_epoch: 24,

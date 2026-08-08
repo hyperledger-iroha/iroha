@@ -7,10 +7,10 @@ export PATH
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SOURCE_SEAL="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
-ABI21_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi21_artifact.py"
+ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 PINNED_TOOLCHAIN="1.93.1"
-REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library"
+REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 22 library"
 
 fail() {
   printf '[kagemusha-jvm-native] ERROR: %s\n' "$*" >&2
@@ -27,7 +27,7 @@ fi
 
 for required_file in \
   "$SOURCE_SEAL" \
-  "$ABI21_ARTIFACT_CHECKER" \
+  "$ABI22_ARTIFACT_CHECKER" \
   "$HERMETIC_RUNNER" \
   "$ROOT_DIR/rust-toolchain.toml" \
   "$ROOT_DIR/kotlin/gradlew" \
@@ -493,7 +493,7 @@ run_expected_missing_native_failure \
 HOST_TRIPLE="$("$RUSTC_BINARY" --version --verbose | sed -n 's/^host: //p')"
 [[ "$HOST_TRIPLE" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "rustc returned a non-canonical host triple"
 CARGO_PATH="${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:/usr/bin:/bin"
-printf '[kagemusha-jvm-native] building fresh host ABI-21 bridge for %s\n' "$HOST_TRIPLE" >&2
+printf '[kagemusha-jvm-native] building fresh host ABI-22 bridge for %s\n' "$HOST_TRIPLE" >&2
 "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
   --profile host-cargo \
   --set "CARGO=$CARGO_BINARY" \
@@ -521,14 +521,14 @@ esac
 [[ -f "$NATIVE_LIBRARY" && ! -L "$NATIVE_LIBRARY" ]] \
   || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
 NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
-NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi21.json"
-"$PYTHON_BINARY" -I -S "$ABI21_ARTIFACT_CHECKER" record \
+NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi22.json"
+"$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record \
   --artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR" \
   --sdk c-jni \
   --target "$HOST_TRIPLE"
-"$PYTHON_BINARY" -I -S "$ABI21_ARTIFACT_CHECKER" verify \
+"$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" verify \
   --artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR"

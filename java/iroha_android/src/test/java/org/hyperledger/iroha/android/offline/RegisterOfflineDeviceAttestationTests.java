@@ -8,12 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
-import java.io.File;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Collections;
@@ -26,6 +21,7 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
 import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
+import org.hyperledger.iroha.android.test.FixtureGeneratorRunner;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -48,7 +44,7 @@ public final class RegisterOfflineDeviceAttestationTests {
     assertEquals(5, rust.size());
     final DeviceAttestationRegistration registration = registration(rust.get(3));
 
-    assertEquals(21, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+    assertEquals(22, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
     assertArrayEquals(hexToBytes(rust.get(0)), registration.noritoEncoded());
     assertArrayEquals(hexToBytes(rust.get(2)), registration.challengeHash());
     assertArrayEquals(hexToBytes(rust.get(4)), registration.canonicalRegistrationHash());
@@ -312,57 +308,7 @@ public final class RegisterOfflineDeviceAttestationTests {
   }
 
   private static List<String> rustFixture() throws Exception {
-    final File root = locateRepoRoot();
-    final File target = new File(root, "target/kotlin-fixture-gen-test");
-    final File binary = new File(target, "debug/kotlin-fixture-gen");
-    final Path lockPath = new File(root, "target/kotlin-fixture-gen-test.lock").toPath();
-    Files.createDirectories(lockPath.getParent());
-    try (FileChannel channel =
-            FileChannel.open(
-                lockPath,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.READ,
-                StandardOpenOption.WRITE);
-        java.nio.channels.FileLock ignored = channel.lock()) {
-      // Always ask Cargo to refresh the generator. Finding an older binary is not
-      // sufficient after a wire-ABI cutover and can compare Java against stale Rust bytes.
-      final ProcessBuilder build =
-          new ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
-              .directory(root)
-              .redirectErrorStream(true);
-      build.environment().put("CARGO_TARGET_DIR", target.getAbsolutePath());
-      final Process process = build.start();
-      final String output =
-          new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-      final int exit = process.waitFor();
-      if (exit != 0) {
-        throw new IllegalStateException("kotlin-fixture-gen build failed: " + output);
-      }
-    }
-    final Process process =
-        new ProcessBuilder(binary.getAbsolutePath(), "offline-device-attestation")
-            .directory(root)
-            .redirectErrorStream(true)
-            .start();
-    final String output =
-        new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-    final int exit = process.waitFor();
-    if (exit != 0 || output.isEmpty()) {
-      throw new IllegalStateException(
-          "offline-device-attestation fixture failed (" + exit + "): " + output);
-    }
-    return Arrays.asList(output.split("\\R"));
-  }
-
-  private static File locateRepoRoot() {
-    File directory = new File("").getAbsoluteFile();
-    while (directory != null && !new File(directory, "Cargo.toml").isFile()) {
-      directory = directory.getParentFile();
-    }
-    if (directory == null) {
-      throw new IllegalStateException("could not locate Iroha repository root");
-    }
-    return directory;
+    return FixtureGeneratorRunner.run("offline-device-attestation");
   }
 
   private static byte[] bytes(final String value) {

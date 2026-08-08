@@ -7,6 +7,7 @@
 //! revision/policy-digest qualifications.
 
 use std::{
+    cell::Cell,
     fmt,
     io::{self, Read},
     sync::{
@@ -33,6 +34,7 @@ use iroha_data_model::{
     account::AccountId,
     block::BlockHeader,
     isi::sorafs::CompleteReplicationOrder,
+    musubi::MusubiArchiveCommitmentV1,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -49,32 +51,41 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use mv::storage::StorageReadOnly as _;
 use norito::{core::DecodeLimits, decode_from_bytes_with_limits};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
-use sorafs_car::{CarBuildPlan, ChunkStoreError, compute_chunk_plan_digest_sha3};
+use sorafs_car::{
+    CarBuildPlan, ChunkStoreError, compute_chunk_plan_digest_sha3,
+    musubi::{MusubiBundleVerifierV1, VerifiedMusubiBundleV1},
+};
 use sorafs_manifest::{
     ManifestV1,
     capacity::{
         MAX_CAPACITY_METADATA_VALUE_BYTES, MAX_REPLICATION_ORDER_ASSIGNMENTS, ReplicationOrderV1,
     },
+    validate_registered_chunker_profile,
 };
 use sorafs_node::provider_ingest_runtime::{
     ProviderIngestAuthenticatedSourcePoolV1, ProviderIngestCompletionSignerBindingV1,
-    ProviderIngestCompletionSignerQualificationV1, ProviderIngestRuntimeProviderQualificationV1,
+    ProviderIngestCompletionSignerQualificationV1, ProviderIngestLocalStoredV1,
+    ProviderIngestRuntimeProviderQualificationV1, ProviderIngestVerifiedMusubiBundleReceiptV1,
 };
 use sorafs_node::{
-    FinalizedProviderIngestAuthorizationV1, NodeHandle, NodeStorageError,
-    ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClaimOwnerV1,
+    AdmittedPayloadReadLeaseErrorV1, FinalizedProviderIngestAuthorizationV1, NodeHandle,
+    NodeStorageError, ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClaimOwnerV1,
     ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
     ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
     ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolutionContextV1,
     ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
     ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
-    ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
-    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
+    ProviderIngestFinalizedClaimFactoryV1, ProviderIngestFinalizedCursorV1,
+    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1,
+    ProviderIngestFinalizedMusubiArchiveClaimV1, ProviderIngestFinalizedMusubiCompletionClaimV1,
+    ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
     ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
-    ProviderIngestLocalStorageV1, ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1,
-    ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
-    ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
-    ProviderIngestTransactionObservationV1, store::StorageError,
+    ProviderIngestLocalStorageV1, ProviderIngestMusubiAttestationApprovalRequestV1,
+    ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeV1,
+    ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1,
+    ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
+    ProviderIngestTransactionObservationV1,
+    store::{StorageError, StoredManifest},
 };
 
 use crate::sorafs_provider_ingest_finalized_query::ArchivedProviderIngestFinalizedLedgerV1;
@@ -631,6 +642,7 @@ impl ObservedArchivedFinalizedAssignmentLedgerV1 {
 impl ProviderIngestFinalizedLedgerV1 for ObservedArchivedFinalizedAssignmentLedgerV1 {
     fn read_assignment_page(
         &self,
+        claim_factory: ProviderIngestFinalizedClaimFactoryV1,
         at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
         after_order_id: Option<[u8; 32]>,
         limit: usize,
@@ -645,7 +657,7 @@ impl ProviderIngestFinalizedLedgerV1 for ObservedArchivedFinalizedAssignmentLedg
         let probe = Arc::clone(&self.probe);
         Box::pin(async move {
             let page = archived
-                .read_assignment_page(at_finalized_cursor, after_order_id, limit)
+                .read_assignment_page(claim_factory, at_finalized_cursor, after_order_id, limit)
                 .await?;
             if page.next_after_order_id.is_none() {
                 probe
@@ -671,6 +683,53 @@ impl NativeProviderIngestLocalStorageV1 {
             operation_timeout,
         }
     }
+
+    // TODO: Invoke this boundary from the finalized post-completion attestation coordinator once
+    // its governed signer/approval handoff exists. Keeping it uncalled makes this slice externally
+    // inert while fixing the only admissible way to derive the unsigned request.
+    #[allow(
+        dead_code,
+        reason = "the post-completion coordinator is intentionally not activated in this slice"
+    )]
+    fn prepare_musubi_attestation_approval_request(
+        &self,
+        retained_authorization: &FinalizedProviderIngestAuthorizationV1,
+        completed_claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
+    ) -> std::result::Result<
+        ProviderIngestMusubiAttestationApprovalRequestV1,
+        ProviderIngestLocalStorageErrorV1,
+    > {
+        if !completed_claim.matches_authorization(retained_authorization) {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+        let stored = self
+            .node
+            .manifest_metadata_by_digest(&retained_authorization.manifest_digest())
+            .map_err(|error| classify_completed_attestation_manifest_lookup_error(&error))?;
+        if stored.manifest_digest() != &retained_authorization.manifest_digest()
+            || stored.manifest_cid() != retained_authorization.manifest_cid()
+            || stored.content_length() != retained_authorization.content_length()
+            || stored.chunk_profile_handle() != retained_authorization.chunker_handle()
+        {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+        let manifest = stored
+            .load_manifest()
+            .map_err(|error| classify_storage_backend_error(&error))?;
+        validate_manifest_binding(retained_authorization, &manifest)?;
+        let registered_profile = validate_registered_chunker_profile(&manifest.chunking)
+            .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
+        let plan = stored
+            .try_to_car_plan_with_hint(registered_profile.profile, None)
+            .map_err(|error| classify_storage_backend_error(&error))?;
+        validate_verified_payload(retained_authorization, &manifest, &plan)?;
+
+        self.node
+            .with_admitted_payload_read_lease(&retained_authorization.manifest_digest(), |lease| {
+                lease.verify_completed_musubi_bundle(&plan, retained_authorization, completed_claim)
+            })
+            .map_err(classify_admitted_payload_lease_error)?
+    }
 }
 
 struct DeadlineBoundedReaderV1 {
@@ -680,6 +739,21 @@ struct DeadlineBoundedReaderV1 {
     terminal_state: DeadlineBoundedReaderTerminalStateV1,
     #[cfg(test)]
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,
+}
+
+struct ObservedAdmittedPayloadReaderV1<'observation, R> {
+    inner: R,
+    first_error_kind: &'observation Cell<Option<io::ErrorKind>>,
+}
+
+impl<R: Read> Read for ObservedAdmittedPayloadReaderV1<'_, R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(output).inspect_err(|error| {
+            if self.first_error_kind.get().is_none() {
+                self.first_error_kind.set(Some(error.kind()));
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -844,24 +918,30 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
     fn verify_existing(
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
+        musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
     ) -> ProviderIngestFutureV1<
         '_,
-        std::result::Result<Option<String>, ProviderIngestLocalStorageErrorV1>,
+        std::result::Result<Option<ProviderIngestLocalStoredV1>, ProviderIngestLocalStorageErrorV1>,
     > {
         let node = self.node.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || verify_existing_manifest(&node, &authorization))
-                .await
-                .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?
+            tokio::task::spawn_blocking(move || {
+                verify_existing_manifest(&node, &authorization, musubi_archive.as_ref())
+            })
+            .await
+            .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?
         })
     }
 
     fn store(
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
+        musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
         mut fetched: VerifiedProviderIngestPayloadV1,
-    ) -> ProviderIngestFutureV1<'_, std::result::Result<String, ProviderIngestLocalStorageErrorV1>>
-    {
+    ) -> ProviderIngestFutureV1<
+        '_,
+        std::result::Result<ProviderIngestLocalStoredV1, ProviderIngestLocalStorageErrorV1>,
+    > {
         let node = self.node.clone();
         let operation_timeout = self.operation_timeout;
         Box::pin(async move {
@@ -880,11 +960,42 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
                         &fetched.plan,
                         &mut fetched.reader,
                     ) {
-                        Ok(manifest_id) => Ok(manifest_id),
-                        Err(NodeStorageError::Storage(StorageError::ManifestExists { .. })) => {
-                            match verify_existing_manifest(&node, &authorization) {
-                                Ok(Some(manifest_id)) => Ok(manifest_id),
-                                Ok(None) => Err(ProviderIngestLocalStorageErrorV1::Permanent),
+                        Ok(manifest_id) => {
+                            // TODO: Quarantine a newly admitted, permanently rejected Musubi
+                            // payload through an audited receipt-bound transition once that
+                            // primitive exists. Raw eviction here could delete a concurrently
+                            // reused generic SoraFS object. Until then the bytes remain admitted,
+                            // but this path cannot return the receipt required for completion.
+                            match verify_existing_manifest(
+                                &node,
+                                &authorization,
+                                musubi_archive.as_ref(),
+                            ) {
+                                Ok(Some(stored))
+                                    if stored.manifest_id() == manifest_id.as_str() =>
+                                {
+                                    Ok(stored)
+                                }
+                                Ok(Some(_)) | Ok(None) => {
+                                    Err(ProviderIngestLocalStorageErrorV1::Permanent)
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                        Err(NodeStorageError::Storage(StorageError::ManifestExists {
+                            manifest_id,
+                        })) => {
+                            match verify_existing_manifest(
+                                &node,
+                                &authorization,
+                                musubi_archive.as_ref(),
+                            ) {
+                                Ok(Some(stored)) if stored.manifest_id() == manifest_id => {
+                                    Ok(stored)
+                                }
+                                Ok(Some(_)) | Ok(None) => {
+                                    Err(ProviderIngestLocalStorageErrorV1::Permanent)
+                                }
                                 Err(error) => Err(error),
                             }
                         }
@@ -908,7 +1019,11 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
 fn verify_existing_manifest(
     node: &NodeHandle,
     authorization: &FinalizedProviderIngestAuthorizationV1,
-) -> std::result::Result<Option<String>, ProviderIngestLocalStorageErrorV1> {
+    musubi_archive: Option<&ProviderIngestFinalizedMusubiArchiveClaimV1>,
+) -> std::result::Result<Option<ProviderIngestLocalStoredV1>, ProviderIngestLocalStorageErrorV1> {
+    authorization
+        .validate()
+        .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
     let stored = match node.manifest_metadata_by_digest(&authorization.manifest_digest()) {
         Ok(stored) => stored,
         Err(NodeStorageError::Storage(StorageError::ManifestNotFound { .. })) => return Ok(None),
@@ -923,12 +1038,162 @@ fn verify_existing_manifest(
     }
     let manifest = stored
         .load_manifest()
-        .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
+        .map_err(|error| classify_storage_backend_error(&error))?;
     validate_manifest_binding(authorization, &manifest)?;
     // Existing records are accepted only through StorageBackend's admission
     // invariant, which separately binds raw bytes to the stored plan payload
     // digest and ManifestV1.car_digest to the reconstructed full CARv2 archive.
-    Ok(Some(stored.manifest_id().to_owned()))
+    let manifest_id = stored.manifest_id().to_owned();
+    let claim = match (authorization.musubi_context(), musubi_archive) {
+        (None, None) => {
+            return Ok(Some(ProviderIngestLocalStoredV1::generic(manifest_id)));
+        }
+        (Some(_), Some(claim)) => claim,
+        (None, Some(_)) | (Some(_), None) => {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+    };
+    let receipt = verify_existing_musubi_bundle(node, authorization, claim, &stored, &manifest)?;
+    Ok(Some(ProviderIngestLocalStoredV1::musubi(
+        manifest_id,
+        receipt,
+    )))
+}
+
+fn verify_existing_musubi_bundle(
+    node: &NodeHandle,
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    claim: &ProviderIngestFinalizedMusubiArchiveClaimV1,
+    stored: &StoredManifest,
+    manifest: &ManifestV1,
+) -> std::result::Result<
+    ProviderIngestVerifiedMusubiBundleReceiptV1,
+    ProviderIngestLocalStorageErrorV1,
+> {
+    validate_musubi_claim_binding(authorization, claim)?;
+    let verified =
+        verify_admitted_musubi_bundle(node, authorization, claim.commitment(), stored, manifest)?;
+
+    ProviderIngestVerifiedMusubiBundleReceiptV1::from_verified_bundle(
+        claim,
+        authorization,
+        &verified,
+    )
+}
+
+/// Reconstruct and verify one admitted Musubi payload under a fresh lifecycle lease.
+///
+/// This helper deliberately returns the verifier's closed evidence instead of a persisted
+/// pre-completion receipt. The post-completion attestation path instead enters a new admitted
+/// payload lifecycle lease and calls
+/// [`sorafs_node::AdmittedPayloadReadLeaseV1::verify_completed_musubi_bundle`] with the
+/// independently sealed completed-row claim; possession of this earlier evidence never skips
+/// that read or authorizes signing.
+fn verify_admitted_musubi_bundle(
+    node: &NodeHandle,
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    commitment: &MusubiArchiveCommitmentV1,
+    stored: &StoredManifest,
+    manifest: &ManifestV1,
+) -> std::result::Result<VerifiedMusubiBundleV1, ProviderIngestLocalStorageErrorV1> {
+    validate_musubi_commitment_binding(authorization, commitment)?;
+    let registered_profile = validate_registered_chunker_profile(&manifest.chunking)
+        .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
+    let plan = stored
+        .try_to_car_plan_with_hint(registered_profile.profile, None)
+        .map_err(|error| classify_storage_backend_error(&error))?;
+    validate_verified_payload(authorization, manifest, &plan)?;
+
+    let verification = node
+        .with_admitted_payload_read_lease(&authorization.manifest_digest(), |lease| {
+            if lease.manifest_digest() != &authorization.manifest_digest()
+                || lease.content_length() != authorization.content_length()
+                || lease.payload_digest() != plan.payload_digest.as_bytes()
+            {
+                return None;
+            }
+            let first_read_error = Cell::new(None);
+            let verified =
+                MusubiBundleVerifierV1::verify_payload_with_factory(&plan, commitment, || {
+                    lease
+                        .open_reader()
+                        .inspect_err(|error| {
+                            if first_read_error.get().is_none() {
+                                first_read_error.set(Some(error.kind()));
+                            }
+                        })
+                        .map(|inner| ObservedAdmittedPayloadReaderV1 {
+                            inner,
+                            first_error_kind: &first_read_error,
+                        })
+                });
+            Some((verified, first_read_error.get()))
+        })
+        .map_err(classify_admitted_payload_lease_error)?
+        .ok_or(ProviderIngestLocalStorageErrorV1::Permanent)?;
+    match verification {
+        (Ok(verified), _) => Ok(verified),
+        (Err(_), Some(kind)) if admitted_payload_read_error_is_retryable(kind) => {
+            return Err(ProviderIngestLocalStorageErrorV1::Retryable);
+        }
+        (Err(_), _) => return Err(ProviderIngestLocalStorageErrorV1::Permanent),
+    }
+}
+
+fn validate_musubi_claim_binding(
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    claim: &ProviderIngestFinalizedMusubiArchiveClaimV1,
+) -> std::result::Result<(), ProviderIngestLocalStorageErrorV1> {
+    if !claim.matches_authorization(authorization) {
+        return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+    }
+    Ok(())
+}
+
+fn validate_musubi_commitment_binding(
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    commitment: &MusubiArchiveCommitmentV1,
+) -> std::result::Result<(), ProviderIngestLocalStorageErrorV1> {
+    let Some(musubi_context) = authorization.musubi_context() else {
+        return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+    };
+    if authorization.validate().is_err()
+        || commitment.validate().is_err()
+        || musubi_context.archive_id() != commitment.archive_id()
+        || commitment.root_cid.as_bytes() != authorization.manifest_cid()
+        || commitment.chunker.to_handle() != authorization.chunker_handle()
+        || commitment.chunk_plan_digest.as_bytes() != &authorization.chunk_digest_sha3_256()
+        || commitment.por_root.as_bytes() != &authorization.por_root()
+        || commitment.content_length != authorization.content_length()
+    {
+        return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+    }
+    Ok(())
+}
+
+const fn classify_admitted_payload_lease_error(
+    error: AdmittedPayloadReadLeaseErrorV1,
+) -> ProviderIngestLocalStorageErrorV1 {
+    match error {
+        AdmittedPayloadReadLeaseErrorV1::StorageUnavailable => {
+            ProviderIngestLocalStorageErrorV1::Retryable
+        }
+        AdmittedPayloadReadLeaseErrorV1::NotAdmitted => {
+            ProviderIngestLocalStorageErrorV1::Retryable
+        }
+        AdmittedPayloadReadLeaseErrorV1::Disabled => ProviderIngestLocalStorageErrorV1::Permanent,
+    }
+}
+
+const fn admitted_payload_read_error_is_retryable(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::Interrupted
+            | io::ErrorKind::WouldBlock
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::NotFound
+            | io::ErrorKind::Other
+    )
 }
 
 fn validate_manifest_binding(
@@ -959,6 +1224,9 @@ fn validate_verified_payload(
     manifest: &ManifestV1,
     plan: &CarBuildPlan,
 ) -> std::result::Result<(), ProviderIngestLocalStorageErrorV1> {
+    authorization
+        .validate()
+        .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
     validate_manifest_binding(authorization, manifest)?;
     if plan.content_length != authorization.content_length()
         || compute_chunk_plan_digest_sha3(&plan.chunks) != authorization.chunk_digest_sha3_256()
@@ -974,34 +1242,58 @@ fn validate_verified_payload(
 
 fn classify_storage_error(error: &NodeStorageError) -> ProviderIngestLocalStorageErrorV1 {
     match error {
-        NodeStorageError::Storage(
-            StorageError::ChunkDigestMismatch { .. }
-            | StorageError::ManifestContentLengthMismatch
-            | StorageError::ManifestChunkPlanDigestMismatch
-            | StorageError::CarArchiveReconstruction { .. }
-            | StorageError::ManifestCarArchiveDigestMismatch
-            | StorageError::ManifestCarSizeMismatch { .. }
-            | StorageError::ManifestDagCodecMismatch { .. }
-            | StorageError::ChunkProfileMismatch
-            | StorageError::PorRootMismatch
-            | StorageError::ChunkStore(
-                ChunkStoreError::UnexpectedEof { .. }
-                | ChunkStoreError::DigestMismatch { .. }
-                | ChunkStoreError::LengthMismatch { .. }
-                | ChunkStoreError::PayloadDigestMismatch
-                | ChunkStoreError::SinkChunkOrder { .. }
-                | ChunkStoreError::SinkChunkMetadataMismatch { .. }
-                | ChunkStoreError::SinkChunkLengthMismatch { .. }
-                | ChunkStoreError::SinkChunkDigestMismatch { .. }
-                | ChunkStoreError::SinkIncomplete { .. },
-            )
-            | StorageError::InvalidFileLayout { .. }
-            | StorageError::CorruptStorageState { .. }
-            | StorageError::UnsupportedIndexVersion { .. },
-        ) => ProviderIngestLocalStorageErrorV1::Permanent,
-        NodeStorageError::Disabled
-        | NodeStorageError::Scheduler(_)
-        | NodeStorageError::Storage(_) => ProviderIngestLocalStorageErrorV1::Retryable,
+        NodeStorageError::Storage(error) => classify_storage_backend_error(error),
+        NodeStorageError::Disabled | NodeStorageError::Scheduler(_) => {
+            ProviderIngestLocalStorageErrorV1::Retryable
+        }
+    }
+}
+
+fn classify_completed_attestation_manifest_lookup_error(
+    error: &NodeStorageError,
+) -> ProviderIngestLocalStorageErrorV1 {
+    match error {
+        NodeStorageError::Disabled => ProviderIngestLocalStorageErrorV1::Permanent,
+        NodeStorageError::Storage(StorageError::ManifestNotFound { .. }) => {
+            ProviderIngestLocalStorageErrorV1::Retryable
+        }
+        other => classify_storage_error(other),
+    }
+}
+
+fn classify_storage_backend_error(error: &StorageError) -> ProviderIngestLocalStorageErrorV1 {
+    match error {
+        StorageError::ChunkDigestMismatch { .. }
+        | StorageError::PayloadLengthMismatch { .. }
+        | StorageError::UnsupportedManifestVersion { .. }
+        | StorageError::ManifestContentLengthMismatch
+        | StorageError::ManifestChunkPlanDigestMismatch
+        | StorageError::CarArchiveReconstruction { .. }
+        | StorageError::ManifestCarArchiveDigestMismatch
+        | StorageError::ManifestCarSizeMismatch { .. }
+        | StorageError::ManifestDagCodecMismatch { .. }
+        | StorageError::ChunkProfileMismatch
+        | StorageError::PorRootMismatch
+        | StorageError::ChunkStore(
+            ChunkStoreError::UnexpectedEof { .. }
+            | ChunkStoreError::DigestMismatch { .. }
+            | ChunkStoreError::LengthMismatch { .. }
+            | ChunkStoreError::PayloadDigestMismatch
+            | ChunkStoreError::SinkChunkOrder { .. }
+            | ChunkStoreError::SinkChunkMetadataMismatch { .. }
+            | ChunkStoreError::SinkChunkLengthMismatch { .. }
+            | ChunkStoreError::SinkChunkDigestMismatch { .. }
+            | ChunkStoreError::SinkIncomplete { .. },
+        )
+        | StorageError::Norito(_)
+        | StorageError::PersistentArtifactTooLarge { .. }
+        | StorageError::LayoutValueTooLarge { .. }
+        | StorageError::InvalidFileLayout { .. }
+        | StorageError::CorruptStorageState { .. }
+        | StorageError::UnsupportedIndexVersion { .. } => {
+            ProviderIngestLocalStorageErrorV1::Permanent
+        }
+        _ => ProviderIngestLocalStorageErrorV1::Retryable,
     }
 }
 
@@ -1819,6 +2111,7 @@ impl ProviderIngestRuntimeAdaptersV1 {
 
 struct ProviderIngestStartContextV1 {
     chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
     state: Arc<State>,
     queue: Arc<Queue>,
     node: NodeHandle,
@@ -1830,6 +2123,7 @@ struct ProviderIngestStartContextV1 {
 /// Daemon-owned inputs needed to launch the supervised provider-ingest worker.
 pub(crate) struct ProviderIngestRuntimeStartArgsV1 {
     chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
     state: Arc<State>,
     queue: Arc<Queue>,
     node: NodeHandle,
@@ -1841,6 +2135,7 @@ impl ProviderIngestRuntimeStartArgsV1 {
     /// finalized reader.
     pub(crate) fn new(
         chain_id: ChainId,
+        genesis_block_hash: [u8; 32],
         state: Arc<State>,
         queue: Arc<Queue>,
         node: NodeHandle,
@@ -1848,6 +2143,7 @@ impl ProviderIngestRuntimeStartArgsV1 {
     ) -> Self {
         Self {
             chain_id,
+            genesis_block_hash,
             state,
             queue,
             node,
@@ -2092,6 +2388,7 @@ fn assemble_native_provider_ingest_runtime(
         .node
         .build_provider_ingest_runtime(
             context.chain_id.clone(),
+            context.genesis_block_hash,
             claim_owner,
             provider_ingest_runtime_policy(config),
             ledger,
@@ -2436,6 +2733,7 @@ pub(crate) async fn start(
 ) -> Result<(ProviderIngestRuntimeHandleV1, Child)> {
     let ProviderIngestRuntimeStartArgsV1 {
         chain_id,
+        genesis_block_hash,
         state,
         queue,
         node,
@@ -2447,6 +2745,7 @@ pub(crate) async fn start(
     } = adapters;
     let context = ProviderIngestStartContextV1 {
         chain_id,
+        genesis_block_hash,
         state,
         queue,
         node,
@@ -2637,10 +2936,18 @@ fn validate_authenticated_source_inventory(
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::isi::InstructionBox;
+    use iroha_data_model::{
+        isi::InstructionBox,
+        musubi::MusubiContentDigestV1,
+        sorafs::pin_registry::{
+            ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionAuthorityV1,
+        },
+    };
+    use sorafs_node::FinalizedProviderIngestMusubiContextV1;
     use sorafs_node::provider_ingest_runtime::{
         ProviderIngestAuthenticatedProviderSourceV1, ProviderIngestAuthenticatedSourceBindingV1,
-        ProviderIngestAuthenticatedSourceRegistrationV1, ProviderIngestSourceQualificationV1,
+        ProviderIngestAuthenticatedSourceRegistrationV1, ProviderIngestMusubiArchiveFetchBindingV1,
+        ProviderIngestSourceQualificationV1,
     };
 
     use super::*;
@@ -3480,6 +3787,7 @@ mod tests {
         fn fetch_provider(
             &self,
             _authorization: FinalizedProviderIngestAuthorizationV1,
+            _musubi_archive: Option<ProviderIngestMusubiArchiveFetchBindingV1>,
         ) -> ProviderIngestFutureV1<
             '_,
             std::result::Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>,
@@ -4040,6 +4348,71 @@ mod tests {
                 ProviderIngestLocalStorageErrorV1::Permanent
             );
         }
+    }
+
+    #[test]
+    fn admitted_musubi_verification_classifies_storage_failures() {
+        assert_eq!(
+            classify_completed_attestation_manifest_lookup_error(&NodeStorageError::Disabled),
+            ProviderIngestLocalStorageErrorV1::Permanent,
+            "statically disabled storage cannot become available on retry"
+        );
+        assert_eq!(
+            classify_completed_attestation_manifest_lookup_error(&NodeStorageError::Storage(
+                StorageError::ManifestNotFound {
+                    manifest_id: "temporarily-absent-completed-bundle".to_owned(),
+                },
+            )),
+            ProviderIngestLocalStorageErrorV1::Retryable,
+            "an admitted bundle may be reconciled back into storage"
+        );
+        assert_eq!(
+            classify_admitted_payload_lease_error(
+                AdmittedPayloadReadLeaseErrorV1::StorageUnavailable,
+            ),
+            ProviderIngestLocalStorageErrorV1::Retryable
+        );
+        assert_eq!(
+            classify_admitted_payload_lease_error(AdmittedPayloadReadLeaseErrorV1::NotAdmitted),
+            ProviderIngestLocalStorageErrorV1::Retryable
+        );
+        assert_eq!(
+            classify_admitted_payload_lease_error(AdmittedPayloadReadLeaseErrorV1::Disabled),
+            ProviderIngestLocalStorageErrorV1::Permanent
+        );
+        assert!(admitted_payload_read_error_is_retryable(
+            io::ErrorKind::Interrupted
+        ));
+        assert!(admitted_payload_read_error_is_retryable(
+            io::ErrorKind::WouldBlock
+        ));
+        assert!(admitted_payload_read_error_is_retryable(
+            io::ErrorKind::TimedOut
+        ));
+        assert!(admitted_payload_read_error_is_retryable(
+            io::ErrorKind::NotFound
+        ));
+        assert!(admitted_payload_read_error_is_retryable(
+            io::ErrorKind::Other
+        ));
+        assert!(!admitted_payload_read_error_is_retryable(
+            io::ErrorKind::InvalidData
+        ));
+        assert!(!admitted_payload_read_error_is_retryable(
+            io::ErrorKind::UnexpectedEof
+        ));
+        assert!(!admitted_payload_read_error_is_retryable(
+            io::ErrorKind::PermissionDenied
+        ));
+
+        let transient = StorageError::Io(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "injected transient storage read",
+        ));
+        assert_eq!(
+            classify_storage_backend_error(&transient),
+            ProviderIngestLocalStorageErrorV1::Retryable
+        );
     }
 
     #[tokio::test]

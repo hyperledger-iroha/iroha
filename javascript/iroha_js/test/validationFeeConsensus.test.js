@@ -159,7 +159,7 @@ function verifyProjectionFixture(projection) {
   return withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 21;
+        return 22;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1() {
@@ -214,7 +214,7 @@ test("request encoder delegates only after strict checkpoint validation", () => 
   withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 21;
+        return 22;
       },
       validationFeeCurrentPolicyProofRequestV1(height, context) {
         assert.equal(height, 100n);
@@ -270,7 +270,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
   withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 21;
+        return 22;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1(
@@ -419,7 +419,7 @@ test("validation-fee proof path rejects a stale native bridge ABI", () => {
     () => {
       assert.throws(
         () => encodeValidationFeeCurrentPolicyProofRequestV1(binding.checkpoint),
-        /ABI 21/u,
+        /ABI 22/u,
       );
     },
   );

@@ -22,6 +22,7 @@ public sealed class ToriiClientTests
     private const string OnboardingFixtureAlias = "merchant@banka.paynet";
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+    private const string CanonicalNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private static readonly string MultisigMemberAccountId1 = TestAccountId(0x41);
     private static readonly string MultisigMemberAccountId2 = TestAccountId(0x42);
     private static readonly string CanonicalMultisigAccountId = TestAccountId(0x43);
@@ -10122,7 +10123,7 @@ public sealed class ToriiClientTests
         using var handler = new RecordingHandler(request =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/query", request.RequestUri!.AbsolutePath);
+            Assert.Equal("/v1/query", request.RequestUri!.AbsolutePath);
             Assert.Equal("limit=1", request.RequestUri.Query.TrimStart('?'));
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
 
@@ -10158,7 +10159,7 @@ public sealed class ToriiClientTests
         using var handler = new RecordingHandler(request =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/query", request.RequestUri!.AbsolutePath);
+            Assert.Equal("/v1/query", request.RequestUri!.AbsolutePath);
             Assert.Equal("limit=1", request.RequestUri.Query.TrimStart('?'));
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
 
@@ -10181,7 +10182,7 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        seenEnvelope = new SignedQueryBuilder("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+        seenEnvelope = new SignedQueryBuilder(CanonicalAccountId, CanonicalNetworkId)
             .FindParameters()
             .BuildSigned(Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"));
 
@@ -10228,7 +10229,7 @@ public sealed class ToriiClientTests
             client.SubmitSignedQueryAsync(queryBytes, query: "limit=1", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("value.id must not appear more than once", error.Message);
-        Assert.Equal("/query?limit=1", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/query?limit=1", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -29150,7 +29151,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VpnQuoteIdHex,
             VpnPaymentTransactionHashHex,
             VpnQuoteIdHex,
-            "cafe",
             "cafe");
         response[field] = JsonValueForVpnResponse(value);
         return response.ToJsonString();
@@ -29176,7 +29176,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 VpnQuoteIdHex,
                 VpnPaymentTransactionHashHex,
                 VpnQuoteIdHex,
-                "cafe",
                 "cafe")),
             ["total"] = 1,
         };
@@ -29207,7 +29206,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 VpnQuoteIdHex,
                 VpnPaymentTransactionHashHex,
                 VpnQuoteIdHex,
-                "cafe",
                 "cafe")),
             ["total"] = 1,
         };

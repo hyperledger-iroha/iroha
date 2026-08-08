@@ -6,29 +6,51 @@
 //! completion before considering transaction-level delivery state.
 
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     fmt,
     future::Future,
+    io::{self, Read},
     pin::Pin,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use iroha_config::parameters::is_production_runtime_handle;
+use iroha_config::parameters::{
+    defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
+    is_production_runtime_handle,
+};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
+    musubi::{
+        ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1,
+        MusubiArtifactDescriptorV1, MusubiContentDigestV1,
+        MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
+        MusubiReplicationOrderArchiveBindingV1, MusubiSemanticReleaseDigestV1,
+        MusubiVerificationLockDigestV1,
+    },
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
-            PinManifestFinalizedRecordV1, PinStatus, ProviderIngestCompletionAuthorityV1,
-            ProviderIngestCompletionSignerPolicyV1, ReplicationOrderRecord, ReplicationOrderStatus,
+            PinManifestFinalizedRecordV1, PinManifestRecord, PinStatus,
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ReplicationOrderCompletionRecord, ReplicationOrderRecord, ReplicationOrderStatus,
         },
     },
     transaction::{SignedTransaction, TransactionPayload},
 };
-use norito::{core::DecodeLimits, decode_from_bytes_with_limits};
+use norito::{
+    codec::Encode as _,
+    core::DecodeLimits,
+    decode_from_bytes_with_limits,
+    derive::{NoritoDeserialize, NoritoSerialize},
+};
+use sorafs_car::{
+    CarBuildPlan, compute_chunk_plan_digest_sha3,
+    musubi::{MusubiBundleVerifierV1, VerifiedMusubiBundleV1},
+};
 use sorafs_manifest::capacity::{
     MAX_CAPACITY_METADATA_VALUE_BYTES, MAX_REPLICATION_ORDER_ASSIGNMENTS, ReplicationOrderV1,
 };
@@ -36,19 +58,26 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::provider_ingest_outbox::{
-    FinalizedProviderIngestAuthorizationV1, PROVIDER_INGEST_STATUS_PAGE_MAX_V1,
-    ProviderIngestCancellationReasonV1, ProviderIngestClaimOwnerV1,
-    ProviderIngestCompletionSigningContextV1, ProviderIngestCompletionStateV1,
-    ProviderIngestDeadLetterReasonV1, ProviderIngestDeliveryStateV1,
-    ProviderIngestExposedCompletionExpiryV1, ProviderIngestFailureClassV1,
-    ProviderIngestFinalizedCancellationV1, ProviderIngestFinalizedCompletionV1,
-    ProviderIngestFinalizedCursorV1, ProviderIngestOutbox, ProviderIngestOutboxError,
-    ProviderIngestSignerPolicyObservationV1, ProviderIngestSourceClaimV1,
+    FinalizedProviderIngestAuthorizationV1, FinalizedProviderIngestMusubiContextV1,
+    PROVIDER_INGEST_STATUS_PAGE_MAX_V1, ProviderIngestCancellationReasonV1,
+    ProviderIngestClaimOwnerV1, ProviderIngestCompletionSigningContextV1,
+    ProviderIngestCompletionStateV1, ProviderIngestDeadLetterReasonV1,
+    ProviderIngestDeliveryStateV1, ProviderIngestExposedCompletionExpiryV1,
+    ProviderIngestFailureClassV1, ProviderIngestFinalizedCancellationV1,
+    ProviderIngestFinalizedCompletionV1, ProviderIngestFinalizedCursorV1, ProviderIngestOutbox,
+    ProviderIngestOutboxError, ProviderIngestSignerPolicyObservationV1,
+    ProviderIngestSourceClaimV1,
 };
+use crate::store::AdmittedPayloadReadLeaseV1;
 
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const PROVIDER_INGEST_SOURCE_QUALIFICATION_VERSION_V1: u8 = 1;
 const PROVIDER_INGEST_COMPLETION_SIGNER_QUALIFICATION_VERSION_V1: u8 = 1;
+const PROVIDER_INGEST_MUSUBI_COMPLETION_CLAIM_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha.sorafs.provider-ingest.musubi-completion-claim.v1\0";
+const MUSUBI_ARTIFACT_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] = b"musubi-artifact-descriptor-v1\0";
+/// Maximum canonical bytes for one persisted pre-completion Musubi verification receipt.
+pub const PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1: usize = 8 * 1024;
 const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     MAX_CAPACITY_METADATA_VALUE_BYTES,
     REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1,
@@ -132,6 +161,12 @@ pub struct ProviderIngestFinalizedAssignmentV1 {
     pub pin: PinManifestFinalizedRecordV1,
     /// Chain-authoritative replication order.
     pub order: ReplicationOrderRecord,
+    /// Reader-authenticated Musubi archive claim, absent for generic
+    /// non-Musubi replication orders.
+    pub musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
+    /// Reader-authenticated Musubi archive and this provider's exact finalized
+    /// completion, absent until the local provider completion is committed.
+    pub completed_musubi_archive: Option<ProviderIngestFinalizedMusubiCompletionClaimV1>,
     /// Current registered owner of this runtime's provider identity.
     pub provider_owner: Option<AccountId>,
     /// Exact current chain-authoritative completion owner and signer policy.
@@ -140,6 +175,739 @@ pub struct ProviderIngestFinalizedAssignmentV1 {
     pub completion_epoch: Option<u64>,
     /// Exact committed transaction hash, when the finalized reader exposes it.
     pub committed_transaction_hash: Option<[u8; 32]>,
+}
+
+/// Opaque consensus-authenticated Musubi archive binding emitted only by a
+/// finalized-ledger reader.
+///
+/// The private representation deliberately prevents publisher request DTOs
+/// from being reinterpreted as finalized evidence. A reader can create this
+/// value only while servicing a runtime-issued
+/// [`ProviderIngestFinalizedClaimFactoryV1`].
+///
+/// This pre-completion claim binds the configured chain/genesis identity and
+/// the exact finalized archive cursor. The source and storage path may use it
+/// only to fetch and semantically verify the bundle before replication
+/// completion. It contains no post-completion finalized row and therefore
+/// cannot authorize a Musubi provider attestation.
+///
+/// ```compile_fail
+/// use sorafs_node::ProviderIngestFinalizedMusubiArchiveClaimV1;
+///
+/// let _forged = ProviderIngestFinalizedMusubiArchiveClaimV1 { binding: todo!() };
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestFinalizedMusubiArchiveClaimV1 {
+    chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
+    provider_id: [u8; 32],
+    observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    binding: MusubiReplicationOrderArchiveBindingV1,
+}
+
+impl ProviderIngestFinalizedMusubiArchiveClaimV1 {
+    /// Exact configured chain identity authenticated by the runtime boundary.
+    #[must_use]
+    pub const fn chain_id(&self) -> &ChainId {
+        &self.chain_id
+    }
+
+    /// Exact configured genesis block hash authenticated by the runtime boundary.
+    #[must_use]
+    pub const fn genesis_block_hash(&self) -> [u8; 32] {
+        self.genesis_block_hash
+    }
+
+    /// Local provider identity for which the finalized assignment was read.
+    #[must_use]
+    pub const fn provider_id(&self) -> [u8; 32] {
+        self.provider_id
+    }
+
+    /// Exact finalized archive cursor at which this binding was observed.
+    #[must_use]
+    pub const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
+        self.observed_finalized_cursor
+    }
+
+    /// Exact replication order authenticated by the finalized reader.
+    #[must_use]
+    pub const fn replication_order(&self) -> [u8; 32] {
+        *self.binding.replication_order.as_bytes()
+    }
+
+    /// Exact derived archive identity authenticated by the finalized reader.
+    #[must_use]
+    pub const fn archive_id(&self) -> ArchiveId {
+        self.binding.archive_id
+    }
+
+    /// Complete immutable archive commitment authenticated by the finalized
+    /// reader.
+    #[must_use]
+    pub const fn commitment(&self) -> &MusubiArchiveCommitmentV1 {
+        &self.binding.commitment
+    }
+
+    /// Check every field shared with one finalized local-ingest authorization.
+    #[must_use]
+    pub fn matches_authorization(
+        &self,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+    ) -> bool {
+        let commitment = self.commitment();
+        authorization.validate().is_ok()
+            && !self.chain_id.as_str().is_empty()
+            && self.chain_id.as_str().len()
+                <= provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+            && self.genesis_block_hash != [0; 32]
+            && self.provider_id == authorization.provider_id()
+            && authorization_musubi_context_matches(
+                authorization,
+                &self.chain_id,
+                self.genesis_block_hash,
+                self.archive_id(),
+            )
+            && finalized_cursor_is_same_or_later(
+                self.observed_finalized_cursor,
+                authorization.admission_finalized_cursor(),
+            )
+            && self.replication_order() == authorization.order_id()
+            && self.archive_id() == commitment.archive_id()
+            && commitment.validate().is_ok()
+            && commitment.root_cid.as_bytes() == authorization.manifest_cid()
+            && commitment.chunker.to_handle() == authorization.chunker_handle()
+            && commitment.chunk_plan_digest.as_bytes() == &authorization.chunk_digest_sha3_256()
+            && commitment.por_root.as_bytes() == &authorization.por_root()
+            && commitment.content_length == authorization.content_length()
+    }
+}
+
+/// Opaque consensus-authenticated Musubi claim sealed only from this provider's
+/// finalized completion row.
+///
+/// This value is intentionally distinct from
+/// [`ProviderIngestFinalizedMusubiArchiveClaimV1`]. The pre-completion claim can
+/// authorize fetching and semantic verification before storage completion, but
+/// only this completed-row capability may enter the later provider-attestation
+/// path. It has no public constructor or serialization implementation.
+///
+/// ```compile_fail
+/// use sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedMusubiCompletionClaimV1;
+///
+/// let _forged = ProviderIngestFinalizedMusubiCompletionClaimV1 {
+///     chain_id: todo!(),
+///     genesis_block_hash: [0; 32],
+///     provider_id: [0; 32],
+///     observed_finalized_cursor: todo!(),
+///     binding: todo!(),
+///     completion: todo!(),
+/// };
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestFinalizedMusubiCompletionClaimV1 {
+    chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
+    provider_id: [u8; 32],
+    observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    binding: MusubiReplicationOrderArchiveBindingV1,
+    completion: ReplicationOrderCompletionRecord,
+}
+
+impl ProviderIngestFinalizedMusubiCompletionClaimV1 {
+    /// Exact configured chain identity authenticated by the finalized reader.
+    #[must_use]
+    pub const fn chain_id(&self) -> &ChainId {
+        &self.chain_id
+    }
+
+    /// Exact configured genesis hash authenticated by the finalized reader.
+    #[must_use]
+    pub const fn genesis_block_hash(&self) -> [u8; 32] {
+        self.genesis_block_hash
+    }
+
+    /// Local provider whose finalized completion was observed.
+    #[must_use]
+    pub const fn provider_id(&self) -> [u8; 32] {
+        self.provider_id
+    }
+
+    /// Exact finalized archive cursor at which the completion row was observed.
+    #[must_use]
+    pub const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
+        self.observed_finalized_cursor
+    }
+
+    /// Exact replication order authenticated by the finalized reader.
+    #[must_use]
+    pub const fn replication_order(&self) -> [u8; 32] {
+        *self.binding.replication_order.as_bytes()
+    }
+
+    /// Exact derived archive identity authenticated by the finalized reader.
+    #[must_use]
+    pub const fn archive_id(&self) -> ArchiveId {
+        self.binding.archive_id
+    }
+
+    /// Complete immutable archive commitment authenticated by the finalized reader.
+    #[must_use]
+    pub const fn commitment(&self) -> &MusubiArchiveCommitmentV1 {
+        &self.binding.commitment
+    }
+
+    /// Exact provider-scoped completion copied from the finalized order row.
+    #[must_use]
+    pub const fn completion(&self) -> &ReplicationOrderCompletionRecord {
+        &self.completion
+    }
+
+    /// Check every finalized identity, cursor, completion, and commitment field against the
+    /// retained local-ingest authorization.
+    ///
+    /// The completed row may first be observed after both its original admission cursor and its
+    /// own finalized anchor. When either earlier point has the same height as the observed cursor,
+    /// its block hash must also match. Conflicting admission and completion hashes at one height
+    /// are always rejected, including when the completed row is observed at a later height.
+    #[must_use]
+    pub fn matches_authorization(
+        &self,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+    ) -> bool {
+        let Some(context) = authorization.musubi_context() else {
+            return false;
+        };
+        let admission_cursor = authorization.admission_finalized_cursor();
+        let completion_anchor = self.completion.finalized_anchor;
+        authorization.validate().is_ok()
+            && self.binding.validate().is_ok()
+            && context.chain_id() == &self.chain_id
+            && context.genesis_block_hash() == self.genesis_block_hash
+            && context.archive_id() == self.archive_id()
+            && self.provider_id == authorization.provider_id()
+            && self.replication_order() == authorization.order_id()
+            && self.archive_id() == self.commitment().archive_id()
+            && self.observed_finalized_cursor.height != 0
+            && self.observed_finalized_cursor.block_hash != [0; 32]
+            && self.completion.provider_id == ProviderId::new(self.provider_id)
+            && self.completion.completed_by == self.completion.completion_authority.provider_owner
+            && self.completion.completion_authority.is_valid()
+            && self.completion.assignment_revision != 0
+            && self.completion.completion_epoch != 0
+            && completion_anchor.is_valid()
+            && (admission_cursor.height != completion_anchor.height
+                || admission_cursor.block_hash == completion_anchor.block_hash)
+            && finalized_cursor_is_same_or_later(self.observed_finalized_cursor, admission_cursor)
+            && finalized_cursor_is_same_or_later(
+                self.observed_finalized_cursor,
+                ProviderIngestFinalizedCursorV1 {
+                    height: completion_anchor.height,
+                    block_hash: completion_anchor.block_hash,
+                },
+            )
+            && self.commitment().root_cid.as_bytes() == authorization.manifest_cid()
+            && self.commitment().chunker.to_handle() == authorization.chunker_handle()
+            && self.commitment().chunk_plan_digest.as_bytes()
+                == &authorization.chunk_digest_sha3_256()
+            && self.commitment().por_root.as_bytes() == &authorization.por_root()
+            && self.commitment().content_length == authorization.content_length()
+    }
+}
+
+/// Closed failure returned while deriving a provider-attestation approval request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ProviderIngestMusubiAttestationApprovalRequestErrorV1 {
+    /// The completed claim or canonical verifier evidence was inconsistent.
+    #[error("provider-ingest Musubi attestation evidence was rejected")]
+    Rejected,
+}
+
+/// Opaque, unsigned request to approve one exact Musubi provider attestation payload.
+///
+/// This value is deliberately nonserializable and has no arbitrary constructor. It can be
+/// derived only by combining a finalized post-completion claim with the canonical bundle
+/// verifier's opaque output. Construction performs no signing and activates no runtime path.
+///
+/// Neither pre-completion receipt nor verifier evidence can bypass the storage lifecycle lease.
+/// The raw evidence constructor is crate-private, so downstream code must use
+/// [`AdmittedPayloadReadLeaseV1::verify_completed_musubi_bundle`]:
+///
+/// ```compile_fail
+/// use sorafs_node::{
+///     ProviderIngestFinalizedMusubiCompletionClaimV1,
+///     ProviderIngestMusubiAttestationApprovalRequestV1,
+/// };
+/// use sorafs_car::musubi::VerifiedMusubiBundleV1;
+///
+/// fn cannot_reuse_precompletion_verifier_evidence(
+///     claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
+///     verified: &VerifiedMusubiBundleV1,
+/// ) {
+///     let _ = ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
+///         claim, verified,
+///     );
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestMusubiAttestationApprovalRequestV1 {
+    payload: MusubiProviderBundleVerificationPayloadV1,
+    completion_claim_digest: [u8; 32],
+    observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    signer_policy: ProviderIngestCompletionSignerPolicyV1,
+}
+
+impl ProviderIngestMusubiAttestationApprovalRequestV1 {
+    /// Derive an unsigned approval request from exact finalized completion and verifier evidence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects noncanonical or substituted claim fields, completion authority, archive
+    /// commitment, CAR statistics, descriptor, semantic release, or verification lock evidence.
+    pub(crate) fn from_verified_completion(
+        claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
+        verified: &VerifiedMusubiBundleV1,
+    ) -> Result<Self, ProviderIngestMusubiAttestationApprovalRequestErrorV1> {
+        let rejected = || ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected;
+        let commitment = claim.commitment();
+        let completion = claim.completion();
+        let descriptor = verified.descriptor();
+        let car_stats = verified.car_stats();
+        let semantic_release_manifest_digest = verified.semantic_release().semantic_digest();
+        let verification_lock_digest = verified.verification_lock().digest();
+        let descriptor_digest =
+            musubi_artifact_descriptor_digest_v1(descriptor).ok_or_else(rejected)?;
+
+        claim.binding.validate().map_err(|_| rejected())?;
+        descriptor.validate().map_err(|_| rejected())?;
+        if claim.chain_id.as_str().is_empty()
+            || claim.chain_id.as_str().len()
+                > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+            || claim.genesis_block_hash == [0; 32]
+            || claim.provider_id == [0; 32]
+            || claim.observed_finalized_cursor.height == 0
+            || claim.observed_finalized_cursor.block_hash == [0; 32]
+            || verified.archive_id() != claim.archive_id()
+            || claim.archive_id() != commitment.archive_id()
+            || completion.provider_id != ProviderId::new(claim.provider_id)
+            || completion.completed_by != completion.completion_authority.provider_owner
+            || !completion.completion_authority.is_valid()
+            || completion.assignment_revision == 0
+            || completion.completion_epoch == 0
+            || !completion.finalized_anchor.is_valid()
+            || completion.finalized_anchor.height > claim.observed_finalized_cursor.height
+            || completion.finalized_anchor.height == claim.observed_finalized_cursor.height
+                && completion.finalized_anchor.block_hash
+                    != claim.observed_finalized_cursor.block_hash
+            || descriptor.semantic_release_manifest_digest != semantic_release_manifest_digest
+            || descriptor.verification_lock_digest != verification_lock_digest
+            || descriptor.source_tree_digest != commitment.source_tree_digest
+            || descriptor_digest != commitment.descriptor_digest
+            || descriptor.source_file_count != verified.source_file_count()
+            || descriptor.source_bytes != verified.source_bytes()
+            || commitment.file_count != verified.source_file_count()
+            || car_stats.payload_bytes != commitment.content_length
+            || car_stats.car_size != commitment.car_size
+            || car_stats.car_archive_digest.as_bytes() != commitment.car_digest.as_bytes()
+            || car_stats.chunk_count
+                != usize::try_from(commitment.chunk_count).unwrap_or(usize::MAX)
+            || car_stats.root_cids.len() != 1
+            || car_stats.root_cids[0].as_slice() != commitment.root_cid.as_bytes()
+        {
+            return Err(rejected());
+        }
+
+        let payload = MusubiProviderBundleVerificationPayloadV1 {
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            binding: MusubiProviderBundleVerificationBindingV1 {
+                chain_id: claim.chain_id.clone(),
+                genesis_block_hash: claim.genesis_block_hash,
+                provider_id: ProviderId::new(claim.provider_id),
+                completed_by: completion.completed_by.clone(),
+                completion_authority: completion.completion_authority.clone(),
+                replication_order: claim.binding.replication_order,
+                assignment_revision: completion.assignment_revision,
+                completion_epoch: completion.completion_epoch,
+                finalized_anchor: completion.finalized_anchor,
+                archive_id: claim.archive_id(),
+                bundle_digest: commitment.bundle_digest,
+                descriptor_digest,
+                semantic_release_manifest_digest,
+                verification_lock_digest,
+                source_tree_digest: descriptor.source_tree_digest,
+            },
+        };
+        payload.validate().map_err(|_| rejected())?;
+        let completion_claim_digest =
+            provider_ingest_musubi_completion_claim_digest_v1(claim).ok_or_else(rejected)?;
+        Ok(Self {
+            payload,
+            completion_claim_digest,
+            observed_finalized_cursor: claim.observed_finalized_cursor,
+            signer_policy: completion.completion_authority.signer_policy,
+        })
+    }
+
+    /// Construct a structurally valid opaque request for crate-local unit tests.
+    ///
+    /// Production code cannot call this helper, and the helper deliberately
+    /// preserves the same completed-owner, signer-policy, cursor, and non-zero
+    /// claim-digest invariants exposed through the request accessors.
+    #[cfg(test)]
+    pub(crate) fn test_fixture(
+        payload: MusubiProviderBundleVerificationPayloadV1,
+        completion_claim_digest: [u8; 32],
+        observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+        signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    ) -> Result<Self, ProviderIngestMusubiAttestationApprovalRequestErrorV1> {
+        let anchor = payload.binding.finalized_anchor;
+        if payload.validate().is_err()
+            || completion_claim_digest == [0; 32]
+            || observed_finalized_cursor.height == 0
+            || observed_finalized_cursor.block_hash == [0; 32]
+            || !signer_policy.is_valid()
+            || payload.binding.completion_authority.signer_policy != signer_policy
+            || payload.binding.completed_by != payload.binding.completion_authority.provider_owner
+            || anchor.height > observed_finalized_cursor.height
+            || anchor.height == observed_finalized_cursor.height
+                && anchor.block_hash != observed_finalized_cursor.block_hash
+        {
+            return Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected);
+        }
+        Ok(Self {
+            payload,
+            completion_claim_digest,
+            observed_finalized_cursor,
+            signer_policy,
+        })
+    }
+
+    /// Return the exact unsigned provider-attestation payload.
+    #[must_use]
+    pub const fn payload(&self) -> &MusubiProviderBundleVerificationPayloadV1 {
+        &self.payload
+    }
+
+    /// Return the domain-separated digest of the complete opaque completion claim.
+    #[must_use]
+    pub const fn completion_claim_digest(&self) -> [u8; 32] {
+        self.completion_claim_digest
+    }
+
+    /// Return the finalized cursor at which the completed row was observed.
+    #[must_use]
+    pub const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
+        self.observed_finalized_cursor
+    }
+
+    /// Return the exact governed signer policy accepted by the finalized completion.
+    #[must_use]
+    pub const fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
+        self.signer_policy
+    }
+}
+
+impl AdmittedPayloadReadLeaseV1<'_> {
+    /// Reverify one completed Musubi bundle and mint its opaque unsigned approval request.
+    ///
+    /// This is the only public request-minting boundary. It binds the retained finalized
+    /// authorization and sealed completed-row claim to this exact storage-admitted manifest,
+    /// checks the supplied reconstruction plan against the admitted payload, and opens all three
+    /// byte-zero readers itself while the storage lifecycle lease remains held. The canonical
+    /// Musubi V1 verifier applies its fixed consensus bounds; no caller-controlled limit or
+    /// previously retained verifier result is accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderIngestLocalStorageErrorV1::Permanent`] for an identity, cursor, plan,
+    /// commitment, payload, or semantic-integrity mismatch. Transient admitted-storage reader
+    /// failures return [`ProviderIngestLocalStorageErrorV1::Retryable`].
+    pub fn verify_completed_musubi_bundle(
+        &self,
+        plan: &CarBuildPlan,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        completed_claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
+    ) -> Result<ProviderIngestMusubiAttestationApprovalRequestV1, ProviderIngestLocalStorageErrorV1>
+    {
+        if !completed_claim.matches_authorization(authorization)
+            || self.manifest_digest() != &authorization.manifest_digest()
+            || self.content_length() != authorization.content_length()
+            || self.payload_digest() != plan.payload_digest.as_bytes()
+            || plan.content_length != authorization.content_length()
+            || compute_chunk_plan_digest_sha3(&plan.chunks) != authorization.chunk_digest_sha3_256()
+        {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+
+        let first_read_error = Cell::new(None);
+        let verified = MusubiBundleVerifierV1::verify_payload_with_factory(
+            plan,
+            completed_claim.commitment(),
+            || {
+                self.open_reader()
+                    .inspect_err(|error| {
+                        if first_read_error.get().is_none() {
+                            first_read_error.set(Some(error.kind()));
+                        }
+                    })
+                    .map(|inner| ProviderIngestObservedAdmittedPayloadReaderV1 {
+                        inner,
+                        first_error_kind: &first_read_error,
+                    })
+            },
+        );
+        match verified {
+            Ok(verified) => {
+                ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
+                    completed_claim,
+                    &verified,
+                )
+                .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)
+            }
+            Err(_)
+                if first_read_error.get().is_some_and(|kind| {
+                    provider_ingest_admitted_payload_read_error_is_retryable(kind)
+                }) =>
+            {
+                Err(ProviderIngestLocalStorageErrorV1::Retryable)
+            }
+            Err(_) => Err(ProviderIngestLocalStorageErrorV1::Permanent),
+        }
+    }
+}
+
+struct ProviderIngestObservedAdmittedPayloadReaderV1<'observation, R> {
+    inner: R,
+    first_error_kind: &'observation Cell<Option<io::ErrorKind>>,
+}
+
+impl<R: Read> Read for ProviderIngestObservedAdmittedPayloadReaderV1<'_, R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(output).inspect_err(|error| {
+            if self.first_error_kind.get().is_none() {
+                self.first_error_kind.set(Some(error.kind()));
+            }
+        })
+    }
+}
+
+const fn provider_ingest_admitted_payload_read_error_is_retryable(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::Interrupted
+            | io::ErrorKind::WouldBlock
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::NotFound
+            | io::ErrorKind::Other
+    )
+}
+
+#[derive(NoritoSerialize)]
+struct ProviderIngestMusubiCompletionClaimDigestPreimageV1 {
+    chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
+    provider_id: [u8; 32],
+    observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    binding: MusubiReplicationOrderArchiveBindingV1,
+    completion: ReplicationOrderCompletionRecord,
+}
+
+fn provider_ingest_musubi_completion_claim_digest_v1(
+    claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
+) -> Option<[u8; 32]> {
+    let preimage = ProviderIngestMusubiCompletionClaimDigestPreimageV1 {
+        chain_id: claim.chain_id.clone(),
+        genesis_block_hash: claim.genesis_block_hash,
+        provider_id: claim.provider_id,
+        observed_finalized_cursor: claim.observed_finalized_cursor,
+        binding: claim.binding.clone(),
+        completion: claim.completion.clone(),
+    };
+    let canonical = norito::to_bytes(&preimage).ok()?;
+    let canonical_len = u64::try_from(canonical.len()).ok()?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PROVIDER_INGEST_MUSUBI_COMPLETION_CLAIM_DIGEST_DOMAIN_V1);
+    hasher.update(&canonical_len.to_be_bytes());
+    hasher.update(&canonical);
+    Some(*hasher.finalize().as_bytes())
+}
+
+fn musubi_artifact_descriptor_digest_v1(
+    descriptor: &MusubiArtifactDescriptorV1,
+) -> Option<MusubiContentDigestV1> {
+    let descriptor_bytes = descriptor.encode();
+    let domain_len = u64::try_from(MUSUBI_ARTIFACT_DESCRIPTOR_DIGEST_DOMAIN_V1.len()).ok()?;
+    let descriptor_len = u64::try_from(descriptor_bytes.len()).ok()?;
+    let material_len = 8_u64
+        .checked_add(domain_len)?
+        .checked_add(8)?
+        .checked_add(descriptor_len)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MUSUBI_ARTIFACT_DESCRIPTOR_DIGEST_DOMAIN_V1);
+    hasher.update(&material_len.to_be_bytes());
+    hasher.update(&domain_len.to_be_bytes());
+    hasher.update(MUSUBI_ARTIFACT_DESCRIPTOR_DIGEST_DOMAIN_V1);
+    hasher.update(&descriptor_len.to_be_bytes());
+    hasher.update(&descriptor_bytes);
+    Some(MusubiContentDigestV1::new(*hasher.finalize().as_bytes()))
+}
+
+/// Runtime-owned capability for constructing opaque claims inside one
+/// finalized-ledger read.
+///
+/// This type has no public constructor. The provider runtime creates it for a
+/// ledger call, and only that ledger implementation can turn a projected
+/// consensus binding into an opaque claim.
+///
+/// The capability authenticates the configured finalized-ledger
+/// implementation boundary, not arbitrary bytes. That trusted implementation
+/// receives ownership and can retain the capability; production wiring must
+/// therefore install only the qualified archive-backed reader.
+#[derive(Debug)]
+pub struct ProviderIngestFinalizedClaimFactoryV1 {
+    chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
+    provider_id: [u8; 32],
+}
+
+impl ProviderIngestFinalizedClaimFactoryV1 {
+    fn new(chain_id: ChainId, genesis_block_hash: [u8; 32], provider_id: [u8; 32]) -> Self {
+        Self {
+            chain_id,
+            genesis_block_hash,
+            provider_id,
+        }
+    }
+
+    /// Validate and seal one exact projected Musubi archive binding.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a noncanonical binding or one substituted from another
+    /// replication order or pin commitment.
+    pub fn seal_musubi_archive(
+        &self,
+        observed_chain_id: &ChainId,
+        observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+        expected_order: [u8; 32],
+        expected_pin: &PinManifestRecord,
+        binding: MusubiReplicationOrderArchiveBindingV1,
+    ) -> Result<ProviderIngestFinalizedMusubiArchiveClaimV1, ProviderIngestFinalizedLedgerErrorV1>
+    {
+        binding
+            .validate()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        let commitment = &binding.commitment;
+        if observed_chain_id != &self.chain_id
+            || observed_finalized_cursor.height == 0
+            || observed_finalized_cursor.block_hash == [0; 32]
+            || binding.replication_order.as_bytes() != &expected_order
+            || commitment.root_cid != expected_pin.root_cid
+            || commitment.chunker != expected_pin.chunker
+            || commitment.chunk_plan_digest.as_bytes() != &expected_pin.chunk_digest_sha3_256
+            || commitment.por_root.as_bytes() != &expected_pin.por_root
+            || commitment.content_length != expected_pin.content_length
+        {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        Ok(ProviderIngestFinalizedMusubiArchiveClaimV1 {
+            chain_id: self.chain_id.clone(),
+            genesis_block_hash: self.genesis_block_hash,
+            provider_id: self.provider_id,
+            observed_finalized_cursor,
+            binding,
+        })
+    }
+
+    /// Seal this provider's exact completed Musubi row as a post-completion capability.
+    ///
+    /// The method accepts the complete finalized order record and locates the
+    /// configured provider's completion itself. A caller therefore cannot
+    /// substitute a detached completion record that was not part of the row.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a pending local provider, a noncanonical completion, or any
+    /// substituted chain, cursor, order, pin, archive, or commitment field.
+    pub fn seal_completed_musubi_archive(
+        &self,
+        observed_chain_id: &ChainId,
+        observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+        expected_provider_id: ProviderId,
+        expected_order: &ReplicationOrderRecord,
+        expected_pin: &PinManifestRecord,
+        binding: MusubiReplicationOrderArchiveBindingV1,
+    ) -> Result<ProviderIngestFinalizedMusubiCompletionClaimV1, ProviderIngestFinalizedLedgerErrorV1>
+    {
+        binding
+            .validate()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        let commitment = &binding.commitment;
+        let provider_id = ProviderId::new(self.provider_id);
+        let canonical_order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
+            &expected_order.canonical_order,
+            REPLICATION_ORDER_DECODE_LIMITS_V1,
+        )
+        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        canonical_order
+            .validate()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        let canonical_bytes = norito::to_bytes(&canonical_order)
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        let mut provider_completions = expected_order
+            .provider_completions
+            .iter()
+            .filter(|completion| completion.provider_id == provider_id);
+        let completion = provider_completions
+            .next()
+            .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        let completion_anchor = completion.finalized_anchor;
+        if observed_chain_id != &self.chain_id
+            || observed_finalized_cursor.height == 0
+            || observed_finalized_cursor.block_hash == [0; 32]
+            || provider_id != expected_provider_id
+            || canonical_bytes != expected_order.canonical_order
+            || canonical_order.order_id != *expected_order.order_id.as_bytes()
+            || canonical_order.manifest_digest != *expected_order.manifest_digest.as_bytes()
+            || canonical_order.manifest_cid.as_slice()
+                != expected_order.manifest_root_cid.as_bytes()
+            || !canonical_order
+                .assignments
+                .iter()
+                .any(|assignment| assignment.provider_id == self.provider_id)
+            || provider_completions.next().is_some()
+            || binding.replication_order != expected_order.order_id
+            || expected_order.musubi_archive != Some(binding.archive_id)
+            || expected_order.manifest_digest != expected_pin.digest
+            || expected_order.manifest_root_cid != expected_pin.root_cid
+            || commitment.root_cid != expected_pin.root_cid
+            || commitment.chunker != expected_pin.chunker
+            || commitment.chunk_plan_digest.as_bytes() != &expected_pin.chunk_digest_sha3_256
+            || commitment.por_root.as_bytes() != &expected_pin.por_root
+            || commitment.content_length != expected_pin.content_length
+            || completion.provider_id != provider_id
+            || completion.completed_by != completion.completion_authority.provider_owner
+            || !completion.completion_authority.is_valid()
+            || completion.assignment_revision == 0
+            || completion.assignment_revision != expected_order.assignment_revision
+            || completion.completion_epoch < expected_order.issued_epoch
+            || completion.completion_epoch > expected_order.deadline_epoch
+            || !completion_anchor.is_valid()
+            || completion_anchor.height > observed_finalized_cursor.height
+            || completion_anchor.height == observed_finalized_cursor.height
+                && completion_anchor.block_hash != observed_finalized_cursor.block_hash
+        {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        Ok(ProviderIngestFinalizedMusubiCompletionClaimV1 {
+            chain_id: self.chain_id.clone(),
+            genesis_block_hash: self.genesis_block_hash,
+            provider_id: self.provider_id,
+            observed_finalized_cursor,
+            binding,
+            completion: completion.clone(),
+        })
+    }
 }
 
 /// Bounded stable page of provider assignments from one finalized state view.
@@ -173,6 +941,7 @@ pub trait ProviderIngestFinalizedLedgerV1: Send + Sync + 'static {
     /// page, including continuations resumed in a later runtime tick.
     fn read_assignment_page<'a>(
         &'a self,
+        claim_factory: ProviderIngestFinalizedClaimFactoryV1,
         at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
         after_order_id: Option<[u8; 32]>,
         limit: usize,
@@ -180,15 +949,6 @@ pub trait ProviderIngestFinalizedLedgerV1: Send + Sync + 'static {
         'a,
         Result<ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedLedgerErrorV1>,
     >;
-}
-
-/// Exact fetch request containing no source credentials or lease material.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderIngestSourceRequestV1 {
-    /// Immutable finalized provider/order/manifest authorization.
-    pub authorization: FinalizedProviderIngestAuthorizationV1,
-    /// Canonically ordered governed source provider identities.
-    pub source_provider_ids: Vec<[u8; 32]>,
 }
 
 /// Authenticated source-fetch outcome.
@@ -200,6 +960,214 @@ pub enum ProviderIngestSourceFetchErrorV1 {
     ContentRejected,
     /// A source identity, public policy, or qualification binding was rejected.
     Rejected,
+}
+
+/// Exact Musubi commitment forwarded only across the private authenticated source boundary.
+///
+/// This value is not finalized evidence and cannot authorize storage completion or provider
+/// attestation. The runtime derives it from an opaque finalized claim, and the private broker
+/// revalidates every field against the ordinary finalized ingest authorization before transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestMusubiArchiveFetchBindingV1 {
+    chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
+    provider_id: [u8; 32],
+    observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    binding: MusubiReplicationOrderArchiveBindingV1,
+}
+
+impl ProviderIngestMusubiArchiveFetchBindingV1 {
+    /// Construct and validate one private-broker Musubi fetch binding.
+    ///
+    /// This constructor does not confer finality. It exists so an authenticated private broker
+    /// can reconstruct the checked informational binding on its server side.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed rejection when an identity or commitment is inert or noncanonical.
+    pub fn new(
+        chain_id: ChainId,
+        genesis_block_hash: [u8; 32],
+        provider_id: [u8; 32],
+        observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+        binding: MusubiReplicationOrderArchiveBindingV1,
+    ) -> Result<Self, ProviderIngestSourceFetchErrorV1> {
+        if chain_id.as_str().is_empty()
+            || chain_id.as_str().len()
+                > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+            || genesis_block_hash == [0; 32]
+            || provider_id == [0; 32]
+            || observed_finalized_cursor.height == 0
+            || observed_finalized_cursor.block_hash == [0; 32]
+            || binding.validate().is_err()
+        {
+            return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+        }
+        Ok(Self {
+            chain_id,
+            genesis_block_hash,
+            provider_id,
+            observed_finalized_cursor,
+            binding,
+        })
+    }
+
+    fn from_finalized_claim(claim: &ProviderIngestFinalizedMusubiArchiveClaimV1) -> Self {
+        Self {
+            chain_id: claim.chain_id.clone(),
+            genesis_block_hash: claim.genesis_block_hash,
+            provider_id: claim.provider_id,
+            observed_finalized_cursor: claim.observed_finalized_cursor,
+            binding: claim.binding.clone(),
+        }
+    }
+
+    /// Exact configured chain identity.
+    #[must_use]
+    pub const fn chain_id(&self) -> &ChainId {
+        &self.chain_id
+    }
+
+    /// Exact configured genesis block hash.
+    #[must_use]
+    pub const fn genesis_block_hash(&self) -> [u8; 32] {
+        self.genesis_block_hash
+    }
+
+    /// Provider for which the finalized assignment was read.
+    #[must_use]
+    pub const fn provider_id(&self) -> [u8; 32] {
+        self.provider_id
+    }
+
+    /// Finalized archive cursor from which the runtime derived this binding.
+    #[must_use]
+    pub const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
+        self.observed_finalized_cursor
+    }
+
+    /// Complete order/archive commitment forwarded to the authenticated source.
+    #[must_use]
+    pub const fn binding(&self) -> &MusubiReplicationOrderArchiveBindingV1 {
+        &self.binding
+    }
+
+    /// Check this informational binding against the exact finalized ingest authorization.
+    #[must_use]
+    pub fn matches_authorization(
+        &self,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+    ) -> bool {
+        let commitment = &self.binding.commitment;
+        authorization.validate().is_ok()
+            && !self.chain_id.as_str().is_empty()
+            && self.chain_id.as_str().len()
+                <= provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+            && self.genesis_block_hash != [0; 32]
+            && self.provider_id == authorization.provider_id()
+            && authorization_musubi_context_matches(
+                authorization,
+                &self.chain_id,
+                self.genesis_block_hash,
+                self.binding.archive_id,
+            )
+            && finalized_cursor_is_same_or_later(
+                self.observed_finalized_cursor,
+                authorization.admission_finalized_cursor(),
+            )
+            && self.binding.validate().is_ok()
+            && self.binding.replication_order.as_bytes() == &authorization.order_id()
+            && commitment.archive_id() == self.binding.archive_id
+            && commitment.root_cid.as_bytes() == authorization.manifest_cid()
+            && commitment.chunker.to_handle() == authorization.chunker_handle()
+            && commitment.chunk_plan_digest.as_bytes() == &authorization.chunk_digest_sha3_256()
+            && commitment.por_root.as_bytes() == &authorization.por_root()
+            && commitment.content_length == authorization.content_length()
+    }
+}
+
+/// Exact fetch request containing no source credentials or lease material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestSourceRequestV1 {
+    authorization: FinalizedProviderIngestAuthorizationV1,
+    source_provider_ids: Vec<[u8; 32]>,
+    musubi_archive: Option<ProviderIngestMusubiArchiveFetchBindingV1>,
+}
+
+impl ProviderIngestSourceRequestV1 {
+    /// Construct one canonical request for an authenticated provider source.
+    ///
+    /// The optional Musubi value is informational transport data, not
+    /// finalized evidence. It must agree exactly with the ordinary finalized
+    /// ingest authorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed rejection for an invalid authorization, an empty,
+    /// oversized, unsorted, duplicate, self-referential, or zero source list,
+    /// or a substituted Musubi binding.
+    pub fn new(
+        authorization: FinalizedProviderIngestAuthorizationV1,
+        source_provider_ids: Vec<[u8; 32]>,
+        musubi_archive: Option<ProviderIngestMusubiArchiveFetchBindingV1>,
+    ) -> Result<Self, ProviderIngestSourceFetchErrorV1> {
+        if authorization.validate().is_err()
+            || source_provider_ids.is_empty()
+            || source_provider_ids.len() > MAX_REPLICATION_ORDER_ASSIGNMENTS
+            || source_provider_ids.iter().any(|provider_id| {
+                *provider_id == [0; 32] || *provider_id == authorization.provider_id()
+            })
+            || source_provider_ids
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || match (authorization.musubi_context(), musubi_archive.as_ref()) {
+                (None, None) => false,
+                (Some(_), Some(binding)) => !binding.matches_authorization(&authorization),
+                (None, Some(_)) | (Some(_), None) => true,
+            }
+        {
+            return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+        }
+        Ok(Self {
+            authorization,
+            source_provider_ids,
+            musubi_archive,
+        })
+    }
+
+    /// Immutable finalized provider/order/manifest authorization.
+    #[must_use]
+    pub const fn authorization(&self) -> &FinalizedProviderIngestAuthorizationV1 {
+        &self.authorization
+    }
+
+    /// Canonically ordered governed source provider identities.
+    #[must_use]
+    pub fn source_provider_ids(&self) -> &[[u8; 32]] {
+        &self.source_provider_ids
+    }
+
+    /// Informational Musubi commitment derived from the opaque finalized claim.
+    #[must_use]
+    pub const fn musubi_archive(&self) -> Option<&ProviderIngestMusubiArchiveFetchBindingV1> {
+        self.musubi_archive.as_ref()
+    }
+
+    /// Consume the request into its checked transport components.
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        FinalizedProviderIngestAuthorizationV1,
+        Vec<[u8; 32]>,
+        Option<ProviderIngestMusubiArchiveFetchBindingV1>,
+    ) {
+        (
+            self.authorization,
+            self.source_provider_ids,
+            self.musubi_archive,
+        )
+    }
 }
 
 /// Public, non-secret qualification for a top-level provider-ingest adapter.
@@ -368,6 +1336,7 @@ pub trait ProviderIngestAuthenticatedProviderSourceV1: Send + Sync + 'static {
     fn fetch_provider<'a>(
         &'a self,
         authorization: FinalizedProviderIngestAuthorizationV1,
+        musubi_archive: Option<ProviderIngestMusubiArchiveFetchBindingV1>,
     ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>>;
 }
 
@@ -647,17 +1616,19 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
         &self,
         request: &ProviderIngestSourceRequestV1,
     ) -> Result<(), ProviderIngestSourceFetchErrorV1> {
-        if request.source_provider_ids.is_empty()
-            || request.source_provider_ids.len() > self.max_sources_per_fetch
-            || request.source_provider_ids.iter().any(|provider_id| {
+        if request.source_provider_ids().len() > self.max_sources_per_fetch
+            || request.source_provider_ids().iter().any(|provider_id| {
                 *provider_id == [0; 32]
-                    || *provider_id == request.authorization.provider_id()
+                    || *provider_id == request.authorization().provider_id()
                     || !self.sources.contains_key(provider_id)
             })
             || request
-                .source_provider_ids
+                .source_provider_ids()
                 .windows(2)
                 .any(|pair| pair[0] >= pair[1])
+            || request
+                .musubi_archive()
+                .is_some_and(|binding| !binding.matches_authorization(request.authorization()))
         {
             return Err(ProviderIngestSourceFetchErrorV1::Rejected);
         }
@@ -677,7 +1648,7 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourceFetchV1
         Box::pin(async move {
             self.validate_request(&request)?;
             let mut content_rejected = false;
-            for provider_id in &request.source_provider_ids {
+            for provider_id in request.source_provider_ids() {
                 let source = self
                     .sources
                     .get(provider_id)
@@ -687,7 +1658,10 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourceFetchV1
                 }
                 let result = source
                     .source
-                    .fetch_provider(request.authorization.clone())
+                    .fetch_provider(
+                        request.authorization().clone(),
+                        request.musubi_archive().cloned(),
+                    )
                     .await;
                 let post_fetch_ready = self.source_is_ready(source)?;
                 match result {
@@ -720,20 +1694,343 @@ pub enum ProviderIngestLocalStorageErrorV1 {
     Permanent,
 }
 
+/// Closed evidence that one immutable local payload passed the complete Musubi verifier.
+///
+/// The value can be constructed only from [`VerifiedMusubiBundleV1`], whose representation is
+/// private to the canonical `sorafs_car` verifier. It is deliberately not Norito-decodable:
+/// durable checkpoints use a crate-private representation so downstream callers cannot fabricate
+/// verifier evidence from public field-shaped bytes. It is a pre-completion receipt, not a
+/// provider attestation, and intentionally contains no finalized completion row or signature.
+///
+/// ```compile_fail
+/// use sorafs_node::ProviderIngestVerifiedMusubiBundleReceiptV1;
+///
+/// let encoded = [];
+/// let _: ProviderIngestVerifiedMusubiBundleReceiptV1 =
+///     norito::decode_from_bytes(&encoded).expect("public receipts are not decodable");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestVerifiedMusubiBundleReceiptV1 {
+    chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
+    provider_id: [u8; 32],
+    observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    replication_order: [u8; 32],
+    manifest_digest: [u8; 32],
+    archive_id: ArchiveId,
+    commitment: MusubiArchiveCommitmentV1,
+    semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1,
+    verification_lock_digest: MusubiVerificationLockDigestV1,
+}
+
+/// Crate-private canonical checkpoint representation of a verified Musubi receipt.
+///
+/// Keeping codec implementations on this non-exported type preserves durable checkpointing
+/// without turning public receipt bytes into a construction capability.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
+    chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
+    provider_id: [u8; 32],
+    observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    replication_order: [u8; 32],
+    manifest_digest: [u8; 32],
+    archive_id: ArchiveId,
+    commitment: MusubiArchiveCommitmentV1,
+    semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1,
+    verification_lock_digest: MusubiVerificationLockDigestV1,
+}
+
+impl ProviderIngestVerifiedMusubiBundleReceiptV1 {
+    /// Bind canonical verifier output to the exact opaque finalized precursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns a permanent failure if the parsed descriptor does not agree with the verified
+    /// semantic release, verification lock, or finalized archive commitment.
+    pub fn from_verified_bundle(
+        claim: &ProviderIngestFinalizedMusubiArchiveClaimV1,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        verified: &VerifiedMusubiBundleV1,
+    ) -> Result<Self, ProviderIngestLocalStorageErrorV1> {
+        let descriptor = verified.descriptor();
+        let semantic_release_manifest_digest = verified.semantic_release().semantic_digest();
+        let verification_lock_digest = verified.verification_lock().digest();
+        if verified.archive_id() != claim.archive_id()
+            || !claim.matches_authorization(authorization)
+            || descriptor.semantic_release_manifest_digest != semantic_release_manifest_digest
+            || descriptor.verification_lock_digest != verification_lock_digest
+            || descriptor.source_tree_digest != claim.commitment().source_tree_digest
+            || claim.archive_id() != claim.commitment().archive_id()
+            || claim.provider_id() != authorization.provider_id()
+            || claim.replication_order() != authorization.order_id()
+        {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+        let receipt = Self {
+            chain_id: claim.chain_id.clone(),
+            genesis_block_hash: claim.genesis_block_hash,
+            provider_id: claim.provider_id,
+            observed_finalized_cursor: claim.observed_finalized_cursor,
+            replication_order: claim.replication_order(),
+            manifest_digest: authorization.manifest_digest(),
+            archive_id: claim.archive_id(),
+            commitment: claim.commitment().clone(),
+            semantic_release_manifest_digest,
+            verification_lock_digest,
+        };
+        if !receipt.validate_stored(authorization) {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+        Ok(receipt)
+    }
+
+    /// Return whether this receipt covers the exact finalized precursor and local authorization.
+    #[must_use]
+    pub fn matches(
+        &self,
+        claim: &ProviderIngestFinalizedMusubiArchiveClaimV1,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+    ) -> bool {
+        self.validate_stored(authorization)
+            && claim.matches_authorization(authorization)
+            && self.chain_id == claim.chain_id
+            && self.genesis_block_hash == claim.genesis_block_hash
+            && self.provider_id == claim.provider_id
+            && self.provider_id == authorization.provider_id()
+            && finalized_cursor_is_same_or_later(
+                self.observed_finalized_cursor,
+                authorization.admission_finalized_cursor(),
+            )
+            && finalized_cursor_is_same_or_later(
+                claim.observed_finalized_cursor,
+                self.observed_finalized_cursor,
+            )
+            && self.replication_order == claim.replication_order()
+            && self.replication_order == authorization.order_id()
+            && self.manifest_digest == authorization.manifest_digest()
+            && self.archive_id == claim.archive_id()
+            && self.commitment == *claim.commitment()
+            && !self.semantic_release_manifest_digest.is_zero()
+            && !self.verification_lock_digest.is_zero()
+    }
+
+    pub(crate) fn validate_stored(
+        &self,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+    ) -> bool {
+        let commitment = &self.commitment;
+        authorization.validate().is_ok()
+            && !self.chain_id.as_str().is_empty()
+            && self.chain_id.as_str().len()
+                <= provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+            && self.genesis_block_hash != [0; 32]
+            && self.provider_id == authorization.provider_id()
+            && authorization_musubi_context_matches(
+                authorization,
+                &self.chain_id,
+                self.genesis_block_hash,
+                self.archive_id,
+            )
+            && self.replication_order == authorization.order_id()
+            && self.manifest_digest == authorization.manifest_digest()
+            && finalized_cursor_is_same_or_later(
+                self.observed_finalized_cursor,
+                authorization.admission_finalized_cursor(),
+            )
+            && self.archive_id == commitment.archive_id()
+            && commitment.validate().is_ok()
+            && commitment.root_cid.as_bytes() == authorization.manifest_cid()
+            && commitment.chunker.to_handle() == authorization.chunker_handle()
+            && commitment.chunk_plan_digest.as_bytes() == &authorization.chunk_digest_sha3_256()
+            && commitment.por_root.as_bytes() == &authorization.por_root()
+            && commitment.content_length == authorization.content_length()
+            && !self.semantic_release_manifest_digest.is_zero()
+            && !self.verification_lock_digest.is_zero()
+            && norito::to_bytes(&self.to_stored()).is_ok_and(|encoded| {
+                encoded.len() <= PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1
+            })
+    }
+
+    /// Domain-separated semantic release-manifest digest parsed from the bundle.
+    #[must_use]
+    pub const fn semantic_release_manifest_digest(&self) -> MusubiSemanticReleaseDigestV1 {
+        self.semantic_release_manifest_digest
+    }
+
+    /// Normalized verification-lock digest parsed from the bundle.
+    #[must_use]
+    pub const fn verification_lock_digest(&self) -> MusubiVerificationLockDigestV1 {
+        self.verification_lock_digest
+    }
+
+    pub(crate) fn to_stored(&self) -> StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
+        StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
+            chain_id: self.chain_id.clone(),
+            genesis_block_hash: self.genesis_block_hash,
+            provider_id: self.provider_id,
+            observed_finalized_cursor: self.observed_finalized_cursor,
+            replication_order: self.replication_order,
+            manifest_digest: self.manifest_digest,
+            archive_id: self.archive_id,
+            commitment: self.commitment.clone(),
+            semantic_release_manifest_digest: self.semantic_release_manifest_digest,
+            verification_lock_digest: self.verification_lock_digest,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        commitment: MusubiArchiveCommitmentV1,
+        semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1,
+        verification_lock_digest: MusubiVerificationLockDigestV1,
+    ) -> Self {
+        let context = authorization
+            .musubi_context()
+            .expect("test receipt requires Musubi authorization context");
+        Self {
+            chain_id: context.chain_id().clone(),
+            genesis_block_hash: context.genesis_block_hash(),
+            provider_id: authorization.provider_id(),
+            observed_finalized_cursor: authorization.admission_finalized_cursor(),
+            replication_order: authorization.order_id(),
+            manifest_digest: authorization.manifest_digest(),
+            archive_id: context.archive_id(),
+            commitment,
+            semantic_release_manifest_digest,
+            verification_lock_digest,
+        }
+    }
+}
+
+impl StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
+    pub(crate) const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
+        self.observed_finalized_cursor
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn set_observed_finalized_cursor_for_test(
+        &mut self,
+        cursor: ProviderIngestFinalizedCursorV1,
+    ) {
+        self.observed_finalized_cursor = cursor;
+    }
+
+    pub(crate) fn into_receipt(self) -> ProviderIngestVerifiedMusubiBundleReceiptV1 {
+        ProviderIngestVerifiedMusubiBundleReceiptV1 {
+            chain_id: self.chain_id,
+            genesis_block_hash: self.genesis_block_hash,
+            provider_id: self.provider_id,
+            observed_finalized_cursor: self.observed_finalized_cursor,
+            replication_order: self.replication_order,
+            manifest_digest: self.manifest_digest,
+            archive_id: self.archive_id,
+            commitment: self.commitment,
+            semantic_release_manifest_digest: self.semantic_release_manifest_digest,
+            verification_lock_digest: self.verification_lock_digest,
+        }
+    }
+
+    pub(crate) fn to_receipt(&self) -> ProviderIngestVerifiedMusubiBundleReceiptV1 {
+        self.clone().into_receipt()
+    }
+
+    pub(crate) fn validate_stored(
+        &self,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+    ) -> bool {
+        self.to_receipt().validate_stored(authorization)
+    }
+}
+
+fn finalized_cursor_is_same_or_later(
+    candidate: ProviderIngestFinalizedCursorV1,
+    baseline: ProviderIngestFinalizedCursorV1,
+) -> bool {
+    candidate.height > baseline.height
+        || candidate.height == baseline.height && candidate.block_hash == baseline.block_hash
+}
+
+fn authorization_musubi_context_matches(
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    chain_id: &ChainId,
+    genesis_block_hash: [u8; 32],
+    archive_id: ArchiveId,
+) -> bool {
+    authorization.musubi_context().is_some_and(|context| {
+        context.chain_id() == chain_id
+            && context.genesis_block_hash() == genesis_block_hash
+            && context.archive_id() == archive_id
+    })
+}
+
+/// Exact local-storage result accepted before a completion transaction may be prepared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestLocalStoredV1 {
+    manifest_id: String,
+    musubi_bundle: Option<ProviderIngestVerifiedMusubiBundleReceiptV1>,
+}
+
+impl ProviderIngestLocalStoredV1 {
+    /// Construct a result for an ordinary non-Musubi replication order.
+    #[must_use]
+    pub fn generic(manifest_id: String) -> Self {
+        Self {
+            manifest_id,
+            musubi_bundle: None,
+        }
+    }
+
+    /// Construct a result whose local payload passed the complete Musubi verifier.
+    #[must_use]
+    pub fn musubi(
+        manifest_id: String,
+        receipt: ProviderIngestVerifiedMusubiBundleReceiptV1,
+    ) -> Self {
+        Self {
+            manifest_id,
+            musubi_bundle: Some(receipt),
+        }
+    }
+
+    /// Canonical local manifest identity.
+    #[must_use]
+    pub fn manifest_id(&self) -> &str {
+        &self.manifest_id
+    }
+
+    /// Verified Musubi receipt, absent only for a generic replication order.
+    #[must_use]
+    pub const fn musubi_bundle(&self) -> Option<&ProviderIngestVerifiedMusubiBundleReceiptV1> {
+        self.musubi_bundle.as_ref()
+    }
+}
+
 /// Exact local storage boundary.
 pub trait ProviderIngestLocalStorageV1<Fetched>: Send + Sync + 'static {
     /// Verify whether exact authorized material is already durable locally.
+    ///
+    /// A Musubi claim requires the complete semantic bundle verifier and a matching receipt.
     fn verify_existing<'a>(
         &'a self,
         authorization: FinalizedProviderIngestAuthorizationV1,
-    ) -> ProviderIngestFutureV1<'a, Result<Option<String>, ProviderIngestLocalStorageErrorV1>>;
+        musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
+    ) -> ProviderIngestFutureV1<
+        'a,
+        Result<Option<ProviderIngestLocalStoredV1>, ProviderIngestLocalStorageErrorV1>,
+    >;
 
-    /// Atomically store verified material and return its canonical manifest ID.
+    /// Atomically store exact material, then verify any Musubi bundle from admitted storage.
     fn store<'a>(
         &'a self,
         authorization: FinalizedProviderIngestAuthorizationV1,
+        musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
         fetched: Fetched,
-    ) -> ProviderIngestFutureV1<'a, Result<String, ProviderIngestLocalStorageErrorV1>>;
+    ) -> ProviderIngestFutureV1<
+        'a,
+        Result<ProviderIngestLocalStoredV1, ProviderIngestLocalStorageErrorV1>,
+    >;
 }
 
 /// Request for one exact fee-quoted provider completion payload.
@@ -1174,6 +2471,7 @@ where
 {
     provider_id: [u8; 32],
     chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
     claim_owner: ProviderIngestClaimOwnerV1,
     policy: ProviderIngestRuntimePolicyV1,
     outbox: ProviderIngestOutbox,
@@ -1205,6 +2503,7 @@ where
     pub fn new(
         provider_id: [u8; 32],
         chain_id: ChainId,
+        genesis_block_hash: [u8; 32],
         claim_owner: ProviderIngestClaimOwnerV1,
         policy: ProviderIngestRuntimePolicyV1,
         outbox: ProviderIngestOutbox,
@@ -1219,11 +2518,21 @@ where
         if provider_id == [0; 32] {
             return Err(ProviderIngestRuntimeErrorV1::InvalidProviderId);
         }
+        if chain_id.as_str().is_empty()
+            || chain_id.as_str().len()
+                > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+        {
+            return Err(ProviderIngestRuntimeErrorV1::InvalidChainId);
+        }
+        if genesis_block_hash == [0; 32] {
+            return Err(ProviderIngestRuntimeErrorV1::InvalidGenesisBlockHash);
+        }
         policy.validate(&outbox)?;
         let last_finalized_cursor = outbox.finalized_cursor_high_water()?;
         Ok(Self {
             provider_id,
             chain_id,
+            genesis_block_hash,
             claim_owner,
             policy,
             outbox,
@@ -1326,7 +2635,16 @@ where
             }
             let page = self
                 .ledger
-                .read_assignment_page(expected_cursor, after, self.policy.max_page_rows)
+                .read_assignment_page(
+                    ProviderIngestFinalizedClaimFactoryV1::new(
+                        self.chain_id.clone(),
+                        self.genesis_block_hash,
+                        self.provider_id,
+                    ),
+                    expected_cursor,
+                    after,
+                    self.policy.max_page_rows,
+                )
                 .await
                 .map_err(|_| ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable)?;
             if after.is_some()
@@ -1390,7 +2708,15 @@ where
         let ValidatedAssignmentV1 {
             authorization,
             source_provider_ids,
-        } = validate_assignment(&row, cursor, self.provider_id, self.policy)?;
+            musubi_archive,
+        } = validate_assignment(
+            &row,
+            cursor,
+            self.provider_id,
+            &self.chain_id,
+            self.genesis_block_hash,
+            self.policy,
+        )?;
         let job_id = authorization.job_id();
         let provider_id = ProviderId::new(self.provider_id);
 
@@ -1448,6 +2774,11 @@ where
         ) {
             outcome.jobs_inserted = outcome.jobs_inserted.saturating_add(1);
         }
+        // The job identity deliberately excludes the finalized cursor so an unchanged
+        // assignment can resume after the head advances. Every source/storage transition must
+        // therefore use the exact authorization retained by the outbox, while the freshly
+        // sealed Musubi claim proves that binding still exists at the newer scan cursor.
+        let authorization = self.outbox.authorization(job_id)?;
         let status = self.outbox.status(job_id)?;
         match status.state {
             ProviderIngestDeliveryStateV1::PendingSource { .. }
@@ -1456,14 +2787,30 @@ where
                 if *source_budget != 0 =>
             {
                 if self
-                    .process_source(authorization, source_provider_ids, cursor, outcome)
+                    .process_source(
+                        authorization.clone(),
+                        source_provider_ids,
+                        musubi_archive.clone(),
+                        cursor,
+                        outcome,
+                    )
                     .await?
                 {
                     *source_budget -= 1;
                     if let Ok(status) = self.outbox.status(job_id)
-                        && let ProviderIngestDeliveryStateV1::LocalStored { completion, .. } =
-                            status.state
+                        && let ProviderIngestDeliveryStateV1::LocalStored {
+                            musubi_bundle,
+                            completion,
+                            ..
+                        } = status.state
                     {
+                        if !persisted_receipt_matches(
+                            &authorization,
+                            musubi_archive.as_ref(),
+                            musubi_bundle.as_deref(),
+                        ) {
+                            return Err(ProviderIngestRuntimeErrorV1::StorageProtocolViolation);
+                        }
                         self.process_completion(
                             &row,
                             status.job_id,
@@ -1476,7 +2823,18 @@ where
                     }
                 }
             }
-            ProviderIngestDeliveryStateV1::LocalStored { completion, .. } => {
+            ProviderIngestDeliveryStateV1::LocalStored {
+                musubi_bundle,
+                completion,
+                ..
+            } => {
+                if !persisted_receipt_matches(
+                    &authorization,
+                    musubi_archive.as_ref(),
+                    musubi_bundle.as_deref(),
+                ) {
+                    return Err(ProviderIngestRuntimeErrorV1::StorageProtocolViolation);
+                }
                 self.process_completion(
                     &row,
                     status.job_id,
@@ -1502,9 +2860,14 @@ where
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
         source_provider_ids: Vec<[u8; 32]>,
+        musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
         cursor: ProviderIngestFinalizedCursorV1,
         outcome: &mut ProviderIngestTickOutcomeV1,
     ) -> Result<bool, ProviderIngestRuntimeErrorV1> {
+        // TODO: After completion is finalized, seal a separate completed-row
+        // claim, rerun the verifier, and durably prepare an approval-only
+        // provider attestation. This pre-completion claim and receipt never
+        // authorize an attestation by themselves.
         let claim = match self.outbox.claim_source(
             authorization.job_id(),
             self.claim_owner,
@@ -1522,14 +2885,28 @@ where
         };
         outcome.source_jobs_claimed = outcome.source_jobs_claimed.saturating_add(1);
 
-        let verify = self.storage.verify_existing(authorization.clone());
+        let verify = self
+            .storage
+            .verify_existing(authorization.clone(), musubi_archive.clone());
         let (claim, existing) = self.await_with_lease(claim, cursor, verify).await?;
         match existing {
-            LeaseOperationOutcomeV1::Completed(Ok(Some(manifest_id))) => {
-                if let Err(error) =
-                    self.outbox
-                        .mark_local_stored(&claim, self.clock.now_ms(), manifest_id)
-                {
+            LeaseOperationOutcomeV1::Completed(Ok(Some(stored))) => {
+                if !local_stored_matches(&stored, &authorization, musubi_archive.as_ref()) {
+                    self.outbox.dead_letter_source(
+                        &claim,
+                        self.clock.now_ms(),
+                        cursor,
+                        ProviderIngestDeadLetterReasonV1::StorageRejected,
+                        ProviderIngestFailureClassV1::BindingMismatch,
+                    )?;
+                    return Err(ProviderIngestRuntimeErrorV1::StorageProtocolViolation);
+                }
+                if let Err(error) = self.outbox.mark_local_stored_verified(
+                    &claim,
+                    self.clock.now_ms(),
+                    stored.manifest_id().to_owned(),
+                    stored.musubi_bundle().cloned(),
+                ) {
                     if error == ProviderIngestOutboxError::InvalidManifestId {
                         self.outbox.dead_letter_source(
                             &claim,
@@ -1561,9 +2938,32 @@ where
             }
         }
 
-        let request = ProviderIngestSourceRequestV1 {
-            authorization: authorization.clone(),
+        if source_provider_ids.is_empty() {
+            self.outbox.schedule_source_retry(
+                &claim,
+                self.clock.now_ms(),
+                cursor,
+                ProviderIngestFailureClassV1::SourceUnavailable,
+            )?;
+            return Ok(true);
+        }
+        let request = match ProviderIngestSourceRequestV1::new(
+            authorization.clone(),
             source_provider_ids,
+            musubi_archive
+                .as_ref()
+                .map(ProviderIngestMusubiArchiveFetchBindingV1::from_finalized_claim),
+        ) {
+            Ok(request) => request,
+            Err(_) => {
+                self.outbox.schedule_source_retry(
+                    &claim,
+                    self.clock.now_ms(),
+                    cursor,
+                    ProviderIngestFailureClassV1::SourceRejected,
+                )?;
+                return Err(ProviderIngestRuntimeErrorV1::SourceProtocolViolation);
+            }
         };
         let fetch = self.fetch.fetch(request);
         let (claim, fetched) = self.await_with_lease(claim, cursor, fetch).await?;
@@ -1603,7 +3003,9 @@ where
             }
         };
 
-        let store = self.storage.store(authorization, fetched);
+        let store = self
+            .storage
+            .store(authorization.clone(), musubi_archive.clone(), fetched);
         let (claim, stored) = self
             .await_mutating_storage_with_lease(claim, cursor, store)
             .await?;
@@ -1612,11 +3014,23 @@ where
             | MutatingStorageOutcomeV1::CompletedAfterSoftTimeout(output) => output,
         };
         match stored {
-            Ok(manifest_id) => {
-                if let Err(error) =
-                    self.outbox
-                        .mark_local_stored(&claim, self.clock.now_ms(), manifest_id)
-                {
+            Ok(stored) => {
+                if !local_stored_matches(&stored, &authorization, musubi_archive.as_ref()) {
+                    self.outbox.dead_letter_source(
+                        &claim,
+                        self.clock.now_ms(),
+                        cursor,
+                        ProviderIngestDeadLetterReasonV1::StorageRejected,
+                        ProviderIngestFailureClassV1::BindingMismatch,
+                    )?;
+                    return Err(ProviderIngestRuntimeErrorV1::StorageProtocolViolation);
+                }
+                if let Err(error) = self.outbox.mark_local_stored_verified(
+                    &claim,
+                    self.clock.now_ms(),
+                    stored.manifest_id().to_owned(),
+                    stored.musubi_bundle().cloned(),
+                ) {
                     if error == ProviderIngestOutboxError::InvalidManifestId {
                         self.outbox.dead_letter_source(
                             &claim,
@@ -2533,6 +3947,34 @@ where
 struct ValidatedAssignmentV1 {
     authorization: FinalizedProviderIngestAuthorizationV1,
     source_provider_ids: Vec<[u8; 32]>,
+    musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
+}
+
+fn local_stored_matches(
+    stored: &ProviderIngestLocalStoredV1,
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    claim: Option<&ProviderIngestFinalizedMusubiArchiveClaimV1>,
+) -> bool {
+    if stored.manifest_id().is_empty() {
+        return false;
+    }
+    match (claim, stored.musubi_bundle()) {
+        (None, None) => authorization.musubi_context().is_none(),
+        (Some(claim), Some(receipt)) => receipt.matches(claim, authorization),
+        (None, Some(_)) | (Some(_), None) => false,
+    }
+}
+
+fn persisted_receipt_matches(
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    claim: Option<&ProviderIngestFinalizedMusubiArchiveClaimV1>,
+    receipt: Option<&ProviderIngestVerifiedMusubiBundleReceiptV1>,
+) -> bool {
+    match (claim, receipt) {
+        (None, None) => authorization.musubi_context().is_none(),
+        (Some(claim), Some(receipt)) => receipt.matches(claim, authorization),
+        (None, Some(_)) | (Some(_), None) => false,
+    }
 }
 
 fn validate_monotonic_finalized_cursor(
@@ -2584,6 +4026,8 @@ fn validate_assignment(
     row: &ProviderIngestFinalizedAssignmentV1,
     cursor: ProviderIngestFinalizedCursorV1,
     provider_id: [u8; 32],
+    chain_id: &ChainId,
+    genesis_block_hash: [u8; 32],
     policy: ProviderIngestRuntimePolicyV1,
 ) -> Result<ValidatedAssignmentV1, ProviderIngestRuntimeErrorV1> {
     if row.pin.finalized_cursor.height != cursor.height
@@ -2628,6 +4072,68 @@ fn validate_assignment(
         .any(|assignment| assignment.provider_id == provider_id)
     {
         return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
+    }
+    match (row.order.musubi_archive, &row.musubi_archive) {
+        (None, None) => {}
+        (Some(archive_id), Some(claim)) => {
+            let commitment = claim.commitment();
+            if claim.chain_id() != chain_id
+                || claim.genesis_block_hash() != genesis_block_hash
+                || claim.provider_id() != provider_id
+                || claim.observed_finalized_cursor() != cursor
+                || claim.replication_order() != *row.order.order_id.as_bytes()
+                || claim.archive_id() != archive_id
+                || claim.archive_id() != commitment.archive_id()
+                || commitment.validate().is_err()
+                || commitment.root_cid != row.pin.manifest.root_cid
+                || commitment.chunker != row.pin.manifest.chunker
+                || commitment.chunk_plan_digest.as_bytes()
+                    != &row.pin.manifest.chunk_digest_sha3_256
+                || commitment.por_root.as_bytes() != &row.pin.manifest.por_root
+                || commitment.content_length != row.pin.manifest.content_length
+            {
+                return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
+            }
+        }
+        (None, Some(_)) | (Some(_), None) => {
+            return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
+        }
+    }
+    let local_completion = row.order.provider_completion(ProviderId::new(provider_id));
+    match (
+        row.order.musubi_archive,
+        local_completion,
+        &row.completed_musubi_archive,
+    ) {
+        (None, _, None) | (Some(_), None, None) => {}
+        (Some(archive_id), Some(completion), Some(claim)) => {
+            let commitment = claim.commitment();
+            let Some(pre_completion_claim) = row.musubi_archive.as_ref() else {
+                return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
+            };
+            if claim.chain_id() != chain_id
+                || claim.genesis_block_hash() != genesis_block_hash
+                || claim.provider_id() != provider_id
+                || claim.observed_finalized_cursor() != cursor
+                || claim.replication_order() != *row.order.order_id.as_bytes()
+                || claim.archive_id() != archive_id
+                || claim.archive_id() != commitment.archive_id()
+                || commitment != pre_completion_claim.commitment()
+                || claim.completion() != completion
+                || commitment.validate().is_err()
+                || commitment.root_cid != row.pin.manifest.root_cid
+                || commitment.chunker != row.pin.manifest.chunker
+                || commitment.chunk_plan_digest.as_bytes()
+                    != &row.pin.manifest.chunk_digest_sha3_256
+                || commitment.por_root.as_bytes() != &row.pin.manifest.por_root
+                || commitment.content_length != row.pin.manifest.content_length
+            {
+                return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
+            }
+        }
+        (None, _, Some(_)) | (Some(_), None, Some(_)) | (Some(_), Some(_), None) => {
+            return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
+        }
     }
     let source_provider_ids = order
         .assignments
@@ -2679,21 +4185,42 @@ fn validate_assignment(
             return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
         }
     }
-    let authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_state(
-        cursor.height,
-        cursor.block_hash,
-        provider_id,
-        *row.order.order_id.as_bytes(),
-        *row.pin.manifest.digest.as_bytes(),
-        order.manifest_cid,
-        order.chunking_profile,
-        row.pin.manifest.chunk_digest_sha3_256,
-        row.pin.manifest.por_root,
-        row.pin.manifest.content_length,
-    )?;
+    let authorization = if let Some(claim) = row.musubi_archive.as_ref() {
+        FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+            cursor.height,
+            cursor.block_hash,
+            provider_id,
+            *row.order.order_id.as_bytes(),
+            *row.pin.manifest.digest.as_bytes(),
+            order.manifest_cid,
+            order.chunking_profile,
+            row.pin.manifest.chunk_digest_sha3_256,
+            row.pin.manifest.por_root,
+            row.pin.manifest.content_length,
+            FinalizedProviderIngestMusubiContextV1::new(
+                chain_id.clone(),
+                genesis_block_hash,
+                claim.archive_id(),
+            )?,
+        )?
+    } else {
+        FinalizedProviderIngestAuthorizationV1::from_finalized_state(
+            cursor.height,
+            cursor.block_hash,
+            provider_id,
+            *row.order.order_id.as_bytes(),
+            *row.pin.manifest.digest.as_bytes(),
+            order.manifest_cid,
+            order.chunking_profile,
+            row.pin.manifest.chunk_digest_sha3_256,
+            row.pin.manifest.por_root,
+            row.pin.manifest.content_length,
+        )?
+    };
     Ok(ValidatedAssignmentV1 {
         authorization,
         source_provider_ids,
+        musubi_archive: row.musubi_archive.clone(),
     })
 }
 
@@ -2707,18 +4234,38 @@ fn authorization_from_status_and_row(
         REPLICATION_ORDER_DECODE_LIMITS_V1,
     )
     .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
-    let authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_state(
-        cursor.height,
-        cursor.block_hash,
-        status.provider_id,
-        status.order_id,
-        status.manifest_digest,
-        order.manifest_cid,
-        order.chunking_profile,
-        row.pin.manifest.chunk_digest_sha3_256,
-        row.pin.manifest.por_root,
-        row.pin.manifest.content_length,
-    )?;
+    let authorization = if let Some(claim) = row.musubi_archive.as_ref() {
+        FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+            cursor.height,
+            cursor.block_hash,
+            status.provider_id,
+            status.order_id,
+            status.manifest_digest,
+            order.manifest_cid,
+            order.chunking_profile,
+            row.pin.manifest.chunk_digest_sha3_256,
+            row.pin.manifest.por_root,
+            row.pin.manifest.content_length,
+            FinalizedProviderIngestMusubiContextV1::new(
+                claim.chain_id().clone(),
+                claim.genesis_block_hash(),
+                claim.archive_id(),
+            )?,
+        )?
+    } else {
+        FinalizedProviderIngestAuthorizationV1::from_finalized_state(
+            cursor.height,
+            cursor.block_hash,
+            status.provider_id,
+            status.order_id,
+            status.manifest_digest,
+            order.manifest_cid,
+            order.chunking_profile,
+            row.pin.manifest.chunk_digest_sha3_256,
+            row.pin.manifest.por_root,
+            row.pin.manifest.content_length,
+        )?
+    };
     if authorization.job_id() != status.job_id {
         return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
     }
@@ -2745,6 +4292,12 @@ pub enum ProviderIngestRuntimeErrorV1 {
     /// Configured provider identity is zero.
     #[error("provider-ingest runtime provider identity is invalid")]
     InvalidProviderId,
+    /// Configured chain identity is empty or over the V1 canonical bound.
+    #[error("provider-ingest runtime chain identity is invalid")]
+    InvalidChainId,
+    /// Configured genesis trust anchor is zero.
+    #[error("provider-ingest runtime genesis block hash is invalid")]
+    InvalidGenesisBlockHash,
     /// Finalized ledger paging is unavailable.
     #[error("provider-ingest finalized ledger is unavailable")]
     FinalizedLedgerUnavailable,
@@ -2775,6 +4328,7 @@ pub enum ProviderIngestRuntimeErrorV1 {
 #[allow(clippy::too_many_lines)]
 mod tests {
     use std::{
+        io,
         sync::{
             Mutex,
             atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -2786,6 +4340,12 @@ mod tests {
     use iroha_data_model::{
         isi::{InstructionBox, sorafs::CompleteReplicationOrder},
         metadata::Metadata,
+        musubi::{
+            MusubiAbiBindingV1, MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1,
+            MusubiReleaseIdV1, MusubiReleaseMetadataV1, MusubiSemanticReleaseManifestV1,
+            MusubiVerificationLockV1,
+        },
+        nexus::DataSpaceId,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestFinalizedCursorV1,
             PinManifestRecord, PinPolicy, ProviderIngestFinalizedAnchorV1,
@@ -2793,8 +4353,16 @@ mod tests {
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
-    use sorafs_manifest::capacity::{
-        REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+    use sorafs_car::{
+        CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3, compute_por_root,
+        musubi::{
+            MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1, MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1,
+            MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1, MusubiBundleVerifierV1,
+        },
+    };
+    use sorafs_manifest::{
+        BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, ManifestV1,
+        capacity::{REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1},
     };
 
     use super::*;
@@ -2802,9 +4370,35 @@ mod tests {
         ProviderIngestCompletionStateV1, ProviderIngestDeliveryStateV1,
         ProviderIngestOutboxPolicyV1,
     };
+    use crate::{
+        config::StorageConfig,
+        scheduler::{StorageSchedulerConfig, StorageSchedulersRuntime},
+        store::StorageBackend,
+    };
 
     const LOCAL_PROVIDER: [u8; 32] = [0x11; 32];
     const SOURCE_PROVIDER: [u8; 32] = [0x22; 32];
+    const TEST_GENESIS_BLOCK_HASH: [u8; 32] = [0xA7; 32];
+
+    fn test_chain_id() -> ChainId {
+        ChainId::from("provider-ingest-runtime-test")
+    }
+
+    fn validate_assignment(
+        row: &ProviderIngestFinalizedAssignmentV1,
+        cursor: ProviderIngestFinalizedCursorV1,
+        provider_id: [u8; 32],
+        policy: ProviderIngestRuntimePolicyV1,
+    ) -> Result<ValidatedAssignmentV1, ProviderIngestRuntimeErrorV1> {
+        super::validate_assignment(
+            row,
+            cursor,
+            provider_id,
+            &test_chain_id(),
+            TEST_GENESIS_BLOCK_HASH,
+            policy,
+        )
+    }
 
     fn account(seed: u8) -> AccountId {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key");
@@ -2961,6 +4555,7 @@ mod tests {
                 order_id: ReplicationOrderId::new(order_id),
                 manifest_digest: digest,
                 manifest_root_cid: root,
+                musubi_archive: None,
                 issued_by: account(1),
                 issued_epoch: 7,
                 deadline_epoch: 20,
@@ -2969,6 +4564,8 @@ mod tests {
                 provider_completions: Vec::new(),
                 status: ReplicationOrderStatus::Pending,
             },
+            musubi_archive: None,
+            completed_musubi_archive: None,
             provider_owner: Some(account(8)),
             completion_authority: Some(ProviderIngestCompletionAuthorityV1::new(
                 account(8),
@@ -2992,6 +4589,325 @@ mod tests {
             rows: vec![row],
             next_after_order_id: None,
         }
+    }
+
+    fn musubi_binding_for_row(
+        row: &ProviderIngestFinalizedAssignmentV1,
+        seed: u8,
+    ) -> MusubiReplicationOrderArchiveBindingV1 {
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: row.pin.manifest.root_cid.clone(),
+            chunker: row.pin.manifest.chunker.clone(),
+            chunk_plan_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                row.pin.manifest.chunk_digest_sha3_256,
+            ),
+            por_root: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                row.pin.manifest.por_root,
+            ),
+            content_length: row.pin.manifest.content_length,
+            car_digest: iroha_data_model::musubi::MusubiContentDigestV1::new([seed; 32]),
+            car_size: row.pin.manifest.content_length.saturating_add(1_024),
+            bundle_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                [seed.wrapping_add(1); 32],
+            ),
+            source_tree_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                [seed.wrapping_add(2); 32],
+            ),
+            descriptor_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                [seed.wrapping_add(3); 32],
+            ),
+            file_count: 1,
+            chunk_count: 1,
+        };
+        MusubiReplicationOrderArchiveBindingV1::new(
+            row.order.order_id,
+            commitment.archive_id(),
+            commitment,
+        )
+    }
+
+    fn fixture_musubi_row(
+        order_seed: u8,
+        commitment_seed: u8,
+    ) -> ProviderIngestFinalizedAssignmentV1 {
+        let mut row = fixture_row(order_seed);
+        let binding = musubi_binding_for_row(&row, commitment_seed);
+        let claim = ProviderIngestFinalizedClaimFactoryV1::new(
+            test_chain_id(),
+            TEST_GENESIS_BLOCK_HASH,
+            LOCAL_PROVIDER,
+        )
+        .seal_musubi_archive(
+            &test_chain_id(),
+            cursor(8),
+            *row.order.order_id.as_bytes(),
+            &row.pin.manifest,
+            binding.clone(),
+        )
+        .expect("seal Musubi fixture claim");
+        row.order.musubi_archive = Some(binding.archive_id);
+        row.musubi_archive = Some(claim);
+        row
+    }
+
+    fn test_verified_musubi_receipt(
+        claim: &ProviderIngestFinalizedMusubiArchiveClaimV1,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+    ) -> ProviderIngestVerifiedMusubiBundleReceiptV1 {
+        ProviderIngestVerifiedMusubiBundleReceiptV1 {
+            chain_id: claim.chain_id().clone(),
+            genesis_block_hash: claim.genesis_block_hash(),
+            provider_id: claim.provider_id(),
+            observed_finalized_cursor: claim.observed_finalized_cursor(),
+            replication_order: claim.replication_order(),
+            manifest_digest: authorization.manifest_digest(),
+            archive_id: claim.archive_id(),
+            commitment: claim.commitment().clone(),
+            semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1::new([0xC1; 32]),
+            verification_lock_digest: MusubiVerificationLockDigestV1::new([0xC2; 32]),
+        }
+    }
+
+    fn append_attestation_fixture_frame(output: &mut Vec<u8>, bytes: &[u8]) {
+        output.extend_from_slice(
+            &u64::try_from(bytes.len())
+                .expect("fixture frame length")
+                .to_be_bytes(),
+        );
+        output.extend_from_slice(bytes);
+    }
+
+    fn attestation_fixture_domain_digest(domain: &[u8], material: &[u8]) -> MusubiContentDigestV1 {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(domain);
+        hasher.update(
+            &u64::try_from(material.len())
+                .expect("fixture transcript length")
+                .to_be_bytes(),
+        );
+        hasher.update(material);
+        MusubiContentDigestV1::new(*hasher.finalize().as_bytes())
+    }
+
+    struct VerifiedAttestationBundleFixtureV1 {
+        verified: VerifiedMusubiBundleV1,
+        commitment: MusubiArchiveCommitmentV1,
+        plan: CarBuildPlan,
+        payload: Vec<u8>,
+    }
+
+    fn verified_attestation_bundle_fixture(source_seed: u8) -> VerifiedAttestationBundleFixtureV1 {
+        const SOURCE_TREE_DOMAIN: &[u8] = b"musubi-source-tree-v1\0";
+        const BUNDLE_DOMAIN: &[u8] = b"musubi-bundle-v1\0";
+
+        let release = MusubiReleaseIdV1::new(
+            MusubiPackageIdV1::new(
+                DataSpaceId::new(7),
+                MusubiPackageScopeV1::DataspaceRoot,
+                "attestation-fixture".parse().expect("fixture package name"),
+            ),
+            "1.0.0".parse().expect("fixture version"),
+        );
+        let verification_lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: release.clone(),
+            root_dependencies: Vec::new(),
+            nodes: Vec::new(),
+        };
+        let semantic_release = MusubiSemanticReleaseManifestV1 {
+            release,
+            edition: MusubiKotodamaEditionV1::V1,
+            abi: MusubiAbiBindingV1::new([0xA8; 32]).expect("fixture ABI"),
+            dependencies: Vec::new(),
+            exports: Vec::new(),
+            interface_digest: MusubiContentDigestV1::new([0xA9; 32]),
+            metadata: MusubiReleaseMetadataV1::default(),
+            verification_lock_digest: verification_lock.digest(),
+        };
+        let source_path = "src/lib.ko";
+        let source = vec![source_seed; 37];
+        let mut source_material = Vec::new();
+        append_attestation_fixture_frame(&mut source_material, SOURCE_TREE_DOMAIN);
+        source_material.extend_from_slice(&1_u32.to_be_bytes());
+        append_attestation_fixture_frame(&mut source_material, source_path.as_bytes());
+        source_material.extend_from_slice(
+            &u64::try_from(source.len())
+                .expect("fixture source length")
+                .to_be_bytes(),
+        );
+        source_material.extend_from_slice(blake3::hash(&source).as_bytes());
+        let source_tree_digest =
+            attestation_fixture_domain_digest(SOURCE_TREE_DOMAIN, &source_material);
+        let descriptor = MusubiArtifactDescriptorV1::new(
+            semantic_release.semantic_digest(),
+            source_tree_digest,
+            verification_lock.digest(),
+            u64::try_from(source.len()).expect("fixture source length"),
+            1,
+        )
+        .expect("fixture descriptor");
+        let semantic_release_bytes = semantic_release.encode();
+        let descriptor_bytes = descriptor.encode();
+        let verification_lock_bytes = verification_lock.encode();
+        let mut descriptor_material = Vec::new();
+        append_attestation_fixture_frame(
+            &mut descriptor_material,
+            MUSUBI_ARTIFACT_DESCRIPTOR_DIGEST_DOMAIN_V1,
+        );
+        append_attestation_fixture_frame(&mut descriptor_material, &descriptor_bytes);
+        let descriptor_digest = attestation_fixture_domain_digest(
+            MUSUBI_ARTIFACT_DESCRIPTOR_DIGEST_DOMAIN_V1,
+            &descriptor_material,
+        );
+        let mut bundle_material = Vec::new();
+        for transcript in [
+            BUNDLE_DOMAIN,
+            semantic_release_bytes.as_slice(),
+            descriptor_material.as_slice(),
+            source_material.as_slice(),
+            verification_lock_bytes.as_slice(),
+        ] {
+            append_attestation_fixture_frame(&mut bundle_material, transcript);
+        }
+        let bundle_digest = attestation_fixture_domain_digest(BUNDLE_DOMAIN, &bundle_material);
+        let entries = vec![
+            FileEntry {
+                path: source_path.split('/').map(str::to_owned).collect(),
+                data: source,
+            },
+            FileEntry {
+                path: MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1
+                    .split('/')
+                    .map(str::to_owned)
+                    .collect(),
+                data: semantic_release_bytes,
+            },
+            FileEntry {
+                path: MUSUBI_BUNDLE_ARTIFACT_DESCRIPTOR_PATH_V1
+                    .split('/')
+                    .map(str::to_owned)
+                    .collect(),
+                data: descriptor_bytes,
+            },
+            FileEntry {
+                path: MUSUBI_BUNDLE_VERIFICATION_LOCK_PATH_V1
+                    .split('/')
+                    .map(str::to_owned)
+                    .collect(),
+                data: verification_lock_bytes,
+            },
+        ];
+        let (plan, payload) = CarBuildPlan::from_files(entries).expect("fixture bundle plan");
+        let mut car = Vec::new();
+        let stats = CarWriter::new(&plan, &payload)
+            .expect("fixture CAR writer")
+            .write_to(&mut car)
+            .expect("fixture canonical CAR");
+        let chunker = sorafs_car::chunker_registry::default_descriptor();
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: ManifestRootCid::try_from(stats.root_cids[0].clone())
+                .expect("fixture root CID"),
+            chunker: ChunkerProfileHandle {
+                profile_id: chunker.id.0,
+                namespace: chunker.namespace.to_owned(),
+                name: chunker.name.to_owned(),
+                semver: chunker.semver.to_owned(),
+                multihash_code: chunker.multihash_code,
+            },
+            chunk_plan_digest: MusubiContentDigestV1::new(compute_chunk_plan_digest_sha3(
+                &plan.chunks,
+            )),
+            por_root: MusubiContentDigestV1::new(
+                compute_por_root(&payload, &plan).expect("fixture PoR"),
+            ),
+            content_length: plan.content_length,
+            car_digest: MusubiContentDigestV1::new(*stats.car_archive_digest.as_bytes()),
+            car_size: stats.car_size,
+            bundle_digest,
+            source_tree_digest,
+            descriptor_digest,
+            file_count: 1,
+            chunk_count: u32::try_from(plan.chunks.len()).expect("fixture chunk count"),
+        };
+        let verified = MusubiBundleVerifierV1::verify(&plan, &car, &commitment)
+            .expect("fixture canonical bundle verification");
+        VerifiedAttestationBundleFixtureV1 {
+            verified,
+            commitment,
+            plan,
+            payload,
+        }
+    }
+
+    fn completed_attestation_claim(
+        commitment: MusubiArchiveCommitmentV1,
+    ) -> ProviderIngestFinalizedMusubiCompletionClaimV1 {
+        ProviderIngestFinalizedMusubiCompletionClaimV1 {
+            chain_id: test_chain_id(),
+            genesis_block_hash: TEST_GENESIS_BLOCK_HASH,
+            provider_id: LOCAL_PROVIDER,
+            observed_finalized_cursor: cursor(8),
+            binding: MusubiReplicationOrderArchiveBindingV1::new(
+                ReplicationOrderId::new([0xAC; 32]),
+                commitment.archive_id(),
+                commitment,
+            ),
+            completion: completion_record(ProviderId::new(LOCAL_PROVIDER), account(8), 8),
+        }
+    }
+
+    fn completed_attestation_authorization(
+        claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
+        manifest_digest: [u8; 32],
+    ) -> FinalizedProviderIngestAuthorizationV1 {
+        FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+            claim.observed_finalized_cursor().height,
+            claim.observed_finalized_cursor().block_hash,
+            claim.provider_id(),
+            claim.replication_order(),
+            manifest_digest,
+            claim.commitment().root_cid.as_bytes().to_vec(),
+            claim.commitment().chunker.to_handle(),
+            *claim.commitment().chunk_plan_digest.as_bytes(),
+            *claim.commitment().por_root.as_bytes(),
+            claim.commitment().content_length,
+            FinalizedProviderIngestMusubiContextV1::new(
+                claim.chain_id().clone(),
+                claim.genesis_block_hash(),
+                claim.archive_id(),
+            )
+            .expect("completed-claim Musubi context"),
+        )
+        .expect("completed-claim retained authorization")
+    }
+
+    fn completed_attestation_manifest(fixture: &VerifiedAttestationBundleFixtureV1) -> ManifestV1 {
+        let car_stats = CarWriter::new(&fixture.plan, &fixture.payload)
+            .expect("prepare completed-attestation fixture CAR")
+            .write_to(io::sink())
+            .expect("compute completed-attestation fixture CAR");
+        ManifestBuilder::new()
+            .root_cid(
+                car_stats
+                    .root_cids
+                    .first()
+                    .cloned()
+                    .expect("completed-attestation fixture root"),
+            )
+            .dag_codec(DagCodecId(car_stats.dag_codec))
+            .chunking_from_profile(fixture.plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&fixture.plan.chunks))
+            .por_root(
+                compute_por_root(&fixture.payload, &fixture.plan)
+                    .expect("completed-attestation fixture PoR root"),
+            )
+            .content_length(fixture.plan.content_length)
+            .car_digest(*car_stats.car_archive_digest.as_bytes())
+            .car_size(car_stats.car_size)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("completed-attestation fixture manifest")
     }
 
     fn outbox_policy() -> ProviderIngestOutboxPolicyV1 {
@@ -3031,6 +4947,7 @@ mod tests {
     impl ProviderIngestFinalizedLedgerV1 for TestLedger {
         fn read_assignment_page<'a>(
             &'a self,
+            _claim_factory: ProviderIngestFinalizedClaimFactoryV1,
             at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
             after_order_id: Option<[u8; 32]>,
             _limit: usize,
@@ -3072,7 +4989,7 @@ mod tests {
         ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>>
         {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(request.source_provider_ids, vec![SOURCE_PROVIDER]);
+            assert_eq!(request.source_provider_ids(), [SOURCE_PROVIDER]);
             let result = self.result.lock().unwrap().clone();
             let delay_ms = self.delay_ms;
             Box::pin(async move {
@@ -3095,6 +5012,7 @@ mod tests {
         readiness: Mutex<Result<(), ProviderIngestSourceFetchErrorV1>>,
         result: Mutex<Result<Vec<u8>, ProviderIngestSourceFetchErrorV1>>,
         calls: Arc<Mutex<Vec<[u8; 32]>>>,
+        musubi_calls: Mutex<Vec<Option<ProviderIngestMusubiArchiveFetchBindingV1>>>,
     }
 
     impl ProviderIngestAuthenticatedProviderSourceV1 for TestProviderSource {
@@ -3125,10 +5043,12 @@ mod tests {
         fn fetch_provider<'a>(
             &'a self,
             authorization: FinalizedProviderIngestAuthorizationV1,
+            musubi_archive: Option<ProviderIngestMusubiArchiveFetchBindingV1>,
         ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>>
         {
             assert_eq!(authorization.provider_id(), LOCAL_PROVIDER);
             self.calls.lock().unwrap().push(self.provider_id);
+            self.musubi_calls.lock().unwrap().push(musubi_archive);
             let result = self.result.lock().unwrap().clone();
             let qualification_after_fetch = self.qualification_after_fetch.lock().unwrap().take();
             if let Some(qualification) = qualification_after_fetch {
@@ -3160,6 +5080,7 @@ mod tests {
             readiness: Mutex::new(readiness),
             result: Mutex::new(result),
             calls,
+            musubi_calls: Mutex::new(Vec::new()),
         })
     }
 
@@ -3205,14 +5126,17 @@ mod tests {
         )
     }
 
-    fn test_source_request(source_provider_ids: Vec<[u8; 32]>) -> ProviderIngestSourceRequestV1 {
+    fn test_source_request_result(
+        source_provider_ids: Vec<[u8; 32]>,
+    ) -> Result<ProviderIngestSourceRequestV1, ProviderIngestSourceFetchErrorV1> {
         let row = fixture_row(0x31);
         let validated =
             validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()).unwrap();
-        ProviderIngestSourceRequestV1 {
-            authorization: validated.authorization,
-            source_provider_ids,
-        }
+        ProviderIngestSourceRequestV1::new(validated.authorization, source_provider_ids, None)
+    }
+
+    fn test_source_request(source_provider_ids: Vec<[u8; 32]>) -> ProviderIngestSourceRequestV1 {
+        test_source_request_result(source_provider_ids).expect("valid test source request")
     }
 
     #[test]
@@ -3484,6 +5408,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authenticated_source_pool_preserves_exact_musubi_fetch_binding() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source = test_provider_source(
+            SOURCE_PROVIDER,
+            "https-pinned:provider-musubi",
+            Ok(()),
+            Ok(vec![0xA5]),
+            false,
+            Arc::clone(&calls),
+        );
+        let fallback = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-musubi-fallback",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        let pool = test_source_pool(vec![Arc::clone(&source), fallback]).unwrap();
+        let row = fixture_musubi_row(0x68, 0xB4);
+        let validated =
+            validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()).unwrap();
+        let musubi_archive = ProviderIngestMusubiArchiveFetchBindingV1::from_finalized_claim(
+            row.musubi_archive.as_ref().unwrap(),
+        );
+        let request = ProviderIngestSourceRequestV1::new(
+            validated.authorization,
+            vec![SOURCE_PROVIDER],
+            Some(musubi_archive.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(pool.fetch(request).await, Ok(vec![0xA5]));
+        assert_eq!(*calls.lock().unwrap(), vec![SOURCE_PROVIDER]);
+        assert_eq!(
+            *source.musubi_calls.lock().unwrap(),
+            vec![Some(musubi_archive)]
+        );
+    }
+
+    #[tokio::test]
     async fn authenticated_source_pool_fails_over_after_content_rejection() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let source_a = test_provider_source(
@@ -3538,10 +5503,13 @@ mod tests {
             );
             let pool = test_source_pool(vec![source_a, source_b]).unwrap();
 
-            assert_eq!(
-                pool.fetch(test_source_request(source_provider_ids)).await,
-                Err(ProviderIngestSourceFetchErrorV1::Rejected)
-            );
+            match test_source_request_result(source_provider_ids) {
+                Ok(request) => assert_eq!(
+                    pool.fetch(request).await,
+                    Err(ProviderIngestSourceFetchErrorV1::Rejected)
+                ),
+                Err(error) => assert_eq!(error, ProviderIngestSourceFetchErrorV1::Rejected),
+            }
             assert!(calls.lock().unwrap().is_empty());
         }
     }
@@ -3614,27 +5582,43 @@ mod tests {
         fn verify_existing<'a>(
             &'a self,
             authorization: FinalizedProviderIngestAuthorizationV1,
-        ) -> ProviderIngestFutureV1<'a, Result<Option<String>, ProviderIngestLocalStorageErrorV1>>
-        {
+            musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
+        ) -> ProviderIngestFutureV1<
+            'a,
+            Result<Option<ProviderIngestLocalStoredV1>, ProviderIngestLocalStorageErrorV1>,
+        > {
             let existing = self.existing.load(Ordering::SeqCst);
-            Box::pin(
-                async move { Ok(existing.then(|| hex::encode(authorization.manifest_digest()))) },
-            )
+            Box::pin(async move {
+                if musubi_archive.is_some() {
+                    return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+                }
+                Ok(existing.then(|| {
+                    ProviderIngestLocalStoredV1::generic(hex::encode(
+                        authorization.manifest_digest(),
+                    ))
+                }))
+            })
         }
 
         fn store<'a>(
             &'a self,
             authorization: FinalizedProviderIngestAuthorizationV1,
+            musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
             fetched: Vec<u8>,
-        ) -> ProviderIngestFutureV1<'a, Result<String, ProviderIngestLocalStorageErrorV1>> {
+        ) -> ProviderIngestFutureV1<
+            'a,
+            Result<ProviderIngestLocalStoredV1, ProviderIngestLocalStorageErrorV1>,
+        > {
             Box::pin(async move {
-                if fetched != vec![0xA5] {
+                if fetched != vec![0xA5] || musubi_archive.is_some() {
                     return Err(ProviderIngestLocalStorageErrorV1::Retryable);
                 }
                 if authorization.order_id() == [0x3E; 32] {
                     tokio::time::sleep(Duration::from_millis(300)).await;
                 }
-                Ok(hex::encode(authorization.manifest_digest()))
+                Ok(ProviderIngestLocalStoredV1::generic(hex::encode(
+                    authorization.manifest_digest(),
+                )))
             })
         }
     }
@@ -3881,19 +5865,24 @@ mod tests {
         TestClock,
     >;
 
-    fn test_runtime(
+    fn test_runtime_with_chain_and_genesis(
         row: ProviderIngestFinalizedAssignmentV1,
         existing: bool,
         fetch_result: Result<Vec<u8>, ProviderIngestSourceFetchErrorV1>,
         fetch_delay_ms: u64,
         disposition: ProviderIngestIngressDispositionV1,
         wrong_signer: bool,
-    ) -> (
-        TestRuntime,
-        Arc<TestLedger>,
-        Arc<TestFetch>,
-        Arc<TestIngress>,
-    ) {
+        chain_id: ChainId,
+        genesis_block_hash: [u8; 32],
+    ) -> Result<
+        (
+            TestRuntime,
+            Arc<TestLedger>,
+            Arc<TestFetch>,
+            Arc<TestIngress>,
+        ),
+        ProviderIngestRuntimeErrorV1,
+    > {
         let page = fixture_page(row.clone());
         let finalized_cursor = page.finalized_cursor;
         let ledger = Arc::new(TestLedger {
@@ -3921,7 +5910,8 @@ mod tests {
         });
         let runtime = ProviderIngestRuntimeV1::new(
             LOCAL_PROVIDER,
-            ChainId::from("provider-ingest-runtime-test"),
+            chain_id,
+            genesis_block_hash,
             ProviderIngestClaimOwnerV1::new([0xCC; 32]).unwrap(),
             runtime_policy(),
             outbox,
@@ -3940,9 +5930,76 @@ mod tests {
                 start: Instant::now(),
                 base_ms: AtomicU64::new(1_000),
             }),
+        )?;
+        Ok((runtime, ledger, fetch, ingress))
+    }
+
+    fn test_runtime(
+        row: ProviderIngestFinalizedAssignmentV1,
+        existing: bool,
+        fetch_result: Result<Vec<u8>, ProviderIngestSourceFetchErrorV1>,
+        fetch_delay_ms: u64,
+        disposition: ProviderIngestIngressDispositionV1,
+        wrong_signer: bool,
+    ) -> (
+        TestRuntime,
+        Arc<TestLedger>,
+        Arc<TestFetch>,
+        Arc<TestIngress>,
+    ) {
+        test_runtime_with_chain_and_genesis(
+            row,
+            existing,
+            fetch_result,
+            fetch_delay_ms,
+            disposition,
+            wrong_signer,
+            test_chain_id(),
+            TEST_GENESIS_BLOCK_HASH,
         )
-        .expect("runtime");
-        (runtime, ledger, fetch, ingress)
+        .expect("runtime")
+    }
+
+    #[test]
+    fn runtime_requires_bounded_chain_and_nonzero_genesis_and_preserves_them_exactly() {
+        let row = fixture_row(0x30);
+        assert!(matches!(
+            test_runtime_with_chain_and_genesis(
+                row.clone(),
+                true,
+                Ok(vec![0xA5]),
+                0,
+                ProviderIngestIngressDispositionV1::Submitted,
+                false,
+                test_chain_id(),
+                [0; 32],
+            ),
+            Err(ProviderIngestRuntimeErrorV1::InvalidGenesisBlockHash)
+        ));
+        assert!(matches!(
+            test_runtime_with_chain_and_genesis(
+                row.clone(),
+                true,
+                Ok(vec![0xA5]),
+                0,
+                ProviderIngestIngressDispositionV1::Submitted,
+                false,
+                ChainId::from(""),
+                TEST_GENESIS_BLOCK_HASH,
+            ),
+            Err(ProviderIngestRuntimeErrorV1::InvalidChainId)
+        ));
+
+        let (runtime, _, _, _) = test_runtime(
+            row,
+            true,
+            Ok(vec![0xA5]),
+            0,
+            ProviderIngestIngressDispositionV1::Submitted,
+            false,
+        );
+        assert_eq!(runtime.chain_id, test_chain_id());
+        assert_eq!(runtime.genesis_block_hash, TEST_GENESIS_BLOCK_HASH);
     }
 
     #[test]
@@ -4022,6 +6079,875 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn finalized_claim_factory_and_runtime_reject_musubi_binding_substitution() {
+        let factory = ProviderIngestFinalizedClaimFactoryV1::new(
+            test_chain_id(),
+            TEST_GENESIS_BLOCK_HASH,
+            LOCAL_PROVIDER,
+        );
+        let mut row = fixture_row(0x32);
+        let binding = musubi_binding_for_row(&row, 0x81);
+        let mut substituted_pin = row.pin.manifest.clone();
+        substituted_pin.content_length = substituted_pin.content_length.saturating_add(1);
+        assert_eq!(
+            factory.seal_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                *row.order.order_id.as_bytes(),
+                &substituted_pin,
+                binding.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+            "a reader cannot seal a publisher-substituted pin commitment"
+        );
+        let claim = factory
+            .seal_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                *row.order.order_id.as_bytes(),
+                &row.pin.manifest,
+                binding.clone(),
+            )
+            .expect("seal finalized Musubi binding");
+        assert_eq!(claim.replication_order(), *row.order.order_id.as_bytes());
+        assert_eq!(claim.archive_id(), binding.archive_id);
+        row.musubi_archive = Some(claim);
+        assert!(matches!(
+            validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()),
+            Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
+        ));
+        row.order.musubi_archive = Some(binding.archive_id);
+        assert!(
+            validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()).is_ok(),
+            "an exact finalized claim must remain usable"
+        );
+        let validated =
+            validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()).unwrap();
+        let receipt = test_verified_musubi_receipt(
+            row.musubi_archive.as_ref().unwrap(),
+            &validated.authorization,
+        );
+        assert!(receipt.validate_stored(&validated.authorization));
+        assert!(
+            norito::to_bytes(&receipt.to_stored()).unwrap().len()
+                <= PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1
+        );
+
+        let mut missing_claim = row.clone();
+        missing_claim.musubi_archive = None;
+        assert!(matches!(
+            validate_assignment(&missing_claim, cursor(8), LOCAL_PROVIDER, runtime_policy(),),
+            Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
+        ));
+
+        let other_order = fixture_row(0x33);
+        assert_eq!(
+            factory.seal_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                *other_order.order.order_id.as_bytes(),
+                &other_order.pin.manifest,
+                binding,
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+            "a reader cannot seal another order's publisher-shaped binding"
+        );
+
+        row.pin.manifest.content_length = row.pin.manifest.content_length.saturating_add(1);
+        assert!(matches!(
+            validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()),
+            Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
+        ));
+    }
+
+    #[test]
+    fn completed_musubi_claim_exists_only_for_the_local_finalized_completion() {
+        let factory = ProviderIngestFinalizedClaimFactoryV1::new(
+            test_chain_id(),
+            TEST_GENESIS_BLOCK_HASH,
+            LOCAL_PROVIDER,
+        );
+        let mut pending = fixture_musubi_row(0x34, 0x82);
+        let binding = musubi_binding_for_row(&pending, 0x82);
+        assert_eq!(
+            factory.seal_completed_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                ProviderId::new(LOCAL_PROVIDER),
+                &pending.order,
+                &pending.pin.manifest,
+                binding.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+            "a pending local provider cannot receive a completed-row capability"
+        );
+        assert!(validate_assignment(&pending, cursor(8), LOCAL_PROVIDER, runtime_policy()).is_ok());
+
+        let mut completed_other = pending.clone();
+        completed_other
+            .order
+            .provider_completions
+            .push(completion_record(
+                ProviderId::new(SOURCE_PROVIDER),
+                account(9),
+                8,
+            ));
+        assert!(
+            validate_assignment(
+                &completed_other,
+                cursor(8),
+                LOCAL_PROVIDER,
+                runtime_policy(),
+            )
+            .is_ok(),
+            "another provider's completion must not require a local completed claim"
+        );
+
+        pending.order.provider_completions.push(completion_record(
+            ProviderId::new(LOCAL_PROVIDER),
+            account(8),
+            8,
+        ));
+        let completed = factory
+            .seal_completed_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                ProviderId::new(LOCAL_PROVIDER),
+                &pending.order,
+                &pending.pin.manifest,
+                binding,
+            )
+            .expect("seal exact local finalized completion");
+        assert_eq!(completed.provider_id(), LOCAL_PROVIDER);
+        assert_eq!(
+            completed.completion(),
+            &pending.order.provider_completions[0]
+        );
+        pending.completed_musubi_archive = Some(completed);
+        assert!(
+            validate_assignment(&pending, cursor(8), LOCAL_PROVIDER, runtime_policy()).is_ok(),
+            "a completed Musubi row must carry its exact post-completion capability"
+        );
+
+        let mut substituted_claim = pending.clone();
+        substituted_claim
+            .completed_musubi_archive
+            .as_mut()
+            .expect("completed claim")
+            .observed_finalized_cursor = cursor(7);
+        assert!(matches!(
+            validate_assignment(
+                &substituted_claim,
+                cursor(8),
+                LOCAL_PROVIDER,
+                runtime_policy(),
+            ),
+            Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
+        ));
+
+        let mut missing = pending.clone();
+        missing.completed_musubi_archive = None;
+        assert!(matches!(
+            validate_assignment(&missing, cursor(8), LOCAL_PROVIDER, runtime_policy()),
+            Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
+        ));
+
+        let mut generic = fixture_row(0x35);
+        generic.order.provider_completions.push(completion_record(
+            ProviderId::new(LOCAL_PROVIDER),
+            account(8),
+            8,
+        ));
+        assert!(
+            validate_assignment(&generic, cursor(8), LOCAL_PROVIDER, runtime_policy()).is_ok(),
+            "a generic finalized completion must not carry a Musubi capability"
+        );
+        generic.completed_musubi_archive = pending.completed_musubi_archive;
+        assert!(matches!(
+            validate_assignment(&generic, cursor(8), LOCAL_PROVIDER, runtime_policy()),
+            Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
+        ));
+    }
+
+    #[test]
+    fn musubi_claims_and_receipts_remain_valid_across_later_finalized_scans() {
+        let row = fixture_musubi_row(0x38, 0x85);
+        let admission = validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy())
+            .expect("validate admission")
+            .authorization;
+        let admitted_claim = row.musubi_archive.as_ref().expect("Musubi admission claim");
+        let admitted_receipt = test_verified_musubi_receipt(admitted_claim, &admission);
+        assert!(admitted_receipt.validate_stored(&admission));
+
+        let mut later_claim = admitted_claim.clone();
+        later_claim.observed_finalized_cursor = cursor(9);
+        assert!(later_claim.matches_authorization(&admission));
+        assert!(admitted_receipt.matches(&later_claim, &admission));
+        assert!(
+            ProviderIngestMusubiArchiveFetchBindingV1::from_finalized_claim(&later_claim)
+                .matches_authorization(&admission)
+        );
+        assert_eq!(
+            ProviderIngestSourceRequestV1::new(admission.clone(), vec![SOURCE_PROVIDER], None,),
+            Err(ProviderIngestSourceFetchErrorV1::Rejected),
+            "a durable Musubi authorization cannot be downgraded to a generic fetch"
+        );
+
+        let generic_authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_state(
+            admission.finalized_height(),
+            admission.finalized_block_hash(),
+            admission.provider_id(),
+            admission.order_id(),
+            admission.manifest_digest(),
+            admission.manifest_cid().to_vec(),
+            admission.chunker_handle().to_owned(),
+            admission.chunk_digest_sha3_256(),
+            admission.por_root(),
+            admission.content_length(),
+        )
+        .expect("generic authorization with the same storage binding");
+        assert_eq!(
+            ProviderIngestSourceRequestV1::new(
+                generic_authorization,
+                vec![SOURCE_PROVIDER],
+                Some(
+                    ProviderIngestMusubiArchiveFetchBindingV1::from_finalized_claim(&later_claim,)
+                ),
+            ),
+            Err(ProviderIngestSourceFetchErrorV1::Rejected),
+            "a generic authorization cannot be upgraded by an informational fetch binding"
+        );
+
+        let later_receipt = test_verified_musubi_receipt(&later_claim, &admission);
+        assert!(later_receipt.validate_stored(&admission));
+        let mut latest_claim = later_claim.clone();
+        latest_claim.observed_finalized_cursor = cursor(10);
+        assert!(later_receipt.matches(&latest_claim, &admission));
+
+        let replay_authorization =
+            FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+                cursor(9).height,
+                cursor(9).block_hash,
+                admission.provider_id(),
+                admission.order_id(),
+                admission.manifest_digest(),
+                admission.manifest_cid().to_vec(),
+                admission.chunker_handle().to_owned(),
+                admission.chunk_digest_sha3_256(),
+                admission.por_root(),
+                admission.content_length(),
+                admission
+                    .musubi_context()
+                    .expect("Musubi authorization context")
+                    .clone(),
+            )
+            .expect("later finalized replay authorization");
+        let outbox = ProviderIngestOutbox::in_memory(outbox_policy()).expect("Musubi outbox");
+        outbox
+            .enqueue(admission.clone())
+            .expect("enqueue admission authorization");
+        assert!(matches!(
+            outbox
+                .enqueue(replay_authorization)
+                .expect("replay at later finalized head"),
+            crate::provider_ingest_outbox::ProviderIngestEnqueueResultV1::ExistingActive { .. }
+        ));
+        let retained = outbox
+            .authorization(admission.job_id())
+            .expect("retained admission authorization");
+        assert_eq!(retained, admission);
+        outbox
+            .observe_finalized_snapshot(cursor(9), 9_000)
+            .expect("advance durable finalized high-water for later receipt");
+        let source_claim = outbox
+            .claim_source(
+                retained.job_id(),
+                ProviderIngestClaimOwnerV1::new([0xD4; 32]).expect("claim owner"),
+                100,
+                cursor(9),
+            )
+            .expect("claim replayed Musubi source work");
+        outbox
+            .mark_local_stored_verified(
+                &source_claim,
+                101,
+                hex::encode(retained.manifest_digest()),
+                Some(later_receipt.clone()),
+            )
+            .expect("persist verifier receipt from later finalized scan");
+        let status = outbox.status(retained.job_id()).expect("stored status");
+        let ProviderIngestDeliveryStateV1::LocalStored {
+            musubi_bundle: Some(stored_receipt),
+            ..
+        } = status.state
+        else {
+            panic!("expected persisted Musubi verifier receipt");
+        };
+        assert!(persisted_receipt_matches(
+            &retained,
+            Some(&latest_claim),
+            Some(stored_receipt.as_ref()),
+        ));
+
+        let mut stale_claim = admitted_claim.clone();
+        stale_claim.observed_finalized_cursor = cursor(7);
+        assert!(!stale_claim.matches_authorization(&admission));
+
+        let mut forked_claim = admitted_claim.clone();
+        forked_claim.observed_finalized_cursor.block_hash = [0xF8; 32];
+        assert!(!forked_claim.matches_authorization(&admission));
+
+        let mut receipt_from_future = later_receipt;
+        receipt_from_future.observed_finalized_cursor = cursor(11);
+        assert!(!receipt_from_future.matches(&latest_claim, &admission));
+    }
+
+    #[test]
+    fn musubi_attestation_approval_request_binds_exact_completed_verified_evidence() {
+        let VerifiedAttestationBundleFixtureV1 {
+            verified,
+            commitment,
+            ..
+        } = verified_attestation_bundle_fixture(0xD1);
+        let claim = completed_attestation_claim(commitment.clone());
+
+        let first = ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
+            &claim, &verified,
+        )
+        .expect("derive approval request");
+        let second = ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
+            &claim, &verified,
+        )
+        .expect("derive deterministic approval request");
+
+        assert_eq!(first, second);
+        assert_ne!(first.completion_claim_digest(), [0; 32]);
+        assert_eq!(first.observed_finalized_cursor(), cursor(8));
+        assert_eq!(
+            first.signer_policy(),
+            claim.completion().completion_authority.signer_policy
+        );
+        assert_eq!(first.payload().version, MUSUBI_REGISTRY_VERSION_V1);
+        assert_eq!(
+            first.payload().binding.chain_id,
+            *claim.chain_id(),
+            "payload must bind the runtime-selected chain"
+        );
+        assert_eq!(
+            first.payload().binding.provider_id,
+            ProviderId::new(LOCAL_PROVIDER)
+        );
+        assert_eq!(
+            first.payload().binding.replication_order.as_bytes(),
+            &claim.replication_order()
+        );
+        assert_eq!(first.payload().binding.archive_id, commitment.archive_id());
+        assert_eq!(
+            first.payload().binding.bundle_digest,
+            commitment.bundle_digest
+        );
+        assert_eq!(
+            first.payload().binding.descriptor_digest,
+            commitment.descriptor_digest
+        );
+        assert_eq!(
+            first.payload().binding.semantic_release_manifest_digest,
+            verified.semantic_release().semantic_digest()
+        );
+        assert_eq!(
+            first.payload().binding.verification_lock_digest,
+            verified.verification_lock().digest()
+        );
+        assert_eq!(
+            first.payload().signing_hash(),
+            second.payload().signing_hash()
+        );
+    }
+
+    #[test]
+    fn musubi_attestation_approval_request_rejects_substituted_evidence() {
+        let VerifiedAttestationBundleFixtureV1 {
+            verified,
+            commitment,
+            ..
+        } = verified_attestation_bundle_fixture(0xD2);
+        let claim = completed_attestation_claim(commitment);
+        let other_verified = verified_attestation_bundle_fixture(0xD3).verified;
+        assert_eq!(
+            ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
+                &claim,
+                &other_verified,
+            ),
+            Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
+            "verified bundle evidence from another commitment must fail"
+        );
+
+        let mut substituted_bundle_commitment = claim.clone();
+        substituted_bundle_commitment
+            .binding
+            .commitment
+            .bundle_digest = MusubiContentDigestV1::new([0xD6; 32]);
+        substituted_bundle_commitment.binding.archive_id = substituted_bundle_commitment
+            .binding
+            .commitment
+            .archive_id();
+        assert_eq!(
+            ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
+                &substituted_bundle_commitment,
+                &verified,
+            ),
+            Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
+            "verified evidence must retain the exact archive identity, not only projected fields"
+        );
+
+        let mut substituted_descriptor_commitment = claim.clone();
+        substituted_descriptor_commitment
+            .binding
+            .commitment
+            .descriptor_digest = MusubiContentDigestV1::new([0xD4; 32]);
+        substituted_descriptor_commitment.binding.archive_id = substituted_descriptor_commitment
+            .binding
+            .commitment
+            .archive_id();
+        assert_eq!(
+            ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
+                &substituted_descriptor_commitment,
+                &verified,
+            ),
+            Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
+            "a substituted descriptor commitment must fail even with a self-consistent archive ID"
+        );
+
+        let mut substituted_completion = claim.clone();
+        substituted_completion.completion.provider_id = ProviderId::new(SOURCE_PROVIDER);
+        assert_eq!(
+            ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
+                &substituted_completion,
+                &verified,
+            ),
+            Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
+            "another provider's completion must fail"
+        );
+
+        let mut substituted_cursor = claim;
+        substituted_cursor.observed_finalized_cursor.block_hash = [0xD5; 32];
+        assert_eq!(
+            ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
+                &substituted_cursor,
+                &verified,
+            ),
+            Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
+            "a same-height cursor that does not cover the completion anchor must fail"
+        );
+    }
+
+    #[test]
+    fn completed_musubi_claim_matches_only_exact_authorization_and_finalized_prefix() {
+        let fixture = verified_attestation_bundle_fixture(0xD8);
+        let mut claim = completed_attestation_claim(fixture.commitment.clone());
+        let authorization = completed_attestation_authorization(&claim, [0x93; 32]);
+        assert!(claim.matches_authorization(&authorization));
+
+        claim.observed_finalized_cursor = cursor(10);
+        claim.completion.finalized_anchor = ProviderIngestFinalizedAnchorV1 {
+            height: 9,
+            block_hash: cursor(9).block_hash,
+        };
+        let late_admission = completed_attestation_authorization(&claim, [0x93; 32]);
+        assert!(
+            claim.matches_authorization(&late_admission),
+            "a completed row may first be observed after its own finalized anchor"
+        );
+
+        let mut stale = claim.clone();
+        stale.observed_finalized_cursor = cursor(8);
+        assert!(!stale.matches_authorization(&late_admission));
+
+        let mut substituted_chain = claim.clone();
+        substituted_chain.chain_id = ChainId::from("substituted-completion-chain");
+        assert!(!substituted_chain.matches_authorization(&late_admission));
+
+        let mut substituted_commitment = claim.clone();
+        substituted_commitment.binding.commitment.por_root = MusubiContentDigestV1::new([0xDA; 32]);
+        substituted_commitment.binding.archive_id =
+            substituted_commitment.binding.commitment.archive_id();
+        assert!(!substituted_commitment.matches_authorization(&late_admission));
+
+        let mut inert_cursor = claim.clone();
+        inert_cursor.observed_finalized_cursor.block_hash = [0; 32];
+        assert!(!inert_cursor.matches_authorization(&late_admission));
+
+        let conflicting_admission =
+            FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+                claim.completion.finalized_anchor.height,
+                [0xDB; 32],
+                claim.provider_id(),
+                claim.replication_order(),
+                [0x93; 32],
+                claim.commitment().root_cid.as_bytes().to_vec(),
+                claim.commitment().chunker.to_handle(),
+                *claim.commitment().chunk_plan_digest.as_bytes(),
+                *claim.commitment().por_root.as_bytes(),
+                claim.commitment().content_length,
+                FinalizedProviderIngestMusubiContextV1::new(
+                    claim.chain_id().clone(),
+                    claim.genesis_block_hash(),
+                    claim.archive_id(),
+                )
+                .expect("conflicting-admission Musubi context"),
+            )
+            .expect("conflicting retained authorization");
+        assert!(
+            !claim.matches_authorization(&conflicting_admission),
+            "admission and completion cannot name different blocks at one height"
+        );
+    }
+
+    #[test]
+    fn admitted_payload_lease_alone_mints_completed_musubi_approval_request() {
+        let fixture = verified_attestation_bundle_fixture(0xD9);
+        let manifest = completed_attestation_manifest(&fixture);
+        let temp_dir = tempfile::tempdir().expect("completed-attestation storage tempdir");
+        let data_dir = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonical completed-attestation tempdir")
+            .join("storage");
+        let backend = StorageBackend::new(
+            StorageConfig::builder()
+                .enabled(true)
+                .data_dir(data_dir)
+                .build(),
+        )
+        .expect("completed-attestation storage backend");
+        let mut payload_reader = fixture.payload.as_slice();
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &fixture.plan, &mut payload_reader)
+            .expect("ingest completed-attestation payload");
+        let stored = backend
+            .manifest(&manifest_id)
+            .expect("completed-attestation stored manifest");
+        let manifest_digest = *stored.manifest_digest();
+        let claim = completed_attestation_claim(fixture.commitment.clone());
+        let authorization = completed_attestation_authorization(&claim, manifest_digest);
+        let schedulers = StorageSchedulersRuntime::new(StorageSchedulerConfig::default());
+
+        assert_eq!(fixture.verified.archive_id(), claim.archive_id());
+        let (request, fourth_reader_rejected) = backend
+            .with_admitted_payload_read_lease_by_digest(&manifest_digest, &schedulers, |lease| {
+                let request =
+                    lease.verify_completed_musubi_bundle(&fixture.plan, &authorization, &claim);
+                let fourth_reader_rejected = matches!(
+                    lease.open_reader(),
+                    Err(error) if error.kind() == io::ErrorKind::PermissionDenied
+                );
+                (request, fourth_reader_rejected)
+            })
+            .expect("acquire completed-attestation lifecycle lease")
+            .expect("completed-attestation payload remains admitted");
+        let request = request.expect("fresh lease verification mints approval request");
+        assert!(
+            fourth_reader_rejected,
+            "verification must consume exactly three fresh readers"
+        );
+        assert_eq!(request.payload().binding.archive_id, claim.archive_id());
+
+        let mut substituted_plan = fixture.plan.clone();
+        substituted_plan.payload_digest = blake3::hash(b"substituted admitted payload");
+        assert_eq!(
+            backend
+                .with_admitted_payload_read_lease_by_digest(
+                    &manifest_digest,
+                    &schedulers,
+                    |lease| lease.verify_completed_musubi_bundle(
+                        &substituted_plan,
+                        &authorization,
+                        &claim,
+                    ),
+                )
+                .expect("acquire substituted-plan lifecycle lease")
+                .expect("completed-attestation payload remains admitted"),
+            Err(ProviderIngestLocalStorageErrorV1::Permanent),
+        );
+
+        let substituted_authorization = completed_attestation_authorization(&claim, [0xDC; 32]);
+        assert_eq!(
+            backend
+                .with_admitted_payload_read_lease_by_digest(
+                    &manifest_digest,
+                    &schedulers,
+                    |lease| lease.verify_completed_musubi_bundle(
+                        &fixture.plan,
+                        &substituted_authorization,
+                        &claim,
+                    ),
+                )
+                .expect("acquire substituted-authorization lifecycle lease")
+                .expect("completed-attestation payload remains admitted"),
+            Err(ProviderIngestLocalStorageErrorV1::Permanent),
+        );
+
+        let mut stale_claim = claim.clone();
+        stale_claim.observed_finalized_cursor = cursor(7);
+        assert_eq!(
+            backend
+                .with_admitted_payload_read_lease_by_digest(
+                    &manifest_digest,
+                    &schedulers,
+                    |lease| lease.verify_completed_musubi_bundle(
+                        &fixture.plan,
+                        &authorization,
+                        &stale_claim,
+                    ),
+                )
+                .expect("acquire stale-claim lifecycle lease")
+                .expect("completed-attestation payload remains admitted"),
+            Err(ProviderIngestLocalStorageErrorV1::Permanent),
+        );
+
+        let mut substituted_claim = claim;
+        substituted_claim.binding.commitment.bundle_digest = MusubiContentDigestV1::new([0xDD; 32]);
+        substituted_claim.binding.archive_id = substituted_claim.binding.commitment.archive_id();
+        assert_eq!(
+            backend
+                .with_admitted_payload_read_lease_by_digest(
+                    &manifest_digest,
+                    &schedulers,
+                    |lease| lease.verify_completed_musubi_bundle(
+                        &fixture.plan,
+                        &authorization,
+                        &substituted_claim,
+                    ),
+                )
+                .expect("acquire substituted-claim lifecycle lease")
+                .expect("completed-attestation payload remains admitted"),
+            Err(ProviderIngestLocalStorageErrorV1::Permanent),
+        );
+    }
+
+    #[test]
+    fn completed_musubi_lease_preserves_transient_reader_classification() {
+        for kind in [
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::NotFound,
+            io::ErrorKind::Other,
+        ] {
+            assert!(provider_ingest_admitted_payload_read_error_is_retryable(
+                kind
+            ));
+        }
+        for kind in [
+            io::ErrorKind::InvalidData,
+            io::ErrorKind::UnexpectedEof,
+            io::ErrorKind::PermissionDenied,
+        ] {
+            assert!(!provider_ingest_admitted_payload_read_error_is_retryable(
+                kind
+            ));
+        }
+    }
+
+    #[test]
+    fn verified_musubi_receipt_rejects_archive_identity_substitution() {
+        let VerifiedAttestationBundleFixtureV1 {
+            verified,
+            commitment,
+            ..
+        } = verified_attestation_bundle_fixture(0xD7);
+        let binding = MusubiReplicationOrderArchiveBindingV1::new(
+            ReplicationOrderId::new([0xAD; 32]),
+            commitment.archive_id(),
+            commitment,
+        );
+        let claim = ProviderIngestFinalizedMusubiArchiveClaimV1 {
+            chain_id: test_chain_id(),
+            genesis_block_hash: TEST_GENESIS_BLOCK_HASH,
+            provider_id: LOCAL_PROVIDER,
+            observed_finalized_cursor: cursor(8),
+            binding,
+        };
+        let authorization_for = |claim: &ProviderIngestFinalizedMusubiArchiveClaimV1| {
+            FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+                8,
+                cursor(8).block_hash,
+                LOCAL_PROVIDER,
+                claim.replication_order(),
+                [0xAE; 32],
+                claim.commitment().root_cid.as_bytes().to_vec(),
+                claim.commitment().chunker.to_handle(),
+                *claim.commitment().chunk_plan_digest.as_bytes(),
+                *claim.commitment().por_root.as_bytes(),
+                claim.commitment().content_length,
+                FinalizedProviderIngestMusubiContextV1::new(
+                    test_chain_id(),
+                    TEST_GENESIS_BLOCK_HASH,
+                    claim.archive_id(),
+                )
+                .expect("Musubi context"),
+            )
+            .expect("Musubi authorization")
+        };
+        let authorization = authorization_for(&claim);
+        ProviderIngestVerifiedMusubiBundleReceiptV1::from_verified_bundle(
+            &claim,
+            &authorization,
+            &verified,
+        )
+        .expect("exact verifier evidence");
+
+        let mut substituted = claim;
+        substituted.binding.commitment.bundle_digest = MusubiContentDigestV1::new([0xAF; 32]);
+        substituted.binding.archive_id = substituted.binding.commitment.archive_id();
+        substituted
+            .binding
+            .validate()
+            .expect("structurally valid substituted binding");
+        let substituted_authorization = authorization_for(&substituted);
+        assert_eq!(
+            ProviderIngestVerifiedMusubiBundleReceiptV1::from_verified_bundle(
+                &substituted,
+                &substituted_authorization,
+                &verified,
+            ),
+            Err(ProviderIngestLocalStorageErrorV1::Permanent),
+            "a verifier result cannot be replayed under a different archive identity"
+        );
+    }
+
+    #[test]
+    fn completed_musubi_claim_factory_rejects_completion_substitutions() {
+        let factory = ProviderIngestFinalizedClaimFactoryV1::new(
+            test_chain_id(),
+            TEST_GENESIS_BLOCK_HASH,
+            LOCAL_PROVIDER,
+        );
+        let mut row = fixture_musubi_row(0x36, 0x83);
+        row.order.provider_completions.push(completion_record(
+            ProviderId::new(LOCAL_PROVIDER),
+            account(8),
+            8,
+        ));
+        let binding = musubi_binding_for_row(&row, 0x83);
+
+        assert_eq!(
+            factory.seal_completed_musubi_archive(
+                &ChainId::from("substituted-chain"),
+                cursor(8),
+                ProviderId::new(LOCAL_PROVIDER),
+                &row.order,
+                &row.pin.manifest,
+                binding.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+        assert_eq!(
+            factory.seal_completed_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                ProviderId::new(SOURCE_PROVIDER),
+                &row.order,
+                &row.pin.manifest,
+                binding.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+        let mut earlier_cursor = cursor(7);
+        earlier_cursor.block_hash = [0xE7; 32];
+        assert_eq!(
+            factory.seal_completed_musubi_archive(
+                &test_chain_id(),
+                earlier_cursor,
+                ProviderId::new(LOCAL_PROVIDER),
+                &row.order,
+                &row.pin.manifest,
+                binding.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+
+        let mut substituted_pin = row.pin.manifest.clone();
+        substituted_pin.por_root = [0xE8; 32];
+        assert_eq!(
+            factory.seal_completed_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                ProviderId::new(LOCAL_PROVIDER),
+                &row.order,
+                &substituted_pin,
+                binding.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+
+        let mut substituted_completion = row.order.clone();
+        substituted_completion.provider_completions[0].assignment_revision = 2;
+        assert_eq!(
+            factory.seal_completed_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                ProviderId::new(LOCAL_PROVIDER),
+                &substituted_completion,
+                &row.pin.manifest,
+                binding.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+
+        let mut duplicate_completion = row.order.clone();
+        duplicate_completion
+            .provider_completions
+            .push(duplicate_completion.provider_completions[0].clone());
+        assert_eq!(
+            factory.seal_completed_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                ProviderId::new(LOCAL_PROVIDER),
+                &duplicate_completion,
+                &row.pin.manifest,
+                binding.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+
+        let mut unassigned_order = row.order.clone();
+        let mut canonical_order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
+            &unassigned_order.canonical_order,
+            REPLICATION_ORDER_DECODE_LIMITS_V1,
+        )
+        .expect("decode fixture order");
+        canonical_order
+            .assignments
+            .retain(|assignment| assignment.provider_id != LOCAL_PROVIDER);
+        unassigned_order.canonical_order = norito::to_bytes(&canonical_order).expect("order bytes");
+        assert_eq!(
+            factory.seal_completed_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                ProviderId::new(LOCAL_PROVIDER),
+                &unassigned_order,
+                &row.pin.manifest,
+                binding.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+
+        let other = fixture_musubi_row(0x37, 0x84);
+        assert_eq!(
+            factory.seal_completed_musubi_archive(
+                &test_chain_id(),
+                cursor(8),
+                ProviderId::new(LOCAL_PROVIDER),
+                &row.order,
+                &row.pin.manifest,
+                musubi_binding_for_row(&other, 0x84),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+    }
+
     #[tokio::test]
     async fn runtime_recovers_durable_finalized_high_water_before_scanning() {
         let row = fixture_row(0x2F);
@@ -4040,6 +6966,7 @@ mod tests {
         let mut restarted = ProviderIngestRuntimeV1::new(
             runtime.provider_id,
             runtime.chain_id.clone(),
+            runtime.genesis_block_hash,
             runtime.claim_owner,
             runtime.policy,
             runtime.outbox.clone(),
@@ -4082,6 +7009,7 @@ mod tests {
         let mut restarted = ProviderIngestRuntimeV1::new(
             runtime.provider_id,
             runtime.chain_id.clone(),
+            runtime.genesis_block_hash,
             runtime.claim_owner,
             runtime.policy,
             runtime.outbox.clone(),
@@ -4130,6 +7058,84 @@ mod tests {
             runtime.outbox.status(ingress.job_id).unwrap().state,
             ProviderIngestDeliveryStateV1::LocalStored {
                 completion: ProviderIngestCompletionStateV1::Submitted { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn musubi_local_stored_without_verifier_receipt_is_never_checkpointed() {
+        let row = fixture_musubi_row(0x6A, 0xB1);
+        let authorization = validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy())
+            .expect("valid Musubi assignment")
+            .authorization;
+        let (runtime, _, _, ingress) = test_runtime(
+            row,
+            true,
+            Ok(vec![0xA5]),
+            0,
+            ProviderIngestIngressDispositionV1::Submitted,
+            false,
+        );
+        runtime
+            .outbox
+            .enqueue(authorization.clone())
+            .expect("enqueue Musubi job");
+        let source_claim = runtime
+            .outbox
+            .claim_source(
+                authorization.job_id(),
+                runtime.claim_owner,
+                1_000,
+                cursor(8),
+            )
+            .expect("claim Musubi source job");
+        assert_eq!(
+            runtime.outbox.mark_local_stored(
+                &source_claim,
+                1_001,
+                hex::encode(authorization.manifest_digest()),
+            ),
+            Err(ProviderIngestOutboxError::InvalidAuthorization)
+        );
+        assert!(matches!(
+            runtime.outbox.status(authorization.job_id()).unwrap().state,
+            ProviderIngestDeliveryStateV1::SourceClaimed { .. }
+        ));
+        assert!(ingress.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn single_replica_without_remote_sources_releases_source_claim_for_retry() {
+        let mut row = fixture_row(0x35);
+        let mut order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
+            &row.order.canonical_order,
+            REPLICATION_ORDER_DECODE_LIMITS_V1,
+        )
+        .expect("decode fixture order");
+        order.target_replicas = 1;
+        order
+            .assignments
+            .retain(|assignment| assignment.provider_id == LOCAL_PROVIDER);
+        order.validate().expect("valid single-replica order");
+        row.order.canonical_order = norito::to_bytes(&order).expect("order bytes");
+
+        let (mut runtime, _, fetch, ingress) = test_runtime(
+            row,
+            false,
+            Ok(vec![0xA5]),
+            0,
+            ProviderIngestIngressDispositionV1::Submitted,
+            false,
+        );
+
+        let outcome = runtime.tick().await.expect("single-replica source tick");
+        assert_eq!(outcome.source_jobs_claimed, 1);
+        assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            runtime.outbox.status(ingress.job_id).unwrap().state,
+            ProviderIngestDeliveryStateV1::RetryScheduled {
+                failure_class: ProviderIngestFailureClassV1::SourceUnavailable,
                 ..
             }
         ));

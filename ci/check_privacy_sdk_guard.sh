@@ -9,6 +9,8 @@ PYTHON_BIN="${PRIVACY_SDK_GUARD_PYTHON_BIN:-python3}"
 from __future__ import annotations
 
 import ast
+import base64
+import binascii
 import hashlib
 import re
 import sys
@@ -21,6 +23,8 @@ mode = sys.argv[2]
 MATRIX_RELATIVE = "fixtures/privacy/exact12_v1.tsv"
 MATRIX_BYTES = (root / MATRIX_RELATIVE).read_bytes()
 MATRIX_TEXT = MATRIX_BYTES.decode("utf-8", errors="strict")
+BUNDLE_RELATIVE = "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64"
+BUNDLE_FILE_BYTES = (root / BUNDLE_RELATIVE).read_bytes()
 
 
 def matrix_rows(kind: str) -> tuple[tuple[str, ...], ...]:
@@ -1197,6 +1201,31 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     version_rows = matrix_rows("matrix-version")
     registry_rows = matrix_rows("registry-sha256")
+    bundle_archive = b""
+    bundle_file_is_canonical = (
+        BUNDLE_FILE_BYTES.endswith(b"\n")
+        and not BUNDLE_FILE_BYTES.endswith(b"\n\n")
+        and b"\r" not in BUNDLE_FILE_BYTES
+        and b"\n" not in BUNDLE_FILE_BYTES[:-1]
+    )
+    if bundle_file_is_canonical:
+        encoded_bundle = BUNDLE_FILE_BYTES[:-1]
+        try:
+            bundle_archive = base64.b64decode(encoded_bundle, validate=True)
+        except (binascii.Error, ValueError):
+            bundle_file_is_canonical = False
+        else:
+            bundle_file_is_canonical = (
+                bool(bundle_archive)
+                and base64.b64encode(bundle_archive) == encoded_bundle
+            )
+    require(
+        bundle_file_is_canonical,
+        "exact12 typed fixture bundle must be one non-empty canonical padded "
+        "standard-Base64 line followed by exactly one LF",
+        errors,
+    )
+    canonical_bundle_digest = hashlib.sha256(bundle_archive).hexdigest()
     require(
         MATRIX_TEXT.endswith("\n")
         and "\r" not in MATRIX_TEXT
@@ -1263,6 +1292,18 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "python/iroha_python/iroha_python_rs/src/lib.rs", overrides
     )
 
+    for relative in (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureCodecV1.java",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1.kt",
+    ):
+        source = read(relative, overrides)
+        require(
+            source.count(canonical_bundle_digest) == 1,
+            f"{relative} must pin the SHA-256 of the canonical Rust-derived "
+            "exact-12 fixture archive exactly once",
+            errors,
+        )
+
     for relative, source, markers in (
         (
             "crates/iroha_data_model/src/privacy.rs",
@@ -1303,49 +1344,49 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     require(
         re.search(
-            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*21\s*;",
+            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*22\s*;",
             js_crypto,
         )
         is not None
         and "abiVersion === PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in js_crypto
         and "abiVersion >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in js_crypto,
-        "JavaScript privacy bridge must require exact first-release ABI 21",
+        "JavaScript privacy bridge must require exact first-release ABI 22",
         errors,
     )
     require(
-        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 21
+        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 22
         and "version == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in py_crypto
         and "version >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in py_crypto,
-        "Python privacy bridge must require exact first-release ABI 21",
+        "Python privacy bridge must require exact first-release ABI 22",
         errors,
     )
     require(
         "fn privacy_bridge_abi_version_py() -> u32" in py_native
         and "PRIVACY_BRIDGE_ABI_VERSION_V1" in py_native,
-        "Python native privacy bridge must report first-release ABI 21",
+        "Python native privacy bridge must report first-release bridge ABI 22",
         errors,
     )
     for relative, marker in (
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-            "REQUIRED_BRIDGE_ABI_VERSION = 21",
+            "REQUIRED_BRIDGE_ABI_VERSION = 22",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
-            "REQUIRED_BRIDGE_ABI_VERSION: Int = 21",
+            "REQUIRED_BRIDGE_ABI_VERSION: Int = 22",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
-            "requiredBridgeABIVersion: UInt32 = 21",
+            "requiredBridgeABIVersion: UInt32 = 22",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
-            "RequiredBridgeAbiVersion = 21",
+            "RequiredBridgeAbiVersion = 22",
         ),
     ):
         require(
             marker in read(relative, overrides),
-            f"{relative} must require exact first-release ABI 21",
+            f"{relative} must require exact first-release bridge ABI 22",
             errors,
         )
 
@@ -1642,7 +1683,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
     require(
         "loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion"
         in swift_native_bridge,
-        "Swift privacy availability must require exact first-release ABI 21",
+        "Swift privacy availability must require exact first-release ABI 22",
         errors,
     )
 
@@ -2272,15 +2313,15 @@ if mode:
     elif mode == "--negative-control-js-privacy-abi-drift":
         path = "javascript/iroha_js/src/crypto.js"
         overrides[path] = read(path, {}).replace(
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 22",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21",
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 20",
             1,
         )
     elif mode == "--negative-control-python-privacy-abi-drift":
         path = "python/iroha_python/src/iroha_python/crypto.py"
         overrides[path] = read(path, {}).replace(
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22",
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21",
             1,
         )
     elif mode == "--negative-control-canonical-backend-alias-rejection-coverage":

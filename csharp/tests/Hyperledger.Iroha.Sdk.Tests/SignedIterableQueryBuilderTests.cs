@@ -10,73 +10,74 @@ public sealed class SignedIterableQueryBuilderTests
 {
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+    private const string FixtureNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Fact]
     public void BuildSignedEncodesZeroPayloadIterableQueries()
     {
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindDomains().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomains().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 0,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindAccounts().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAccounts().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 1,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindAssets().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssets().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 2,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindAssetDefinitions().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAssetDefinitions().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 3,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindRepoAgreements().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindRepoAgreements().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 4,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindNfts().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindNfts().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 5,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindRwas().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindRwas().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 6,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindTransactions().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindTransactions().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 12,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindPeers().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindPeers().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 9,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindActiveTriggerIds().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindActiveTriggerIds().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 10,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindTriggers().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindTriggers().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 11,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindRoles().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindRoles().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 7,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindRoleIds().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindRoleIds().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 8,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindBlocks().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindBlocks().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 13,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindBlockHeaders().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindBlockHeaders().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 14,
             expectedQueryPayload: Array.Empty<byte>());
         AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindProofRecords().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindProofRecords().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 15,
             expectedQueryPayload: Array.Empty<byte>());
     }
@@ -92,7 +93,7 @@ public sealed class SignedIterableQueryBuilderTests
     [InlineData("n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     public void ConstructorRejectsNonExactAuthority(string authorityAccountId)
     {
-        Assert.Throws<ArgumentException>(() => new SignedIterableQueryBuilder(authorityAccountId));
+        Assert.Throws<ArgumentException>(() => new SignedIterableQueryBuilder(authorityAccountId, FixtureNetworkId));
     }
 
     [Fact]
@@ -100,7 +101,35 @@ public sealed class SignedIterableQueryBuilderTests
     {
         AssertArgumentException(
             "authorityAccountId",
-            () => new SignedIterableQueryBuilder(FixtureAccountId.Insert(8, " ")));
+            () => new SignedIterableQueryBuilder(FixtureAccountId.Insert(8, " "), FixtureNetworkId));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149")]
+    [InlineData("hash:32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149#A2F0")]
+    [InlineData("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#0000")]
+    public void ConstructorRejectsNonCanonicalNetworkId(string networkId)
+    {
+        AssertArgumentException(
+            "networkId",
+            () => new SignedIterableQueryBuilder(FixtureAccountId, networkId));
+    }
+
+    [Fact]
+    public void BuildSignedRejectsInvalidReplayContext()
+    {
+        var seed = Convert.FromHexString(FixtureSeedHex);
+        var builder = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomains();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            builder.BuildSigned(seed, 1_000, 0, Enumerable.Repeat((byte)0x5A, 32).ToArray()));
+        AssertArgumentException(
+            "nonce",
+            () => builder.BuildSigned(seed, 1_000, 10_000, new byte[32]));
+        AssertArgumentException(
+            "nonce",
+            () => builder.BuildSigned(seed, 1_000, 10_000, new byte[31]));
     }
 
     [Fact]
@@ -108,37 +137,37 @@ public sealed class SignedIterableQueryBuilderTests
     {
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).FindAccountsWithAsset(" " + FixtureAssetDefinitionId);
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAccountsWithAsset(" " + FixtureAssetDefinitionId);
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).FindPermissionsByAccountId(FixtureAccountId + " ");
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindPermissionsByAccountId(FixtureAccountId + " ");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).FindPermissionsByAccountId("merchant@sora");
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindPermissionsByAccountId("merchant@sora");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).FindRolesByAccountId("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53");
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindRolesByAccountId("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).FindRolesByAccountId(
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindRolesByAccountId(
                 "n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).FindRolesByAccountId(
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindRolesByAccountId(
                 "0x0a00012022d3c25e96fa1178ae08b3d30081a31a0d09e8f7321b1e015140cd37b332109ca");
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).Continue(" cursor-1", 5);
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).Continue(" cursor-1", 5);
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).SortByMetadata("rank ");
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).SortByMetadata("rank ");
         });
     }
 
@@ -147,30 +176,30 @@ public sealed class SignedIterableQueryBuilderTests
     {
         AssertArgumentException(
             "assetDefinitionId",
-            () => new SignedIterableQueryBuilder(FixtureAccountId).FindAccountsWithAsset("asset def"));
+            () => new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindAccountsWithAsset("asset def"));
         AssertArgumentException(
             "accountId",
-            () => new SignedIterableQueryBuilder(FixtureAccountId).FindPermissionsByAccountId(
+            () => new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindPermissionsByAccountId(
                 FixtureAccountId.Insert(8, " ")));
         AssertArgumentException(
             "accountId",
-            () => new SignedIterableQueryBuilder(FixtureAccountId).FindRolesByAccountId(
+            () => new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindRolesByAccountId(
                 FixtureAccountId.Insert(8, "\t")));
         AssertArgumentException(
             "queryId",
-            () => new SignedIterableQueryBuilder(FixtureAccountId).Continue("cursor 1", 5));
+            () => new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).Continue("cursor 1", 5));
         AssertArgumentException(
             "key",
-            () => new SignedIterableQueryBuilder(FixtureAccountId).SortByMetadata("rank key"));
+            () => new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).SortByMetadata("rank key"));
         AssertArgumentException(
             "key",
-            () => new SignedIterableQueryBuilder(FixtureAccountId).SortByMetadata("rank\u00A0key"));
+            () => new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).SortByMetadata("rank\u00A0key"));
     }
 
     [Fact]
     public void BuildSignedEncodesParameterizedIterableQueries()
     {
-        var accountsWithAsset = new SignedIterableQueryBuilder(FixtureAccountId)
+        var accountsWithAsset = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindAccountsWithAsset(FixtureAssetDefinitionId)
             .SetLimit(25)
             .SetOffset(7)
@@ -188,14 +217,14 @@ public sealed class SignedIterableQueryBuilderTests
         Assert.Equal("rank", accountsWithAssetParams.SortByMetadataKey);
         Assert.Equal((uint)1, accountsWithAssetParams.SortOrderDiscriminant);
 
-        var permissions = new SignedIterableQueryBuilder(FixtureAccountId)
+        var permissions = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindPermissionsByAccountId(FixtureAccountId)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var permissionsParams = ReadIterableStart(permissions);
         Assert.Equal(16u, permissionsParams.ItemKindDiscriminant);
         Assert.NotEmpty(ReadField(permissionsParams.QueryPayload, out _));
 
-        var roles = new SignedIterableQueryBuilder(FixtureAccountId)
+        var roles = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindRolesByAccountId(FixtureAccountId)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var rolesParams = ReadIterableStart(roles);
@@ -207,7 +236,7 @@ public sealed class SignedIterableQueryBuilderTests
     [Fact]
     public void BuildSignedEncodesContinueCursorRequests()
     {
-        var envelope = new SignedIterableQueryBuilder(FixtureAccountId)
+        var envelope = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .Continue("cursor-1", 5, gasBudget: 9)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
@@ -231,7 +260,7 @@ public sealed class SignedIterableQueryBuilderTests
     {
         var exception = Assert.Throws<InvalidOperationException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId)
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
                 .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         });
 
@@ -243,7 +272,7 @@ public sealed class SignedIterableQueryBuilderTests
     {
         var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).Continue("cursor-1", 0);
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).Continue("cursor-1", 0);
         });
 
         Assert.Equal("cursor", exception.ParamName);
@@ -254,7 +283,7 @@ public sealed class SignedIterableQueryBuilderTests
     {
         var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).Continue("cursor-1", 5, gasBudget: 0);
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).Continue("cursor-1", 5, gasBudget: 0);
         });
 
         Assert.Equal("gasBudget", exception.ParamName);
@@ -265,15 +294,15 @@ public sealed class SignedIterableQueryBuilderTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).FindDomains().SetLimit(0);
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomains().SetLimit(0);
         });
         Assert.Throws<ArgumentOutOfRangeException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).FindDomains().SetFetchSize(0);
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomains().SetFetchSize(0);
         });
         var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
         {
-            new SignedIterableQueryBuilder(FixtureAccountId).FindDomains().SetFetchSize(10_001);
+            new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomains().SetFetchSize(10_001);
         });
 
         Assert.Equal("fetchSize", exception.ParamName);
@@ -282,7 +311,7 @@ public sealed class SignedIterableQueryBuilderTests
     [Fact]
     public void NullablePaginationSettersCanClearPreviouslyConfiguredValues()
     {
-        var envelope = new SignedIterableQueryBuilder(FixtureAccountId)
+        var envelope = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDomains()
             .SetLimit(25)
             .SetFetchSize(50)
@@ -299,7 +328,7 @@ public sealed class SignedIterableQueryBuilderTests
     [Fact]
     public void ClearSortingRemovesPreviouslyConfiguredSortOrderBeforeSigning()
     {
-        var envelope = new SignedIterableQueryBuilder(FixtureAccountId)
+        var envelope = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDomains()
             .SortByMetadata("rank", descending: true)
             .ClearSorting()
@@ -314,7 +343,7 @@ public sealed class SignedIterableQueryBuilderTests
     [Fact]
     public void SelectingNewIterableQueryClearsStaleParamsBeforeSigning()
     {
-        var envelope = new SignedIterableQueryBuilder(FixtureAccountId)
+        var envelope = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindAccountsWithAsset(FixtureAssetDefinitionId)
             .SetLimit(25)
             .SetOffset(7)
@@ -420,11 +449,37 @@ public sealed class SignedIterableQueryBuilderTests
 
     private static (uint RequestDiscriminant, byte[] RequestPayload) ReadQueryRequest(SignedQueryEnvelope envelope)
     {
-        _ = ReadField(envelope.PayloadBytes, out var offsetAfterAuthority);
-        var requestField = ReadField(envelope.PayloadBytes[offsetAfterAuthority..], out _);
+        var requestField = ReadContextBoundRequest(envelope);
 
         var discriminant = BinaryPrimitives.ReadUInt32LittleEndian(requestField[..4]);
         return (discriminant, requestField[4..].ToArray());
+    }
+
+    private static byte[] ReadContextBoundRequest(SignedQueryEnvelope envelope)
+    {
+        var payload = envelope.PayloadBytes.AsSpan();
+        var offset = 0;
+        var networkId = ReadField(payload[offset..], out var consumed);
+        offset += consumed;
+        var authority = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+        var creationTime = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+        var timeToLive = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+        var nonce = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+        var request = ReadField(payload[offset..], out consumed);
+        offset += consumed;
+
+        Assert.Equal(payload.Length, offset);
+        Assert.Equal(Convert.FromHexString(FixtureNetworkId.Substring(5, 64)), networkId);
+        Assert.NotEmpty(authority);
+        Assert.True(BinaryPrimitives.ReadUInt64LittleEndian(creationTime) > 0);
+        Assert.Equal(100_000ul, BinaryPrimitives.ReadUInt64LittleEndian(timeToLive));
+        Assert.Equal(32, nonce.Length);
+        Assert.Contains(nonce, static value => value != 0);
+        return request;
     }
 
     private static byte[] ReadField(ReadOnlySpan<byte> bytes, out int consumed)

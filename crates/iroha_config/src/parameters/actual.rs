@@ -4939,6 +4939,8 @@ pub struct Confidential {
     pub policy_transition_delay_blocks: u64,
     /// Grace window around policy activation.
     pub policy_transition_window_blocks: u64,
+    /// Maximum confidential-policy transitions that may share one effective height.
+    pub policy_transition_max_per_height: NonZeroU32,
     /// Non-zero commitment tree root history length.
     pub tree_roots_history_len: NonZeroUsize,
     /// Frontier checkpoint interval.
@@ -8801,8 +8803,44 @@ pub struct ToriiTransport {
     /// Explicit trusted proxy hosts whose appended `X-Forwarded-For` chain is
     /// used to derive the canonical remote IP.
     pub trusted_proxy_cidrs: Vec<String>,
+    /// HTTP/1 listener, parser, and socket limits.
+    pub http: ToriiHttpTransport,
     /// Norito-RPC rollout settings.
     pub norito_rpc: NoritoRpcTransport,
+}
+
+/// HTTP/1 limits enforced before request middleware.
+#[derive(Debug, Clone, Copy)]
+pub struct ToriiHttpTransport {
+    /// Maximum accepted TCP connections retained by Torii.
+    pub max_connections: NonZeroUsize,
+    /// Maximum accepted TCP connections retained for one source IP.
+    pub max_connections_per_ip: NonZeroUsize,
+    /// Absolute deadline for reading one HTTP/1 request head.
+    pub header_read_timeout: Duration,
+    /// Maximum duration without socket write progress.
+    pub write_timeout: Duration,
+    /// Maximum number of HTTP/1 headers accepted in one request.
+    pub max_headers: NonZeroUsize,
+    /// Maximum HTTP/1 parser buffer, including the request head.
+    pub max_header_bytes: Bytes<u64>,
+}
+
+impl Default for ToriiHttpTransport {
+    fn default() -> Self {
+        Self {
+            max_connections: defaults::torii::transport::http::MAX_CONNECTIONS,
+            max_connections_per_ip: defaults::torii::transport::http::MAX_CONNECTIONS_PER_IP,
+            header_read_timeout: Duration::from_millis(
+                defaults::torii::transport::http::HEADER_READ_TIMEOUT_MS,
+            ),
+            write_timeout: Duration::from_millis(
+                defaults::torii::transport::http::WRITE_TIMEOUT_MS,
+            ),
+            max_headers: defaults::torii::transport::http::MAX_HEADERS,
+            max_header_bytes: defaults::torii::transport::http::MAX_HEADER_BYTES,
+        }
+    }
 }
 
 /// Native MCP tool profile.
@@ -8976,6 +9014,14 @@ impl From<user::ToriiTransport> for ToriiTransport {
     fn from(value: user::ToriiTransport) -> Self {
         Self {
             trusted_proxy_cidrs: value.trusted_proxy_cidrs,
+            http: ToriiHttpTransport {
+                max_connections: value.http.max_connections,
+                max_connections_per_ip: value.http.max_connections_per_ip,
+                header_read_timeout: value.http.header_read_timeout_ms.get(),
+                write_timeout: value.http.write_timeout_ms.get(),
+                max_headers: value.http.max_headers,
+                max_header_bytes: value.http.max_header_bytes,
+            },
             norito_rpc: value.norito_rpc.into(),
         }
     }
@@ -12230,6 +12276,8 @@ pub struct Zk {
     pub policy_transition_delay_blocks: u64,
     /// Grace window (in blocks) around policy activation for conversions.
     pub policy_transition_window_blocks: u64,
+    /// Maximum confidential-policy transitions that may share one effective height.
+    pub policy_transition_max_per_height: NonZeroU32,
     /// Non-zero commitment tree root history length to retain.
     pub tree_roots_history_len: NonZeroUsize,
     /// Interval (in blocks) between frontier checkpoints.

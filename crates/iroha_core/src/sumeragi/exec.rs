@@ -4,14 +4,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{
         SignedBlock,
         consensus::{LaneBlockCommitment, LaneBlockProposalV1},
         consensus_v2 as wire,
     },
-    nexus::{DataSpaceId, LaneId},
+    nexus::{DataSpaceId, LaneFinalityStatement, LaneId, compute_settlement_hash},
     transaction::signed::TransactionResult,
 };
 
@@ -358,6 +358,95 @@ impl NativeAmxApplicationManifestV1 {
     }
 }
 
+/// Canonical, bounded lane-finality manifest for one result-bearing block.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneFinalityManifestV1 {
+    statements: Vec<LaneFinalityStatement>,
+    tree: MerkleTree<LaneFinalityStatement>,
+}
+
+impl LaneFinalityManifestV1 {
+    /// Build the canonical empty lane-finality manifest.
+    #[must_use]
+    pub(crate) fn empty() -> Self {
+        Self {
+            statements: Vec::new(),
+            tree: MerkleTree::default(),
+        }
+    }
+
+    /// Derive the exact manifest from the immutable execution result.
+    pub(crate) fn from_result_bearing_block(block: &SignedBlock) -> Result<Self, String> {
+        if !block.has_results() {
+            return Err("lane-finality manifest requires a result-bearing block".to_owned());
+        }
+        let statements = block.lane_finality_statements().to_vec();
+        if statements.len()
+            > usize::try_from(wire::MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK)
+                .expect("lane-finality bound fits usize")
+        {
+            return Err("lane-finality manifest exceeds the active-lane bound".to_owned());
+        }
+        let mut previous_coordinate = None;
+        for statement in &statements {
+            if statement.version != 1
+                || statement.block_header_hash != block.hash()
+                || statement.da_commitment_hash != block.header().da_commitments_hash()
+                || statement
+                    .lane_block_descriptor_hash
+                    .as_ref()
+                    .iter()
+                    .all(|byte| *byte == 0)
+                || statement.manifest_root.iter().all(|byte| *byte == 0)
+                || statement.settlement_commitment.lane_id != statement.lane_id
+                || statement.settlement_commitment.lane_incarnation != statement.lane_incarnation
+                || statement.settlement_commitment.dataspace_id != statement.dataspace_id
+                || statement.settlement_commitment.block_height != statement.block_height
+                || compute_settlement_hash(&statement.settlement_commitment)
+                    .map_err(|error| format!("lane settlement cannot be hashed: {error}"))?
+                    != statement.settlement_hash
+            {
+                return Err("lane-finality statement is not canonical for its block".to_owned());
+            }
+            let coordinate = (
+                statement.lane_id,
+                statement.dataspace_id,
+                statement.lane_incarnation,
+                statement.block_height,
+            );
+            if previous_coordinate.is_some_and(|previous| previous >= coordinate) {
+                return Err(
+                    "lane-finality statements are not strictly coordinate-sorted".to_owned(),
+                );
+            }
+            previous_coordinate = Some(coordinate);
+        }
+        let tree = statements
+            .iter()
+            .map(HashOf::new)
+            .collect::<MerkleTree<_>>();
+        Ok(Self { statements, tree })
+    }
+
+    /// Authenticated root and exact non-zero statement count.
+    #[must_use]
+    pub(crate) fn commitment(&self) -> Option<MerkleTreeCommitment<LaneFinalityStatement>> {
+        self.tree.commitment()
+    }
+
+    /// Canonically ordered statements.
+    #[must_use]
+    pub(crate) fn statements(&self) -> &[LaneFinalityStatement] {
+        &self.statements
+    }
+
+    /// Inclusion proof for one canonical statement.
+    #[must_use]
+    pub(crate) fn proof(&self, index: u32) -> Option<MerkleProof<LaneFinalityStatement>> {
+        self.tree.get_proof(index)
+    }
+}
+
 /// Convert an `ExecWitness` into SMT `KvPair` slices and compute the `post_state_root`.
 pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
     try_post_state_from_witness(w).unwrap_or_else(|error| {
@@ -382,11 +471,12 @@ pub fn try_post_state_from_witness(w: &ExecWitness) -> Result<Hash, &'static str
 pub(crate) fn execution_commitment_from_witness(
     witness: &ExecWitness,
     native_amx_manifest: &NativeAmxApplicationManifestV1,
+    lane_finality_manifest: &LaneFinalityManifestV1,
 ) -> Result<wire::ExecutionCommitment, &'static str> {
     let (reads, writes) = witness_pairs(witness);
     let parent_state_root = parent_state_from_witness(witness);
     match build_kagemusha_topup_block_commitment(&writes)? {
-        Some(kagemusha) => wire::ExecutionCommitment::new_with_native_amx_application_manifest(
+        Some(kagemusha) => wire::ExecutionCommitment::new_with_manifests(
             parent_state_root,
             kagemusha.post_state_root,
             kagemusha.ordinary_writes_root,
@@ -396,10 +486,11 @@ pub(crate) fn execution_commitment_from_witness(
             wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_manifest.root(),
             native_amx_manifest.count(),
+            lane_finality_manifest.commitment(),
             native_amx_manifest.executed_block_wire_hash(),
         )
         .map_err(|_| "Kagemusha V2 execution commitment is not canonical"),
-        None => wire::ExecutionCommitment::new_with_native_amx_application_manifest(
+        None => wire::ExecutionCommitment::new_with_manifests(
             parent_state_root,
             compute_consensus_post_state_root(&reads, &writes)?,
             compute_post_state_root(&[], &writes),
@@ -408,6 +499,7 @@ pub(crate) fn execution_commitment_from_witness(
             wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_manifest.root(),
             native_amx_manifest.count(),
+            lane_finality_manifest.commitment(),
             native_amx_manifest.executed_block_wire_hash(),
         )
         .map_err(|_| "Sumeragi V2 execution commitment is not canonical"),
@@ -1073,8 +1165,10 @@ mod tests {
 
         let executed_block_wire_hash = Hash::new(b"executed block wire");
         let native_manifest = NativeAmxApplicationManifestV1::empty(executed_block_wire_hash);
-        let commitment = execution_commitment_from_witness(&witness, &native_manifest)
-            .expect("valid top-up commitment");
+        let lane_manifest = LaneFinalityManifestV1::empty();
+        let commitment =
+            execution_commitment_from_witness(&witness, &native_manifest, &lane_manifest)
+                .expect("valid top-up commitment");
         assert_eq!(commitment.topup_anchor_count, 1);
         assert!(commitment.topup_anchor_root.is_some());
         assert_eq!(commitment.validate(), Ok(()));

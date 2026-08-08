@@ -371,6 +371,7 @@ jobs:
           retention-days: 30
 
   macos-native-build:
+    needs: linux-native-authority
     runs-on: [self-hosted, macOS, ARM64, taira-untrusted-build]
     timeout-minutes: 360
     steps:
@@ -386,6 +387,11 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Download the signed Linux archive for cross-target privacy binding
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: taira-linux-authority-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taira-macos-privacy-linux-authority
       - name: Reconstruct and compile inert macOS binaries
         shell: bash
         env:
@@ -406,6 +412,21 @@ jobs:
           stage="$RUNNER_TEMP/taira-macos-build-handoff"; mkdir -m 0700 "$stage" "$stage/bin"
           install -m 0500 "$target_root/release/irohad" "$stage/bin/irohad"
           install -m 0600 "$source_root/taira-source-identity-v1.json" "$stage/taira-source-identity-v1.json"
+          linux_root="$RUNNER_TEMP/taira-macos-privacy-linux-authority"
+          test -s "$linux_root/handoff-inventory-v1.json"
+          linux_archive="$(find "$linux_root" -maxdepth 2 -type f -name '*.tar.gz' -print)"
+          test -n "$linux_archive"
+          test "$(printf '%s\n' "$linux_archive" | wc -l | tr -d ' ')" = 1
+          privacy_target="$RUNNER_TEMP/taira-macos-privacy-target"
+          mkdir -m 0700 "$privacy_target"
+          python3 -I -S scripts/capture_taira_privacy_protocol_four_peer_receipt.py \
+            --repository "$GITHUB_WORKSPACE" \
+            --validator-binary "$target_root/release/irohad" \
+            --linux-archive "$linux_archive" \
+            --exact12-matrix "$GITHUB_WORKSPACE/fixtures/privacy/exact12_v1.tsv" \
+            --source-identity "$source_root/taira-source-identity-v1.json" \
+            --cargo-target-dir "$privacy_target" \
+            --output "$stage/privacy-protocol-four-peer-receipt-v1.json"
           /usr/bin/python3 -I -S - "$stage" macos-build <<'PY'
           import hashlib,json,os,stat,sys
           from pathlib import Path
@@ -520,6 +541,7 @@ jobs:
           stage="$AUTHORITY_STAGING_ROOT/qualification-receipt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"; test ! -e "$stage"
           sudo -n "$TAIRA_CONTROLLER_COMMAND" run "${common[@]}" capture-four-peer -- \
             --reset-bundle "$reset" --validator-binary "$mac_stage/bin/irohad" --supervisor "$supervisor" \
+            --privacy-protocol-receipt "$mac_stage/privacy-protocol-four-peer-receipt-v1.json" \
             --artifact-handoff-sha256 "$handoff_digest" --source-commit "$source_commit" \
             --dpn-validator-release-commit "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
             --cargo-lock-sha256 "$cargo_lock" --workspace-source-manifest-sha256 "$source_manifest" \
@@ -594,6 +616,7 @@ jobs:
             --workspace-source-manifest-sha256 "$source_manifest" --source-date-epoch "$source_epoch" \
             --linux-archive "$linux_archive" --linux-authority-dir "$linux_stage/authority" \
             --macos-receipt "$receipt_stage/four-peer-receipt-v2.json" --expected-receipt-id "$receipt_id" \
+            --privacy-protocol-receipt "$receipt_stage/privacy-protocol-four-peer-receipt-v1.json" \
             --controller-manifest "$TAIRA_CONTROLLER_ROOT/authority-controller-v1.json" --controller-digest "$EXPECTED_CONTROLLER_DIGEST" \
             --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
             --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \

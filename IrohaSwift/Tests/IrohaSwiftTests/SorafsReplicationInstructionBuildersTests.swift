@@ -11,6 +11,7 @@ final class SorafsReplicationInstructionBuildersTests: XCTestCase {
     private let predecessorDigest = String(repeating: "32", count: 32)
     private let policyDigest = String(repeating: "43", count: 32)
     private let blockHash = String(repeating: "54", count: 32)
+    private let archiveId = String(repeating: "cd", count: 32)
 
     private func completionAuthority(
         revision: UInt64 = 2,
@@ -52,12 +53,19 @@ final class SorafsReplicationInstructionBuildersTests: XCTestCase {
         let body = try XCTUnwrap(outer["IssueReplicationOrder"] as? [String: Any])
         XCTAssertEqual(
             Set(body.keys),
-            ["order_id", "order_payload", "issued_epoch", "deadline_epoch"]
+            [
+                "order_id",
+                "order_payload",
+                "issued_epoch",
+                "deadline_epoch",
+                "musubi_archive",
+            ]
         )
         XCTAssertEqual(body["order_id"] as? String, orderId)
         XCTAssertEqual(body["order_payload"] as? String, fixture.base64EncodedString())
         XCTAssertEqual((body["issued_epoch"] as? NSNumber)?.uint64Value, 20)
         XCTAssertEqual((body["deadline_epoch"] as? NSNumber)?.uint64Value, 28)
+        XCTAssertTrue(body["musubi_archive"] is NSNull)
 
         let summary = try SorafsReplicationInstructionBuilders.validateOrderPayloadV1(
             fixture,
@@ -77,6 +85,92 @@ final class SorafsReplicationInstructionBuildersTests: XCTestCase {
                 issuedEpoch: 20,
                 deadlineEpoch: 28
             ))
+        )
+    }
+
+    func testIssueMusubiArchiveHexAndNoneRoundTripThroughSchemaClosedModelJSON() throws {
+        let fixture = try replicationFixture()
+        let bound = try SorafsReplicationInstructionBuilders.issueReplicationOrder(
+            orderId: orderId,
+            orderPayload: fixture,
+            issuedEpoch: 20,
+            deadlineEpoch: 28,
+            musubiArchiveId: archiveId
+        )
+        let outer = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: bound.data) as? [String: Any]
+        )
+        let body = try XCTUnwrap(outer["IssueReplicationOrder"] as? [String: Any])
+        XCTAssertEqual(body["musubi_archive"] as? String, archiveId)
+        XCTAssertEqual(
+            try SorafsReplicationInstructionBuilders.decode(bound),
+            .issue(try SorafsIssueReplicationOrderInstruction(
+                orderId: orderId,
+                orderPayload: fixture,
+                issuedEpoch: 20,
+                deadlineEpoch: 28,
+                musubiArchiveId: archiveId
+            ))
+        )
+
+        let ordinary = try SorafsReplicationInstructionBuilders.issueReplicationOrder(
+            orderId: orderId,
+            orderPayloadBase64: fixture.base64EncodedString(),
+            issuedEpoch: 20,
+            deadlineEpoch: 28
+        )
+        guard case let .issue(decoded) = try SorafsReplicationInstructionBuilders.decode(ordinary)
+        else {
+            return XCTFail("expected IssueReplicationOrder")
+        }
+        XCTAssertNil(decoded.musubiArchiveId)
+    }
+
+    func testIssueDecodeRejectsRetiredMalformedAndUnknownFieldShapes() throws {
+        let fixture = try replicationFixture()
+        let common: [String: Any] = [
+            "order_id": orderId,
+            "order_payload": fixture.base64EncodedString(),
+            "issued_epoch": 20,
+            "deadline_epoch": 28,
+        ]
+        let retiredFourField = try NoritoJSON.fromJSONObject([
+            "IssueReplicationOrder": common,
+        ])
+        XCTAssertThrowsError(
+            try SorafsReplicationInstructionBuilders.decode(retiredFourField)
+        )
+
+        var unknownBody = common
+        unknownBody["musubi_archive"] = NSNull()
+        unknownBody["legacy_archive"] = archiveId
+        let unknown = try NoritoJSON.fromJSONObject([
+            "IssueReplicationOrder": unknownBody,
+        ])
+        XCTAssertThrowsError(try SorafsReplicationInstructionBuilders.decode(unknown))
+
+        for malformed: Any in [
+            archiveId.uppercased(),
+            String(repeating: "00", count: 32),
+            String(repeating: "cd", count: 31),
+            [archiveId],
+        ] {
+            var malformedBody = common
+            malformedBody["musubi_archive"] = malformed
+            let instruction = try NoritoJSON.fromJSONObject([
+                "IssueReplicationOrder": malformedBody,
+            ])
+            XCTAssertThrowsError(try SorafsReplicationInstructionBuilders.decode(instruction))
+        }
+
+        XCTAssertThrowsError(
+            try SorafsIssueReplicationOrderInstruction(
+                orderId: orderId,
+                orderPayload: fixture,
+                issuedEpoch: 20,
+                deadlineEpoch: 28,
+                musubiArchiveId: archiveId.uppercased()
+            )
         )
     }
 

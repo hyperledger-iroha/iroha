@@ -26,6 +26,12 @@ def test_default_chain_id_targets_public_sumeragi_v2_taira() -> None:
     assert MODULE.DEFAULT_CHAIN_ID == "fc56984b-2be7-431d-840e-21514d1883f0"
 
 
+def test_default_network_id_targets_the_exact_public_taira_genesis() -> None:
+    assert MODULE.DEFAULT_NETWORK_ID == (
+        "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+    )
+
+
 def test_default_alias_uses_canonical_dataspace_root() -> None:
     assert MODULE.build_alias(
         "canary",

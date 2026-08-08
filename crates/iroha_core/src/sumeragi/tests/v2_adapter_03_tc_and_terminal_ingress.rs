@@ -233,13 +233,21 @@
         let evidence = adapter
             .receive_authenticated(AuthenticatedConsensusMessage::for_test(conflict.clone()))
             .expect("report the conflicting locked-round vote");
-        assert!(matches!(
-            evidence.effects(),
-            [AdapterEffect::ReportEquivocation {
-                kind: reducer::EquivocationKind::Vote,
-                ..
-            }]
-        ));
+        let [AdapterEffect::ReportEquivocation { evidence }] = evidence.effects() else {
+            panic!("expected exact phase-vote equivocation evidence")
+        };
+        let wire::SumeragiV2Equivocation::PhaseVote { first, second } = evidence.as_ref() else {
+            panic!("expected exact phase-vote equivocation evidence")
+        };
+        let wire::ConsensusMessageV2Payload::Vote(expected_first) = locked_vote(1, 0xB7).payload
+        else {
+            unreachable!("locked-vote fixture")
+        };
+        let wire::ConsensusMessageV2Payload::Vote(expected_second) = &conflict.payload else {
+            unreachable!("conflicting-vote fixture")
+        };
+        assert_eq!(first, &expected_first);
+        assert_eq!(second, expected_second);
         assert_eq!(
             adapter
                 .receive_authenticated(AuthenticatedConsensusMessage::for_test(conflict))

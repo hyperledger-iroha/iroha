@@ -261,12 +261,24 @@ pub(super) fn zk_ams_phase23_mask_proof_audit_v1(
     let hyrax_bgv_equality_certified = false;
     let partial_padding_certified = false;
     let per_full_chunk_scale_four_primitive_certified = true;
-    let release_available = per_full_chunk_scale_four_primitive_certified
-        && corrected_global_noise_fits
-        && corrected_terminal_proof_fits
-        && complete_w_transport_fits
-        && hyrax_bgv_equality_certified
-        && partial_padding_certified;
+    let mut blocker_mask = 0_u8;
+    for (complete, blocker) in [
+        (
+            corrected_global_noise_fits && corrected_terminal_proof_fits,
+            BLOCKER_CORRECTED_NOISE_V1,
+        ),
+        (
+            complete_w_transport_fits,
+            BLOCKER_COMPLETE_PARTY_TRANSPORT_V1,
+        ),
+        (hyrax_bgv_equality_certified, BLOCKER_HYRAX_EQUALITY_V1),
+        (partial_padding_certified, BLOCKER_PARTIAL_PADDING_V1),
+    ] {
+        if !complete {
+            blocker_mask |= blocker;
+        }
+    }
+    let release_available = per_full_chunk_scale_four_primitive_certified && blocker_mask == 0;
 
     let mut audit = ZkAmsPhase23MaskProofAuditV1 {
         ring_degree: as_u32(RELEASE_RING_DEGREE_V1)?,
@@ -306,7 +318,7 @@ pub(super) fn zk_ams_phase23_mask_proof_audit_v1(
         complete_w_transport_fits,
         hyrax_bgv_equality_certified,
         partial_padding_certified,
-        blocker_mask: ALL_RELEASE_BLOCKERS_V1,
+        blocker_mask,
         release_available,
         digest: [0; 32],
     };
@@ -540,6 +552,9 @@ mod tests {
         assert_ne!(audit_digest(forged), audit.digest);
         forged = audit;
         forged.release_available = true;
+        assert_ne!(audit_digest(forged), audit.digest);
+        forged = audit;
+        forged.blocker_mask ^= BLOCKER_HYRAX_EQUALITY_V1;
         assert_ne!(audit_digest(forged), audit.digest);
     }
 

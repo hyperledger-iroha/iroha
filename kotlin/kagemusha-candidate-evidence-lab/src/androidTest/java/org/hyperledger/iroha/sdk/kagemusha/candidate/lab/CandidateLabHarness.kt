@@ -997,7 +997,7 @@ internal object CandidateLabHarness {
     }
 
     private fun installCandidate(context: Context): AcceptedIdentity {
-        check(KagemushaCandidateLabNative.nativeBridgeAbiVersion() == 21)
+        check(KagemushaCandidateLabNative.nativeBridgeAbiVersion() == 22)
         check(!KagemushaCandidateLabNative.nativeProductionCapabilityObservedV4()) {
             "candidate lab native library unexpectedly reports production capability"
         }
@@ -1277,7 +1277,7 @@ internal object CandidateLabHarness {
                 1L..(64L * 1024 * 1024 * 1024) &&
                 validation.getString("generation_memory_enforcement_profile") ==
                 "self-physical-footprint-v1" &&
-                validation.getInt("bridge_abi_version") == 21 &&
+                validation.getInt("bridge_abi_version") == 22 &&
                 validation.getInt("artifact_count") == artifacts.size &&
                 validation.getString("topup_finality_roster_file_name") ==
                 "topup-finality-roster-v4.norito" &&

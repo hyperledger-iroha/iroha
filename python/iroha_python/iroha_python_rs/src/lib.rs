@@ -69,6 +69,7 @@ use iroha_crypto::{
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use iroha_data_model::{
+    NetworkId,
     account::{
         Account,
         address::{AccountAddress, AccountAddressError},
@@ -77,7 +78,7 @@ use iroha_data_model::{
         AssetBalanceScope, AssetTransferAvailability, AssetTransferControlWindow,
         AssetTransferLimit,
         alias::AssetDefinitionAlias,
-        definition::{AssetBalancePolicy, AssetConfidentialPolicy, validate_asset_name},
+        definition::{AssetBalancePolicy, validate_asset_name},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
     },
     block::{
@@ -118,9 +119,10 @@ use iroha_data_model::{
         },
         smart_contract_code::CommitContractDeployment,
         sorafs::{CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder},
-        zk::{RegisterZkAsset, VerifyProof, ZkAssetMode},
+        zk::{RegisterZkAsset, VerifyProof},
     },
     metadata::Metadata,
+    musubi::ArchiveId,
     name::Name,
     nexus::{
         DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision,
@@ -216,7 +218,7 @@ use pyo3::{
     types::{PyAny, PyBool, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
-use rand_core_06::OsRng as OsRng06;
+use rand_core_06::{OsRng as OsRng06, RngCore as _};
 use sorafs_car::{
     CarBuildPlan, CarChunk, FilePlan,
     fetch_plan::chunk_fetch_plan_from_json,
@@ -1051,16 +1053,6 @@ fn dict_get_alias<'py>(
     Ok(None)
 }
 
-fn parse_zk_asset_mode(value: Option<&str>) -> PyResult<ZkAssetMode> {
-    match value.unwrap_or("Hybrid").trim() {
-        "Hybrid" | "hybrid" => Ok(ZkAssetMode::Hybrid),
-        "ZkNative" | "zk_native" | "zk-native" | "native" => Ok(ZkAssetMode::ZkNative),
-        other => Err(PyValueError::new_err(format!(
-            "invalid ZK asset mode `{other}`"
-        ))),
-    }
-}
-
 fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
     value.trim().parse::<u128>().map_err(|err| {
         PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
@@ -1079,6 +1071,25 @@ fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
     }
     value.parse::<u128>().map_err(|err| {
         PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
+    })
+}
+
+fn parse_canonical_public_balance_scope_py(
+    value: &str,
+    context: &str,
+) -> PyResult<AssetBalanceScope> {
+    crate::privacy_native_actions::parse_canonical_public_balance_scope_v1(value).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "{context} must be exactly `global` or `dataspace:<canonical positive u64>`"
+        ))
+    })
+}
+
+fn canonical_public_balance_scope_py(scope: AssetBalanceScope) -> PyResult<String> {
+    crate::privacy_native_actions::canonical_public_balance_scope_v1(scope).ok_or_else(|| {
+        PyRuntimeError::new_err(
+            "authenticated privacy statement contains the reserved universal dataspace scope",
+        )
     })
 }
 
@@ -6280,6 +6291,28 @@ mod tests {
     }
 
     #[test]
+    fn query_network_id_requires_one_nonzero_genesis_hash() {
+        ensure_python();
+        assert!(parse_query_network_id(&[0xA5; Hash::LENGTH]).is_ok());
+        for malformed in [
+            Vec::new(),
+            vec![0xA5; Hash::LENGTH - 1],
+            vec![0xA5; Hash::LENGTH + 1],
+        ] {
+            let error = parse_query_network_id(&malformed)
+                .expect_err("wrong-width genesis hash must fail before signing");
+            assert!(
+                error
+                    .to_string()
+                    .contains("canonical_genesis_hash must contain exactly 32 bytes")
+            );
+        }
+        let error = parse_query_network_id(&[0; Hash::LENGTH])
+            .expect_err("zero genesis hash sentinel must fail before signing");
+        assert!(error.to_string().contains("must not be the zero sentinel"));
+    }
+
+    #[test]
     fn sorafs_orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
         ensure_python();
         assert!(
@@ -7229,7 +7262,7 @@ mod tests {
 
     #[test]
     fn privacy_bridge_abi_version_python_function_matches_first_release() {
-        assert_eq!(privacy_bridge_abi_version_py(), 21);
+        assert_eq!(privacy_bridge_abi_version_py(), 22);
     }
 
     #[test]
@@ -7442,6 +7475,7 @@ mod tests {
                         identity_root,
                         identity_blinding,
                         replay_secret,
+                        "global",
                     )
                     .err()
                     .expect("invalid witness must fail before proof construction");
@@ -7450,6 +7484,43 @@ mod tests {
                     "expected {expected:?}, got {error}"
                 );
             }
+
+            let mut builder =
+                TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                    .expect("builder constructs");
+            let output = builder
+                .sign_privacy_zk_ace_transfer_action_v1(
+                    py,
+                    &[0x51; 32],
+                    &[0xA5; 32],
+                    &policy_archive,
+                    &authority,
+                    &destination,
+                    "1",
+                    vec![0x11; 32],
+                    vec![0x22; 32],
+                    vec![0x33; 32],
+                    "dataspace:7",
+                )
+                .expect("valid dataspace-scoped ZK-ACE action builds");
+            assert_eq!(output.public_balance_scope(), "dataspace:7");
+            let signed_versioned = output
+                .envelope
+                .bind(py)
+                .borrow()
+                .signed_transaction_versioned
+                .clone();
+            let inspected =
+                inspect_signed_privacy_zk_ace_transfer_action_v1_py(py, &signed_versioned)
+                    .expect("signed ZK-ACE action authenticates");
+            let inspected_scope = inspected
+                .bind(py)
+                .get_item("public_balance_scope")
+                .expect("dictionary access")
+                .expect("scope inspection field")
+                .extract::<String>()
+                .expect("canonical scope text");
+            assert_eq!(inspected_scope, "dataspace:7");
         });
     }
 
@@ -8047,8 +8118,8 @@ mod tests {
     }
 
     #[test]
-    fn native_sdk_bridge_abi_version_is_exactly_twenty_one() {
-        assert_eq!(connect_norito_bridge_abi_version_py(), 21);
+    fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
+        assert_eq!(connect_norito_bridge_abi_version_py(), 22);
     }
 
     #[test]
@@ -11164,23 +11235,6 @@ fn parse_mintable(mode: Option<&str>) -> PyResult<Mintable> {
     }
 }
 
-fn parse_confidential_policy(mode: Option<&str>) -> PyResult<Option<AssetConfidentialPolicy>> {
-    let Some(mode) = mode else {
-        return Ok(None);
-    };
-    let policy = match mode {
-        "TransparentOnly" => AssetConfidentialPolicy::transparent(),
-        "ShieldedOnly" => AssetConfidentialPolicy::shielded_only(),
-        "Convertible" => AssetConfidentialPolicy::convertible(),
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "invalid confidential policy `{other}`; expected TransparentOnly/ShieldedOnly/Convertible"
-            )));
-        }
-    };
-    Ok(Some(policy))
-}
-
 fn parse_balance_scope_policy(mode: &str) -> PyResult<AssetBalancePolicy> {
     let policy = match mode {
         "Global" => AssetBalancePolicy::Global,
@@ -11438,12 +11492,14 @@ impl Instruction {
 
     /// Construct one canonical native SoraFS replication-order issue.
     #[classmethod]
+    #[pyo3(signature = (order_id, order_payload_base64, issued_epoch, deadline_epoch, musubi_archive=None))]
     fn issue_replication_order(
         _cls: &Bound<'_, PyType>,
         order_id: &str,
         order_payload_base64: &str,
         issued_epoch: u64,
         deadline_epoch: u64,
+        musubi_archive: Option<&str>,
     ) -> PyResult<Self> {
         let order_id = parse_nonzero_lower_hex_32(order_id, "order_id")?;
         if deadline_epoch <= issued_epoch {
@@ -11495,15 +11551,21 @@ impl Instruction {
                 "order_payload must use the canonical ReplicationOrderV1 encoding",
             ));
         }
-        Ok(Self::new(
-            IssueReplicationOrder::new(
-                ReplicationOrderId::new(order_id),
-                order_payload,
-                issued_epoch,
-                deadline_epoch,
-            )
-            .into(),
-        ))
+        let instruction = IssueReplicationOrder::new(
+            ReplicationOrderId::new(order_id),
+            order_payload,
+            issued_epoch,
+            deadline_epoch,
+        );
+        let instruction = if let Some(archive_id) = musubi_archive {
+            instruction.for_musubi_archive(ArchiveId::new(parse_nonzero_lower_hex_32(
+                archive_id,
+                "musubi_archive",
+            )?))
+        } else {
+            instruction
+        };
+        Ok(Self::new(instruction.into()))
     }
 
     /// Construct one exact six-field SoraFS provider completion.
@@ -11894,7 +11956,7 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (definition_id, *, owning_domain, balance_scope_policy, name, description=None, alias=None, scale=None, mintable=None, confidential_policy=None, metadata=None))]
+    #[pyo3(signature = (definition_id, *, owning_domain, balance_scope_policy, name, description=None, alias=None, scale=None, mintable=None, metadata=None))]
     #[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python surface and requires explicit keyword params
     fn register_asset_definition<'py>(
         _cls: &Bound<'py, PyType>,
@@ -11907,7 +11969,6 @@ impl Instruction {
         alias: Option<&str>,
         scale: Option<u32>,
         mintable: Option<&str>,
-        confidential_policy: Option<&str>,
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let definition_id: AssetDefinitionId = definition_id.parse().map_err(|err| {
@@ -11967,24 +12028,15 @@ impl Instruction {
             Mintable::Not => new_asset.with_mintable(Mintable::Not),
         };
 
-        if let Some(policy) = parse_confidential_policy(confidential_policy)? {
-            new_asset = new_asset.confidential_policy(policy);
-        }
-
         let instruction = Register::<AssetDefinition>::asset_definition(new_asset);
         Ok(Instruction::new(instruction.into()))
     }
 
     #[classmethod]
-    #[pyo3(signature = (asset_definition_id, *, mode=None, allow_shield=true, allow_unshield=true, vk_transfer=None, vk_unshield=None, vk_shield=None))]
-    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (asset_definition_id, *, vk_unshield=None, vk_shield=None))]
     fn register_zk_asset<'py>(
         _cls: &Bound<'py, PyType>,
         asset_definition_id: &str,
-        mode: Option<&str>,
-        allow_shield: bool,
-        allow_unshield: bool,
-        vk_transfer: Option<&Bound<'py, PyAny>>,
         vk_unshield: Option<&Bound<'py, PyAny>>,
         vk_shield: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
@@ -11993,15 +12045,12 @@ impl Instruction {
                 "invalid asset definition id `{asset_definition_id}`: {err}"
             ))
         })?;
-        let instruction = RegisterZkAsset::new(
-            asset,
-            parse_zk_asset_mode(mode)?,
-            allow_shield,
-            allow_unshield,
-            parse_verifying_key_id_py(vk_transfer, "vk_transfer")?,
-            parse_verifying_key_id_py(vk_unshield, "vk_unshield")?,
-            parse_verifying_key_id_py(vk_shield, "vk_shield")?,
-        );
+        let vk_unshield = parse_verifying_key_id_py(vk_unshield, "vk_unshield")?;
+        let vk_shield = parse_verifying_key_id_py(vk_shield, "vk_shield")?;
+        let instruction = RegisterZkAsset::new(asset, vk_unshield, vk_shield);
+        instruction
+            .validate_verifier_roles()
+            .map_err(PyValueError::new_err)?;
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -14446,6 +14495,8 @@ impl TransactionBuilder {
     /// Build and sign one canonical, intent-bound ZK-ACE transparent transfer.
     ///
     /// The governed policy is accepted only as its canonical typed archive.
+    /// The required public balance scope names the exact transparent reserve
+    /// bucket and accepts no aliases or universal-dataspace sentinel.
     /// The three witness components move into zeroizing native storage and
     /// never appear in the returned public result.
     #[pyo3(signature = (
@@ -14457,7 +14508,9 @@ impl TransactionBuilder {
         amount,
         identity_root,
         identity_blinding,
-        replay_secret
+        replay_secret,
+        *,
+        public_balance_scope
     ))]
     #[allow(clippy::too_many_arguments)]
     fn sign_privacy_zk_ace_transfer_action_v1(
@@ -14472,6 +14525,7 @@ impl TransactionBuilder {
         identity_root: Vec<u8>,
         identity_blinding: Vec<u8>,
         replay_secret: Vec<u8>,
+        public_balance_scope: &str,
     ) -> PyResult<PrivacyZkAceTransferActionBuildResultV1> {
         let mut witness_bytes = ZeroizingZkAceWitnessBytes {
             identity_root,
@@ -14485,6 +14539,8 @@ impl TransactionBuilder {
         let source = parse_exact_i105_account_id(source_account_id, "source_account_id")?;
         let destination =
             parse_exact_i105_account_id(destination_account_id, "destination_account_id")?;
+        let public_balance_scope =
+            parse_canonical_public_balance_scope_py(public_balance_scope, "public_balance_scope")?;
         let amount = parse_canonical_u128_text(amount, "amount")?;
         if amount == 0 {
             return Err(PyValueError::new_err(
@@ -14493,12 +14549,18 @@ impl TransactionBuilder {
         }
         let private_key = parse_private_key(private_key)?;
         self.validate_privacy_action_signing_authority_v1(&private_key)?;
-        let transfer = ZkAcePrivacyTransferV1::try_new(policy, source, destination, amount)
-            .map_err(|error| {
-                PyValueError::new_err(format!(
-                    "invalid native ZK-ACE transparent transfer: {error}"
-                ))
-            })?;
+        let transfer = ZkAcePrivacyTransferV1::try_new(
+            policy,
+            source,
+            destination,
+            public_balance_scope,
+            amount,
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid native ZK-ACE transparent transfer: {error}"
+            ))
+        })?;
         for (bytes, label) in [
             (&witness_bytes.identity_root, "identity_root"),
             (&witness_bytes.identity_blinding, "identity_blinding"),
@@ -14565,6 +14627,7 @@ impl TransactionBuilder {
             source_account_id: effect.source.to_string(),
             destination_account_id: effect.destination.to_string(),
             asset_definition_id: effect.asset_definition_id.to_string(),
+            public_balance_scope: canonical_public_balance_scope_py(effect.public_balance_scope)?,
             amount: effect.amount.to_string(),
             replay_nullifier: *effect.replay_nullifier.as_bytes(),
         };
@@ -15896,6 +15959,7 @@ struct PrivacyZkAceTransferActionBuildResultV1 {
     source_account_id: String,
     destination_account_id: String,
     asset_definition_id: String,
+    public_balance_scope: String,
     amount: String,
     replay_nullifier: [u8; 32],
 }
@@ -15975,6 +16039,11 @@ impl PrivacyZkAceTransferActionBuildResultV1 {
     #[getter]
     fn asset_definition_id(&self) -> &str {
         &self.asset_definition_id
+    }
+
+    #[getter]
+    fn public_balance_scope(&self) -> &str {
+        &self.public_balance_scope
     }
 
     #[getter]
@@ -17528,9 +17597,27 @@ fn sign_py(
     Ok(Py::from(PyBytes::new(py, signature.payload())))
 }
 
+fn parse_query_network_id(canonical_genesis_hash: &[u8]) -> PyResult<NetworkId> {
+    let genesis_hash: [u8; Hash::LENGTH] = canonical_genesis_hash.try_into().map_err(|_| {
+        PyValueError::new_err(format!(
+            "canonical_genesis_hash must contain exactly {} bytes",
+            Hash::LENGTH
+        ))
+    })?;
+    if genesis_hash == [0; Hash::LENGTH] {
+        return Err(PyValueError::new_err(
+            "canonical_genesis_hash must not be the zero sentinel",
+        ));
+    }
+    Ok(NetworkId::from_genesis_hash(
+        HashOf::from_untyped_unchecked(Hash::prehashed(genesis_hash)),
+    ))
+}
+
 fn sign_query_request(
     authority: &str,
     private_key: &[u8],
+    canonical_genesis_hash: &[u8],
     request: QueryRequest,
 ) -> PyResult<Vec<u8>> {
     let authority = parse_account_id(authority)?;
@@ -17545,8 +17632,30 @@ fn sign_query_request(
             "query private key does not match the authority account",
         ));
     }
+    let network_id = parse_query_network_id(canonical_genesis_hash)?;
+    let creation_time_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            PyValueError::new_err(format!("system clock precedes UNIX epoch: {error}"))
+        })?
+        .as_millis()
+        .try_into()
+        .map_err(|_| PyValueError::new_err("query creation time exceeds u64"))?;
+    const QUERY_TIME_TO_LIVE_MS: u64 = 100_000;
+    let time_to_live_ms =
+        NonZeroU64::new(QUERY_TIME_TO_LIVE_MS).expect("query TTL constant is nonzero");
+    let mut nonce = [0_u8; 32];
+    OsRng06
+        .try_fill_bytes(&mut nonce)
+        .map_err(|error| PyValueError::new_err(format!("query nonce OS RNG failed: {error}")))?;
     request
-        .with_authority(authority)
+        .with_authority(
+            network_id,
+            authority,
+            creation_time_ms,
+            time_to_live_ms,
+            nonce,
+        )
         .try_sign(&key_pair)
         .map(|signed| signed.encode_versioned())
         .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))
@@ -17566,12 +17675,13 @@ fn build_find_asset_escrow_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    canonical_genesis_hash: &[u8],
     escrow_id: &str,
 ) -> PyResult<Py<PyBytes>> {
     let request = QueryRequest::Singular(SingularQueryBox::FindAssetEscrowById(
         FindAssetEscrowById::new(parse_escrow_id(escrow_id, "escrow_id")?),
     ));
-    let signed = sign_query_request(authority, private_key, request)?;
+    let signed = sign_query_request(authority, private_key, canonical_genesis_hash, request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
@@ -17579,6 +17689,7 @@ fn build_find_asset_escrows_by_party_query(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    canonical_genesis_hash: &[u8],
     query_payload: Vec<u8>,
 ) -> PyResult<Py<PyBytes>> {
     let erased = ErasedIterQuery::<AssetEscrowRecord>::new(
@@ -17588,7 +17699,7 @@ fn build_find_asset_escrows_by_party_query(
     );
     let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
     let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
-    let signed = sign_query_request(authority, private_key, request)?;
+    let signed = sign_query_request(authority, private_key, canonical_genesis_hash, request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
@@ -17599,6 +17710,7 @@ fn build_find_asset_escrows_by_seller_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    canonical_genesis_hash: &[u8],
     seller: &str,
 ) -> PyResult<Py<PyBytes>> {
     let query = FindAssetEscrowsBySeller {
@@ -17608,6 +17720,7 @@ fn build_find_asset_escrows_by_seller_query_py(
         py,
         authority,
         private_key,
+        canonical_genesis_hash,
         norito::codec::Encode::encode(&query),
     )
 }
@@ -17619,6 +17732,7 @@ fn build_find_asset_escrows_by_buyer_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    canonical_genesis_hash: &[u8],
     buyer: &str,
 ) -> PyResult<Py<PyBytes>> {
     let query = FindAssetEscrowsByBuyer {
@@ -17628,6 +17742,7 @@ fn build_find_asset_escrows_by_buyer_query_py(
         py,
         authority,
         private_key,
+        canonical_genesis_hash,
         norito::codec::Encode::encode(&query),
     )
 }
@@ -17639,6 +17754,7 @@ fn build_find_committed_transaction_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    canonical_genesis_hash: &[u8],
     transaction_hash: &str,
 ) -> PyResult<Py<PyBytes>> {
     let transaction_hash =
@@ -17653,7 +17769,7 @@ fn build_find_committed_transaction_query_py(
     );
     let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
     let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
-    let signed = sign_query_request(authority, private_key, request)?;
+    let signed = sign_query_request(authority, private_key, canonical_genesis_hash, request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
@@ -17664,6 +17780,7 @@ fn build_find_block_by_hash_query_py(
     py: Python<'_>,
     authority: &str,
     private_key: &[u8],
+    canonical_genesis_hash: &[u8],
     block_hash: &str,
 ) -> PyResult<Py<PyBytes>> {
     let block_hash = parse_typed_hash::<BlockHeader>(block_hash, "block hash")?;
@@ -17676,7 +17793,7 @@ fn build_find_block_by_hash_query_py(
     );
     let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
     let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
-    let signed = sign_query_request(authority, private_key, request)?;
+    let signed = sign_query_request(authority, private_key, canonical_genesis_hash, request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
@@ -18629,6 +18746,10 @@ fn inspect_signed_privacy_zk_ace_transfer_action_v1_py(
         "asset_definition_id",
         statement.asset_definition_id.to_string(),
     )?;
+    result.set_item(
+        "public_balance_scope",
+        canonical_public_balance_scope_py(statement.public_balance_scope)?,
+    )?;
     result.set_item("amount", statement.amount.to_string())?;
     result.set_item("authorization_epoch", statement.authorization_epoch)?;
     result.set_item(
@@ -19349,6 +19470,10 @@ fn inspect_signed_privacy_orchard_note_action_v1_py(
         "asset_definition_id",
         statement.asset_definition_id.to_string(),
     )?;
+    result.set_item(
+        "public_balance_scope",
+        canonical_public_balance_scope_py(statement.public_balance_scope)?,
+    )?;
     result.set_item("pool_id", PyBytes::new(py, statement.pool_id.as_bytes()))?;
     result.set_item("anchor", PyBytes::new(py, statement.anchor.as_bytes()))?;
     result.set_item("anchor_epoch", statement.anchor_epoch)?;
@@ -19452,6 +19577,10 @@ fn inspect_signed_privacy_ivm_private_note_action_v1_py(
     result.set_item(
         "asset_definition_id",
         statement.asset_definition_id.to_string(),
+    )?;
+    result.set_item(
+        "public_balance_scope",
+        canonical_public_balance_scope_py(statement.public_balance_scope)?,
     )?;
     result.set_item("pool_id", PyBytes::new(py, statement.pool_id.as_bytes()))?;
     result.set_item(
@@ -19927,7 +20056,7 @@ fn privacy_bridge_abi_version_py() -> u32 {
 #[pyfunction]
 #[pyo3(name = "connect_norito_bridge_abi_version")]
 fn connect_norito_bridge_abi_version_py() -> u32 {
-    21
+    PRIVACY_BRIDGE_ABI_VERSION_V1
 }
 
 #[pyfunction]

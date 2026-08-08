@@ -1122,9 +1122,11 @@ async fn public_peer_inventory_does_not_require_foreign_dataspace_read_grants() 
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple restricted dataspace routes",
     );
-    let signed = iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test())
-        .with_authority(authority)
-        .sign(&key_pair);
+    let signed = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test()),
+        authority,
+    )
+    .sign(&key_pair);
 
     let response = super::handler_signed_query(
         State(app),
@@ -1373,15 +1375,17 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route() {
     let mut app = mk_app_state_for_tests();
     let (restricted_lane, restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
-    let query = iroha_data_model::query::QueryRequest::Singular(
+    let query = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Singular(
         iroha_data_model::query::SingularQueryBox::FindDomainById(
             iroha_data_model::query::domain::prelude::FindDomainById::new(
                 iroha_data_model::domain::DomainId::try_new("hbl", "restricted")
                     .expect("domain id"),
             ),
         ),
+        ),
+        authority,
     )
-    .with_authority(authority)
     .sign(&authority_key_pair);
 
     assert_eq!(
@@ -1409,14 +1413,16 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route_for_opaqu
         "asset-definition".parse().expect("asset definition name"),
     );
     seed_asset_definition_for_test(&app, &asset_definition_id, Some(&domain_id));
-    let query = iroha_data_model::query::QueryRequest::Singular(
+    let query = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Singular(
         iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
             iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
                 asset_definition_id,
             ),
         ),
+        ),
+        authority,
     )
-    .with_authority(authority)
     .sign(&authority_key_pair);
 
     assert_eq!(
@@ -1440,12 +1446,14 @@ async fn resolve_signed_query_routing_for_app_uses_target_alias_route() {
         "banking".parse().expect("alias label"),
         restricted_dataspace,
     );
-    let query = iroha_data_model::query::QueryRequest::Singular(
+    let query = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Singular(
         iroha_data_model::query::SingularQueryBox::FindAccountByAlias(
             iroha_data_model::query::account::prelude::FindAccountByAlias::new(alias),
         ),
+        ),
+        authority,
     )
-    .with_authority(authority)
     .sign(&authority_key_pair);
 
     assert_eq!(

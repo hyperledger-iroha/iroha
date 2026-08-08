@@ -113,10 +113,122 @@ MACOS_CONTROLLER_FILES = (
 MACOS_RECEIPT_SCHEMA = "iroha.taira.macos_arm64_four_peer_receipt"
 MACOS_RECEIPT_SCHEMA_VERSION = 2
 MACOS_RECEIPT_PATH = "macos/four-peer-receipt-v2.json"
+PRIVACY_PROTOCOL_RECEIPT_SCHEMA = (
+    "iroha.taira.privacy_protocol_four_peer_receipt"
+)
+PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION = 1
+PRIVACY_PROTOCOL_RECEIPT_PATH = (
+    "macos/privacy-protocol-four-peer-receipt-v1.json"
+)
+MAX_PRIVACY_PROTOCOL_RECEIPT_LIFETIME_SECONDS = 24 * 60 * 60
 REPLAY_LEDGER_SCHEMA = "iroha.taira.rollout_admission_replay_ledger"
 REPLAY_LEDGER_SCHEMA_VERSION = 1
 VERIFICATION_SCHEMA = "iroha.taira.rollout_admission_verification"
 VERIFICATION_SCHEMA_VERSION = 1
+
+# Ordered exactly as `PrivacyProtocolIdV1::ALL` and
+# `fixtures/privacy/exact12_v1.tsv`.  These values are release semantics, not
+# display text: an unavailable profile cannot be rewritten as a passing
+# production action, and Jindo's functional Experimental path cannot be used
+# to claim the deliberately absent security certificate.
+PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1 = (
+    (
+        "zk-ace-pq-authorization-v0",
+        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
+        "available",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "none",
+    ),
+    (
+        "anonymous-pgc-k-out-of-n-v1",
+        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
+        "available",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "none",
+    ),
+    (
+        "verange-transparent-range-v1",
+        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
+        "available",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "none",
+    ),
+    (
+        "iroha-zk-ams-v1",
+        "privacy_exact12_activation_network::zk_ams_unreleased_profile_fails_closed_across_four_peer_restart",
+        "engine-unavailable",
+        "governance-and-action-rejected-across-four-peers",
+        "PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable",
+        "zk-ams-mkhe-release-readiness-incomplete",
+    ),
+    (
+        "vega-existing-credential-zk-v0",
+        "privacy_exact12_zk_ams_vega_network::canonical_vega_action_survives_four_validator_activation_replay_and_restart",
+        "available",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "none",
+    ),
+    (
+        "iroha-zk-x509-stark-p256-v0",
+        "privacy_exact12_zk_x509_network::zk_x509_governance_and_unreleased_actions_fail_closed_across_four_peer_restart",
+        "engine-unavailable",
+        "governance-and-action-rejected-across-four-peers",
+        "PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable",
+        "zk-x509-native-readiness-captures-incomplete",
+    ),
+    (
+        "iroha-jindo-polynomial-commitment-v0",
+        "privacy_exact12_jindo_network::canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart",
+        "available-experimental",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "JindoSecurityCertificateErrorV1::MissingDistributionWideKnowledgeSoundnessEvidence",
+    ),
+    (
+        "iroha-bootle-lantern-anoncred-v1",
+        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
+        "available",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "none",
+    ),
+    (
+        "orchard-halo2-actions-v1",
+        "privacy_exact12_orchard_pq_masp_network::canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart",
+        "available",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "none",
+    ),
+    (
+        "monero-fcmp-plus-plus-v1",
+        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
+        "available",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "none",
+    ),
+    (
+        "iroha-ivm-private-note-stark-v1",
+        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
+        "available",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "none",
+    ),
+    (
+        "pq-masp-stark-v0",
+        "privacy_exact12_orchard_pq_masp_network::canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart",
+        "available",
+        "accepted-and-queried-across-four-peers",
+        "none",
+        "none",
+    ),
+)
 
 FINAL_AUTHORITY_FILES = (
     "release_manifest.json",
@@ -291,6 +403,225 @@ def compute_macos_receipt_id(receipt_without_id: Mapping[str, object]) -> str:
     digest.update(b"iroha.taira.macos_arm64_four_peer_receipt.v2\0")
     digest.update(canonical_json_bytes(receipt_without_id))
     return digest.hexdigest()
+
+
+def compute_privacy_protocol_receipt_id(
+    receipt_without_id: Mapping[str, object],
+) -> str:
+    """Return the domain-separated ID for an Exact12 four-peer receipt body."""
+
+    if "receipt_id" in receipt_without_id:
+        _fail("privacy protocol receipt ID input must omit receipt_id")
+    digest = hashlib.sha256()
+    digest.update(b"iroha.taira.privacy_protocol_four_peer_receipt.v1\0")
+    digest.update(canonical_json_bytes(receipt_without_id))
+    return digest.hexdigest()
+
+
+def _validate_privacy_protocol_receipt(
+    payload: bytes,
+    *,
+    expected_source: SourceIdentity,
+    expected_validator_binary_sha256: str,
+    expected_linux_release_archive_sha256: str,
+    expected_exact12_matrix_sha256: str,
+    expected_receipt_id: str,
+    now_unix: int,
+) -> dict[str, object]:
+    """Validate one strict, signed-later Exact12 production-network receipt."""
+
+    receipt = _canonical_object(payload, "privacy protocol four-peer receipt")
+    _exact_fields(
+        receipt,
+        {
+            "candidate",
+            "expires_at_unix",
+            "issued_at_unix",
+            "outcomes",
+            "platform",
+            "receipt_id",
+            "schema",
+            "schema_version",
+        },
+        "privacy protocol four-peer receipt",
+    )
+    if receipt["schema"] != PRIVACY_PROTOCOL_RECEIPT_SCHEMA:
+        _fail("privacy protocol receipt schema identifier is unsupported")
+    if (
+        _integer(
+            receipt["schema_version"],
+            "privacy protocol receipt schema version",
+            minimum=1,
+        )
+        != PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION
+    ):
+        _fail("privacy protocol receipt schema version is unsupported")
+
+    receipt_id = _sha256(
+        receipt["receipt_id"], "privacy protocol receipt ID"
+    )
+    body = dict(receipt)
+    del body["receipt_id"]
+    if compute_privacy_protocol_receipt_id(body) != receipt_id:
+        _fail("privacy protocol receipt ID does not match its canonical body")
+    if receipt_id != _sha256(
+        expected_receipt_id, "expected privacy protocol receipt ID"
+    ):
+        _fail("privacy protocol receipt ID differs from the independently expected ID")
+
+    platform = receipt["platform"]
+    if not isinstance(platform, dict):
+        _fail("privacy protocol receipt platform must be an object")
+    _exact_fields(platform, {"arch", "os", "peer_count"}, "privacy protocol platform")
+    if platform != {"arch": "arm64", "os": "macos", "peer_count": PEER_COUNT}:
+        _fail("privacy protocol receipt platform must be exactly four-peer macos/arm64")
+
+    issued = _integer(
+        receipt["issued_at_unix"], "privacy protocol receipt issue time"
+    )
+    expires = _integer(
+        receipt["expires_at_unix"], "privacy protocol receipt expiry time"
+    )
+    if expires <= issued:
+        _fail("privacy protocol receipt expiry must follow its issue time")
+    if expires - issued > MAX_PRIVACY_PROTOCOL_RECEIPT_LIFETIME_SECONDS:
+        _fail("privacy protocol receipt lifetime exceeds the first-release maximum")
+    if issued > now_unix + MAX_FUTURE_CLOCK_SKEW_SECONDS:
+        _fail("privacy protocol receipt issue time is implausibly far in the future")
+    if now_unix > expires:
+        _fail("privacy protocol four-peer receipt is stale")
+
+    candidate = receipt["candidate"]
+    if not isinstance(candidate, dict):
+        _fail("privacy protocol receipt candidate must be an object")
+    _exact_fields(
+        candidate,
+        {
+            "exact12_matrix_sha256",
+            "linux_release_archive_sha256",
+            "source",
+            "validator_binary_sha256",
+        },
+        "privacy protocol receipt candidate",
+    )
+    source = _source_identity(
+        candidate["source"], "privacy protocol receipt candidate source"
+    )
+    _require_source(source, expected_source, "privacy protocol receipt")
+    validator_sha = _sha256(
+        candidate["validator_binary_sha256"],
+        "privacy protocol validator binary digest",
+    )
+    linux_archive_sha = _sha256(
+        candidate["linux_release_archive_sha256"],
+        "privacy protocol Linux release archive digest",
+    )
+    exact12_sha = _sha256(
+        candidate["exact12_matrix_sha256"],
+        "privacy protocol Exact12 matrix digest",
+    )
+    if validator_sha != _sha256(
+        expected_validator_binary_sha256,
+        "expected privacy protocol validator binary digest",
+    ):
+        _fail("privacy protocol receipt is bound to a different validator binary")
+    if linux_archive_sha != _sha256(
+        expected_linux_release_archive_sha256,
+        "expected privacy protocol Linux release archive digest",
+    ):
+        _fail("privacy protocol receipt is bound to a different Linux release archive")
+    if exact12_sha != _sha256(
+        expected_exact12_matrix_sha256,
+        "expected privacy protocol Exact12 matrix digest",
+    ):
+        _fail("privacy protocol receipt is bound to a different Exact12 matrix")
+
+    outcomes = receipt["outcomes"]
+    if not isinstance(outcomes, list):
+        _fail("privacy protocol receipt outcomes must be an array")
+    if len(outcomes) != len(PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1):
+        _fail("privacy protocol receipt must contain exactly twelve outcome rows")
+    observed_labels: list[str] = []
+    normalized_outcomes: list[dict[str, object]] = []
+    for index, (row, expected) in enumerate(
+        zip(outcomes, PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1)
+    ):
+        if not isinstance(row, dict):
+            _fail("privacy protocol receipt outcome rows must be objects")
+        _exact_fields(
+            row,
+            {
+                "case",
+                "case_output_sha256",
+                "closed_reason",
+                "index",
+                "production_outcome",
+                "profile",
+                "protocol",
+                "security_boundary",
+                "validator_binary_sha256",
+            },
+            f"privacy protocol receipt outcome {index}",
+        )
+        (
+            expected_protocol,
+            expected_case,
+            expected_profile,
+            expected_production_outcome,
+            expected_closed_reason,
+            expected_security_boundary,
+        ) = expected
+        if row["index"] != index:
+            _fail("privacy protocol receipt outcome rows are not in exact registry order")
+        for field, expected_value in (
+            ("protocol", expected_protocol),
+            ("case", expected_case),
+            ("profile", expected_profile),
+            ("production_outcome", expected_production_outcome),
+            ("closed_reason", expected_closed_reason),
+            ("security_boundary", expected_security_boundary),
+        ):
+            if row[field] != expected_value:
+                _fail(
+                    f"privacy protocol receipt outcome {index} has a noncanonical {field}"
+                )
+        case_output_sha = _sha256(
+            row["case_output_sha256"],
+            f"privacy protocol receipt outcome {index} case output digest",
+        )
+        row_validator_sha = _sha256(
+            row["validator_binary_sha256"],
+            f"privacy protocol receipt outcome {index} validator binary digest",
+        )
+        if row_validator_sha != validator_sha:
+            _fail(
+                f"privacy protocol receipt outcome {index} is bound to a different validator"
+            )
+        observed_labels.append(expected_protocol)
+        normalized_outcomes.append(
+            {
+                **row,
+                "case_output_sha256": case_output_sha,
+                "validator_binary_sha256": row_validator_sha,
+            }
+        )
+    if len(observed_labels) != len(set(observed_labels)):
+        _fail("privacy protocol receipt repeats a protocol outcome")
+    case_digests: dict[str, str] = {}
+    for row in normalized_outcomes:
+        case = str(row["case"])
+        digest = str(row["case_output_sha256"])
+        previous = case_digests.setdefault(case, digest)
+        if previous != digest:
+            _fail("one privacy four-peer case has conflicting output digests")
+
+    return {
+        "exact12_matrix_sha256": exact12_sha,
+        "linux_release_archive_sha256": linux_archive_sha,
+        "outcomes": normalized_outcomes,
+        "receipt_id": receipt_id,
+        "validator_binary_sha256": validator_sha,
+    }
 
 
 def canonical_replay_ledger_bytes(consumed_receipt_ids: Sequence[str]) -> bytes:
@@ -863,15 +1194,28 @@ def _validate_admission_manifest(
         _fail("admission macOS target must be an object")
     _exact_fields(
         macos,
-        {"arch", "os", "receipt_id", "receipt_path"},
+        {
+            "arch",
+            "os",
+            "privacy_protocol_receipt_id",
+            "privacy_protocol_receipt_path",
+            "receipt_id",
+            "receipt_path",
+        },
         "admission macOS target",
     )
-    if macos != {
-        "arch": "arm64",
-        "os": "macos",
-        "receipt_id": expected_receipt_id,
-        "receipt_path": MACOS_RECEIPT_PATH,
-    }:
+    privacy_protocol_receipt_id = _sha256(
+        macos["privacy_protocol_receipt_id"],
+        "admission privacy protocol receipt ID",
+    )
+    if (
+        macos["arch"] != "arm64"
+        or macos["os"] != "macos"
+        or macos["receipt_id"] != expected_receipt_id
+        or macos["receipt_path"] != MACOS_RECEIPT_PATH
+        or macos["privacy_protocol_receipt_path"]
+        != PRIVACY_PROTOCOL_RECEIPT_PATH
+    ):
         _fail("admission macOS target is not the exact expected receipt")
 
     _validate_inventory(manifest, actual_inventory)
@@ -879,6 +1223,7 @@ def _validate_admission_manifest(
         archive_path,
         CONTROLLER_MANIFEST_PATH,
         MACOS_RECEIPT_PATH,
+        PRIVACY_PROTOCOL_RECEIPT_PATH,
         *(f"{LINUX_AUTHORITY_DIRECTORY}/{path}" for path in LINUX_AUTHORITY_FILES),
     }
     actual_paths = set(actual_inventory) - {ADMISSION_MANIFEST_PATH}
@@ -889,6 +1234,7 @@ def _validate_admission_manifest(
         "linux_archive_path": archive_path,
         "linux_authority_manifest_sha256": linux["authority_manifest_sha256"],
         "linux_native_verifier_sha256": linux["authority_native_verifier_sha256"],
+        "privacy_protocol_receipt_id": privacy_protocol_receipt_id,
     }
 
 
@@ -1041,6 +1387,19 @@ def _verify_closed_linux_authority(
         _fail("nested exact-12 authority must bind exactly one Cargo.lock")
     if cargo_rows[0].get("sha256") != expected_source.cargo_lock_sha256:
         _fail("nested exact-12 authority Cargo.lock digest differs")
+    exact12_rows = [
+        row
+        for row in evidence
+        if isinstance(row, dict)
+        and row.get("path")
+        == taira_release_authority.EVIDENCE_PATHS["exact12_matrix"]
+    ]
+    if len(exact12_rows) != 1:
+        _fail("nested exact-12 authority must bind exactly one Exact12 matrix")
+    exact12_matrix_sha256 = _sha256(
+        exact12_rows[0].get("sha256"),
+        "nested exact-12 authority matrix digest",
+    )
 
     subject = authority.get("subject")
     if not isinstance(subject, dict):
@@ -1056,6 +1415,7 @@ def _verify_closed_linux_authority(
 
     return {
         "authority": authority,
+        "exact12_matrix_sha256": exact12_matrix_sha256,
         "native_verifier_sha256": expected_native_verifier_sha256,
         "manifest_sha256": verification["manifest_sha256"],
     }
@@ -1366,6 +1726,14 @@ def verify_admission(
             now_unix=current_time,
         )
 
+        _, privacy_protocol_receipt_payload = stable_read_relative(
+            root,
+            PRIVACY_PROTOCOL_RECEIPT_PATH,
+            max_size=MAX_JSON_BYTES,
+            return_payload=True,
+        )
+        assert privacy_protocol_receipt_payload is not None
+
         linux_archive_path = root / str(admission["linux_archive_path"])
         nested = _verify_closed_linux_authority(
             root,
@@ -1387,6 +1755,23 @@ def verify_admission(
             expected_source=expected_source,
             trusted_signing_fingerprint=trusted_signing_fingerprint,
             native_verifier_sha256=str(nested["native_verifier_sha256"]),
+        )
+        privacy_protocol_receipt = _validate_privacy_protocol_receipt(
+            privacy_protocol_receipt_payload,
+            expected_source=expected_source,
+            expected_validator_binary_sha256=str(
+                receipt["validator_binary_sha256"]
+            ),
+            expected_linux_release_archive_sha256=stable_hash_path(
+                linux_archive_path
+            ).sha256,
+            expected_exact12_matrix_sha256=str(
+                nested["exact12_matrix_sha256"]
+            ),
+            expected_receipt_id=str(
+                admission["privacy_protocol_receipt_id"]
+            ),
+            now_unix=current_time,
         )
         try:
             nested_inventory = scan_inventory_paths(root / LINUX_AUTHORITY_DIRECTORY)
@@ -1429,6 +1814,7 @@ def verify_admission(
         "macos_end_block_hash": receipt["end_block_hash"],
         "macos_end_height": receipt["end_height"],
         "peer_count": PEER_COUNT,
+        "privacy_protocol_receipt_id": privacy_protocol_receipt["receipt_id"],
         "receipt_id": receipt["receipt_id"],
         "reset_manifest_sha256": receipt["reset_manifest_sha256"],
         "release_manifest_sha256": final_verification["manifest_sha256"],

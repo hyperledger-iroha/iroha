@@ -3380,7 +3380,6 @@ test("supported confidential transaction builders wrap expected instruction payl
       feePayment: AUTHORITY_FEE_PAYMENT,
       registration: {
         assetDefinitionId: ASSET_DEFINITION_ID,
-        mode: "Hybrid",
       },
       privateKey: PRIVATE_KEY,
     }),

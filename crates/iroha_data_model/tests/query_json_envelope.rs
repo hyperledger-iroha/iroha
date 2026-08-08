@@ -2,24 +2,13 @@
 
 #[cfg(feature = "json")]
 mod json_envelope {
-    use iroha_data_model::{
-        account::AccountId,
-        query::{
-            QueryRequest,
-            json::QueryEnvelopeJson,
-            parameters::{FetchSize, SortOrder},
-        },
+    use iroha_data_model::query::{
+        QueryRequest,
+        json::QueryEnvelopeJson,
+        parameters::{FetchSize, SortOrder},
     };
 
     const AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
-    const ALT_AUTHORITY: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
-
-    fn parse_authority(literal: &str) -> AccountId {
-        AccountId::parse_encoded(literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("authority")
-    }
-
     #[test]
     fn iterable_envelope_parses_params() {
         let json = r#"{
@@ -42,13 +31,9 @@ mod json_envelope {
         .replace("__AUTHORITY__", AUTHORITY);
 
         let envelope: QueryEnvelopeJson = norito::json::from_str(&json).expect("parse envelope");
-        let authority = parse_authority(AUTHORITY);
-        let request = envelope
-            .into_signed_request(authority.clone())
-            .expect("build signed request");
-        assert_eq!(request.authority(), &authority);
+        let request = envelope.into_request().expect("build query request");
 
-        let QueryRequest::Start(query_with_params) = request.request() else {
+        let QueryRequest::Start(query_with_params) = &request else {
             panic!("expected iterable envelope");
         };
         let params = query_with_params.params();
@@ -78,8 +63,7 @@ mod json_envelope {
     fn iterable_order_without_key_errors() {
         let json = r#"{"iterable": {"type": "FindDomains", "params": {"order": "Asc"}}}"#;
         let envelope: QueryEnvelopeJson = norito::json::from_str(json).expect("parse envelope");
-        let authority = parse_authority(ALT_AUTHORITY);
-        let err = match envelope.into_signed_request(authority) {
+        let err = match envelope.into_request() {
             Ok(_) => panic!("order without sort key must error"),
             Err(err) => err,
         };
@@ -130,11 +114,8 @@ mod json_envelope {
             }
         }"#;
         let envelope: QueryEnvelopeJson = norito::json::from_str(json).expect("parse envelope");
-        let authority = parse_authority(AUTHORITY);
-        let request = envelope
-            .into_signed_request(authority)
-            .expect("build signed request");
-        let QueryRequest::Singular(query_box) = request.request() else {
+        let request = envelope.into_request().expect("build query request");
+        let QueryRequest::Singular(query_box) = &request else {
             panic!("expected singular envelope");
         };
         assert!(matches!(

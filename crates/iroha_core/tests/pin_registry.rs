@@ -94,6 +94,7 @@ fn pin_registry_snapshot_matches_fixture() {
         order_payload,
         issued_epoch: 20,
         deadline_epoch: 28,
+        musubi_archive: None,
     }
     .execute(&alice(), &mut tx)
     .expect("issue replication order");
@@ -330,6 +331,7 @@ fn replication_order_with_mismatched_profile_is_rejected() {
         order_payload,
         issued_epoch: 20,
         deadline_epoch: 28,
+        musubi_archive: None,
     }
     .execute(&alice(), &mut tx)
     .expect_err("replication order with mismatched profile must be rejected");
@@ -446,6 +448,7 @@ fn replication_order_below_min_replicas_is_rejected() {
         order_payload,
         issued_epoch: 20,
         deadline_epoch: 28,
+        musubi_archive: None,
     }
     .execute(&alice(), &mut tx)
     .expect_err("replication order below minimum replicas must be rejected");

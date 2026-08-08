@@ -110,7 +110,7 @@ print(
 ```
 
 The closed response is always `mandatory=False`,
-`cash_handoff_capability="cash_handoff_v1"`, bridge ABI `21`, maximum hop count
+`cash_handoff_capability="cash_handoff_v1"`, bridge ABI `22`, maximum hop count
 `8`, `ready=True`, and empty `assets` and `blockers`. The deprecated
 `get_kagemusha_readiness(asset_definition_id)` method ignores its selector and
 returns the same status. Wallet/device peer handoff must not depend on network

@@ -681,7 +681,7 @@ public final class BilateralSettlementInstructions {
     for (final Map.Entry<String, JsonValue> entry : value.entrySet()) {
       final String key = requireName(entry.getKey(), "metadata key");
       final JsonValue json = Objects.requireNonNull(entry.getValue(), "metadata value");
-      final String raw = json.rawJson();
+      final String raw = json.canonicalJson();
       if (raw.isEmpty() || !raw.equals(raw.trim())) {
         throw new IllegalArgumentException(
             "metadata value for '" + key + "' must be an exact non-empty JSON literal");
@@ -1033,7 +1033,7 @@ public final class BilateralSettlementInstructions {
       @Override
       public void encode(final NoritoEncoder encoder, final MetadataEntry value) {
         sized(encoder, STRING, value.key);
-        sized(encoder, STRING, value.value.rawJson());
+        sized(encoder, STRING, value.value.canonicalJson());
       }
 
       @Override

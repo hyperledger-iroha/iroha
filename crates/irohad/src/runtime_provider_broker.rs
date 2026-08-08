@@ -5089,9 +5089,17 @@ mod protocol {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSourceFetchRequestWireV1 {
+    struct ProviderIngestSourceMusubiArchiveWireV1 {
+        genesis_block_hash: [u8; 32],
+        observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1,
+        binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+    struct ProviderIngestSourceFetchRequestWireV2 {
         authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
         source_provider_ids: Vec<[u8; 32]>,
+        musubi_archive: Option<ProviderIngestSourceMusubiArchiveWireV1>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -5682,30 +5690,80 @@ mod protocol {
         source_plan_from_wire(wire)
     }
 
+    fn source_request_from_wire(
+        fetch: ProviderIngestSourceFetchRequestWireV2,
+        session_chain_id: Option<&str>,
+    ) -> Result<sorafs_node::ProviderIngestSourceRequestV1, BrokerError> {
+        let musubi_archive = match fetch.musubi_archive {
+            Some(musubi) => {
+                let session_chain_id = session_chain_id.ok_or(BrokerError::BindingMismatch)?;
+                let chain_id = session_chain_id
+                    .parse::<iroha_data_model::ChainId>()
+                    .map_err(|_| BrokerError::BindingMismatch)?;
+                Some(
+                    sorafs_node::ProviderIngestMusubiArchiveFetchBindingV1::new(
+                        chain_id,
+                        musubi.genesis_block_hash,
+                        fetch.authorization.provider_id(),
+                        musubi.observed_finalized_cursor,
+                        musubi.binding,
+                    )
+                    .map_err(|_| BrokerError::Rejected)?,
+                )
+            }
+            None => None,
+        };
+        sorafs_node::ProviderIngestSourceRequestV1::new(
+            fetch.authorization,
+            fetch.source_provider_ids,
+            musubi_archive,
+        )
+        .map_err(|_| BrokerError::Rejected)
+    }
+
+    fn source_request_to_wire(
+        request: sorafs_node::ProviderIngestSourceRequestV1,
+        session_chain_id: &str,
+    ) -> Result<ProviderIngestSourceFetchRequestWireV2, BrokerError> {
+        let (authorization, source_provider_ids, musubi_archive) = request.into_parts();
+        let musubi_archive = match musubi_archive {
+            Some(musubi) => {
+                if musubi.chain_id().as_str() != session_chain_id
+                    || !musubi.matches_authorization(&authorization)
+                {
+                    return Err(BrokerError::BindingMismatch);
+                }
+                Some(ProviderIngestSourceMusubiArchiveWireV1 {
+                    genesis_block_hash: musubi.genesis_block_hash(),
+                    observed_finalized_cursor: musubi.observed_finalized_cursor(),
+                    binding: musubi.binding().clone(),
+                })
+            }
+            None => None,
+        };
+        let fetch = ProviderIngestSourceFetchRequestWireV2 {
+            authorization,
+            source_provider_ids,
+            musubi_archive,
+        };
+        source_request_from_wire(fetch.clone(), Some(session_chain_id))?;
+        Ok(fetch)
+    }
+
     fn validate_source_fetch_request(
-        fetch: &ProviderIngestSourceFetchRequestWireV1,
+        fetch: &ProviderIngestSourceFetchRequestWireV2,
         binding: &ProviderBindingWireV1,
         admitted_provider_ids: Option<&[[u8; 32]]>,
+        session_chain_id: Option<&str>,
     ) -> Result<(), BrokerError> {
-        fetch
-            .authorization
-            .validate()
-            .map_err(|_| BrokerError::Rejected)?;
+        source_request_from_wire(fetch.clone(), session_chain_id)?;
         let limits = binding
             .provider_ingest_source_limits
             .ok_or(BrokerError::BindingMismatch)?;
         let max_sources =
             usize::try_from(limits.max_source_providers).map_err(|_| BrokerError::Rejected)?;
         if fetch.authorization.content_length() > limits.max_content_bytes
-            || fetch.source_provider_ids.is_empty()
             || fetch.source_provider_ids.len() > max_sources
-            || fetch.source_provider_ids.iter().any(|provider_id| {
-                *provider_id == [0; 32] || *provider_id == fetch.authorization.provider_id()
-            })
-            || fetch
-                .source_provider_ids
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
         {
             return Err(BrokerError::Rejected);
         }
@@ -8412,7 +8470,7 @@ mod protocol {
             OPERATION_SEALED_LOAD_V1
             | OPERATION_SEALED_COMPARE_AND_SWAP_V1
             | OPERATION_SEALED_DELETE_V1 => GOVERNANCE_SEALED_STATE_DECODE_POLICY_V1,
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1 => SOURCE_PLAN_DECODE_POLICY_V1,
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2 => SOURCE_PLAN_DECODE_POLICY_V1,
             OPERATION_PROVIDER_INGEST_SIGN_V1 => PROVIDER_INGEST_SIGN_DECODE_POLICY_V1,
             OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1
             | OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
@@ -8513,7 +8571,7 @@ mod protocol {
             | OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1 => {
                 MAX_PROVIDER_INGEST_RETENTION_FRAME_BYTES_V1
             }
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1 => {
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2 => {
                 MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1
             }
             OPERATION_QUALIFY_V1 => MAX_BROKER_UNARY_FRAME_BYTES_V1,
@@ -8701,7 +8759,7 @@ mod protocol {
                 | OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1
                 | OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1
                 | OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1
-                | OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
+                | OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2
                 | OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
                 | OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1
                 | OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1
@@ -10298,14 +10356,14 @@ mod protocol {
             {
                 decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
             }
-            (slot, OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1)
+            (slot, OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2)
                 if slot == provider_ingest_source_slot =>
             {
-                let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
+                let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV2>(
                     &request.payload,
                     MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
                 )?;
-                validate_source_fetch_request(&fetch, &request.binding, None)?;
+                validate_source_fetch_request(&fetch, &request.binding, None, session_chain_id)?;
             }
             (slot, OPERATION_SIGN_V1) if slot == signer_slot => {
                 let signing = decode_canonical::<SignRequestWireV1>(
@@ -19089,7 +19147,7 @@ mod protocol {
         fn fetch_provider_ingest_source(
             source: &dyn crate::sorafs_provider_ingest_runtime::
                 ProviderIngestAuthenticatedSourceRuntimeV1,
-            fetch: ProviderIngestSourceFetchRequestWireV1,
+            request: sorafs_node::ProviderIngestSourceRequestV1,
             timeout: Duration,
         ) -> Result<
             crate::sorafs_provider_ingest_runtime::VerifiedProviderIngestPayloadV1,
@@ -19102,13 +19160,7 @@ mod protocol {
             runtime
                 .block_on(tokio::time::timeout(
                     timeout,
-                    sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
-                        source,
-                        sorafs_node::ProviderIngestSourceRequestV1 {
-                            authorization: fetch.authorization,
-                            source_provider_ids: fetch.source_provider_ids,
-                        },
-                    ),
+                    sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(source, request),
                 ))
                 .map_err(|_| BrokerError::Unavailable)?
                 .map_err(source_fetch_error)
@@ -19173,7 +19225,7 @@ mod protocol {
             apply_source_socket_deadline(&stream, deadline)?;
             let configured =
                 qualify_server_binding(state, &request.binding, request.provider_metadata_digest)?;
-            let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
+            let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV2>(
                 &request.payload,
                 MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
             )?;
@@ -19181,8 +19233,10 @@ mod protocol {
                 &fetch,
                 &request.binding,
                 Some(&configured.provider_ingest_source_provider_ids),
+                Some(&state.chain_id),
             )?;
             let authorization = fetch.authorization.clone();
+            let source_request = source_request_from_wire(fetch, Some(&state.chain_id))?;
             let source = state
                 .backends
                 .provider_ingest_authenticated_source
@@ -19190,7 +19244,7 @@ mod protocol {
                 .ok_or(BrokerError::BindingMismatch)?;
             let mut fetched = fetch_provider_ingest_source(
                 source.as_ref(),
-                fetch,
+                source_request,
                 source_deadline_remaining(deadline)?,
             )?;
             validate_source_payload_metadata(&authorization, &fetched.manifest, &fetched.plan)?;
@@ -19199,7 +19253,7 @@ mod protocol {
             let frame_count = source_stream_frame_count(content_length)?;
             let mut transcript = {
                 let initial_admission = DecodeResourceAdmissionV1::acquire_operation(
-                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                 )?;
                 let _initial_scope = initial_admission.enter();
                 let manifest = fetched
@@ -19448,7 +19502,7 @@ mod protocol {
                 };
                 if request.binding.slot
                     == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id()
-                    && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
+                    && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2
                 {
                     let Ok(source_stream_permit) =
                         Arc::clone(&source_stream_permits).try_acquire_owned()
@@ -21201,11 +21255,13 @@ mod protocol {
                 let deadline = std::time::Instant::now()
                     .checked_add(Duration::from_millis(limits.operation_timeout_ms))
                     .ok_or(BrokerError::Rejected)?;
-                let fetch = ProviderIngestSourceFetchRequestWireV1 {
-                    authorization: request.authorization,
-                    source_provider_ids: request.source_provider_ids,
-                };
-                validate_source_fetch_request(&fetch, &binding, Some(&source_provider_ids))?;
+                let fetch = source_request_to_wire(request, &chain_id)?;
+                validate_source_fetch_request(
+                    &fetch,
+                    &binding,
+                    Some(&source_provider_ids),
+                    Some(&chain_id),
+                )?;
                 let (mut connection, observations) = connect_broker_connection(
                     &endpoint,
                     &chain_id,
@@ -21223,7 +21279,7 @@ mod protocol {
                 }
                 apply_source_socket_deadline(&connection.stream, deadline)?;
                 let decode_admission = DecodeResourceAdmissionV1::acquire_operation(
-                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                 )?;
                 let decode_scope = decode_admission.enter();
                 let payload =
@@ -21233,7 +21289,7 @@ mod protocol {
                     connection.next_request_id,
                     binding,
                     metadata_digest,
-                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                     payload,
                 )?;
                 let request_frame = encode_frame(
@@ -21255,7 +21311,7 @@ mod protocol {
                 let response = decode_operation_frame::<OperationResponseV1>(
                     &response_frame,
                     FRAME_KIND_OPERATION_RESPONSE_V1,
-                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                 )?;
                 validate_operation_response(&operation_request, &response)?;
                 match response.status {
@@ -31089,7 +31145,7 @@ mod protocol {
                         OPAQUE_BLOB_DECODE_POLICY_V1,
                     ),
                     (
-                        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                         MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
                         SOURCE_PLAN_DECODE_POLICY_V1,
                     ),
@@ -33647,6 +33703,8 @@ mod protocol {
                 revision: Arc<AtomicU64>,
                 fetch_delay: Duration,
                 drift_on_eof: bool,
+                observed_request:
+                    Option<Arc<Mutex<Option<sorafs_node::ProviderIngestSourceRequestV1>>>>,
             }
 
             impl fmt::Debug for ServerTestProviderSource {
@@ -33664,7 +33722,7 @@ mod protocol {
 
                 fn fetch<'a>(
                     &'a self,
-                    _request: sorafs_node::ProviderIngestSourceRequestV1,
+                    request: sorafs_node::ProviderIngestSourceRequestV1,
                 ) -> sorafs_node::ProviderIngestFutureV1<
                     'a,
                     Result<Self::Fetched, sorafs_node::ProviderIngestSourceFetchErrorV1>,
@@ -33675,7 +33733,12 @@ mod protocol {
                     let revision = Arc::clone(&self.revision);
                     let fetch_delay = self.fetch_delay;
                     let drift_on_eof = self.drift_on_eof;
+                    let observed_request = self.observed_request.clone();
                     Box::pin(async move {
+                        if let Some(observed_request) = observed_request {
+                            *observed_request.lock().expect("capture source request") =
+                                Some(request);
+                        }
                         if !fetch_delay.is_zero() {
                             tokio::time::sleep(fetch_delay).await;
                         }
@@ -33786,6 +33849,91 @@ mod protocol {
                     )
                     .expect("build source authorization");
                 (authorization, manifest, plan)
+            }
+
+            fn test_source_musubi_fetch_binding(
+                authorization: &sorafs_node::FinalizedProviderIngestAuthorizationV1,
+                manifest: &sorafs_manifest::ManifestV1,
+                plan: &sorafs_car::CarBuildPlan,
+            ) -> (
+                sorafs_node::FinalizedProviderIngestAuthorizationV1,
+                sorafs_node::ProviderIngestMusubiArchiveFetchBindingV1,
+            ) {
+                let commitment = iroha_data_model::musubi::MusubiArchiveCommitmentV1 {
+                    root_cid:
+                        iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(
+                            &manifest.root_cid,
+                        )
+                        .expect("canonical source root CID"),
+                    chunker: iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+                        profile_id: manifest.chunking.profile_id.0,
+                        namespace: manifest.chunking.namespace.clone(),
+                        name: manifest.chunking.name.clone(),
+                        semver: manifest.chunking.semver.clone(),
+                        multihash_code: manifest.chunking.multihash_code,
+                    },
+                    chunk_plan_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        manifest.chunk_digest_sha3_256,
+                    ),
+                    por_root: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        manifest.por_root,
+                    ),
+                    content_length: manifest.content_length,
+                    car_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        manifest.car_digest,
+                    ),
+                    car_size: manifest.car_size,
+                    bundle_digest: iroha_data_model::musubi::MusubiContentDigestV1::new([0xB1; 32]),
+                    source_tree_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        [0xB2; 32],
+                    ),
+                    descriptor_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        [0xB3; 32],
+                    ),
+                    file_count: u32::try_from(plan.files.len())
+                        .expect("source file count fits u32"),
+                    chunk_count: u32::try_from(plan.chunks.len())
+                        .expect("source chunk count fits u32"),
+                };
+                let archive_id = commitment.archive_id();
+                let binding = iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1::new(
+                    iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new(
+                        authorization.order_id(),
+                    ),
+                    archive_id,
+                    commitment,
+                );
+                let chain_id = iroha_data_model::ChainId::from("server-test-chain");
+                let genesis_block_hash = [0xA7; 32];
+                let musubi_authorization =
+                    sorafs_node::FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+                        authorization.finalized_height(),
+                        authorization.finalized_block_hash(),
+                        authorization.provider_id(),
+                        authorization.order_id(),
+                        authorization.manifest_digest(),
+                        authorization.manifest_cid().to_vec(),
+                        authorization.chunker_handle().to_owned(),
+                        authorization.chunk_digest_sha3_256(),
+                        authorization.por_root(),
+                        authorization.content_length(),
+                        sorafs_node::provider_ingest_outbox::FinalizedProviderIngestMusubiContextV1::new(
+                            chain_id.clone(),
+                            genesis_block_hash,
+                            archive_id,
+                        )
+                        .expect("construct source Musubi context"),
+                    )
+                    .expect("construct source Musubi authorization");
+                let fetch_binding = sorafs_node::ProviderIngestMusubiArchiveFetchBindingV1::new(
+                    chain_id,
+                    genesis_block_hash,
+                    authorization.provider_id(),
+                    authorization.admission_finalized_cursor(),
+                    binding,
+                )
+                .expect("construct Musubi source binding");
+                (musubi_authorization, fetch_binding)
             }
 
             fn source_test_catalog(
@@ -37340,6 +37488,70 @@ mod protocol {
             }
 
             #[test]
+            fn musubi_source_fetch_v2_reconstructs_exact_private_binding() {
+                let payload = vec![0xD7; 4 * 1024 + 19];
+                let (generic_authorization, manifest, plan) = test_source_material(payload.clone());
+                let (authorization, musubi) =
+                    test_source_musubi_fetch_binding(&generic_authorization, &manifest, &plan);
+                let expected_musubi = musubi.clone();
+                let observed_request = Arc::new(Mutex::new(None));
+                let source_backend = ServerTestProviderSource {
+                    payload: payload.clone(),
+                    manifest,
+                    plan,
+                    revision: Arc::new(AtomicU64::new(5)),
+                    fetch_delay: Duration::ZERO,
+                    drift_on_eof: false,
+                    observed_request: Some(Arc::clone(&observed_request)),
+                };
+                let bindings = source_test_catalog(Duration::from_secs(5), 64 * 1024, 1);
+                let (_directory, policy, shutdown, server) =
+                    start_source_test_server(source_backend, bindings.clone());
+                let source = connect_test_source(&policy, &bindings);
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build Musubi source client runtime");
+                let request = sorafs_node::ProviderIngestSourceRequestV1::new(
+                    authorization.clone(),
+                    SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                    Some(musubi),
+                )
+                .expect("construct Musubi source request");
+                let mut fetched = runtime
+                    .block_on(
+                        sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
+                            source.as_ref(),
+                            request,
+                        ),
+                    )
+                    .expect("open Musubi source stream");
+                let mut observed_payload = Vec::new();
+                std::io::Read::read_to_end(&mut fetched.reader, &mut observed_payload)
+                    .expect("read authenticated Musubi source stream");
+                assert_eq!(observed_payload, payload);
+                let observed = observed_request
+                    .lock()
+                    .expect("lock captured source request")
+                    .take()
+                    .expect("server backend received source request");
+                assert_eq!(observed.authorization(), &authorization);
+                assert_eq!(
+                    observed.source_provider_ids(),
+                    SERVER_TEST_SOURCE_PROVIDER_IDS.as_slice()
+                );
+                assert_eq!(observed.musubi_archive(), Some(&expected_musubi));
+                drop(fetched);
+                drop(source);
+                drop(runtime);
+                shutdown.request_shutdown();
+                server
+                    .join()
+                    .expect("join Musubi source broker")
+                    .expect("Musubi source broker exits cleanly");
+            }
+
+            #[test]
             fn stalled_source_stream_releases_unary_session_capacity() {
                 let payload = vec![0xA7; 8 * 1024 * 1024];
                 let (authorization, manifest, plan) = test_source_material(payload.clone());
@@ -37350,6 +37562,7 @@ mod protocol {
                     revision: Arc::new(AtomicU64::new(5)),
                     fetch_delay: Duration::ZERO,
                     drift_on_eof: false,
+                    observed_request: None,
                 };
                 let bindings = source_test_catalog(Duration::from_secs(10), 16 * 1024 * 1024, 1);
                 let (_directory, policy, shutdown, server) =
@@ -37363,10 +37576,12 @@ mod protocol {
                     .block_on(
                         sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
                             source.as_ref(),
-                            sorafs_node::ProviderIngestSourceRequestV1 {
-                                authorization: authorization.clone(),
-                                source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-                            },
+                            sorafs_node::ProviderIngestSourceRequestV1::new(
+                                authorization.clone(),
+                                SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                                None,
+                            )
+                            .expect("construct generic source request"),
                         ),
                     )
                     .expect("open stalled source stream");
@@ -37374,10 +37589,12 @@ mod protocol {
                     runtime.block_on(
                         sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
                             source.as_ref(),
-                            sorafs_node::ProviderIngestSourceRequestV1 {
+                            sorafs_node::ProviderIngestSourceRequestV1::new(
                                 authorization,
-                                source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-                            },
+                                SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                                None,
+                            )
+                            .expect("construct generic source request"),
                         )
                     ),
                     Err(sorafs_node::ProviderIngestSourceFetchErrorV1::ContentRejected)
@@ -37412,6 +37629,7 @@ mod protocol {
                     revision: Arc::clone(&revision),
                     fetch_delay: Duration::ZERO,
                     drift_on_eof: true,
+                    observed_request: None,
                 };
                 let bindings = source_test_catalog(Duration::from_secs(5), 2 * 1024 * 1024, 1);
                 let (_directory, policy, shutdown, server) =
@@ -37425,10 +37643,12 @@ mod protocol {
                     .block_on(
                         sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
                             source.as_ref(),
-                            sorafs_node::ProviderIngestSourceRequestV1 {
+                            sorafs_node::ProviderIngestSourceRequestV1::new(
                                 authorization,
-                                source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-                            },
+                                SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                                None,
+                            )
+                            .expect("construct generic source request"),
                         ),
                     )
                     .expect("open source stream");
@@ -37459,6 +37679,7 @@ mod protocol {
                     revision: Arc::new(AtomicU64::new(5)),
                     fetch_delay: Duration::from_millis(1_500),
                     drift_on_eof: false,
+                    observed_request: None,
                 };
                 let bindings = source_test_catalog(Duration::from_millis(200), 1024, 1);
                 let (_directory, policy, shutdown, server) =
@@ -37473,10 +37694,12 @@ mod protocol {
                     runtime.block_on(
                         sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
                             source.as_ref(),
-                            sorafs_node::ProviderIngestSourceRequestV1 {
+                            sorafs_node::ProviderIngestSourceRequestV1::new(
                                 authorization,
-                                source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-                            },
+                                SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                                None,
+                            )
+                            .expect("construct generic source request"),
                         )
                     ),
                     Err(sorafs_node::ProviderIngestSourceFetchErrorV1::Unavailable)
@@ -38075,6 +38298,242 @@ mod protocol {
             }
 
             #[test]
+            fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
+                let payload = vec![0xD1; 4096];
+                let (authorization, manifest, plan) = test_source_material(payload);
+                let bindings = source_test_catalog(Duration::from_secs(5), 64 * 1024, 1);
+                let binding = ProviderBindingWireV1::try_from_binding(
+                    bindings.iter().next().expect("source binding"),
+                )
+                .expect("project source binding");
+
+                let generic = source_request_to_wire(
+                    sorafs_node::ProviderIngestSourceRequestV1::new(
+                        authorization.clone(),
+                        SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                        None,
+                    )
+                    .expect("construct generic source request"),
+                    "server-test-chain",
+                )
+                .expect("project generic V2 source wire");
+                assert_eq!(
+                    validate_source_fetch_request(
+                        &generic,
+                        &binding,
+                        Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+                        Some("server-test-chain"),
+                    ),
+                    Ok(())
+                );
+
+                let (musubi_authorization, musubi) =
+                    test_source_musubi_fetch_binding(&authorization, &manifest, &plan);
+                let request = sorafs_node::ProviderIngestSourceRequestV1::new(
+                    musubi_authorization.clone(),
+                    SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                    Some(musubi.clone()),
+                )
+                .expect("construct Musubi source request");
+                let exact = source_request_to_wire(request, "server-test-chain")
+                    .expect("project exact Musubi V2 source wire");
+                assert_eq!(
+                    validate_source_fetch_request(
+                        &exact,
+                        &binding,
+                        Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+                        Some("server-test-chain"),
+                    ),
+                    Ok(())
+                );
+
+                let mut later_cursor = exact.clone();
+                later_cursor
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .observed_finalized_cursor = sorafs_node::ProviderIngestFinalizedCursorV1 {
+                    height: authorization.finalized_height().saturating_add(1),
+                    block_hash: [0x78; 32],
+                };
+                assert_eq!(
+                    validate_source_fetch_request(
+                        &later_cursor,
+                        &binding,
+                        Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+                        Some("server-test-chain"),
+                    ),
+                    Ok(()),
+                    "a current informational claim may be newer than its retained admission"
+                );
+
+                let rejects = |candidate: &ProviderIngestSourceFetchRequestWireV2| {
+                    assert_eq!(
+                        validate_source_fetch_request(
+                            candidate,
+                            &binding,
+                            Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+                            Some("server-test-chain"),
+                        ),
+                        Err(BrokerError::Rejected)
+                    );
+                };
+
+                let mut zero_genesis = exact.clone();
+                zero_genesis
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .genesis_block_hash = [0; 32];
+                rejects(&zero_genesis);
+
+                let mut zero_cursor = exact.clone();
+                zero_cursor
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .observed_finalized_cursor
+                    .height = 0;
+                rejects(&zero_cursor);
+
+                let mut forked_cursor = exact.clone();
+                forked_cursor
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .observed_finalized_cursor
+                    .block_hash = [0xE0; 32];
+                rejects(&forked_cursor);
+
+                let mut wrong_order = exact.clone();
+                wrong_order
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .binding
+                    .replication_order =
+                    iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xE1; 32]);
+                rejects(&wrong_order);
+
+                let mut wrong_archive = exact.clone();
+                wrong_archive
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .binding
+                    .archive_id = iroha_data_model::musubi::ArchiveId::new([0xE2; 32]);
+                rejects(&wrong_archive);
+
+                let mut wrong_root = exact.clone();
+                let wrong_root_binding = &mut wrong_root
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .binding;
+                wrong_root_binding.commitment.root_cid =
+                    iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+                        [0xE3; 32],
+                    )
+                    .expect("alternate canonical root CID");
+                wrong_root_binding.archive_id = wrong_root_binding.commitment.archive_id();
+                rejects(&wrong_root);
+
+                let mut wrong_chunker = exact.clone();
+                let wrong_chunker_binding = &mut wrong_chunker
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .binding;
+                wrong_chunker_binding.commitment.chunker.name = "other".to_owned();
+                wrong_chunker_binding.archive_id = wrong_chunker_binding.commitment.archive_id();
+                rejects(&wrong_chunker);
+
+                let mut wrong_plan = exact.clone();
+                let wrong_plan_binding = &mut wrong_plan
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .binding;
+                wrong_plan_binding.commitment.chunk_plan_digest =
+                    iroha_data_model::musubi::MusubiContentDigestV1::new([0xE4; 32]);
+                wrong_plan_binding.archive_id = wrong_plan_binding.commitment.archive_id();
+                rejects(&wrong_plan);
+
+                let mut wrong_por = exact.clone();
+                let wrong_por_binding = &mut wrong_por
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .binding;
+                wrong_por_binding.commitment.por_root =
+                    iroha_data_model::musubi::MusubiContentDigestV1::new([0xE5; 32]);
+                wrong_por_binding.archive_id = wrong_por_binding.commitment.archive_id();
+                rejects(&wrong_por);
+
+                let mut wrong_length = exact;
+                let wrong_length_binding = &mut wrong_length
+                    .musubi_archive
+                    .as_mut()
+                    .expect("Musubi wire")
+                    .binding;
+                wrong_length_binding.commitment.content_length = wrong_length_binding
+                    .commitment
+                    .content_length
+                    .saturating_add(1);
+                wrong_length_binding.archive_id = wrong_length_binding.commitment.archive_id();
+                rejects(&wrong_length);
+
+                let wrong_chain_request = sorafs_node::ProviderIngestSourceRequestV1::new(
+                    musubi_authorization,
+                    SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                    Some(musubi),
+                )
+                .expect("construct chain-bound Musubi request");
+                assert_eq!(
+                    source_request_to_wire(wrong_chain_request, "other-chain"),
+                    Err(BrokerError::BindingMismatch)
+                );
+            }
+
+            #[test]
+            fn source_fetch_v2_rejects_retired_operation_28_and_legacy_wire() {
+                #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+                struct LegacyProviderIngestSourceFetchRequestWireV1 {
+                    authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
+                    source_provider_ids: Vec<[u8; 32]>,
+                }
+
+                let bindings = source_test_catalog(Duration::from_secs(5), 64 * 1024, 1);
+                let binding = ProviderBindingWireV1::try_from_binding(
+                    bindings.iter().next().expect("source binding"),
+                )
+                .expect("project source binding");
+                let legacy = LegacyProviderIngestSourceFetchRequestWireV1 {
+                    authorization: test_source_authorization(16),
+                    source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                };
+                let payload =
+                    encode_canonical(&legacy, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)
+                        .expect("encode retired source request");
+                assert!(
+                    decode_canonical::<ProviderIngestSourceFetchRequestWireV2>(
+                        &payload,
+                        MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
+                    )
+                    .is_err(),
+                    "the retired two-field wire must not decode as V2"
+                );
+                assert!(!operation_is_known(28));
+                let request =
+                    make_operation_request([0x91; 32], 1, binding, [0x92; 32], 28, payload)
+                        .expect("construct retired operation request");
+                assert_eq!(
+                    validate_operation_request_for_session(&request, "server-test-chain"),
+                    Err(BrokerError::BindingMismatch)
+                );
+            }
+
+            #[test]
             fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_allocating()
             {
                 assert_eq!(
@@ -38145,19 +38604,20 @@ mod protocol {
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
                 };
-                let fetch = ProviderIngestSourceFetchRequestWireV1 {
+                let fetch = ProviderIngestSourceFetchRequestWireV2 {
                     authorization: test_source_authorization(17),
                     source_provider_ids: vec![[1; 32], [2; 32]],
+                    musubi_archive: None,
                 };
                 assert_eq!(
-                    validate_source_fetch_request(&fetch, &binding, None),
+                    validate_source_fetch_request(&fetch, &binding, None, None),
                     Err(BrokerError::Rejected)
                 );
                 let mut too_many_sources = fetch;
                 too_many_sources.authorization = test_source_authorization(16);
                 too_many_sources.source_provider_ids.push([3; 32]);
                 assert_eq!(
-                    validate_source_fetch_request(&too_many_sources, &binding, None),
+                    validate_source_fetch_request(&too_many_sources, &binding, None, None),
                     Err(BrokerError::Rejected)
                 );
             }
@@ -44530,12 +44990,21 @@ mod protocol {
                     );
                 }
                 assert_eq!(
-                    operation_frame_limit(OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1),
+                    operation_frame_limit(OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2),
                     MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1
                 );
-                for operation in OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1
-                    ..=OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
-                {
+                for operation in [
+                    OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1,
+                    OPERATION_PROVIDER_INGEST_RESOLVE_SIGNER_V1,
+                    OPERATION_PROVIDER_INGEST_SIGN_V1,
+                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
+                    OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                    OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1,
+                    OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
+                ] {
+                    assert!(operation_is_known(operation));
                     assert!(
                         operation_frame_limit(operation) <= MAX_OPERATION_FRAME_BYTES_V1,
                         "provider-ingest operation {operation} must stay within the process raw-frame ceiling"

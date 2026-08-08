@@ -37,7 +37,7 @@ class PrivacyNativeBridge private constructor() {
     }
 
     companion object {
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 22
         const val COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Int = 256 * 1024
         const val EXACT12_FIXTURE_BUNDLE_MAX_BYTES: Int = 2 * 1024 * 1024
         private const val LIBRARY_NAME: String = "connect_norito_bridge"

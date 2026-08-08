@@ -14930,6 +14930,28 @@ pub(super) mod tests {
         time::{Duration, Instant},
     };
 
+    use super::*;
+    use crate::{
+        block::{CommittedBlock, ValidBlock},
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        },
+        merge_sidecar::CertifiedMergeSidecarChunkV1,
+        query::store::LiveQueryStore,
+        state::World,
+        sumeragi::{
+            fair_v2_ingress_admit_for_test, fair_v2_ingress_admit_with_roster_for_test,
+            network_topology::Topology,
+            v2_worker::{
+                ExactOutputTestAdmission,
+                tests::{
+                    durable_finality_fixture, service_for_history_context,
+                    service_for_history_context_with_handoff_owner,
+                    service_for_history_context_with_local_validator_and_handoff_owner,
+                },
+            },
+        },
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, Level,
@@ -14956,30 +14978,6 @@ pub(super) mod tests {
             signed::{TransactionResult, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
-    };
-    use mv::storage::StorageReadOnly;
-
-    use super::*;
-    use crate::{
-        block::{CommittedBlock, ValidBlock},
-        governance::manifest::{
-            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
-        },
-        merge_sidecar::CertifiedMergeSidecarChunkV1,
-        query::store::LiveQueryStore,
-        state::World,
-        sumeragi::{
-            fair_v2_ingress_admit_for_test, fair_v2_ingress_admit_with_roster_for_test,
-            network_topology::Topology,
-            v2_worker::{
-                ExactOutputTestAdmission,
-                tests::{
-                    durable_finality_fixture, service_for_history_context,
-                    service_for_history_context_with_handoff_owner,
-                    service_for_history_context_with_local_validator_and_handoff_owner,
-                },
-            },
-        },
     };
 
     fn semantic_sequence(value: u64) -> CertifiedMergeSidecarSemanticSequenceV1 {
@@ -30710,7 +30708,7 @@ pub(super) mod tests {
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
-        let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+        let mut envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
             .expect("construct production-valid relay envelope")
             .with_lane_block_descriptor_hash(Some(Hash::new(
                 b"v2 merge persistence retry lane descriptor",

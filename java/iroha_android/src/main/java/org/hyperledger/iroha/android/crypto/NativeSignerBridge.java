@@ -9,8 +9,8 @@ import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstructi
 /** Thin JVM/JNI wrapper around {@code connect_norito_bridge} signing helpers. */
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 21;
-  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 3;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 22;
+  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 4;
   private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -136,9 +136,6 @@ public final class NativeSignerBridge {
             ttl,
             hasTtl,
             assetBytes,
-            instruction.mode().bridgeCode(),
-            instruction.allowShield(),
-            instruction.allowUnshield(),
             unshieldBytes,
             instruction.unshieldVerifyingKey() != null,
             shieldBytes,
@@ -255,9 +252,6 @@ public final class NativeSignerBridge {
       long ttlMs,
       boolean ttlPresent,
       byte[] asset,
-      int modeCode,
-      boolean allowShield,
-      boolean allowUnshield,
       byte[] unshieldVerifyingKey,
       boolean unshieldVerifyingKeyPresent,
       byte[] shieldVerifyingKey,

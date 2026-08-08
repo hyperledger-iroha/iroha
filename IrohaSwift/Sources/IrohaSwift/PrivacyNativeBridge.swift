@@ -206,7 +206,7 @@ public enum PrivacyExact12FixtureValidationStatusV1: Int32, CaseIterable, Sendab
 /// establishes network activation or readiness. Fetch a fresh authoritative
 /// `PrivacyCapabilitySnapshotV1` from live Torii before submitting a privacy proof.
 public enum PrivacyNativeBridge {
-    public static let requiredBridgeABIVersion: UInt32 = 21
+    public static let requiredBridgeABIVersion: UInt32 = 22
     public static let compiledProfileCatalogArchiveMaximumBytes = 256 * 1024
     public static let exact12FixtureBundleMaximumBytes = 2 * 1024 * 1024
 

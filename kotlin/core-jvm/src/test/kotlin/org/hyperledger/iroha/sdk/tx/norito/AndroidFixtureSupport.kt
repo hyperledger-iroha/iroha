@@ -454,9 +454,9 @@ internal object AndroidFixtureSupport {
     }
 
     private fun jsonValue(value: Any?): JsonValue = when (value) {
-        null -> JsonValue.raw("null")
+        null -> JsonValue.nullValue()
         is String -> JsonValue.string(value)
-        is Number -> JsonValue.raw(value.toString())
+        is Number -> JsonValue.parse(value.toString())
         is Boolean -> JsonValue.bool(value)
         else -> error("Unsupported metadata JSON value type: ${value::class}")
     }

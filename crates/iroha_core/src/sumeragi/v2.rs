@@ -614,14 +614,11 @@ pub(crate) enum AdapterEffect {
         /// Exact post-install durable lock whose body pipeline must survive the transition.
         protected_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     },
-    /// Report first-release equivocation metadata for operator visibility.
+    /// Validate and persist exact authenticated equivocation evidence.
     ReportEquivocation {
-        /// Offending voting validator.
-        offender: PeerId,
-        /// Round containing the conflict.
-        round: wire::ConsensusRound,
-        /// Conflicting message class.
-        kind: reducer::EquivocationKind,
+        /// Complete conflicting signed artifacts retained for independent
+        /// validation, canonical persistence, and eventual accountability.
+        evidence: Box<wire::SumeragiV2Equivocation>,
     },
     /// Report a deterministic validation failure for a certified body.
     ReportInvalidCertifiedBody {
@@ -3410,9 +3407,112 @@ enum IngressFingerprint {
     TimeoutVote(Option<wire::QuorumCertificateRef>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+fn ingress_equivocation_identity(
+    payload: &wire::ConsensusMessageV2Payload,
+) -> Option<(IngressSemanticKey, IngressFingerprint)> {
+    match payload {
+        wire::ConsensusMessageV2Payload::Proposal(proposal) => Some((
+            IngressSemanticKey::Proposal {
+                round: proposal.round,
+                proposer: proposal.proposer,
+            },
+            IngressFingerprint::Proposal(Hash::new(proposal.signature_preimage())),
+        )),
+        wire::ConsensusMessageV2Payload::Vote(vote) => Some((
+            IngressSemanticKey::Vote {
+                round: vote.round,
+                phase: vote.phase,
+                signer: vote.signer,
+            },
+            IngressFingerprint::Vote(vote.proposal_round, vote.subject, vote.execution_commitment),
+        )),
+        wire::ConsensusMessageV2Payload::TimeoutVote(vote) => Some((
+            IngressSemanticKey::TimeoutVote {
+                round: vote.round,
+                signer: vote.signer,
+            },
+            IngressFingerprint::TimeoutVote(
+                vote.highest_prepare_qc
+                    .as_ref()
+                    .map(wire::QuorumCertificate::as_ref),
+            ),
+        )),
+        wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+        | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum IngressEquivocationArtifact {
+    Proposal(Arc<wire::Proposal>),
+    Vote(Arc<wire::Vote>),
+    TimeoutVote(Arc<wire::TimeoutVote>),
+}
+
+impl IngressEquivocationArtifact {
+    fn from_payload(payload: &wire::ConsensusMessageV2Payload) -> Option<Self> {
+        match payload {
+            wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                Some(Self::Proposal(Arc::new(proposal.clone())))
+            }
+            wire::ConsensusMessageV2Payload::Vote(vote) => Some(Self::Vote(Arc::new(vote.clone()))),
+            wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
+                Some(Self::TimeoutVote(Arc::new(vote.clone())))
+            }
+            wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
+            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+            | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+            | wire::ConsensusMessageV2Payload::VrfCommit(_)
+            | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+        }
+    }
+
+    fn conflict_with(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> Result<wire::SumeragiV2Equivocation, AdapterError> {
+        let evidence = match (self, payload) {
+            (Self::Proposal(first), wire::ConsensusMessageV2Payload::Proposal(second)) => {
+                Ok(wire::SumeragiV2Equivocation::Proposal {
+                    first: first.as_ref().clone(),
+                    second: second.clone(),
+                })
+            }
+            (Self::Vote(first), wire::ConsensusMessageV2Payload::Vote(second)) => {
+                Ok(wire::SumeragiV2Equivocation::PhaseVote {
+                    first: first.as_ref().clone(),
+                    second: second.clone(),
+                })
+            }
+            (Self::TimeoutVote(first), wire::ConsensusMessageV2Payload::TimeoutVote(second)) => {
+                Ok(wire::SumeragiV2Equivocation::TimeoutVote {
+                    first: first.as_ref().clone(),
+                    second: second.clone(),
+                })
+            }
+            _ => Err(AdapterError::EquivocationArtifactMismatch),
+        }?;
+        Ok(super::evidence::canonicalize_v2_conflict(&evidence))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct IngressEquivocationRecord {
     fingerprint: IngressFingerprint,
+    artifact: IngressEquivocationArtifact,
     equivocation_reported: bool,
     capacity_bypass: bool,
     admitted_at: Instant,
@@ -3607,6 +3707,9 @@ pub(crate) enum AdapterError {
     /// A transport-only canonical payload was incorrectly routed to the reducer.
     #[error("Sumeragi v2 transport payload is not a reducer input")]
     TransportPayload,
+    /// One semantic equivocation slot retained a different signed artifact class.
+    #[error("Sumeragi v2 equivocation artifact does not match its semantic slot")]
+    EquivocationArtifactMismatch,
     /// Trusted completion ownership exceeded the bounded deferred lane.
     #[error("Sumeragi v2 deferred completion lane exceeded its bounded capacity")]
     DeferredCompletionCapacityExceeded,
@@ -4418,9 +4521,28 @@ impl SumeragiV2Adapter {
             &self.proofs_of_possession,
         )?;
         let authenticated = AuthenticatedConsensusMessage(message);
-        self.ensure_authenticated_manifest_compatible(&authenticated)?;
-        self.ensure_authenticated_execution_commitments_compatible(&authenticated)?;
+        // A second, independently authenticated statement for an already
+        // retained semantic slot must reach exact-evidence admission even when
+        // its manifest or execution commitment deliberately conflicts with the
+        // local registry. Ordinary traffic still fails those compatibility
+        // gates before it can mutate adapter state.
+        if !self.retained_authenticated_equivocation(authenticated.payload()) {
+            self.ensure_authenticated_manifest_compatible(&authenticated)?;
+            self.ensure_authenticated_execution_commitments_compatible(&authenticated)?;
+        }
         Ok(authenticated)
+    }
+
+    fn retained_authenticated_equivocation(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        let Some((key, fingerprint)) = ingress_equivocation_identity(payload) else {
+            return false;
+        };
+        self.ingress_equivocations
+            .get(&key)
+            .is_some_and(|record| record.fingerprint != fingerprint)
     }
 
     /// Return whether authenticated ingress belongs to the active lock's
@@ -4925,7 +5047,7 @@ impl SumeragiV2Adapter {
         } else {
             false
         };
-        let (key, fingerprint, round, signer, kind) = match payload {
+        match payload {
             wire::ConsensusMessageV2Payload::Proposal(proposal) => {
                 if proposal.round.view != current_view {
                     return Ok((
@@ -4933,16 +5055,6 @@ impl SumeragiV2Adapter {
                         None,
                     ));
                 }
-                (
-                    IngressSemanticKey::Proposal {
-                        round: proposal.round,
-                        proposer: proposal.proposer,
-                    },
-                    IngressFingerprint::Proposal(Hash::new(proposal.signature_preimage())),
-                    proposal.round,
-                    proposal.proposer,
-                    reducer::EquivocationKind::Proposal,
-                )
             }
             wire::ConsensusMessageV2Payload::Vote(vote) => {
                 if vote.round.view > current_view
@@ -4953,21 +5065,6 @@ impl SumeragiV2Adapter {
                         None,
                     ));
                 }
-                (
-                    IngressSemanticKey::Vote {
-                        round: vote.round,
-                        phase: vote.phase,
-                        signer: vote.signer,
-                    },
-                    IngressFingerprint::Vote(
-                        vote.proposal_round,
-                        vote.subject,
-                        vote.execution_commitment,
-                    ),
-                    vote.round,
-                    vote.signer,
-                    reducer::EquivocationKind::Vote,
-                )
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
                 if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
@@ -4976,20 +5073,6 @@ impl SumeragiV2Adapter {
                         None,
                     ));
                 }
-                (
-                    IngressSemanticKey::TimeoutVote {
-                        round: vote.round,
-                        signer: vote.signer,
-                    },
-                    IngressFingerprint::TimeoutVote(
-                        vote.highest_prepare_qc
-                            .as_ref()
-                            .map(wire::QuorumCertificate::as_ref),
-                    ),
-                    vote.round,
-                    vote.signer,
-                    reducer::EquivocationKind::Timeout,
-                )
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
@@ -5003,7 +5086,11 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
                 return Ok((None, None));
             }
-        };
+        }
+        let (key, fingerprint) = ingress_equivocation_identity(payload)
+            .ok_or(AdapterError::EquivocationArtifactMismatch)?;
+        let artifact = IngressEquivocationArtifact::from_payload(payload)
+            .ok_or(AdapterError::EquivocationArtifactMismatch)?;
         let deferred_owner = self.deferred_owns_ingress(key, fingerprint);
 
         if let Some(record) = self.ingress_equivocations.get_mut(&key) {
@@ -5043,20 +5130,13 @@ impl SumeragiV2Adapter {
                     None,
                 ));
             }
+            let evidence = record.artifact.conflict_with(payload)?;
             record.equivocation_reported = true;
-            let offender = self
-                .wire_context
-                .roster
-                .get(usize::try_from(signer).unwrap_or(usize::MAX))
-                .map(|entry| entry.validator.clone())
-                .ok_or(AdapterError::ValidatorIndexOutOfRange(signer))?;
             return Ok((
                 Some(AdapterOutcome {
                     disposition: reducer::StepDisposition::Applied,
                     effects: vec![AdapterEffect::ReportEquivocation {
-                        offender,
-                        round,
-                        kind,
+                        evidence: Box::new(evidence),
                     }],
                     deferred_admission_ordinal: None,
                     producer_handoff: None,
@@ -5082,6 +5162,7 @@ impl SumeragiV2Adapter {
             key,
             IngressEquivocationRecord {
                 fingerprint,
+                artifact,
                 equivocation_reported: false,
                 capacity_bypass,
                 admitted_at: Instant::now(),
@@ -5943,6 +6024,7 @@ impl SumeragiV2Adapter {
             ))
             .encode(),
         );
+        let wire_proposal = proposal.clone();
         let proposal = self
             .registry
             .proposal_to_core(proposal, &self.wire_context)?;
@@ -5971,6 +6053,7 @@ impl SumeragiV2Adapter {
                     admission_key,
                     IngressEquivocationRecord {
                         fingerprint,
+                        artifact: IngressEquivocationArtifact::Proposal(Arc::new(wire_proposal)),
                         equivocation_reported: false,
                         capacity_bypass: false,
                         admitted_at,
@@ -6139,7 +6222,7 @@ impl SumeragiV2Adapter {
         };
         let expected_fingerprint =
             IngressFingerprint::Proposal(Hash::new(registered_proposal.signature_preimage()));
-        let Some(registered_equivocation) = self.ingress_equivocations.get(&admission_key).copied()
+        let Some(registered_equivocation) = self.ingress_equivocations.get(&admission_key).cloned()
         else {
             return None;
         };
@@ -9754,13 +9837,11 @@ impl SumeragiV2Adapter {
                 })
             }
             reducer::Effect::ReportEquivocation { evidence } => {
-                // TODO: Carry the complete authenticated conflicting message pair
-                // through `AdapterEffect` and persist it before enabling evidence
-                // penalties. First-release live handling is deliberately logging-only.
                 Ok(AdapterEffect::ReportEquivocation {
-                    offender: self.registry.peer(evidence.offender())?,
-                    round: self.registry.round_to_wire(evidence.round()),
-                    kind: evidence.kind(),
+                    evidence: Box::new(
+                        self.registry
+                            .equivocation_to_wire(&evidence, self.aggregator.as_ref())?,
+                    ),
                 })
             }
             reducer::Effect::ReportInvalidCertifiedBody {
@@ -10415,6 +10496,33 @@ impl WireRegistry {
         let mut wire = self.unsigned_timeout_vote_to_wire(&vote.vote(), aggregator)?;
         wire.signature = vote.signature().as_bytes().to_vec();
         Ok(wire)
+    }
+
+    fn equivocation_to_wire(
+        &mut self,
+        evidence: &reducer::EquivocationEvidence,
+        aggregator: &dyn SignatureAggregator,
+    ) -> Result<wire::SumeragiV2Equivocation, AdapterError> {
+        match evidence {
+            reducer::EquivocationEvidence::Proposal { first, second } => {
+                Ok(wire::SumeragiV2Equivocation::Proposal {
+                    first: self.signed_proposal_to_wire(first, aggregator)?,
+                    second: self.signed_proposal_to_wire(second, aggregator)?,
+                })
+            }
+            reducer::EquivocationEvidence::Vote { first, second } => {
+                Ok(wire::SumeragiV2Equivocation::PhaseVote {
+                    first: self.signed_vote_to_wire(first)?,
+                    second: self.signed_vote_to_wire(second)?,
+                })
+            }
+            reducer::EquivocationEvidence::Timeout { first, second } => {
+                Ok(wire::SumeragiV2Equivocation::TimeoutVote {
+                    first: self.signed_timeout_vote_to_wire(first, aggregator)?,
+                    second: self.signed_timeout_vote_to_wire(second, aggregator)?,
+                })
+            }
+        }
     }
 
     fn tc_to_core(
@@ -12368,6 +12476,25 @@ mod tests {
             ),
             signature: vec![0x91],
         }))
+    }
+
+    fn synthetic_ingress_proposal(
+        context: &wire::HeightContext,
+        round: wire::ConsensusRound,
+        proposer: wire::ValidatorIndex,
+        salt: usize,
+    ) -> IngressEquivocationArtifact {
+        let salt = u8::try_from(salt % usize::from(u8::MAX)).expect("bounded fixture salt");
+        let wire::ConsensusMessageV2Payload::Proposal(mut proposal) =
+            proposal(context, context.leader(round.view), subject(salt)).payload
+        else {
+            unreachable!("proposal fixture")
+        };
+        proposal.round = round;
+        proposal.manifest.round = round;
+        proposal.proposer = proposer;
+        proposal.signature = vec![salt];
+        IngressEquivocationArtifact::Proposal(Arc::new(proposal))
     }
 
     fn authenticated_wire_identity(payload: wire::ConsensusMessageV2Payload) -> Arc<[u8]> {
@@ -15267,6 +15394,9 @@ mod tests {
                 fingerprint: IngressFingerprint::Proposal(Hash::new(
                     conflicting_proposal.signature_preimage(),
                 )),
+                artifact: IngressEquivocationArtifact::Proposal(Arc::new(
+                    conflicting_proposal.clone(),
+                )),
                 equivocation_reported: true,
                 capacity_bypass: false,
                 admitted_at: Instant::now(),
@@ -16690,6 +16820,7 @@ mod tests {
 
         let first_lock = install_lock(&mut adapter, 0xDB);
         let ordinary_round = first_lock.0;
+        let ingress_context = adapter.wire_context.clone();
         for index in 0..MAX_INGRESS_SEMANTIC_KEYS {
             let proposer = u32::try_from(index).expect("semantic table bound fits u32");
             adapter.ingress_equivocations.insert(
@@ -16699,6 +16830,12 @@ mod tests {
                 },
                 IngressEquivocationRecord {
                     fingerprint: IngressFingerprint::Proposal(Hash::new(index.to_le_bytes())),
+                    artifact: synthetic_ingress_proposal(
+                        &ingress_context,
+                        ordinary_round,
+                        proposer,
+                        index,
+                    ),
                     equivocation_reported: false,
                     capacity_bypass: false,
                     admitted_at: Instant::now(),
@@ -18818,6 +18955,7 @@ mod tests {
         adapter: &mut SumeragiV2Adapter,
         round: wire::ConsensusRound,
     ) {
+        let ingress_context = adapter.wire_context.clone();
         for index in 0..MAX_INGRESS_SEMANTIC_KEYS {
             if adapter.ingress_equivocations.len() >= MAX_INGRESS_SEMANTIC_KEYS {
                 break;
@@ -18829,6 +18967,7 @@ mod tests {
                 IngressSemanticKey::Proposal { round, proposer },
                 IngressEquivocationRecord {
                     fingerprint: IngressFingerprint::Proposal(Hash::new(index.to_le_bytes())),
+                    artifact: synthetic_ingress_proposal(&ingress_context, round, proposer, index),
                     equivocation_reported: false,
                     capacity_bypass: false,
                     admitted_at: Instant::now(),

@@ -54,13 +54,13 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
-    fun exactAbi21IsRequired() {
-        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(21))
+    fun exactBridgeAbi22IsRequired() {
+        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(22))
         assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(20))
         assertTrue(
             KagemushaRecursiveSpendProver.detectExactNativeAvailability(
                 loadLibrary = {},
-                abiVersion = { 21 },
+                abiVersion = { 22 },
                 symbolProbe = { true },
             ),
         )
@@ -514,7 +514,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun artifactContractAndInventoryAreCurrentOnly() {
-        assertEquals(21, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(22, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(8, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
         assertEquals(1024 * 1024, KagemushaRecursiveSpendProver.MAX_ARTIFACT_CHUNK_BYTES)
         assertFailsWith<IllegalArgumentException> {
@@ -1542,7 +1542,7 @@ class KagemushaRecursiveSpendProverTest {
     private fun requireNativeArtifactStreaming() {
         assertTrue(
             KagemushaRecursiveSpendProver.isArtifactStreamingAvailable(),
-            "A freshly built connect_norito_bridge ABI 21 artifact-streaming library is required",
+            "A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required",
         )
     }
 
@@ -1652,7 +1652,7 @@ class KagemushaRecursiveSpendProverTest {
                             )
                             .setBody(
                                 if (capability) {
-                                    """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"""
+                                    """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"""
                                         .toByteArray(StandardCharsets.UTF_8)
                                 } else {
                                     archive(
@@ -1677,7 +1677,7 @@ class KagemushaRecursiveSpendProverTest {
         val status = client.getOfflineCapability().join()
         assertFalse(status.mandatory)
         assertEquals("cash_handoff_v1", status.cashHandoffCapability)
-        assertEquals(21, status.requiredBridgeAbiVersion)
+        assertEquals(22, status.requiredBridgeAbiVersion)
         assertEquals(8, status.maximumHops)
         assertTrue(status.ready)
         assertTrue(status.assets.isEmpty())
@@ -1731,14 +1731,14 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun offlineCapabilityRejectsBackendReadinessClaims() {
         val invalidPayloads = listOf(
-            """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":20,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":9,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":false,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}""",
+            """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}""",
         )
         invalidPayloads.forEach { payload ->
             assertFailsWith<RuntimeException> {

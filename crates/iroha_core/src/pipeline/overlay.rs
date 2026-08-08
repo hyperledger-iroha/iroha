@@ -2030,7 +2030,7 @@ impl TxOverlay {
             crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
                 state_tx,
                 self.completed_axt.clone(),
-            );
+            )?;
             for (path, value) in &self.durable_state_overlay {
                 if let Some(authorization) = self
                     .durable_state_authorizations
@@ -6483,6 +6483,7 @@ mod tests {
             manifest_view_root: vec![0x5A; 32],
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -9516,6 +9517,7 @@ seiyaku AliasBoundArguments {
             manifest_view_root: vec![0x11; 32],
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_signature: None,
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,

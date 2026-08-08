@@ -351,7 +351,7 @@ object BilateralSettlementInstructions {
         val copy = LinkedHashMap<String, JsonValue>(value.size)
         for ((key, json) in value) {
             val canonicalKey = requireName(key, "metadata key")
-            require(json.rawJson.isNotEmpty() && json.rawJson == json.rawJson.trim()) {
+            require(json.canonicalJson.isNotEmpty() && json.canonicalJson == json.canonicalJson.trim()) {
                 "metadata value for '$canonicalKey' must be an exact non-empty JSON literal"
             }
             copy[canonicalKey] = json
@@ -594,7 +594,7 @@ private object BilateralSettlementWire {
     private object MetadataEntryAdapter : TypeAdapter<MetadataEntry> {
         override fun encode(encoder: NoritoEncoder, value: MetadataEntry) {
             sized(encoder, STRING, value.key)
-            sized(encoder, STRING, value.value.rawJson)
+            sized(encoder, STRING, value.value.canonicalJson)
         }
 
         override fun decode(decoder: NoritoDecoder): MetadataEntry = unsupportedDecode()
